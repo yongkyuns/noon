@@ -249,3 +249,31 @@ fn interpreter_worker_retains_single_glow_edits_between_prefixes() {
     }
     assert_eq!(state(&player)["frontier"], 2.0);
 }
+
+#[test]
+fn interpreter_worker_retains_geometry_morph_after_prefix_bootstrap() {
+    let (mut context, target) = fixture();
+    let endpoint = context.scene.rectangle(1.4, 0.3).unwrap();
+    let animation = context
+        .declare_live_transform_to(
+            &target,
+            &endpoint,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    context.begin_ordinary_wait(1.0).unwrap();
+    context.prepare_live_segment().unwrap();
+    let mut player = PreparedExecutionPlayer::from_completed_source(&mut context, 905).unwrap();
+    player.set_prepared_playing(false);
+    player.seek_delta_json(0.5).unwrap();
+    context
+        .active_live_player()
+        .unwrap()
+        .live_play_animation(&animation)
+        .unwrap();
+    player.prepare_interpreter_segment(&mut context).unwrap();
+    assert!(player.deliver_source_prefix().unwrap());
+    assert_eq!(state(&player)["frontier"], 2.0);
+}

@@ -721,12 +721,17 @@ resource closures carry only not-yet-delivered immutable handles and dependencie
 A new-slot capacity reservation is an explicit bounded maintenance barrier, never
 an implicit whole-scene relocation during append. It may be O(existing storage);
 ordinary suffix extraction/installation remains proportional to newly touched
-payloads and ordering neighbours. Resource/payload limits count entries, not bytes.
+payloads and ordering neighbours. Entry limits coexist with byte admission for
+immutable resource closures, the reserved history index, saved revision vectors,
+compiled/runtime object vectors and both-side logical inline path payloads. Other
+shared allocations, path spare capacity, allocator overhead, source work and GPU
+residency remain outside these charges; they are not total memory bounds.
 An empty reactive runtime installed by semantic lowering is admissible; actual
 signals or reactive bindings, including later enrollment, require their own history
-policy.
-Family channels, spatial/glow plans, reactive/causal native input and host callbacks
-remain outside admission. The opt-in cooperative `PreparedSource` may consume an
+policy. Validated 2D geometry transforms/morphs and one resource-free Glow attachment
+share the sparse revision path. New family channels, path-motion/spatial plans,
+ordered effects/effect animation, reactive/causal native input and host callbacks
+remain outside suffix admission. The opt-in cooperative `PreparedSource` may consume an
 ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each preparation
 call invokes at most one continuation and completes its actual admitted segment
 headlessly using the shared evaluator/completion path. One pending reader/batch

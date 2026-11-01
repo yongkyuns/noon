@@ -1,7 +1,7 @@
 //! Explicit storage accounting and maintenance for historical execution.
 use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
 use crate::{CompiledChannelKey, CompiledObject};
-use noon_core::TrackId;
+use noon_core::{GeometryRef, TrackId, TrackValues};
 
 /// The three Vec backing stores only. Inline headers are charged by the outer
 /// revision index; indirect/shared allocations require separate accounting.
@@ -11,24 +11,95 @@ fn revision_payload_bytes(rows: usize, channels: usize, tracks: usize) -> Option
         .checked_add(tracks.checked_mul(std::mem::size_of::<(TrackId, Option<CompiledTrack>)>())?)
 }
 
+// Count references conservatively rather than introducing a shared-payload registry.
+// Values and prepared plans can share paths; the charge intentionally counts both.
+fn geometry_bytes(geometry: &GeometryRef) -> Option<usize> {
+    match geometry {
+        GeometryRef::VectorPath(path) => {
+            let bytes = path.retained_bytes();
+            (bytes != usize::MAX).then_some(bytes)
+        }
+        _ => Some(0),
+    }
+}
+
+fn row_geometry_bytes(row: &CompiledObject) -> Option<usize> {
+    row.content.geometry().map_or(Some(0), geometry_bytes)
+}
+
+fn track_geometry_bytes(track: &CompiledTrack) -> Option<usize> {
+    let values = match &track.values {
+        TrackValues::PreparedMorph { geometry, .. } => geometry_bytes(geometry)?,
+        TrackValues::Object { from, to } => {
+            geometry_bytes(&from.geometry)?.checked_add(geometry_bytes(&to.geometry)?)?
+        }
+        _ => 0,
+    };
+    let plan = match &track.transform_geometry_plan {
+        Some(crate::TransformGeometryPlan::PathPair {
+            geometry,
+            prestart_geometry,
+            ..
+        }) => geometry_bytes(geometry)?.checked_add(
+            prestart_geometry
+                .as_ref()
+                .map_or(Some(0), |geometry| geometry_bytes(geometry))?,
+        )?,
+        _ => 0,
+    };
+    values.checked_add(plan)
+}
+
+impl CompiledScene {
+    /// Finalize the already-committed patch's retained storage charge. Count both
+    /// saved and current sides so later replay exchanges cannot increase it.
+    /// Visits only affected rows/tracks; never scans the scene or copies paths.
+    #[doc(hidden)]
+    pub fn charge_prefix_revision_geometry(
+        &self,
+        revision: &mut CompiledReplayRevision,
+    ) -> Option<()> {
+        let mut bytes = 0usize;
+        for saved in &revision.rows {
+            for row in saved.object.iter().chain(
+                self.objects
+                    .get(saved.index as usize)
+                    .filter(|row| row.live),
+            ) {
+                bytes = bytes.checked_add(row_geometry_bytes(row)?)?;
+            }
+        }
+        for (id, saved) in &revision.tracks {
+            for track in saved.iter().chain(self.track(*id)) {
+                bytes = bytes.checked_add(track_geometry_bytes(track)?)?;
+            }
+        }
+        revision.geometry_payload_bytes = bytes;
+        Some(())
+    }
+}
+
 impl CompiledReplayRevision {
-    /// Required row/channel/track backing bytes for a clone or forward revision.
+    /// Requested row/channel/track backing plus both-side logical inline path bytes.
     /// These operations preserve occupied lengths, not source spare capacity.
     /// This is a pre-allocation request, not a bound on allocator over-allocation.
     pub fn prefix_clone_payload_bytes(&self) -> Option<usize> {
-        revision_payload_bytes(self.rows.len(), self.channels.len(), self.tracks.len())
+        revision_payload_bytes(self.rows.len(), self.channels.len(), self.tracks.len())?
+            .checked_add(self.geometry_payload_bytes)
     }
 
-    /// Reported row/channel/track Vec capacity times the target's inline sizes.
+    /// Reported Vec backing plus the stable both-side logical path charge.
+    /// Shared paths are conservatively charged per saved/current reference.
     /// Revision exchange only swaps elements; it cannot resize these buffers.
     /// Excludes the outer index, object/track storage in the active projection,
-    /// indirect Box/Arc payloads, allocator overhead and temporary allocations.
+    /// other indirect Box/Arc payloads, path spare capacity, allocator overhead and temporaries.
     pub fn prefix_payload_bytes(&self) -> Option<usize> {
         revision_payload_bytes(
             self.rows.capacity(),
             self.channels.capacity(),
             self.tracks.capacity(),
-        )
+        )?
+        .checked_add(self.geometry_payload_bytes)
     }
 }
 
@@ -109,6 +180,7 @@ mod tests {
             tracks: Vec::with_capacity(5),
             camera_motion_payloads: 0,
             path_motion_commands: 0,
+            geometry_payload_bytes: 0,
         };
         assert_eq!(revision.prefix_clone_payload_bytes(), Some(0));
         let reserved = revision_payload_bytes(
