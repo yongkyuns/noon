@@ -29,7 +29,7 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
@@ -38,8 +38,10 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const trap = operation => { if (operation === trapAt) throw new WebAssembly.RuntimeError(`trap during ${operation}`); };
   const player = {
     prepareSourceSegment(value) {
+      if (late) { events.push("require-source"); return false; }
       alive(); trap("segment"); assert.equal(value, context); counters.segments++; pending = 4; events.push("segment");
     },
+    beginSourceExecution(value) { alive(); assert.equal(value, context); observed = true; events.push("handoff"); return false; },
     finishSourcePreparation(value) {
       alive(); trap("terminal"); assert.equal(value, context); counters.terminal++; pending = 4; events.push("terminal");
     },
@@ -60,6 +62,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   let endpoint;
   const attachSemanticEngine = async (_context, _request, onStop, ...args) => {
     assert.equal(_context, context);
+    const prepared = args[5] !== undefined;
     if (!observed) {
       assert.deepEqual(args.slice(0, 5), [null, null, null, null, null]);
       assert.equal(args[5].player, player);
@@ -69,14 +72,15 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
       startContinuation(generation) { events.push("observe-segment"); assert.equal(generation, args[1].generation); },
       async publishContinuationResult(generation) { assert.equal(generation, args[1].generation); events.push("final-publication"); },
       sourcePrefixDelivered() { assert.equal(stopped, false); counters.delivered++; args[5].wakeSource(); },
+      sourceExecutionRequired() { assert.equal(stopped, false); events.push("source-demand"); },
       stop() {
         if (stopped) return;
         stopped = true;
         events.push("stop"); onStop();
-        if (!observed) { player.stopSourcePreparation(); player.free(); }
+        if (prepared) { player.stopSourcePreparation(); player.free(); }
       },
     };
-    if (attachGate) await attachGate.promise;
+    if (attachGate && (!late || !prepared)) await attachGate.promise;
     return endpoint;
   };
   api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
@@ -287,6 +291,47 @@ test("first-segment rejection fails attachment and source without retrying compl
   assert.equal(h.counters.initial, 1); assert.equal(h.counters.freed, 0);
   assert.equal(h.errors.filter(error => /unsupported prepared source/.test(String(error.error))).length, 2);
   assert.equal(h.contexts.size, 0);
+});
+
+for (const cancelDuringAttach of [false, true]) test(`late source handoff retains the original suspension (cancel=${cancelDuringAttach})`, async () => {
+  const gate = cancelDuringAttach ? deferred() : null;
+  const h = host({ late: true, demand: true, attachGate: gate });
+  let invocations = 0, resumed = 0;
+  const done = h.start(async api => {
+    invocations++;
+    await api.awaitSemanticContinuation(h.context);
+    const event = JSON.parse(await api.awaitSemanticContinuation(h.context));
+    assert.equal(event.kind, "complete"); resumed++;
+    return h.result();
+  });
+  await microtasks();
+  const initial = h.tick(); await h.attach(); await initial; await microtasks();
+  const previous = h.endpoint(), continuation = h.run().continuation;
+  const pending = h.tick(); await microtasks();
+  assert.deepEqual(h.events.slice(-2), ["require-source", "source-demand"]);
+  assert.equal(resumed, 0);
+  assert.equal(continuation.pending !== null, true);
+  const attachment = h.attach({ sourceHandoff: true });
+  if (cancelDuringAttach) {
+    await microtasks(); await h.cancel(); await done;
+    assert.equal(h.contexts.size, 1, "registry must retain the in-flight source lease");
+    gate.resolve(); await attachment; await pending;
+    assert.equal(h.contexts.size, 0);
+    assert.equal(resumed, 0);
+  } else {
+    await attachment;
+    previous.stop();
+    assert.equal(continuation.terminal, false, "retiring the reader must not cancel its successor");
+    h.completeContinuation(continuation, continuation.generation);
+    await pending; await done;
+    assert.equal(resumed, 1);
+    assert.equal(h.errors.length, 0);
+    assert.equal(h.events.at(-1), "final-publication");
+  }
+  assert.equal(invocations, 1);
+  assert.equal(h.counters.freed, 1);
+  assert.equal(h.counters.terminal, 0);
+  assert.equal(h.counters.adopted, 0);
 });
 
 test("initial observed admission relays callbacks to the original stack without creating history", async () => {

@@ -63,6 +63,10 @@ const causalSource = source.slice(0, source.indexOf("class OriginalSource")) + `
     def tear_down(self):
         mark("cleanup")
 `;
+const lateSource = source.replace("        target.add_updater(update)",
+  '        mark("prefix")\n        self.wait(1)\n        target.add_updater(update)');
+const lateCausalSource = causalSource.replace("        self.set_drag_targets(draggable)",
+  '        mark("prefix")\n        self.wait(1)\n        self.set_drag_targets(draggable)');
 const reference = `from noon import *
 class FinalPicture(Scene):
     def construct(self):
@@ -77,7 +81,9 @@ class FinalInputPicture(Scene):
 const heldSource = causalSource.replace("        target.shift(RIGHT)\n", "");
 const heldReference = causalReference.replace(".shift(RIGHT))", ")");
 const report = {
-  status: "running", scope: "observed admission, pause/resume and completed-source input; original interpreter, pointer receipts and final pixels; no late handoff, recovery, latency or default-cutover claim",
+  status: "running", scope: "observed admission, incremental reader-to-source handoff, pause/resume and completed-source input; original interpreter, pointer receipts and final pixels; no recovery, latency or default-cutover claim",
+  lateSourceSha256: hash(lateSource),
+  lateCausalSourceSha256: hash(lateCausalSource),
   sourceSha256: hash(source), referenceSha256: hash(reference), cases: [],
   causalSourceSha256: hash(causalSource),
   causalReferenceSha256: hash(causalReference),
@@ -90,7 +96,7 @@ let server, unisolatedServer, browser;
 
 async function start(page, transportMode, arm) {
   const sources = { ordinary: source, incremental: source, reference, causal: causalSource, "causal-reference": causalReference,
-    held: heldSource, "held-reference": heldReference };
+    held: heldSource, "held-reference": heldReference, "late-ordinary": lateSource, "late-incremental": lateSource, "late-causal": lateCausalSource };
   await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
   await page.evaluate(async ({ source, transportMode, preparedPlayback, initiallyPaused }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
@@ -137,7 +143,7 @@ async function start(page, transportMode, arm) {
       if (host.registrations === 0) await attach(result.semanticExecution, result.duration);
       host.outcome = { status: "finished", duration: result.duration };
     }).catch(error => { host.outcome = { status: "failed", error: String(error) }; host.rejectFailure(error); });
-  }, { source: sources[arm], transportMode, preparedPlayback: arm !== "ordinary", initiallyPaused: ["incremental", "causal", "held"].includes(arm) });
+  }, { source: sources[arm], transportMode, preparedPlayback: !["ordinary", "late-ordinary"].includes(arm), initiallyPaused: ["incremental", "causal", "held", "late-incremental", "late-causal"].includes(arm) });
 }
 
 async function observeSource(page) {
@@ -205,7 +211,7 @@ try {
     report.browserVersion = browser.version();
     for (const transportMode of ["transferable", "shared"]) {
       const pictures = new Map();
-      for (const arm of ["ordinary", "incremental", "reference", "causal", "causal-reference", "held", "held-reference"]) {
+      for (const arm of ["late-incremental", "late-causal", "late-ordinary", "ordinary", "incremental", "reference", "causal", "causal-reference", "held", "held-reference"]) {
         const entry = { backend, transportMode, arm, status: "running", observations: [] };
         report.cases.push(entry);
         const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
@@ -225,6 +231,46 @@ try {
         try {
           process.stdout.write(`starting ${backend}/${transportMode}/${arm}\n`);
           await start(page, transportMode, arm);
+          if (arm === "late-incremental" || arm === "late-causal") {
+            const initial = await untilSource(page, s => s.attached && s.metrics?.ready && s.metrics.presentedFrames > 0 && !s.metrics.needsPresent);
+            entry.initial = initial;
+            assert.equal(initial.state.preparedPlayback, true);
+            assert.equal(initial.state.preparedFrontier, 1);
+            assert.equal(initial.state.time, 0);
+            assert.equal(initial.events[0], "prefix");
+            assert.ok(initial.events.length <= 2, "source cannot complete the required segment before playback demand");
+            assert.deepEqual(initial.samples, []);
+            // The cached seek supplies actual lookahead demand, independent of
+            // whether the initial observation arrived before its queued turn.
+            await page.evaluate(() => observedAuthoring.execution.seek(0.5));
+            await untilSource(page, s => s.events.includes("start"));
+            await page.evaluate(() => observedAuthoring.execution.seek(0));
+            await page.waitForTimeout(220);
+            const cached = await observeSource(page);
+            assert.equal(cached.state.preparedPlayback, true);
+            assert.deepEqual(cached.events, ["prefix", "start"]);
+            assert.deepEqual(cached.samples, []);
+            await page.getByRole("button", { name: "Play animation", exact: true }).click();
+            const handoff = await untilSource(page, s => s.state?.sourceExecution === "observed" && s.state.time >= 1.1);
+            entry.handoff = { initial, cached, handoff };
+            assert.equal(handoff.metrics.presentedSession, initial.metrics.presentedSession + 1);
+            assert.equal(handoff.metrics.rendererRebuilds, initial.metrics.rendererRebuilds + 1);
+            assert.equal(handoff.metrics.gpuGeneration, 1, "the replacement renderer begins its own GPU generation");
+            assert.equal(handoff.state.replaySupported, false);
+            const controls = await page.locator(".playback-controls").evaluate(el => ({ ...el.dataset }));
+            assert.equal(controls.controllable, "false");
+            assert.equal(controls.buffering, "false");
+            await page.getByRole("button", { name: "Pause animation", exact: true }).click();
+            const paused = await untilSource(page, s => !s.state.playing && !s.metrics.needsPresent && s.metrics.bufferedDeltas === 0);
+            await page.waitForTimeout(220);
+            const frozen = await observeSource(page);
+            assert.equal(frozen.state.time, paused.state.time);
+            assert.deepEqual(frozen.samples, paused.samples);
+            assert.deepEqual(frozen.events, paused.events);
+            entry.handoff = { initial, cached, handoff, controls, paused, frozen };
+            if (arm === "late-causal") entry.handoff.pausedClick = await clickWhileFrozen(page, `${backend}-${transportMode}-${arm}-handoff-click`, 400);
+            await page.getByRole("button", { name: "Play animation", exact: true }).click();
+          }
           if (["incremental", "causal", "held"].includes(arm)) {
             const paused = await untilSource(page, s => s.attached && s.metrics?.ready && s.metrics.presentedFrames > 0 && !s.metrics.needsPresent);
             assert.equal(paused.state.time, 0); assert.equal(paused.state.playing, false);
@@ -280,17 +326,18 @@ try {
           entry.gpu = classifyRendererGpuIdentity(observed.metrics.rendererGpuIdentity, backend);
           if (!["reference", "causal-reference", "held-reference"].includes(arm)) {
             assert.equal(observed.registrations, 1);
-            assert.deepEqual(observed.events, ["causal", "held"].includes(arm) ? ["start", "end", "cleanup"] : ["start", "first", "end", "cleanup"]);
+            assert.deepEqual(observed.events, [...(arm.startsWith("late-") ? ["prefix"] : []),
+              ...(["causal", "held", "late-causal"].includes(arm) ? ["start", "end", "cleanup"] : ["start", "first", "end", "cleanup"])]);
             assert.equal(observed.state.sourceExecution, "observed");
             assert.equal(observed.state.replaySupported, false);
             assert.notEqual(observed.state.preparedPlayback, true);
-            assert.equal(observed.state.time, 2);
+            assert.equal(observed.state.time, arm.startsWith("late-") ? 3 : 2);
             assert.equal(observed.state.sourcePlaybackControllable, false);
-            if (!["causal", "held"].includes(arm)) assert.ok(Math.abs(observed.samples.reduce((a, b) => a + b, 0) - 2) < 1e-9);
+            if (!["causal", "held", "late-causal"].includes(arm)) assert.ok(Math.abs(observed.samples.reduce((a, b) => a + b, 0) - 2) < 1e-9);
           }
-          if (arm === "causal" || arm === "held") {
+          if (arm === "causal" || arm === "held" || arm === "late-causal") {
             const rect = await page.locator("#scene").boundingBox();
-            if (arm === "causal") {
+            if (arm !== "held") {
               await page.mouse.move(rect.x + 600, rect.y + 200);
               await page.mouse.down();
             }
@@ -299,8 +346,8 @@ try {
             await untilSource(page, s => !s.metrics.needsPresent && s.metrics.bufferedDeltas === 0);
             entry.completedClick = await clickWhileFrozen(page, `${backend}-${transportMode}-${arm}-completed-click`, arm === "held" ? 400 : 450);
             entry.afterInput = await observeSource(page);
-            assert.equal(entry.afterInput.state.time, 2);
-            assert.deepEqual(entry.afterInput.events, ["start", "end", "cleanup"]);
+            assert.equal(entry.afterInput.state.time, arm === "late-causal" ? 3 : 2);
+            assert.deepEqual(entry.afterInput.events, [...(arm === "late-causal" ? ["prefix"] : []), "start", "end", "cleanup"]);
             assert.equal(entry.afterInput.metrics.gpuGeneration, observed.metrics.gpuGeneration);
             assert.equal(entry.afterInput.metrics.rendererRebuilds, observed.metrics.rendererRebuilds);
             assert.equal(entry.afterInput.metrics.presentedSession, observed.metrics.presentedSession);
@@ -326,7 +373,7 @@ try {
           await writeFile(path.join(output, "report.json"), encode(report));
         }
       }
-      for (const [actual, reference] of [["ordinary", "reference"], ["incremental", "reference"], ["causal", "causal-reference"], ["held", "held-reference"]]) {
+      for (const [actual, reference] of [["ordinary", "reference"], ["incremental", "reference"], ["causal", "causal-reference"], ["held", "held-reference"], ["late-ordinary", "reference"], ["late-incremental", "reference"], ["late-causal", "causal-reference"]]) {
         const image = pictures.get(actual), expected = pictures.get(reference);
         assert.equal(image.width, expected.width); assert.equal(image.height, expected.height);
         assert.ok(image.data.equals(expected.data), `${backend}/${transportMode}/${actual} final pixels must equal the static reference`);

@@ -317,6 +317,62 @@ for (const explicit of [true, false]) test(`prepared reader refuses destructive 
   } finally { client.terminate(); }
 });
 
+test("late prepared source uses the allocated next session and a fresh renderer", async () => {
+  const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = true;
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("prepared-scene", authoring, {
+      transportMode: "transferable", continuationGeneration: 7, preparedPlayback: true,
+    });
+    const { render, engine } = await finishStartup(starting, authoring, offset);
+    authoring.preparedPlayback = false;
+    const handoff = client.handoffPreparedSource(7);
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    assert.equal(authoring.attachments.length, 2);
+    const next = authoring.attachments[1];
+    assert.equal(next.contextId, "prepared-scene");
+    assert.equal(next.options.session, 2);
+    assert.equal(next.options.continuationGeneration, 7);
+    assert.equal(next.options.sourceHandoff, true);
+    assert.equal(engine.messages.some(message => message.type === "stop"), false);
+    replyRender(render, rebuild, "engine_rebuilt");
+    assert.equal((await handoff).session, 2);
+    assert.deepEqual(authoring.stoppedContexts, ["prepared-scene"]);
+    assert.deepEqual(authoring.releasedContexts, []);
+    await assert.rejects(client.handoffPreparedSource(7), /historical player/);
+    assert.equal((await client.pause()).playing, false);
+  } finally { client.terminate(); }
+});
+
+for (const retire of [false, true]) test(`failed source handoff settles active queries and ignores retired errors (${retire})`, async () => {
+  const authoring = new FakeSemanticAuthoringClient(); authoring.preparedPlayback = true;
+  let rejectHandoff;
+  const errors = [];
+  const client = new ExecutionWorkerClient(new FakeCanvas(), {
+    onError: error => errors.push(error),
+    onSourceHandoff: () => new Promise((_, reject) => { rejectHandoff = reject; }),
+  });
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("prepared-scene", authoring, {
+      transportMode: "transferable", continuationGeneration: 7, preparedPlayback: true,
+    });
+    const { engine } = await finishStartup(starting, authoring, offset);
+    authoring.autoRespond = false;
+    const pending = client.state();
+    const rejected = assert.rejects(pending, retire ? /terminated/ : /source attachment failed/);
+    await Promise.resolve();
+    engine.emitMessage(engineMessage("source_handoff_required", { generation: 7 }));
+    if (retire) client.terminate();
+    rejectHandoff(new Error("source attachment failed"));
+    await rejected;
+    await Promise.resolve();
+    assert.equal(errors.length, retire ? 0 : 1);
+  } finally { client.terminate(); }
+});
+
 test("invalid prepared startup profiles reject before allocating a renderer", async () => {
   for (const options of [
     { preparedPlayback: "true", continuationGeneration: 1 },

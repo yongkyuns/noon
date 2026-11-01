@@ -111,6 +111,7 @@ export async function attachSemanticEngine(
   let pendingPointerPresentation = null;
   let pointerView = null;
   let continuationActive = false;
+  let sourceHandoffRequested = false;
   let sourceFinished = false;
   // Read-only observation of the last completed lease. The authoring context's
   // next segment horizon is future time, not elapsed playback time. Never use it
@@ -127,6 +128,16 @@ export async function attachSemanticEngine(
   let pendingExternalContinuation = null;
   const controls = [];
   const post = (payload, transfer = []) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
+  function requestSourceHandoff() {
+    if (stopped || prepared === null || sourceHandoffRequested || !player.sourceExecutionReady()) return;
+    sourceHandoffRequested = true;
+    // Keep the selected reader alive for its last picture, but retire delivery
+    // before another queued command can alter the frontier authorization.
+    stopped = true;
+    latestTick = null;
+    emitExecutionWake("idle", null, true);
+    post({ type: "source_handoff_required", generation: prepared.generation });
+  }
   function rejectEffectPreparation(error) {
     if (pendingEffectPreparation === null) return;
     pendingEffectPreparation.reject(error);
@@ -1192,6 +1203,7 @@ export async function attachSemanticEngine(
                   ? performance.now() : testOnlyTickTimestamp()));
                 observeExecutionWake(performance.now());
                 prepared.wakeSource();
+                requestSourceHandoff();
               }
             } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && player !== null) {
               if (player.interactionsActive()) {
@@ -1537,6 +1549,7 @@ export async function attachSemanticEngine(
   } catch (error) { notePreparedTrap(error); stop(); throw error; }
   return {
     stop,
+    sourceExecutionRequired() { requestSourceHandoff(); },
     sourcePrefixDelivered() {
       if (prepared === null) throw new Error("semantic endpoint has no prepared source");
       if (stopped) throw new Error("prepared execution endpoint is stopped");

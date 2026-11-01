@@ -99,11 +99,13 @@ export class PythonAuthoringClient {
       initiallyPaused = false,
       pacing = "realtime",
       replaceExistingEndpoint = false,
+      sourceHandoff = false,
       initialPointerView = undefined,
     },
   ) {
     validateSemanticExecutionContextId(contextId);
     if (typeof replaceExistingEndpoint !== "boolean") throw new TypeError("replaceExistingEndpoint must be a boolean");
+    if (typeof sourceHandoff !== "boolean") throw new TypeError("sourceHandoff must be a boolean");
     if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
       throw new TypeError("semantic execution attachment requires control and render MessagePorts");
     }
@@ -162,6 +164,7 @@ export class PythonAuthoringClient {
       initiallyPaused,
       pacing,
       replaceExistingEndpoint,
+      ...(sourceHandoff ? { sourceHandoff: true } : {}),
     };
     if (initialPointerView !== undefined) payload.initialPointerView = initialPointerView;
     if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;

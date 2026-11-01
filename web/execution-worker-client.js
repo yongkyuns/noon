@@ -69,6 +69,7 @@ export class ExecutionWorkerClient {
   #audioControlGeneration = 0;
   #onError;
   #onRecoverableError;
+  #onSourceHandoff;
   #semanticAuthoringClient = null;
   #semanticContextId = null;
   #semanticCallbackSessionId = null;
@@ -79,7 +80,7 @@ export class ExecutionWorkerClient {
   #staleWorkerEvents = { engine: 0, render: 0 };
   #staleResponses = { engine: 0, render: 0 };
 
-  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null, onSourceHandoff = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("ExecutionWorkerClient requires an HTMLCanvasElement");
     }
@@ -92,6 +93,8 @@ export class ExecutionWorkerClient {
     this.#canvas = canvas;
     this.#onError = onError;
     this.#onRecoverableError = onRecoverableError;
+    if (onSourceHandoff !== null && typeof onSourceHandoff !== "function") throw new TypeError("onSourceHandoff must be a function");
+    this.#onSourceHandoff = onSourceHandoff;
   }
 
   get canvas() {
@@ -428,6 +431,7 @@ export class ExecutionWorkerClient {
       continuationGeneration = null,
       renderCommand,
       replaceExistingEndpoint = false,
+      sourceHandoff = false,
     },
   ) {
     // Explicit Run may have released its source before authoring in the same
@@ -435,7 +439,7 @@ export class ExecutionWorkerClient {
     if (this.#renderWorker === null || this.#session === 0) {
       throw new Error("ExecutionWorkerClient has not been started");
     }
-    if (this.#semanticPreparedPlayback) {
+    if (this.#semanticPreparedPlayback && !sourceHandoff) {
       throw new Error("prepared playback retains its historical player; use a fresh Run to replace it");
     }
     validateSemanticContextId(contextId);
@@ -447,7 +451,7 @@ export class ExecutionWorkerClient {
     const wasPlaying = this.#playing;
     const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
     const oldEngine = this.#engineWorker;
-    if (this.#audioDevice.available) {
+    if (!sourceHandoff && this.#audioDevice.available) {
       this.#audioControlGeneration += 1;
       this.#audioDevice.stop();
       this.#rememberPlaying(await this.#requestEngine("pause", {}));
@@ -472,7 +476,7 @@ export class ExecutionWorkerClient {
           callbackSessionId,
           continuationGeneration,
           continuationGeneration === null ? !wasPlaying : false,
-        ), replaceExistingEndpoint },
+        ), replaceExistingEndpoint, ...(sourceHandoff ? { sourceHandoff: true } : {}) },
       );
       [candidateReady] = await Promise.all([candidateReadyPromise, attached]);
       this.#assertLifecycleCurrent(generation);
@@ -525,6 +529,7 @@ export class ExecutionWorkerClient {
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
       this.#playing = candidateReady.playing ?? (continuationGeneration === null ? wasPlaying : true);
+      this.#semanticPreparedPlayback = candidateReady.preparedPlayback === true;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
@@ -848,6 +853,16 @@ export class ExecutionWorkerClient {
     return this.#restartAll();
   }
 
+  async handoffPreparedSource(generation) {
+    if (!this.#semanticPreparedPlayback || !Number.isSafeInteger(generation) || generation <= 0) {
+      throw new Error("source handoff requires its active historical player and continuation");
+    }
+    return this.#transitionSemanticExecution(this.#semanticContextId, this.#semanticAuthoringClient, {
+      loopDurationSeconds: this.#loopDurationSeconds, callbackSessionId: this.#semanticCallbackSessionId,
+      continuationGeneration: generation, renderCommand: "rebuild_engine", sourceHandoff: true,
+    });
+  }
+
   async #restartEngine() {
     return this.#transitionSemanticExecution(
       this.#semanticContextId,
@@ -1041,6 +1056,20 @@ export class ExecutionWorkerClient {
       const message = event.data;
       try {
         validateWorkerEnvelope(message, channel);
+        if (owner === "engine" && message.type === "source_handoff_required") {
+          if (!this.#semanticPreparedPlayback || !Number.isSafeInteger(message.generation) || message.generation <= 0) {
+            throw new Error("invalid source handoff notification");
+          }
+          const generation = this.#lifecycleGeneration;
+          const transition = this.#onSourceHandoff === null
+            ? this.handoffPreparedSource(message.generation) : this.#onSourceHandoff(message.generation);
+          void Promise.resolve(transition).catch(error => {
+            if (generation !== this.#lifecycleGeneration || this.#engineWorker === null) return;
+            this.#rejectOwner("engine", error);
+            this.#notifyError(error, "engine");
+          });
+          return;
+        }
         if (owner === "engine" && message.type === "audio_stopped") {
           this.#audioControlGeneration += 1;
           this.#audioDevice.stop();

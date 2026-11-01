@@ -8,6 +8,37 @@ fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
 }
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn prefix_source_requirement(
+        &self,
+        publisher: &PrefixPublisher,
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        self.session
+            .preflight_prepared_source(Some(publisher))
+            .map_err(prefix_error)
+    }
+
+    pub(crate) fn begin_observed_prefix_source(
+        &mut self,
+        publisher: &PrefixPublisher,
+        reader: &PrefixReader,
+        playing: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.live_segment()?;
+        if self
+            .session
+            .begin_observed_prefix_source(publisher, reader)
+            .map_err(prefix_error)?
+            .is_none()
+        {
+            return Err("source does not require observed execution".into());
+        }
+        if playing {
+            self.resume();
+        } else {
+            self.pause();
+        }
+        Ok(())
+    }
     pub(crate) fn begin_observed_prepared_source(&mut self) -> Result<bool, AuthoringFailure> {
         self.live_segment()?;
         self.session
