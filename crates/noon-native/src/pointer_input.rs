@@ -51,6 +51,9 @@ pub(super) enum PointerDispatch {
 
 impl NativeApp {
     fn ensure_pointer_input(&mut self) -> Result<bool, NativeHostError> {
+        if !self.execution.presentation_ready() {
+            return Ok(false);
+        }
         if !self.pointer.configured {
             // Do not activate an unused input domain during window bootstrap or
             // incidental focus/cursor events in callback-only scenes. Explicit
@@ -261,6 +264,13 @@ impl NativeApp {
     pub(super) fn pointer_focus_lost(&mut self) -> Result<(), NativeHostError> {
         self.cancel_pointer(NativePointerCancellation::FocusLost)?;
         self.pointer.modifiers = ModifiersState::empty();
+        Ok(())
+    }
+
+    pub(super) fn pointer_source_changed(&mut self) -> Result<(), NativeHostError> {
+        self.pointer.configured = false;
+        self.rebind_pointer_view()?;
+        self.ensure_pointer_input()?;
         Ok(())
     }
 

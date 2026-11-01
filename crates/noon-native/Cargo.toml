@@ -16,7 +16,7 @@ required-features = ["wgsl-effects"]
 
 [dependencies]
 cpal = { version = "=0.18.2", default-features = false, optional = true }
-noon = { path = "../noon" }
+noon = { path = "../noon", features = ["prepared-prefix"] }
 noon-core = { path = "../noon-core" }
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["native"] }
 pollster = "1.0"

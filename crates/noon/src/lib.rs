@@ -278,7 +278,10 @@ pub use live_program::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
 };
 #[cfg(feature = "prepared-prefix")]
-pub use live_program::{PreparedSource, PreparedSourceError, PreparedSourceStatus};
+pub use live_program::{
+    PlaybackProgram, PlaybackProgramError, PreparedSource, PreparedSourceError,
+    PreparedSourceStatus,
+};
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
     DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,

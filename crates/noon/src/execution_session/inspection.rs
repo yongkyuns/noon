@@ -55,6 +55,13 @@ impl std::error::Error for InspectionNavigationError {
 }
 
 impl ExecutionSession {
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn inherit_prepared_inspection(&mut self, reader: &Self) {
+        // The runtime incarnation still changes. This copies only the viewer's
+        // adjustment; no old frame/input receipt or pointer contact is rebound.
+        self.inspection = reader.inspection;
+    }
+
     /// Navigation revision scoped to this runtime incarnation. It never resets
     /// when zoom returns to its original value; old displayed snapshots stay stale.
     pub const fn inspection_view_revision(&self) -> u64 {

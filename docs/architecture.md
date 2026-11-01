@@ -753,9 +753,8 @@ same-call add/remove. Staged external resources retain their original program
 and rendering-host publication handshake. A one-use typed transfer retains
 the original program, runtime and actual pending segment, releasing only its open
 source-history scope; already-delivered readers stay valid. It invokes no source
-or callback and acknowledges no display. This does not admit callback replay or
-install an observed-execution path in the default viewer. Other preparation failure
-is terminal and never retries user code; cancellation releases only source-owned
+or callback and acknowledges no display. This does not admit callback replay in
+the reader. Other preparation failure is terminal and never retries user code; cancellation releases only source-owned
 state while already-delivered history remains usable. An unwinding panic leaves
 that source owner terminally failed before propagating its original payload;
 source-owned unpublished output is released even if final cleanup panics. This
@@ -768,9 +767,25 @@ at the exact closed range `[0, 0]`, without an artificial segment or source retr
 Its history index reserves only occupied entries because no future suffix exists.
 Explicitly sealed
 source completion can publish a terminal batch; only reader adoption changes the
-ready interval to the inclusive final endpoint, without seeking the display. It is disabled by default and does not change gallery
-presentation or establish physical-device performance. Implementation and
+ready interval to the inclusive final endpoint, without seeking the display.
+This does not change gallery default presentation or establish physical-device performance. Implementation and
 qualification remain in #2211; this is not another scene or rendering authority.
+
+The native continuation entry point uses the typed `PlaybackProgram` owner through
+the existing prefix feature. One cooperative call prepares and adopts at most one
+source suffix; host demand comes from its existing clock, including sleeping waits.
+The reader remains selected until an actual request reaches a required execution
+frontier. Handoff preserves inspection, releases cached history, retires the old
+physical input receipt/contact and rebuilds previously retained renderer residency,
+including text and capture state. This explicit maintenance can reupload the scene;
+it preserves the device and immutable program cache, not old projection bindings.
+The original program then uses the shared forward-sample callback/resource fences;
+seeking becomes unavailable rather than replaying effectful work. Missing-prefix
+buffering retains the last sample, preserves pause intent and reanchors only the
+existing host clock after delivery. Closed-range adoption is separate from source
+completion. This does not classify arbitrary host I/O or wall-time reads as pure,
+preempt long calls, or establish browser/default-cutover or total-memory qualification.
+The Python viewer still uses its separate temporary qualification gate in #2211.
 
 The opt-in direct Rust/WASM canvas can own this reader instead of a live source,
 using the same retained renderer, presentation receipts, pointer normalization and
