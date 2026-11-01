@@ -125,11 +125,26 @@ for (const roles of [["baseline"], ["candidate-fixture", "candidate"]]) {
   });
 }
 
-test("untracked pre-build evidence makes provenance unavailable instead of inventing a revision", async t => {
+test("generated browser evidence preserves product provenance and exact runtime hashes", async t => {
   const f = await fixture(t);
   await selectSources(f);
   await generatedPackage(f.root, "candidate");
-  const report = "browser-smoke-artifacts/product-gate/source-pair.json";
+  const original = await writeRuntimeBuildIdentity(f.root);
+  await put(f.root, "browser-smoke-artifacts/product-gate/source-pair.json", JSON.stringify(f.sources));
+  assert.equal(f.git("status", "--porcelain", "--untracked-files=all"), "");
+  assert.deepEqual(await writeRuntimeBuildIdentity(f.root), original);
+  await put(f.root, "web/python-worker.js", "// changed generated worker bytes\n");
+  const changed = await writeRuntimeBuildIdentity(f.root);
+  assert.equal(changed.sourceRevision, f.sources.candidate);
+  assert.notEqual(changed.files.worker.sha256, original.files.worker.sha256);
+  assert.notEqual(changed.buildId, original.buildId);
+});
+
+test("unexpected untracked pre-build evidence makes provenance unavailable instead of inventing a revision", async t => {
+  const f = await fixture(t);
+  await selectSources(f);
+  await generatedPackage(f.root, "candidate");
+  const report = "source-pair.json";
   await put(f.root, report, JSON.stringify(f.sources));
   assert.match(f.git("status", "--porcelain", "--untracked-files=all"), /source-pair\.json/);
   const dirty = await writeRuntimeBuildIdentity(f.root);

@@ -83,8 +83,12 @@ test("verified consumers can retain browser evidence without weakening producer 
   const original = await createRuntimeBuildIdentity(root);
   assert.equal(original.sourceRevision, git("rev-parse", "HEAD"));
   await put("browser-smoke-artifacts/glow-profile/report.json", "{}\n");
-  assert.equal(observedSourceRevision(root), null, "untracked pre-build evidence still rejects");
-  await put(".git/info/exclude", "/browser-smoke-artifacts\n");
+  assert.equal(observedSourceRevision(root), original.sourceRevision,
+    "repository-owned generated evidence is ignored without a local exclusion");
+  assert.deepEqual(await createRuntimeBuildIdentity(root), original);
+  await put("source-pair.json", "{}\n");
+  assert.equal(observedSourceRevision(root), null, "unexpected untracked evidence still rejects");
+  await rm(path.join(root, "source-pair.json"));
   assert.deepEqual(await createRuntimeBuildIdentity(root), original);
   await put("web/python-worker.js", "changed runtime bytes\n");
   assert.notEqual((await createRuntimeBuildIdentity(root)).buildId, original.buildId);
