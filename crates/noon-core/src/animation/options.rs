@@ -257,6 +257,24 @@ pub fn resolve_sampled_motion_animation_options(
     animation: AnimationOptions,
     play: AnimationOptions,
 ) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    resolve_single_target_reversible_options(defaults, animation, play)
+}
+
+/// Resolve phase-mapped reveal timing without changing the authored rate.
+/// Lowering applies reversal once, before mapping the eased phase to a curve.
+pub fn resolve_phase_reveal_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    resolve_single_target_reversible_options(defaults, animation, play)
+}
+
+fn resolve_single_target_reversible_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
     let options = resolve_reversible_options_without_path(defaults, animation, play)?;
     if options.path_arc != 0.0 {
         return Err(AnimationOptionsError::UnsupportedPathArc(options.path_arc));

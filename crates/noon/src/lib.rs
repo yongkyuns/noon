@@ -330,6 +330,7 @@ pub use noon_core::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
 pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
+pub use noon_core::{RevealPhaseMap, RevealPhaseMapError};
 pub use noon_core::{SampledMotionData, SampledMotionError};
 #[cfg(test)]
 mod gradient_authoring_tests;
@@ -339,6 +340,8 @@ mod hatch_authoring_tests;
 mod image_paint_authoring_tests;
 #[cfg(test)]
 mod noise_authoring_tests;
+#[cfg(test)]
+mod phase_reveal_tests;
 #[cfg(test)]
 mod radial_authoring_tests;
 #[cfg(test)]

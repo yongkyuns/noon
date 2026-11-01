@@ -33,3 +33,6 @@ pub use timeline::*;
 
 mod sampled_motion;
 pub use sampled_motion::*;
+
+mod reveal_phase_map;
+pub use reveal_phase_map::*;

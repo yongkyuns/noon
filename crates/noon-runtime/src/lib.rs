@@ -18,6 +18,8 @@ mod frame;
 mod graph_endpoints;
 mod numeric_text;
 #[cfg(test)]
+mod phase_reveal_tests;
+#[cfg(test)]
 mod sampled_motion_tests;
 #[cfg(test)]
 mod seek_storage_tests;
@@ -2286,12 +2288,17 @@ fn initial_channel_scalar(
     let Some(track) = compiled.channel_tracks(channel).first() else {
         return default;
     };
-    let (TrackValues::Scalar { from, .. } | TrackValues::PreparedMorph { from, .. }) =
-        &track.values
-    else {
-        unreachable!("compiled scalar property must contain scalar values");
-    };
-    from.clamp(0.0, 1.0)
+    match &track.values {
+        TrackValues::Scalar { from, .. } | TrackValues::PreparedMorph { from, .. } => {
+            from.clamp(0.0, 1.0)
+        }
+        TrackValues::PhaseReveal { phase_map } => {
+            // Before this channel becomes active, retain the same initial leaf
+            // pose as its first evaluation, including reversed/returning rates.
+            phase_map.sample(track.timing.evaluate_progress_f64(0.0)) as f32
+        }
+        _ => unreachable!("compiled scalar property must contain scalar values"),
+    }
 }
 
 fn affine_base_at_time(
@@ -2859,6 +2866,16 @@ fn apply_group_to_row(
         // Admission excludes overshooting leaf rates. As with glow, remove only
         // endpoint roundoff from otherwise bounded polynomial rate functions.
         return apply_paint_track(&mut row, transition, progress.clamp(0.0, 1.0));
+    }
+    if let TrackValues::PhaseReveal { phase_map } = &track.values {
+        let phase =
+            world_track_progress(track, time).expect("selected phase reveal track is active");
+        return apply_evaluated_value(
+            &mut row,
+            Property::Reveal,
+            EvaluatedValue::Scalar(phase_map.sample(phase) as f32),
+            false,
+        );
     }
     if let TrackValues::SampledPosition { plan } | TrackValues::SampledRotation { plan } =
         &track.values
@@ -3752,6 +3769,7 @@ fn interpolate_track_values_with_path_plan(
         }
         TrackValues::Effect { .. }
         | TrackValues::Paint { .. }
+        | TrackValues::PhaseReveal { .. }
         | TrackValues::Bool { .. }
         | TrackValues::ZIndex { .. }
         | TrackValues::Object { .. }

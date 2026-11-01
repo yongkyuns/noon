@@ -2303,6 +2303,7 @@ def _build_canonical_composition_candidate(
     """Build one inert recursive composition tree owned by the WASM context."""
     import _manim_rotate as _rotate
     import _noon_sampled_motion as _sampled_motion
+    import _noon_phase_reveal as _phase_reveal
 
     root_play_kwargs = dict(kwargs)
     if group is None:
@@ -2923,6 +2924,18 @@ def _build_canonical_composition_candidate(
             )
             if remover:
                 removals.append(uncreated)
+            return
+        if type(animation) is _phase_reveal.PhaseReveal:
+            target = animation.mobject
+            if target._scene not in (None, self):
+                raise ValueError("PhaseReveal target belongs to another Scene")
+            if getattr(target, "_semantic_handle", None) is None:
+                raise NotImplementedError("PhaseReveal requires a typed retained path target")
+            reservation = reserve(target) if target._scene is None else None
+            entering_id = "" if reservation is None or reservation.reuse_existing_identity else str(reservation.object.id)
+            _phase_reveal.append(builder, animation, entering_id, child_kwargs)
+            if animation.remover:
+                removals.append(target)
             return
         created = _canonical_create_animation(self, animation)
         if created is not None:

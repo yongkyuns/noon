@@ -39,6 +39,8 @@ mod completed_binding_tests;
 #[cfg(test)]
 mod ownership_tests;
 #[cfg(test)]
+mod phase_reveal_tests;
+#[cfg(test)]
 mod wait_bootstrap_tests;
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -588,6 +590,12 @@ enum OrdinaryCompositionChild {
     Create {
         entering_id: Option<ObjectId>,
         target: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
+    PhaseReveal {
+        entering_id: Option<ObjectId>,
+        target: noon::Mobject,
+        phase_map: std::sync::Arc<noon_core::RevealPhaseMap>,
         options: noon_core::AnimationOptions,
     },
     Uncreate {
@@ -2624,6 +2632,16 @@ impl CanonicalAuthoringScene {
                     target,
                     options: *options,
                 },
+                OrdinaryCompositionChild::PhaseReveal {
+                    target,
+                    phase_map,
+                    options,
+                    ..
+                } => noon::AnimationCompositionRequest::PhaseReveal {
+                    target,
+                    phase_map: phase_map.clone(),
+                    options: *options,
+                },
                 OrdinaryCompositionChild::Uncreate {
                     target, options, ..
                 } => noon::AnimationCompositionRequest::Uncreate {
@@ -2740,6 +2758,11 @@ impl CanonicalAuthoringScene {
                     ..
                 }
                 | OrdinaryCompositionChild::Create {
+                    entering_id,
+                    target,
+                    ..
+                }
+                | OrdinaryCompositionChild::PhaseReveal {
                     entering_id,
                     target,
                     ..
@@ -3467,6 +3490,12 @@ impl CanonicalAuthoringScene {
                     target,
                     options,
                 }
+                | OrdinaryCompositionChild::PhaseReveal {
+                    entering_id,
+                    target,
+                    options,
+                    ..
+                }
                 | OrdinaryCompositionChild::Uncreate {
                     entering_id,
                     target,
@@ -3492,6 +3521,15 @@ impl CanonicalAuthoringScene {
             ) {
                 noon_core::resolve_transform_animation_options(
                     noon_core::AnimationDefaults::MANIM,
+                    options,
+                    noon_core::AnimationOptions::new(),
+                )
+            } else if matches!(child, OrdinaryCompositionChild::PhaseReveal { .. }) {
+                noon_core::resolve_phase_reveal_animation_options(
+                    noon_core::AnimationDefaults {
+                        introducer: true,
+                        ..noon_core::AnimationDefaults::MANIM
+                    },
                     options,
                     noon_core::AnimationOptions::new(),
                 )
@@ -6555,6 +6593,66 @@ mod wasm {
                 target: target.semantic_mobject().clone(),
                 options: Self::options(child_run_time, rate_function)?
                     .reverse_rate_function(reverse_rate_function),
+            });
+            Ok(())
+        }
+
+        /// A complete immutable timing table crosses the actual language boundary
+        /// once. The shared Rust timeline validates and evaluates every phase.
+        #[allow(clippy::too_many_arguments)]
+        #[wasm_bindgen(js_name = appendPhaseReveal)]
+        pub fn append_phase_reveal(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            key_times: &[f64],
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            path_arc: Option<f64>,
+            reverse_rate_function: Option<bool>,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            play_run_time: Option<f64>,
+            play_rate_function: Option<String>,
+            play_lag_ratio: Option<f64>,
+        ) -> Result<(), JsValue> {
+            let mut local = Self::optional_options(child_run_time, rate_function)?;
+            local.lag_ratio = lag_ratio;
+            local.path_arc = path_arc;
+            local.reverse_rate_function = reverse_rate_function;
+            local.introducer = introducer;
+            local.remover = remover;
+            let mut play = Self::optional_options(play_run_time, play_rate_function)?;
+            play.lag_ratio = play_lag_ratio;
+            let resolved = noon_core::resolve_phase_reveal_animation_options(
+                noon_core::AnimationDefaults {
+                    introducer: true,
+                    ..noon_core::AnimationDefaults::MANIM
+                },
+                local,
+                play,
+            )
+            .map_err(|error| js_error(error.to_string()))?;
+            let phase_map = noon_core::RevealPhaseMap::new(key_times.to_vec())
+                .map_err(|error| js_error(error.to_string()))?;
+            let entering_id = if object_id.is_empty() {
+                None
+            } else {
+                Some(parse_object_id("PhaseReveal object ID", object_id)?)
+            };
+            self.children.push(OrdinaryCompositionChild::PhaseReveal {
+                entering_id,
+                target: target.semantic_mobject().clone(),
+                phase_map: std::sync::Arc::new(phase_map),
+                options: noon_core::AnimationOptions::new()
+                    .run_time(resolved.run_time)
+                    .rate_func(resolved.rate_func)
+                    .lag_ratio(resolved.lag_ratio)
+                    .path_arc(resolved.path_arc)
+                    .reverse_rate_function(resolved.reverse_rate_function)
+                    .introducer(resolved.introducer)
+                    .remover(resolved.remover),
             });
             Ok(())
         }

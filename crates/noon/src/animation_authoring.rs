@@ -150,6 +150,28 @@ impl crate::Scene {
         )
     }
 
+    /// Reveal one retained path according to authored phase at each curve boundary.
+    ///
+    /// Phase zero and one bound a continuous static path. Each interval advances
+    /// one existing drawable curve by its parameter, rather than by arc length.
+    /// The ordinary timeline owns easing, reversal, completion and history.
+    pub fn declare_phase_reveal(
+        &self,
+        target: &Mobject,
+        phase_map: std::sync::Arc<noon_core::RevealPhaseMap>,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
+        self.declare_animation(
+            SemanticAnimationIntent::PhaseReveal {
+                target: target.node_id(),
+                phase_map,
+            },
+            options,
+        )
+    }
+
     /// Declare a replayable intensity pulse. Activation captures the effective glow;
     /// an absent canonical attachment is enrolled neutrally by the live session.
     pub fn declare_glow_pulse(

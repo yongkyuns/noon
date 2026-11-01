@@ -1,6 +1,6 @@
-// Compact sampled motion through real Python, the canonical authoring worker,
+// Compact sampled motion and phase-mapped traces through real Python, the canonical authoring worker,
 // retained historical playback, both renderers/transports, and actual Web Audio.
-// The original Fourier source is preserved; the variant changes native_poses only.
+// The original and sampled-motion Fourier baselines are preserved byte-for-byte.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -20,10 +20,10 @@ const output = path.resolve(process.env.NOON_SAMPLED_MOTION_ARTIFACTS ??
   path.join(root, "browser-smoke-artifacts/sampled-motion"));
 const backends = (process.env.NOON_SAMPLED_MOTION_BACKENDS ?? "webgl,webgpu").split(",");
 const transports = (process.env.NOON_SAMPLED_MOTION_TRANSPORTS ?? "transferable,shared").split(",");
-const selected = (process.env.NOON_SAMPLED_MOTION_CASES ?? "paired,original,sampled").split(",");
+const selected = (process.env.NOON_SAMPLED_MOTION_CASES ?? "paired,original,sampled,phase-paired,phase-reveal").split(",");
 assert.ok(backends.length && backends.every(x => ["webgl", "webgpu"].includes(x)));
 assert.ok(transports.length && transports.every(x => ["transferable", "shared"].includes(x)));
-assert.ok(selected.length && selected.every(x => ["paired", "original", "sampled"].includes(x)));
+assert.ok(selected.length && selected.every(x => ["paired", "original", "sampled", "phase-paired", "phase-reveal"].includes(x)));
 const admission = "normal";
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const json = value => JSON.stringify(value, (_, x) => typeof x === "bigint" ? String(x) : x, 2) + "\n";
@@ -46,11 +46,14 @@ const fixtureDirectory = path.join(root, "tests/fixtures/fourier_audio");
 const sources = {
   original: await readFile(path.join(fixtureDirectory, "fourier_epicycles.py"), "utf8"),
   sampled: await readFile(path.join(fixtureDirectory, "fourier_epicycles_sampled.py"), "utf8"),
+  "phase-reveal": await readFile(path.join(fixtureDirectory, "fourier_epicycles_phase_reveal.py"), "utf8"),
   paired: await readFile(path.join(root, "web/python/examples/sampled_motion.py"), "utf8"),
+  "phase-paired": await readFile(path.join(root, "web/python/examples/phase_reveal.py"), "utf8"),
 };
 assert.equal(hash(sources.original), sourceComparison.original_sha256);
 assert.equal(hash(sources.sampled), sourceComparison.compact_sha256);
-for (const name of ["original", "sampled"]) {
+assert.equal(hash(sources["phase-reveal"]), sourceComparison.phase_reveal_sha256);
+for (const name of ["original", "sampled", "phase-reveal"]) {
   const firstPlay = "        self.play(FadeIn(title)";
   const insertion = "        self.audio(AudioSource.small_discovery(), duration=34.65, gain=0.5, fade_in=1.5, fade_out=2.5)\n";
   assert.equal(sources[name].split(firstPlay).length, 2);
@@ -59,15 +62,17 @@ for (const name of ["original", "sampled"]) {
   assert.equal(sources[name].replace(insertion, ""), original);
 }
 const pairedAudio = "        self.audio(AudioSource.small_discovery(), duration=2.3, gain=0.5)\n";
-assert.equal(sources.paired.split("        self.play(").length, 2);
-sources.paired = sources.paired.replace("        self.play(", pairedAudio + "        self.play(");
+for (const name of ["paired", "phase-paired"]) {
+  assert.equal(sources[name].split("        self.play(").length, 2);
+  sources[name] = sources[name].replace("        self.play(", pairedAudio + "        self.play(");
+}
 const workerSource = await readFile(path.join(root, "web/python-worker.source.js"), "utf8");
 const pinnedPyodide = workerSource.match(/from "(https:\/\/cdn\.jsdelivr\.net\/pyodide\/v[^/]+\/full\/pyodide\.mjs)"/)?.[1];
 assert.ok(pinnedPyodide, "production worker must pin Pyodide");
 const cache = createPyodideResourceCache(workerSource);
 const report = {
   status: "running",
-  scope: "sampled motion fidelity and structural construction savings; real Python/WASM/render workers/Web Audio; no physical-device performance claim",
+  scope: "sampled motion and phase-mapped trace fidelity with structural construction counts; real Python/WASM/render workers/Web Audio; no physical-device performance or net memory claim",
   revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
   harnessSha256: hash(await readFile(fileURLToPath(import.meta.url))),
@@ -264,15 +269,15 @@ async function picture(page, name) {
   await writeFile(path.join(output, name + ".png"), bytes);
   return PNG.sync.read(bytes).data;
 }
-function pairedPixelEvidence(pixels) {
+function pairedPixelEvidence(pixels, blueObject = "line", redObject = "square") {
   let bluePixels = 0, redPixels = 0;
   for (let index = 0; index < pixels.length; index += 4) {
     const [red, green, blue, alpha] = pixels.subarray(index, index + 4);
     if (alpha > 0 && blue > 100 && blue > red + 40 && green > 60) bluePixels++;
     if (alpha > 0 && red > 100 && red > green + 40 && red > blue + 40) redPixels++;
   }
-  assert.ok(bluePixels > 10, "actual paired pixels contain the blue line");
-  assert.ok(redPixels > 10, "actual paired pixels contain the red square");
+  assert.ok(bluePixels > 10, "actual paired pixels contain the blue " + blueObject);
+  assert.ok(redPixels > 10, "actual paired pixels contain the red " + redObject);
   return { bluePixels, redPixels };
 }
 function assertBounded(snapshot) {
@@ -340,7 +345,48 @@ function pairedObservation(frame, phase) {
   }
   return result;
 }
-function fourierObservation(frame, stage, phase) {
+function phaseCurveReveal(keys, phase) {
+  return lerpKeys(keys, keys.map((_, index) => [index / (keys.length - 1)]), phase)[0];
+}
+function prefixBounds(keys, points, phase) {
+  const prefix = points.filter((_, index) => keys[index] <= phase);
+  prefix.push(lerpKeys(keys, points, phase));
+  return {
+    min: [0, 1].map(axis => Math.min(...prefix.map(point => point[axis]))),
+    max: [0, 1].map(axis => Math.max(...prefix.map(point => point[axis]))),
+  };
+}
+function boundsNear(actual, expected, name) {
+  assert.ok(actual && expected, name + " exists");
+  pointNear(actual.min, expected.min, name + " minimum");
+  pointNear(actual.max, expected.max, name + " maximum");
+}
+const tracePairKeys = [0, 0.13, 0.4, 0.73, 1];
+const tracePairPoints = [[-3, -1], [-2, 1], [0.5, -1], [2, 1], [2.5, -0.5]];
+function phasePairedObservation(frame, phase) {
+  const rows = present(frame);
+  assert.equal(rows.length, 2, "phase pair has the introduced trace and its pen");
+  const traces = rows.filter(object => object.stroke !== null && Math.abs(object.stroke_width - 0.06) < 1e-6);
+  const pens = rows.filter(object => object.fill !== null && object.bounds !== null &&
+    Math.abs(object.bounds.width - 0.18) < 1e-5 && Math.abs(object.bounds.height - 0.18) < 1e-5);
+  assert.equal(traces.length, 1); assert.equal(pens.length, 1);
+  const trace = traces[0], pen = pens[0];
+  const endpoint = lerpKeys(tracePairKeys, tracePairPoints, phase);
+  const expectedReveal = phaseCurveReveal(tracePairKeys, phase);
+  pointNear(pen.center, endpoint, "phase-paired sampled pen center");
+  pointNear(translation(pen), endpoint, "phase-paired sampled pen translation");
+  near(trace.reveal, expectedReveal, "nonuniform elapsed phase maps to retained curve count", revealTolerance);
+  if (phase > 0) {
+    assert.ok(Array.isArray(trace.path_endpoints), "the retained partial trace has drawable endpoints");
+    pointNear(trace.path_endpoints[0], tracePairPoints[0], "partial trace retains its start");
+    pointNear(trace.path_endpoints[1], endpoint, "partial trace endpoint follows the pen");
+    boundsNear(trace.bounds, prefixBounds(tracePairKeys, tracePairPoints, phase), "retained trace prefix bounds");
+  }
+  return { phase, expectedReveal, pen: { center: pen.center, translation: translation(pen) },
+    trace: { reveal: trace.reveal, endpoints: trace.path_endpoints, bounds: trace.bounds },
+    objectIds: { trace: trace.id, pen: pen.id } };
+}
+function fourierObservation(frame, stage, phase, phaseMapped = false) {
   const { oracle, terms } = stage, count = terms - 1;
   const rows = present(frame);
   // _manim_compat._manim_stroke_width and _manim_semantic_handles convert
@@ -385,13 +431,21 @@ function fourierObservation(frame, stage, phase) {
   assert.ok(traces.length === 1 || (phase === 0 && traces.length === 0), "one continuous retained trace");
   if (traces.length) {
     const trace = traces[0];
-    near(trace.reveal, phase, "trace uses the same elapsed phase", revealTolerance);
+    const expectedReveal = phaseMapped ? phaseCurveReveal(oracle.keys, phase) : phase;
+    near(trace.reveal, expectedReveal, "trace reveal selects the same elapsed phase", revealTolerance);
     if (phase > 0) {
       assert.ok(Array.isArray(trace.path_endpoints), "actual revealed retained trace endpoints are observable");
       pointNear(trace.path_endpoints[1], tips[0].center, "trace end coincides with the pen", positionTolerance);
+      if (phaseMapped) {
+        const endpointKeys = oracle.chain.map(row => row.at(-1));
+        pointNear(trace.path_endpoints[0], endpointKeys[0], "phase-mapped trace retains the original start");
+        boundsNear(trace.bounds, prefixBounds(oracle.keys, endpointKeys, phase), "phase-mapped Fourier prefix bounds");
+      }
       result.maxima.tracePenGap = Math.hypot(...trace.path_endpoints[1].map((x, axis) => x - tips[0].center[axis]));
     }
-    result.trace = { reveal: trace.reveal, endpoints: trace.path_endpoints };
+    result.trace = { reveal: trace.reveal, expectedReveal,
+      parameterization: phaseMapped ? "elapsed-phase-map" : "uniform-curve-count",
+      endpoints: trace.path_endpoints, bounds: trace.bounds };
     result.objectIds.trace = trace.id;
   }
   return result;
@@ -410,12 +464,25 @@ function compareObservations(actual, expected) {
   pointNear(actual.tip, expected.tip, "original/compact tip");
   assert.equal(actual.trace === null, expected.trace === null);
   if (actual.trace) {
-    near(actual.trace.reveal, expected.trace.reveal, "original/compact trace reveal", revealTolerance);
-    if (actual.phase > 0) pointNear(actual.trace.endpoints[1], expected.trace.endpoints[1], "original/compact trace endpoint");
+    // The old sampled-motion comparison remains exact in reveal space. A phase
+    // map intentionally changes that scalar; its visible prefix is the invariant.
+    if (actual.trace.parameterization === expected.trace.parameterization) {
+      near(actual.trace.reveal, expected.trace.reveal, "original/compact trace reveal", revealTolerance);
+    }
+    if (actual.phase > 0) {
+      pointNear(actual.trace.endpoints[1], expected.trace.endpoints[1], "original/compact trace endpoint");
+      if (actual.trace.parameterization === "elapsed-phase-map") {
+        pointNear(actual.trace.endpoints[0], expected.trace.endpoints[0], "original/phase-mapped trace start");
+        boundsNear(actual.trace.bounds, expected.trace.bounds, "original/phase-mapped retained prefix bounds");
+      }
+    }
   }
 }
 
 const pairedPhases = [0, 0.065, 0.13, 0.13 + 1e-7, 0.3, 0.4, 0.6, 0.73, 0.91, 1,
+  0.73, 0, 0.91, 0.13, 0.6, 0.3, 1, 0.065];
+const phasePairedPhases = [0, 0.065, 0.13 - 1e-7, 0.13, 0.13 + 1e-7, 0.3,
+  0.4 - 1e-7, 0.4, 0.4 + 1e-7, 0.6, 0.73 - 1e-7, 0.73, 0.73 + 1e-7, 0.91, 1,
   0.73, 0, 0.91, 0.13, 0.6, 0.3, 1, 0.065];
 function fourierSamples() {
   const samples = [];
@@ -450,7 +517,9 @@ async function assertIdle(page, entry) {
 }
 
 async function workerCase(page, entry, name, transportMode) {
-  const duration = name === "paired" ? 2.3 : 34.65;
+  const isPaired = name === "paired" || name === "phase-paired";
+  const phasePair = name === "phase-paired";
+  const duration = isPaired ? 2.3 : 34.65;
   entry.setupStartedEpochMs = Date.now();
   await launchSource(page, sources[name], transportMode);
   entry.firstPictureObservedEpochMs = Date.now();
@@ -493,15 +562,25 @@ async function workerCase(page, entry, name, transportMode) {
   entry.completion = completion;
   entry.checks.push("complete-natural-playback", "displayed-time-audio", "terminal-silence", "pause-freezes-clock");
   entry.observations = [];
-  const repeat = new Map(), identities = new Map();
+  const repeat = new Map(), identities = new Map(), traceIdentities = new Map();
   const warmRenderer = await rendererMetrics(page);
-  if (name === "paired") {
-    for (const phase of pairedPhases) {
+  if (isPaired) {
+    for (const phase of phasePair ? phasePairedPhases : pairedPhases) {
       await seek(page, phase * duration);
-      const frame = await debugFrame(page), observation = pairedObservation(frame, phase);
+      const frame = await debugFrame(page);
+      let observation;
+      try { observation = phasePair ? phasePairedObservation(frame, phase) : pairedObservation(frame, phase); }
+      catch (error) {
+        if (phasePair) entry.failedPhaseObservation = { time: phase * duration, phase, frame };
+        throw error;
+      }
       const signature = hash(json(observation));
       if (repeat.has(phase)) assert.equal(signature, repeat.get(phase), "paired reverse seek restores exact effective values");
       repeat.set(phase, signature);
+      if (phasePair) {
+        if (identities.has("pair")) assert.deepEqual(observation.objectIds, identities.get("pair"), "phase selection retains trace and pen identities");
+        identities.set("pair", observation.objectIds);
+      }
       const metrics = await rendererMetrics(page);
       assert.equal(metrics.rendererRebuilds, warmRenderer.rendererRebuilds, "paired historical motion reuses the renderer");
       assert.equal(metrics.geometryCacheMisses, 0, "paired warm seek reuses immutable geometry");
@@ -510,12 +589,19 @@ async function workerCase(page, entry, name, transportMode) {
           outlineCacheMisses: metrics.outlineCacheMisses, rendererRebuilds: metrics.rendererRebuilds } });
     }
     await seek(page, 0.6 * duration);
-    entry.pixels = pairedPixelEvidence(await picture(page, entry.id + "-midpoint"));
+    entry.pixels = pairedPixelEvidence(await picture(page, entry.id + "-midpoint"),
+      phasePair ? "trace" : "line", phasePair ? "pen" : "square");
     const visible = await rendererMetrics(page);
     assert.ok(visible.drawCalls > 0, "paired renderer submits real draws");
     assert.ok(visible.instancesDrawn >= 2, "paired renderer draws both object instances");
-    entry.checks.push("nonuniform-keys", "signed-unwrapped-multiturn-rotation", "vector-world-endpoints",
-      "warm-geometry-cache-reuse", "actual-blue-line-and-red-square-pixels");
+    if (phasePair) {
+      entry.checks.push("nonuniform-phase-map", "adaptive-key-neighborhoods", "trace-pen-phase-agreement",
+        "retained-partial-prefix-bounds", "stable-trace-and-pen-identity",
+        "warm-geometry-cache-reuse", "actual-blue-trace-and-red-pen-pixels");
+    } else {
+      entry.checks.push("nonuniform-keys", "signed-unwrapped-multiturn-rotation", "vector-world-endpoints",
+        "warm-geometry-cache-reuse", "actual-blue-line-and-red-square-pixels");
+    }
   } else {
     const baselineKey = entry.backend + "/" + transportMode;
     const baseline = comparisons.get(baselineKey) ?? new Map();
@@ -526,7 +612,7 @@ async function workerCase(page, entry, name, transportMode) {
       const frame = await debugFrame(page);
       near(frame.time, time, "debug frame belongs to exact selected time", 0);
       let observation;
-      try { observation = fourierObservation(frame, stage, phase); }
+      try { observation = fourierObservation(frame, stage, phase, name === "phase-reveal"); }
       catch (error) {
         entry.failedFourierObservation = { time, stageIndex, terms: stage.terms, phase, frame };
         throw error;
@@ -538,6 +624,10 @@ async function workerCase(page, entry, name, transportMode) {
       const stableIds = { ...observation.objectIds }; delete stableIds.trace;
       if (identities.has(stageIndex)) assert.deepEqual(stableIds, identities.get(stageIndex), "seek does not allocate new rig identities");
       identities.set(stageIndex, stableIds);
+      if (name === "phase-reveal" && observation.objectIds.trace !== undefined) {
+        if (traceIdentities.has(stageIndex)) assert.equal(observation.objectIds.trace, traceIdentities.get(stageIndex), "phase reveal retains the original trace identity");
+        traceIdentities.set(stageIndex, observation.objectIds.trace);
+      }
       if (name === "original") baseline.set(key, observation);
       else if (selected.includes("original")) {
         assert.ok(baseline.has(key), "paired original observation is required");
@@ -563,6 +653,10 @@ async function workerCase(page, entry, name, transportMode) {
       "trace-pen-phase-agreement", "nonuniform-key-neighborhoods", "cross-stage-membership-restoration",
       "stable-rig-identity", "warm-geometry-cache-reuse");
     if (name === "sampled" && selected.includes("original")) entry.checks.push("original-compact-runtime-fidelity");
+    if (name === "phase-reveal") {
+      entry.checks.push("adaptive-trace-without-uniform-grid", "retained-partial-prefix-bounds", "stable-trace-identity");
+      if (selected.includes("original")) entry.checks.push("original-phase-mapped-visible-prefix-fidelity");
+    }
   }
   await quiet(page);
   entry.checks.push("forward-random-reverse-seek", "exact-repeat-observation");
@@ -571,24 +665,62 @@ async function workerCase(page, entry, name, transportMode) {
   const restarted = await snapshot(page);
   assert.equal(restarted.transport.time, 0); assert.equal(restarted.transport.playing, false);
   await quiet(page);
+  if (phasePair) {
+    const frame = await debugFrame(page);
+    near(frame.time, 0, "restart selects the paired phase-zero picture", 0);
+    let observation;
+    try { observation = phasePairedObservation(frame, 0); }
+    catch (error) { entry.failedPhaseObservation = { time: 0, phase: 0, frame, afterRestart: true }; throw error; }
+    assert.equal(hash(json(observation)), repeat.get(0), "restart preserves exact trace/pen geometry and identity");
+    entry.restartObservation = { time: 0, ...observation };
+    entry.restartRenderer = await rendererMetrics(page);
+  } else if (name === "phase-reveal") {
+    const stageIndex = 2, phase = 0.503, stage = sourceComparison.stages[stageIndex];
+    const time = stage.oracle.draw_start_seconds + phase * stage.oracle.draw_duration_seconds;
+    await seek(page, time);
+    const frame = await debugFrame(page);
+    near(frame.time, time, "restart retains the selected Fourier history", 0);
+    let observation;
+    try { observation = fourierObservation(frame, stage, phase, true); }
+    catch (error) { entry.failedFourierObservation = { time, stageIndex, terms: stage.terms, phase, frame, afterRestart: true }; throw error; }
+    assert.equal(hash(json(observation)), repeat.get(stageIndex + "/" + phase), "restart preserves exact retained Fourier prefix and trace identity");
+    entry.restartObservation = { time, ...observation };
+    entry.restartRenderer = await rendererMetrics(page);
+    await seek(page, 0);
+    await quiet(page);
+  }
+  if (phasePair || name === "phase-reveal") {
+    const metrics = entry.restartRenderer;
+    assert.equal(metrics.rendererRebuilds, warmRenderer.rendererRebuilds, "restart retains the existing renderer");
+    assert.equal(metrics.geometryCacheMisses, 0, "restart reuses the retained path resource");
+    entry.checks.push("restart-preserves-trace-identity-and-visible-prefix");
+  }
   entry.checks.push("restart-retains-history-and-silence");
   entry.renderer = await rendererMetrics(page);
 }
 
-async function directCase(page, entry) {
-  await page.evaluate(async () => {
+async function directCase(page, entry, phasePair = false) {
+  await page.evaluate(async phasePair => {
     const wasm = await import("./pkg/noon_web.js"); await wasm.default();
     const NativeWorker = globalThis.Worker;
     globalThis.Worker = class { constructor() { throw new Error("direct typed Rust fixture attempted worker transport"); } };
     const canvas = document.querySelector("#scene"); canvas.width = 960; canvas.height = 540;
     canvas.style.width = "960px"; canvas.style.height = "540px";
-    const renderer = await wasm.createDirectSampledMotionSmokeRenderer(canvas.transferControlToOffscreen());
+    const create = phasePair ? wasm.createDirectPhaseRevealSmokeRenderer : wasm.createDirectSampledMotionSmokeRenderer;
+    const renderer = await create(canvas.transferControlToOffscreen());
     globalThis.directMotion = { renderer, NativeWorker };
     renderer.render();
-  });
+    if (phasePair) {
+      // Warm the full immutable path before measuring partial-reveal reuse,
+      // just as worker cases complete playback before their historical seeks.
+      renderer.seekDirect(2.3); renderer.render();
+      renderer.seekDirect(0); renderer.render();
+    }
+  }, phasePair);
   entry.observations = [];
   const repeat = new Map();
-  for (const phase of pairedPhases) {
+  let identities = null;
+  for (const phase of phasePair ? phasePairedPhases : pairedPhases) {
     const result = await bounded(page.evaluate(phase => {
       const r = directMotion.renderer;
       r.seekDirect(phase * 2.3); r.render();
@@ -600,20 +732,36 @@ async function directCase(page, entry) {
     assert.equal(result.objectCount, 2);
     assert.equal(result.backend, entry.backend === "webgl" ? "WebGL2" : "WebGPU");
     assert.ok(result.drawCalls > 0, "direct renderer submits real draws");
-    assert.ok(result.instancesDrawn >= 2, "direct renderer draws both object instances");
-    const observation = pairedObservation(result.frame, phase);
+    assert.ok(result.instancesDrawn >= (phasePair && phase === 0 ? 1 : 2), "direct renderer draws every nonempty paired object");
+    let observation;
+    try { observation = phasePair ? phasePairedObservation(result.frame, phase) : pairedObservation(result.frame, phase); }
+    catch (error) {
+      if (phasePair) entry.failedPhaseObservation = { time: phase * 2.3, phase, frame: result.frame };
+      throw error;
+    }
     const signature = hash(json(observation));
     if (repeat.has(phase)) assert.equal(signature, repeat.get(phase), "direct reverse seek agrees exactly");
     repeat.set(phase, signature);
+    if (phasePair) {
+      if (identities !== null) assert.deepEqual(observation.objectIds, identities, "direct phase selection retains trace and pen identities");
+      identities = observation.objectIds;
+      assert.equal(result.geometryCacheMisses, 0, "direct phase selection reuses immutable retained geometry");
+    }
     entry.observations.push(observation);
     entry.renderer = { backend: result.backend, objectCount: result.objectCount,
       geometryCacheMisses: result.geometryCacheMisses, bytesUploaded: result.bytesUploaded,
       drawCalls: result.drawCalls, instancesDrawn: result.instancesDrawn };
   }
-  entry.pixels = pairedPixelEvidence(await picture(page, entry.id + "-final"));
-  entry.checks.push("shared-rust-fixture", "direct-typed-engine-path", "no-worker-transport",
-    "nonuniform-keys", "signed-unwrapped-angles", "world-endpoints", "forward-random-reverse-seek",
-    "actual-blue-line-and-red-square-pixels");
+  entry.pixels = pairedPixelEvidence(await picture(page, entry.id + "-final"),
+    phasePair ? "trace" : "line", phasePair ? "pen" : "square");
+  entry.checks.push("shared-rust-fixture", "direct-typed-engine-path", "no-worker-transport", "forward-random-reverse-seek");
+  if (phasePair) {
+    entry.checks.push("nonuniform-phase-map", "adaptive-key-neighborhoods", "trace-pen-phase-agreement",
+      "retained-partial-prefix-bounds", "stable-trace-and-pen-identity", "warm-geometry-cache-reuse",
+      "actual-blue-trace-and-red-pen-pixels");
+  } else {
+    entry.checks.push("nonuniform-keys", "signed-unwrapped-angles", "world-endpoints", "actual-blue-line-and-red-square-pixels");
+  }
   await page.evaluate(() => directMotion.renderer.free());
 }
 
@@ -631,7 +779,7 @@ try {
       ignoreDefaultArgs: ["--mute-audio"], args: report.browserArguments[backend],
       ...(process.env.NOON_BROWSER_PROXY ? { proxy: { server: process.env.NOON_BROWSER_PROXY, bypass: "127.0.0.1,localhost" } } : {}) });
     report.browserVersion = browser.version();
-    const cases = [{ case: "direct", transportMode: "none" },
+    const cases = [{ case: "direct", transportMode: "none" }, { case: "phase-direct", transportMode: "none" },
       ...transports.flatMap(transportMode => selected.map(name => ({ case: name, transportMode })))];
     for (const descriptor of cases) {
       const entry = { id: backend + "-" + descriptor.transportMode + "-" + descriptor.case,
@@ -648,7 +796,7 @@ try {
       });
       try {
         await page.goto(server.baseUrl + "/web/execution-worker-smoke.html");
-        if (entry.case === "direct") await directCase(page, entry);
+        if (entry.case === "direct" || entry.case === "phase-direct") await directCase(page, entry, entry.case === "phase-direct");
         else {
           await installObservers(page);
           await workerCase(page, entry, entry.case, entry.transportMode);
@@ -660,7 +808,7 @@ try {
         entry.status = "passed"; console.log("[PASS] " + entry.id);
       } catch (error) {
         entry.status = "failed"; entry.error = String(error.stack ?? error);
-        if (entry.case !== "direct") entry.failure = await bounded(snapshot(page), "failure observation", 5_000).catch(() => null);
+        if (entry.case !== "direct" && entry.case !== "phase-direct") entry.failure = await bounded(snapshot(page), "failure observation", 5_000).catch(() => null);
         await page.screenshot({ path: path.join(output, entry.id + "-failure.png"), timeout: 10_000 }).catch(() => {});
         throw error;
       } finally {

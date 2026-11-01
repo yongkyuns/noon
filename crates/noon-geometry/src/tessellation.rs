@@ -1008,7 +1008,7 @@ fn stroke_event_tangents(
 }
 
 fn build_reveal_points(path: &VectorPath) -> Result<Vec<RevealPoint>, GeometryError> {
-    let curve_count = count_manim_curves(path)?;
+    let curve_count = retained_reveal_curve_count(path)?;
     let mut points = Vec::new();
     let mut current = None;
     let mut contour_start = None;
@@ -1938,7 +1938,12 @@ fn morph_mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
     Some(Rect::new(min, max))
 }
 
-fn count_manim_curves(path: &VectorPath) -> Result<usize, GeometryError> {
+/// Count the drawable curve slots used by retained reveal tessellation.
+///
+/// Explicit line, quadratic and cubic commands each occupy one slot. A Close
+/// contributes a slot only when its edge exceeds the renderer's degeneracy
+/// threshold. The same traversal validates finite points and contour ordering.
+pub fn retained_reveal_curve_count(path: &VectorPath) -> Result<usize, GeometryError> {
     let mut count = 0_usize;
     let mut active = false;
     let mut current = None;
@@ -1992,7 +1997,7 @@ fn count_manim_curves(path: &VectorPath) -> Result<usize, GeometryError> {
 }
 
 fn build_lyon_path_with_manim_progress(path: &VectorPath) -> Result<Path, GeometryError> {
-    let curve_count = count_manim_curves(path)?;
+    let curve_count = retained_reveal_curve_count(path)?;
     let mut builder = Path::builder_with_attributes(1);
     let mut active = false;
     let mut current = None;
@@ -2174,6 +2179,44 @@ fn mesh_bounds(vertices: &[MeshVertex]) -> Option<Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_reveal_curve_count_uses_the_renderers_close_and_validation_rules() {
+        let open = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(2.0, 0.0))
+            .quadratic_to(Vec2::new(3.0, 1.0), Vec2::new(2.0, 2.0))
+            .cubic_to(
+                Vec2::new(1.0, 3.0),
+                Vec2::new(0.0, 3.0),
+                Vec2::new(0.0, 2.0),
+            );
+        assert_eq!(retained_reveal_curve_count(&open).unwrap(), 3);
+        assert_eq!(
+            retained_reveal_curve_count(&open.clone().close()).unwrap(),
+            4
+        );
+        assert_eq!(
+            retained_reveal_curve_count(&open.clone().line_to(Vec2::ZERO).close()).unwrap(),
+            4
+        );
+        assert_eq!(
+            retained_reveal_curve_count(&open.close().line_to(Vec2::ONE)),
+            Err(GeometryError::DrawingBeforeMove)
+        );
+        assert_eq!(
+            retained_reveal_curve_count(&VectorPath::new().line_to(Vec2::ONE)),
+            Err(GeometryError::DrawingBeforeMove)
+        );
+        assert_eq!(
+            retained_reveal_curve_count(
+                &VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(f32::NAN, 1.0))
+            ),
+            Err(GeometryError::NonFinitePoint)
+        );
+    }
 
     #[test]
     fn background_stroke_is_layered_under_fill_and_foreground_stroke() {

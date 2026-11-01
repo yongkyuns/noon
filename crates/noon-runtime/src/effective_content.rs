@@ -180,6 +180,44 @@ impl std::error::Error for EffectiveContentError {
 }
 
 impl SceneInstance {
+    /// Whether a retained content track may still affect this exact target at
+    /// or after `at`. Only the target's Morph and whole-object Transform channels
+    /// are inspected. An unreconciled whole-object Transform retains its held
+    /// content endpoint after its active interval, so it remains a conflict.
+    /// Morph endpoints are inclusive unless completion has already reconciled
+    /// the root endpoint. Returning parent rates conservatively retain their
+    /// whole root interval through the shared interval calculation.
+    ///
+    /// This does not inspect effective content leases or frame overrides.
+    /// Callers admitting an immutable content consumer must check those current
+    /// owners separately. An invalid observation time fails closed.
+    pub fn object_has_current_or_future_content_track(&self, object: ObjectId, at: f64) -> bool {
+        if !at.is_finite() {
+            return true;
+        }
+        let Some(index) = self.compiled.object_index(object) else {
+            return false;
+        };
+        [Property::Morph, Property::Transform]
+            .into_iter()
+            .any(|property| {
+                self.compiled
+                    .channel_tracks(noon_compile::CompiledChannelKey::new(index, property))
+                    .iter()
+                    .any(|track| {
+                        if property == Property::Transform && !track.reconciled {
+                            return true;
+                        }
+                        if track.reconciled && at >= track.timing.start_time + track.timing.duration
+                        {
+                            return false;
+                        }
+                        noon_core::continuous_time_map_interval(track.timing, &track.time_map)
+                            .map_or(true, |(_, end)| at <= end)
+                    })
+            })
+    }
+
     /// Observe the lease bound to this runtime incarnation. A cloned runtime
     /// has fresh identity, so a caller deliberately adopting that clone must
     /// obtain its lease rather than reuse a token from the source runtime.

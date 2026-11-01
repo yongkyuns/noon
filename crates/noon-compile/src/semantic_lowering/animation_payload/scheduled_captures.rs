@@ -134,7 +134,8 @@ impl ScheduledCaptures {
             if let Some(index) = self.latest_tracks.get(&key) {
                 let track = &tracks[*index];
                 if track.animation == owner {
-                    let sampled = track.values.sampled_motion_plan().is_some();
+                    let sampled = track.values.sampled_motion_plan().is_some()
+                        || track.values.reveal_phase_map().is_some();
                     let alpha = if sampled {
                         track
                             .values
@@ -176,7 +177,8 @@ pub(super) fn completed_effective_properties_before(
             TrackActivationRelation::Overlapping => return None,
             TrackActivationRelation::Completed => {}
         }
-        let sampled = track.values.sampled_motion_plan().is_some();
+        let sampled = track.values.sampled_motion_plan().is_some()
+            || track.values.reveal_phase_map().is_some();
         let alpha = if sampled {
             track
                 .values
@@ -248,6 +250,9 @@ fn apply_effective_track_at_progress(
         }
         (Property::Rotation, TrackValues::SampledRotation { plan }) => {
             value.transform.rotation = plan.sample(progress).1
+        }
+        (Property::Reveal, TrackValues::PhaseReveal { phase_map }) => {
+            value.reveal = phase_map.sample(progress) as f32;
         }
         _ => return apply_effective_track_endpoint(value, property, values, progress == 1.0),
     }
