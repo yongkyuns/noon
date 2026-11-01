@@ -6633,9 +6633,9 @@ mod wasm {
                 local,
                 play,
             )
-            .map_err(|error| js_error(&error.to_string()))?;
+            .map_err(|error| js_error(error.to_string()))?;
             let phase_map = noon_core::RevealPhaseMap::new(key_times.to_vec())
-                .map_err(|error| js_error(&error.to_string()))?;
+                .map_err(|error| js_error(error.to_string()))?;
             let entering_id = if object_id.is_empty() {
                 None
             } else {
