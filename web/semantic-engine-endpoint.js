@@ -13,8 +13,6 @@ export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
 export const SEMANTIC_PACING_REALTIME = "realtime";
 export const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
-  "pause",
-  "resume",
   "seek",
   "restart_playback",
   "set_loop_duration",
@@ -80,9 +78,6 @@ export async function attachSemanticEngine(
   if (typeof initiallyPaused !== "boolean") {
     throw new Error("semantic execution has an invalid initially-paused state");
   }
-  if (initiallyPaused && continuation !== null) {
-    throw new Error("source-owned semantic continuations cannot start paused");
-  }
   if (![SEMANTIC_PACING_REALTIME, SEMANTIC_PACING_EXTERNAL_SAMPLES].includes(pacing)) {
     throw new Error(`unsupported semantic execution pacing ${pacing}`);
   }
@@ -116,6 +111,7 @@ export async function attachSemanticEngine(
   let pendingPointerPresentation = null;
   let pointerView = null;
   let continuationActive = false;
+  let sourceFinished = false;
   // Read-only observation of the last completed lease. The authoring context's
   // next segment horizon is future time, not elapsed playback time. Never use it
   // as a clock while Python holds the returned player.
@@ -340,7 +336,8 @@ export async function attachSemanticEngine(
         throw new Error("returned semantic continuation has no valid authored time");
       }
       return {
-        type, time, playing: false, nextPatchSequence: "0", durationSeconds: null,
+        type, time, playing: !sourceFinished && context.sourcePlaybackPlaying(), nextPatchSequence: "0", durationSeconds: null,
+        sourcePlaybackControllable: pacing === SEMANTIC_PACING_REALTIME && !sourceFinished,
         sourceExecution: "observed", replaySupported: false,
         replayUnavailable: "source execution is not retained for replay",
         canUndoTranslationDrag: false,
@@ -360,6 +357,7 @@ export async function attachSemanticEngine(
       ...(continuation === null
         ? { replaySupported: replayUnavailable === null, replayUnavailable }
         : { durationSeconds: null, sourceExecution: "observed", replaySupported: false,
+          sourcePlaybackControllable: pacing === SEMANTIC_PACING_REALTIME && !sourceFinished,
           replayUnavailable: "source execution is not retained for replay" }),
     };
   };
@@ -988,11 +986,17 @@ export async function attachSemanticEngine(
             break;
           case "pause": {
             latestTick = null;
+            if (sourceFinished) break;
             if (prepared !== null) {
               if (!preparedClockAdmitted) player.setPreparedPlaying(false);
               else player.pausePreparedAt(performance.now());
               drainAndSendDelta();
               observeExecutionWake(performance.now(), true);
+              break;
+            }
+            if (player === null) {
+              context.setSourcePlaybackPlaying(false);
+              emitExecutionWake("idle", null, true);
               break;
             }
             if (pacing === SEMANTIC_PACING_REALTIME) {
@@ -1002,10 +1006,16 @@ export async function attachSemanticEngine(
               if (time > player.time()) await advanceToAuthoredTime(time);
             }
             player.pause();
-            observeExecutionWake(performance.now(), true);
+            if (continuationActive) observeContinuationWake(performance.now(), true);
+            else observeExecutionWake(performance.now(), true);
             break;
           }
           case "resume": {
+            if (sourceFinished) break;
+            if (player === null) {
+              context.setSourcePlaybackPlaying(true);
+              break;
+            }
             if (hasAudio) {
               await awaitPresentation(null);
               if (player.time() === player.finiteAudioDuration()) {
@@ -1014,7 +1024,8 @@ export async function attachSemanticEngine(
             }
             if (prepared !== null) player.setPreparedPlaying(true);
             else player.resume();
-            if (!hasAudio) observeExecutionWake(performance.now(), true);
+            if (continuationActive) observeContinuationWake(performance.now(), true);
+            else if (!hasAudio) observeExecutionWake(performance.now(), true);
             break;
           }
           case "set_loop_duration":
@@ -1121,9 +1132,8 @@ export async function attachSemanticEngine(
                        player.interactionsActive() && publication !== null) {
               await awaitPresentation(publication);
             }
-            // Live driving pauses the ordinary playback clock. Native input
-            // must retain the active segment's Rust-derived wake, including
-            // pure-wait deadlines, rather than accidentally publishing idle.
+            // Source input retains its segment wake and viewer play intent,
+            // including pure-wait deadlines and independent paused interactions.
             if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) observeExternalInteractionWake();
             else if (continuationActive) observeContinuationWake(performance.now());
             else observeExecutionWake(performance.now());
@@ -1196,7 +1206,11 @@ export async function attachSemanticEngine(
               // A render-worker timestamp may use a different time origin.
               // Its tick is only a wake opportunity; Rust progression stays
               // anchored to this authoring worker's monotonic clock.
-              await driveContinuation(performance.now());
+              if (player.isPlaying()) await driveContinuation(performance.now());
+              else {
+                send(player.advanceInteractionsDeltaJson(performance.now()));
+                observeContinuationWake(performance.now());
+              }
             } else if (player !== null) {
               // Renderer timestamps may use another worker's time origin. They
               // admit one drive only; the player samples this engine context's
@@ -1339,7 +1353,9 @@ export async function attachSemanticEngine(
       try { player.sealReplay(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
     }
-    if (initiallyPaused || hasAudio || replayUnavailable !== null) {
+    if (continuation !== null && pacing === SEMANTIC_PACING_REALTIME && !initiallyPaused) player.resume();
+    if (initiallyPaused || hasAudio || replayUnavailable !== null ||
+        (continuation !== null && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES)) {
       if (prepared !== null) player.setPreparedPlaying(false);
       else player.pause();
     }
@@ -1380,6 +1396,10 @@ export async function attachSemanticEngine(
           throw new Error(
             "playback controls are unavailable while a Python source continuation owns execution",
           );
+        }
+        if (continuation !== null && ["pause", "resume"].includes(message.type) &&
+            pacing !== SEMANTIC_PACING_REALTIME) {
+          throw new Error("source playback controls require realtime pacing");
         }
         if (message.type === "sample_to_authored_time") {
           if (message.stopAtSourceCompletion !== undefined &&
@@ -1567,6 +1587,8 @@ export async function attachSemanticEngine(
       // through the exact returned encoder without another segment or callback.
       const publication = send(context.drainReturnedPublicationJson());
       await awaitPresentation(publication);
+      context.setSourcePlaybackPlaying(false);
+      sourceFinished = true;
       if (pendingExternalContinuation !== null) {
         const { resolve } = pendingExternalContinuation;
         pendingExternalContinuation = null;
