@@ -34,7 +34,14 @@ class PreparedGallery(Scene):
 `;
 const failureSource = source.slice(0, source.indexOf("        self.play(")) +
   '        raise RuntimeError("intentional gallery source failure")\n';
-const entries = ["prepared-lifecycle", "prepared-failure"].map((id, order) => ({
+const staticSource = `from noon import *
+from js import console
+class StaticPrepared(Scene):
+    def construct(self):
+        console.log("noon-static-source-invoked")
+        self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0))
+`;
+const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static"].map((id, order) => ({
   id, order, title: id, status: "ready", parity_status: "candidate",
   reuse: "manim-compatible-parity-v0.21", category: "qualification",
   path: `python/examples/${id}.py`, thumbnail: "prepared-fixture.svg",
@@ -42,7 +49,7 @@ const entries = ["prepared-lifecycle", "prepared-failure"].map((id, order) => ({
 }));
 const hash = value => createHash("sha256").update(value).digest("hex");
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
-  sourceSha256: hash(source), captureBackdrop: "opaque canvas-wrap; unchanged full-canvas RGBA equality", cases: [] };
+  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let browser, server;
 
@@ -55,7 +62,7 @@ async function installFixture(page) {
   }));
   for (const entry of entries) {
     await page.route(`**/${entry.path}`, route => route.fulfill({ contentType: "text/x-python",
-      body: entry.id === "prepared-failure" ? failureSource : source }));
+      body: entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
   }
   await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
@@ -138,6 +145,7 @@ async function pixels(page, name) {
 await mkdir(output, { recursive: true });
 try {
   report.mainSha256 = hash(await readFile(path.join(root, "web/main.js")));
+  report.workerSha256 = hash(await readFile(path.join(root, "web/python-worker.js")));
   report.wasmSha256 = hash(await readFile(path.join(root, "web/pkg/noon_web_bg.wasm")));
   for (const backend of ["webgpu", "webgl"]) {
     browser = await playwright.chromium.launch({ headless: true, channel: "chromium", args: browserArgs(backend),
@@ -148,15 +156,16 @@ try {
       const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1 });
       page.setDefaultTimeout(180_000);
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
+      let staticInvocations = 0;
+      page.on("console", message => { if (message.text() === "noon-static-source-invoked") staticInvocations++; });
       try {
         await installFixture(page);
         await page.goto(`${server.baseUrl}/web/index.html?example=prepared-lifecycle`);
         await page.waitForFunction(() => globalThis.__noonExampleGallery !== undefined);
-        // Rounded canvas corners and fractional edge coverage expose the page
-        // backdrop. Its decorative gradient can dither between screenshots.
-        // Make only that backdrop opaque; retain the canvas geometry, border,
-        // renderer, full screenshot and exact pixel comparisons unchanged.
-        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; }" });
+        // CSS corner/shadow compositing can vary by one byte across captures.
+        // Remove only that decoration and make its backdrop opaque. Keep canvas
+        // dimensions, renderer, full screenshot and exact RGBA assertions.
+        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; } #scene { border-radius: 0 !important; box-shadow: none !important; }" });
         await page.evaluate(() => {
           if (!__noonExampleGallery.runInFlight && !document.querySelector(".playback-controls")) void __noonExampleGallery.run();
         });
@@ -209,6 +218,29 @@ try {
         assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
         assert.deepEqual(pageErrors, []);
         entry.checks.push("new-run-after-source-failure", "no-page-errors");
+        await selectGalleryExample(page, "prepared-static");
+        await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
+          document.querySelector(".playback-controls")?.dataset.durationKnown === "true" &&
+          document.querySelector(".playback-scrubber")?.max === "0");
+        assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
+        assert.equal(await page.locator(".playback-toggle").isDisabled(), true);
+        assert.equal(await page.locator(".playback-scrubber").isDisabled(), true);
+        assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "false");
+        const staticPixels = await pixels(page, `${backend}-${transport}-static`);
+        assert.ok(baseline.equals(staticPixels), "completed static reader must render the same circle");
+        await page.locator(".playback-restart").click();
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+        assert.ok(staticPixels.equals(await pixels(page, `${backend}-${transport}-static-restart`)));
+        assert.equal(staticInvocations, 1, "restart must not rerun static source");
+        const staticGeneration = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+        await page.locator("#replace-scene").click();
+        await page.waitForFunction(previous => !__noonExampleGallery.runInFlight &&
+          __noonExampleGallery.runPhaseMetrics.runGeneration > previous &&
+          document.querySelector("#patch-status")?.dataset.state === "applied", staticGeneration);
+        assert.equal(staticInvocations, 2, "explicit Run executes static source once");
+        assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+        assert.deepEqual(pageErrors, []);
+        entry.checks.push("completed-static-reader-exact-zero-pixels", "static-restart-never-reruns-source", "static-rerun-retains-warm-interpreter");
         entry.status = "passed";
       } catch (error) {
         entry.status = "failed"; entry.error = String(error.stack ?? error);

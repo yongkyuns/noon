@@ -592,10 +592,10 @@ export class PlaygroundPlaybackControls {
     // scene stays disabled without displaying an indefinite wait cursor/aria-busy.
     const busy = this.#externalBusy || this.#commandPending || this.#seekActive;
     const blockCommands = !this.#controllable || busy;
-    this.#playButton.disabled = blockCommands;
+    this.#playButton.disabled = blockCommands || this.#durationSeconds === 0;
     this.#restartButton.disabled = blockCommands;
     this.#undoDragButton.disabled = blockCommands || this.#preparedFrontier !== null || !this.#canUndoTranslationDrag;
-    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending || this.#durationSeconds === null;
+    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending || this.#durationSeconds === null || this.#durationSeconds === 0;
     // Buffering is reader readiness, not a command lock: pause and rewind stay usable.
     this.#preparedSeek.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
     this.#previousSection.disabled = blockCommands || this.#sectionState?.previous === null;
@@ -856,7 +856,8 @@ function formatTime(seconds) {
 function validatePreparedState(state) {
   const { time, preparedFrontier, durationSeconds, buffering } = state;
   if (state.preparedPlayback !== true || state.replaySupported !== true ||
-      !Number.isFinite(preparedFrontier) || preparedFrontier <= 0 ||
+      !Number.isFinite(preparedFrontier) || preparedFrontier < 0 ||
+      (preparedFrontier === 0 && durationSeconds !== 0) ||
       time > preparedFrontier || typeof buffering !== "boolean" ||
       (durationSeconds !== null && (!Number.isFinite(durationSeconds) ||
        durationSeconds !== preparedFrontier || buffering))) {

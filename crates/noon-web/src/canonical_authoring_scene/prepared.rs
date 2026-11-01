@@ -28,6 +28,35 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.create_prepared_prefix()
     }
 
+    /// Completed static source uses the same historical reader at `[0, 0]`.
+    /// Called only after the interpreter has finished its source and cleanup.
+    pub fn create_finished_static_reader(&self) -> Result<PrefixReader, AuthoringFailure> {
+        if !self.player_ownership.is_unstarted() || self.scene.time() != 0.0 {
+            return Err(AuthoringFailure::new(
+                "unsupported_domain",
+                "prepared.static_source",
+                "completed static preparation requires an unstarted zero-duration source",
+            ));
+        }
+        let mut session = self.lower_execution()?;
+        if session.finite_playback_end_time() != Some(0.0) {
+            return Err(AuthoringFailure::new(
+                "unsupported_domain",
+                "prepared.static_source",
+                "completed static preparation cannot discard future authored work",
+            ));
+        }
+        session
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .map_err(|e| AuthoringFailure::unclassified("prepared.static_source", &e))?;
+        session
+            .seal_replay()
+            .map_err(|e| AuthoringFailure::unclassified("prepared.static_source", &e))?;
+        session
+            .create_finished_prepared_reader()
+            .map_err(|e| AuthoringFailure::unclassified("prepared.static_source", &e))
+    }
+
     /// Extract only the new completed suffix. The caller owns ordered delivery
     /// and must retain the original batch if receiver admission fails.
     pub fn publish_prepared_prefix(

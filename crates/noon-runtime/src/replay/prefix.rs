@@ -558,11 +558,41 @@ impl SceneInstance {
         )
     }
 
+    /// Bootstrap a completed stream, including an exact zero-duration range.
+    /// The owning session must prove source completion before calling this.
+    #[doc(hidden)]
+    pub fn create_finished_prefix_projection(
+        &self,
+    ) -> Result<(SceneInstance, PrefixReceiver), PrefixError> {
+        let (_, runtime, receiver) = self.create_prefix_projection_for_state(
+            Self::DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES,
+            Self::MAX_PREFIX_HISTORY_PAYLOAD_BYTES,
+            Self::MAX_PREFIX_OBJECT_VECTOR_BYTES,
+            true,
+        )?;
+        Ok((runtime, receiver))
+    }
+
     fn create_prefix_projection_with_object_budget(
         &self,
         resource_budget_bytes: usize,
         history_payload_budget_bytes: usize,
         object_vector_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_for_state(
+            resource_budget_bytes,
+            history_payload_budget_bytes,
+            object_vector_budget_bytes,
+            false,
+        )
+    }
+
+    fn create_prefix_projection_for_state(
+        &self,
+        resource_budget_bytes: usize,
+        history_payload_budget_bytes: usize,
+        object_vector_budget_bytes: usize,
+        finished: bool,
     ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
         let history = self
             .replay_history
@@ -571,10 +601,12 @@ impl SceneInstance {
         if let Some(error) = history.failure {
             return Err(error.into());
         }
-        if history.end.is_some()
-            || history.applied != history.revisions.len()
-            || self.frame.time <= history.start
-        {
+        let ready = if finished {
+            history.end == Some(self.frame.time)
+        } else {
+            history.end.is_none() && self.frame.time > history.start
+        };
+        if !ready || history.applied != history.revisions.len() {
             return Err(PrefixError::NotReady);
         }
         if self
@@ -599,9 +631,13 @@ impl SceneInstance {
         }
         // Charge reserved entries, not just current history length. Reject a
         // pathological configured maximum before cloning any reader state.
-        storage::preflight_history_index_capacity(
-            history.limits.revisions.max(history.revisions.len()),
-        )?;
+        // Completed history cannot grow; reserve only its occupied index.
+        let revision_capacity = if finished {
+            history.revisions.len()
+        } else {
+            history.limits.revisions.max(history.revisions.len())
+        };
+        storage::preflight_history_index_capacity(revision_capacity)?;
         object_budget::preflight_clone(
             self,
             self.compiled.objects().len(),
@@ -647,10 +683,7 @@ impl SceneInstance {
             )?)?;
         // A named, bounded bootstrap allocation, not an unpredictable O(history)
         // relocation on every append. Payload budgets retain existing semantics.
-        let extra = history
-            .limits
-            .revisions
-            .saturating_sub(copied.revisions.len());
+        let extra = revision_capacity.saturating_sub(copied.revisions.len());
         copied
             .revisions
             .try_reserve_exact(extra)
@@ -668,7 +701,7 @@ impl SceneInstance {
             next_revision: history.revisions.len(),
             extracted_payloads: history.stats.payloads_retained,
             frontier: self.frame.time,
-            finished: false,
+            finished,
             object_slots: self.compiled.objects().len(),
             resources: self.compiled.resources().clone(),
             resource_budget,
@@ -681,7 +714,7 @@ impl SceneInstance {
             stream,
             start: history.start,
             frontier: self.frame.time,
-            finished: false,
+            finished,
             received_revisions: history.revisions.len(),
             limits: history.limits,
             object_capacity: self.compiled.objects().len(),

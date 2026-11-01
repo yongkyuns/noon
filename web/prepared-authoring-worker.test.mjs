@@ -10,7 +10,7 @@ const section = (start, end) => {
   return source.slice(begin, finish);
 };
 const lifecycle = [
-  section("function registerContinuationContext", "function continuationEvent"),
+  section("function registerSemanticExecution", "function continuationEvent"),
   section("function failContinuation(", "function isContinuationControl"),
   section("function isContinuationControl", "function retireSemanticContext"),
   section("function retireSemanticContext", "async function prepareAuthoringDependencies"),
@@ -51,6 +51,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   };
   const context = {
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
+    createFinishedPreparedExecutionPlayer(session) { assert.equal(session, 3); events.push("static-reader"); return player; },
     retireExecutionSource() { events.push("retire-source"); },
     livePrepareSegment() { counters.initial++; events.push("initial"); trap("initial"); if (completeError) throw completeError; },
     createPreparedExecutionPlayer(session) { trap("reader"); assert.equal(session, 3); events.push("reader"); return player; },
@@ -87,7 +88,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
       fatalAuthoringFailure = true; postError(null, error);
     }
     ${lifecycle}
-    return { awaitSemanticContinuation, handleRequest, handleContinuationControl,
+    return { registerSemanticExecution, failAuthoringWorker, awaitSemanticContinuation, handleRequest, handleContinuationControl,
       failContinuation, contexts: semanticContexts, run: () => activeAuthoringRun,
       fatal: () => fatalAuthoringFailure };
   `)(options => createPreparedInterpreterDriver({ ...options,
@@ -116,6 +117,21 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
           initiallyPaused: true, pacing: "realtime", ...extra,
         }));
       } finally { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); }
+    },
+    async attachFinished(extra = {}) {
+      const control = new MessageChannel(), render = new MessageChannel();
+      try {
+        const token = JSON.parse(posts.findLast(post => post.type === "result").resultJson).semantic_execution.context_id;
+        return await api.handleRequest(envelope("attach_semantic_execution", {
+          requestId: 2, contextId: token, controlPort: control.port1, renderPort: render.port1,
+          session: 3, transportMode: "transferable", sharedSlotCapacity: 1024,
+          loopDurationSeconds: 1, initiallyPaused: true, pacing: "realtime", ...extra,
+        }));
+      } finally { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); }
+    },
+    releaseFinished() {
+      const token = JSON.parse(posts.findLast(post => post.type === "result").resultJson).semantic_execution.context_id;
+      return api.handleContinuationControl(envelope("release_semantic_execution", { requestId: 3, contextId: token }));
     },
     cancel() { return api.handleContinuationControl(continuationRequest("cancel_semantic_continuation", { reason: "cancelled by test" })); },
     tick() {
@@ -250,7 +266,7 @@ test("a foreign result cannot seal the original source even after valid delivery
   h.endpoint().stop();
 });
 
-test("source without a readable barrier fails explicitly", async () => {
+test("unregistered result cannot manufacture completed static admission", async () => {
   const h = host();
   await h.start(async () => JSON.stringify({ kind: "semantic_scene", semantic_execution: { context_id: "other" } }));
   assert.match(String(h.errors[0].error), /no readable play or wait interval/);
@@ -300,3 +316,77 @@ for (const trapAt of ["initial", "reader", "segment", "terminal", "capacity", "r
     assert.equal(h.posts.some(post => post.type === "result"), false);
   });
 }
+
+function staticResult(h) {
+  return JSON.stringify({ kind: "semantic_scene", duration: 0,
+    semantic_execution: { context_id: h.registerSemanticExecution(h.context), callback_session_id: null } });
+}
+
+test("completed static source attaches the same prepared player once without segment work", async () => {
+  const h = host(); let invocations = 0;
+  await h.start(async () => { invocations++; return staticResult(h); });
+  assert.equal(invocations, 1);
+  assert.deepEqual(h.errors, []);
+  const result = JSON.parse(h.posts.find(post => post.type === "result").resultJson);
+  assert.equal(result.duration, 0);
+  assert.equal(result.semantic_execution.prepared_playback, true);
+  assert.equal(h.posts.some(post => post.type === "semantic_continuation_registered"), false);
+  await h.attachFinished();
+  assert.deepEqual(h.errors, []);
+  await h.attachFinished();
+  assert.match(String(h.errors[0].error), /single-use/);
+  assert.equal(h.events.filter(event => event === "static-reader").length, 1);
+  assert.equal(h.counters.initial + h.counters.segments + h.counters.terminal, 0);
+  h.endpoint().stop();
+  assert.equal(h.counters.freed, 1);
+  assert.equal(h.contexts.size, 0);
+});
+
+test("static source cleanup failure retires its context without publishing a result", async () => {
+  const h = host();
+  await h.start(async () => { staticResult(h); throw new Error("source cleanup failed"); });
+  assert.match(String(h.errors[0].error), /source cleanup failed/);
+  assert.equal(h.posts.some(post => post.type === "result"), false);
+  assert.equal(h.contexts.size, 0);
+  assert.equal(h.events.includes("static-reader"), false);
+});
+
+test("released static source cannot revive after asynchronous renderer attachment", async () => {
+  const gate = deferred(), h = host({ attachGate: gate });
+  await h.start(async () => staticResult(h));
+  const attaching = h.attachFinished();
+  await microtasks();
+  await h.releaseFinished();
+  gate.resolve(); await attaching;
+  assert.match(String(h.errors.at(-1).error), /released during attachment/);
+  assert.equal(h.counters.freed, 1);
+  assert.equal(h.contexts.size, 0);
+  assert.equal(h.posts.some(post => post.type === "semantic_execution_attached"), false);
+});
+
+test("failed renderer attachment never frees a static reader already retired by its endpoint", async () => {
+  const gate = deferred(), h = host({ attachGate: gate });
+  await h.start(async () => staticResult(h));
+  const attaching = h.attachFinished();
+  await microtasks();
+  h.endpoint().stop();
+  gate.reject(new Error("renderer attachment failed"));
+  await attaching;
+  assert.match(String(h.errors.at(-1).error), /renderer attachment failed/);
+  assert.equal(h.counters.freed, 1);
+  assert.equal(h.fatal(), false);
+  assert.equal(h.contexts.size, 0);
+});
+
+test("fatal source failure after static registration never calls back into trapped WASM", async () => {
+  const h = host(), error = new WebAssembly.RuntimeError("source cleanup trap");
+  await h.start(async () => {
+    staticResult(h);
+    h.failAuthoringWorker(error);
+    throw error;
+  });
+  assert.equal(h.fatal(), true);
+  assert.equal(h.events.includes("retire-source"), false);
+  assert.equal(h.posts.some(post => post.type === "result"), false);
+  assert.deepEqual(h.errors.map(item => item.requestId), [null]);
+});

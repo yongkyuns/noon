@@ -74,6 +74,24 @@ impl ExecutionSession {
         let (publisher, runtime, receiver) = self
             .runtime
             .create_prefix_projection_with_resource_budget(resource_budget_bytes)?;
+        Ok((publisher, self.prepared_reader(runtime, receiver)?))
+    }
+
+    /// Create the same historical reader after explicit source completion.
+    /// A sealed zero-duration scene has the exact readable range `[0, 0]`;
+    /// neither an invented segment nor another source invocation is needed.
+    pub fn create_finished_prepared_reader(&self) -> Result<PrefixReader, PrefixError> {
+        self.ensure_replay_completion()?;
+        self.validate_prepared_source_domain()?;
+        let (runtime, receiver) = self.runtime.create_finished_prefix_projection()?;
+        self.prepared_reader(runtime, receiver)
+    }
+
+    fn prepared_reader(
+        &self,
+        runtime: noon_runtime::SceneInstance,
+        receiver: noon_runtime::PrefixReceiver,
+    ) -> Result<PrefixReader, PrefixError> {
         // Pin every retained physical identity, including rows not live at the
         // bootstrap time. Selected membership is still proved by the runtime.
         let mut slots = noon_runtime::ExecutionSlotTable::new();
@@ -94,7 +112,7 @@ impl ExecutionSession {
             None,
             super::super::callback::CallbackSchedule::new(Default::default()),
         );
-        Ok((publisher, PrefixReader::new(session, receiver)))
+        Ok(PrefixReader::new(session, receiver))
     }
 
     /// Publish a completed extension through the same Rust source admission.
