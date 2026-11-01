@@ -42,8 +42,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     finishSourcePreparation(value) {
       alive(); trap("terminal"); assert.equal(value, context); counters.terminal++; pending = 4; events.push("terminal");
     },
-    pendingSourceObjectCapacity() { alive(); trap("capacity"); return pending; },
-    reservePrefixObjectCapacity(value) { alive(); trap("reserve"); assert.equal(value, 4); counters.reserved++; },
+    reserveSourcePrefixCapacity() { alive(); trap("reserve"); if (pending === undefined) return false; assert.equal(pending, 4); counters.reserved++; return true; },
     deliverSourcePrefix() { alive(); trap("adopt"); assert.equal(pending, 4); pending = undefined; counters.adopted++; return true; },
     needsPreparation() { alive(); trap("demand"); return demand; },
     stopSourcePreparation() { alive(); counters.stopped++; pending = undefined; },
@@ -295,7 +294,7 @@ test("prepared attachment rejects replacement and callbacks before completing it
   await h.cancel(); await done;
 });
 
-for (const trapAt of ["initial", "reader", "segment", "terminal", "capacity", "reserve", "adopt", "demand"]) {
+for (const trapAt of ["initial", "reader", "segment", "terminal", "reserve", "adopt", "demand"]) {
   test(`direct prepared ${trapAt} trap retires the worker before any Rust cleanup`, async () => {
     const h = host({ demand: true, trapAt });
     const done = h.start(async api => {

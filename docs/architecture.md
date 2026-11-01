@@ -730,8 +730,14 @@ An empty reactive runtime installed by semantic lowering is admissible; actual
 signals or reactive bindings, including later enrollment, require their own history
 policy. Validated 2D geometry transforms/morphs and one resource-free Glow attachment
 share the sparse revision path, including generation-scoped Glow color, radius
-and intensity tracks. New family channels, path-motion/spatial plans, ordered
-effects/other effect animation, reactive/causal native input and host callbacks
+and intensity tracks. Append-only glyph/reveal plans transfer only new immutable
+member descriptors and composition timing, preserving existing plan/channel
+indices and the shared scheduler. Their logical headers, member data and time
+maps join resource-byte admission before cloning; spare capacity and scheduler
+metadata remain outside that charge. An explicit storage reservation precedes
+adoption, which neither evaluates future glyphs nor changes the displayed frame.
+Family transforms, path-motion/spatial plans, ordered effects/other effect
+animation, reactive/causal native input and host callbacks
 remain outside suffix admission. The opt-in cooperative `PreparedSource` may consume an
 ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each preparation
 call invokes at most one continuation and completes its actual admitted segment

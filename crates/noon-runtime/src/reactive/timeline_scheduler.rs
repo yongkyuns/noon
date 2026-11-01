@@ -436,6 +436,36 @@ impl TimelineEventScheduler {
         }
     }
 
+    /// Explicit maintenance for future prefix groups. Ordinary append may
+    /// allocate only its own small event vectors and tree nodes, not relocate
+    /// existing scheduler tables. Reused free groups need no new outer slots.
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn reserve_prefix_groups(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), std::collections::TryReserveError> {
+        let additional = additional.saturating_sub(self.free_groups.len());
+        self.groups.try_reserve_exact(additional)?;
+        self.group_events.try_reserve_exact(additional)?;
+        self.active_counts.try_reserve_exact(additional)?;
+        self.active_positions.try_reserve_exact(additional)?;
+        self.visit_epoch.try_reserve_exact(additional)
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn prefix_groups_reserved(&self, additional: usize) -> bool {
+        self.groups
+            .len()
+            .checked_add(additional.saturating_sub(self.free_groups.len()))
+            .is_some_and(|total| {
+                total <= self.groups.capacity()
+                    && total <= self.group_events.capacity()
+                    && total <= self.active_counts.capacity()
+                    && total <= self.active_positions.capacity()
+                    && total <= self.visit_epoch.capacity()
+            })
+    }
+
     /// Append one immutable compiled family-animation channel to this scheduler.
     /// Live semantic publication is append-only, so existing stable group slots and
     /// their event indices never move.
