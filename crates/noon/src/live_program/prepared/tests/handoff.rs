@@ -9,6 +9,61 @@ use std::cell::RefCell;
 const CALLBACK: HostCallbackId = HostCallbackId::new(701);
 
 #[test]
+fn completed_static_drag_retains_the_original_source_without_readable_interval() {
+    struct Static {
+        target: Mobject,
+        calls: Rc<Cell<usize>>,
+        zero_wait: bool,
+    }
+    impl LiveContinuation for Static {
+        const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
+        type Error = LiveSessionError;
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            let step = self.calls.get();
+            self.calls.set(step + 1);
+            if step == 0 && self.zero_wait {
+                return Ok(ContinuationStep::Await(live.wait_segment(0.0)?));
+            }
+            assert_eq!(step, usize::from(self.zero_wait), "source cannot restart");
+            live.set_translation_drag_targets([&self.target])?;
+            Ok(ContinuationStep::Finished)
+        }
+    }
+    for zero_wait in [false, true] {
+        let mut scene = Scene::new();
+        let target = scene.circle(0.5).unwrap();
+        scene.add(&target).unwrap();
+        let calls = Rc::new(Cell::new(0));
+        let program = scene
+            .into_live_program(Static {
+                target,
+                calls: calls.clone(),
+                zero_wait,
+            })
+            .unwrap();
+        let identity = program.session().runtime_identity();
+        let mut source = program
+            .into_prepared_source(ReplayLimits::default())
+            .unwrap();
+        if zero_wait {
+            assert_eq!(source.prepare_next().unwrap(), PreparedSourceStatus::Ready);
+            assert!(source.take_reader().is_none());
+        }
+        let required =
+            PreparedSourceStatus::ExecutionRequired(SourceExecutionRequirement::NativeInput);
+        assert_eq!(source.prepare_next().unwrap(), required);
+        assert_eq!(source.prepare_next().unwrap(), required);
+        assert!(source.take_reader().is_none());
+        let mut original = source.take_execution_program().unwrap();
+        assert_eq!(original.session().runtime_identity(), identity);
+        assert_eq!(original.session().frame().time, 0.0);
+        assert_eq!(original.status(), LiveProgramStatus::Finished);
+        assert!(original.resume().is_err());
+        assert_eq!(calls.get(), 1 + usize::from(zero_wait));
+    }
+}
+
+#[test]
 fn terminal_drag_requirement_preserves_the_finished_rust_source() {
     struct Tail {
         target: Mobject,
