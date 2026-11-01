@@ -1437,7 +1437,12 @@ export async function attachSemanticEngine(
           latestTick = message.timestamp;
           void drain();
         }
-      } else if (message?.type === "transport_writable") void drain();
+      } else if (message?.type === "transport_writable") {
+        if (transportMode === EXECUTION_TRANSPORT_SHARED && transport?.flush() > 0) {
+          renderPort.postMessage({ type: "shared_delta" });
+        }
+        void drain();
+      }
       else if (message?.type === "execution_presented") notePresentedPublication(message);
       else if (message?.type === "pointer_presentation_invalidated") {
         if (message.receipt?.session !== session) return;

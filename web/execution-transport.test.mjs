@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   EXECUTION_TRANSPORT_SHARED,
+  MAX_SHARED_EXECUTION_DELTA_BYTES,
   EXECUTION_TRANSPORT_TRANSFERABLE,
   RETAINED_EXECUTION_TRANSPORT_CHANNEL,
   SharedExecutionDeltaReader,
@@ -353,4 +354,111 @@ test("worker carrier validates bounded metadata and never relaxes generic JSON o
   let applied = false;
   assert.throws(() => reader.drain(() => { applied = true; }), /invalid JSON/);
   assert.equal(applied, false, "an invalid body must not reach the consumer");
+});
+
+
+const largeDelta = (sequence = 0, options = {}) => JSON.stringify({
+  ...JSON.parse(delta(sequence, options)), payload: "𝄞é🙂".repeat(200),
+});
+function sharedPair(capacity = 256) {
+  const mailbox = createSharedExecutionMailbox(capacity);
+  return { mailbox, writer: new SharedExecutionDeltaWriter(mailbox), reader: new SharedExecutionDeltaReader(mailbox) };
+}
+function completeChunks(writer, reader, apply) {
+  for (let turn = 0; turn < 100; turn++) {
+    reader.drain(apply);
+    if (writer.flush() === 0 && writer.canSend()) return;
+  }
+  assert.fail("a bounded packet must finish under returned slot credits");
+}
+
+test("oversized shared packets reuse fixed slots and preserve Unicode and publication order", () => {
+  const { mailbox, writer, reader } = sharedPair();
+  const storageBytes = mailbox.buffer.byteLength, large = largeDelta(1);
+  const received = [];
+  assert.equal(writer.send(delta(0)), true);
+  assert.equal(writer.send(large), true);
+  assert.equal(writer.canSend(), false);
+  assert.equal(writer.send(delta(2)), false);
+  // Publish the next large packet while the previous final chunk still owns
+  // one slot. Ordered assembly must survive both packet identities coexisting.
+  for (let turn = 0; !writer.canSend() && turn < 100; turn++) {
+    reader.drain(json => received.push(json)); writer.flush();
+  }
+  assert.equal(writer.canSend(), true);
+  const secondLarge = largeDelta(2);
+  assert.equal(writer.send(secondLarge), true);
+  completeChunks(writer, reader, json => { received.push(json); });
+  assert.equal(writer.send(delta(3)), true);
+  reader.drain(json => received.push(json));
+  assert.deepEqual(received, [delta(0), large, secondLarge, delta(3)]);
+  assert.equal(mailbox.buffer.byteLength, storageBytes, "mailbox reservation must stay fixed");
+});
+
+test("partial chunks admit no frame and a rejected complete frame keeps its slot", () => {
+  const { writer, reader } = sharedPair();
+  const large = largeDelta(), attempts = [], accepted = [];
+  let accepting = false;
+  const apply = json => { attempts.push(json); if (!accepting) return false; accepted.push(json); };
+  writer.send(large);
+  assert.equal(reader.drain(apply), 2);
+  assert.deepEqual(attempts, [], "physical credits cannot stand in for a publication receipt");
+  assert.equal(writer.flush(), 2);
+  assert.equal(writer.canSend(), false);
+  for (let turn = 0; attempts.length === 0 && turn < 100; turn++) { reader.drain(apply); writer.flush(); }
+  assert.deepEqual(attempts, [large]);
+  assert.equal(reader.drain(apply), 0);
+  assert.deepEqual(attempts, [large, large], "retry must reuse the same complete packet");
+  assert.deepEqual(accepted, []);
+  accepting = true;
+  assert.equal(reader.drain(apply), 1);
+  assert.deepEqual(accepted, [large]);
+  assert.equal(writer.canSend(), true);
+});
+
+test("chunk framing rejects invalid budgets and identity before applying a packet", () => {
+  for (const [field, value, kind] of [
+    [4, MAX_SHARED_EXECUTION_DELTA_BYTES + 1, "uint"],
+    [8, 1, "uint"], [12, 99, "uint"], [16, -1, "float"], [24, NaN, "float"],
+  ]) {
+    const { mailbox, writer, reader } = sharedPair();
+    writer.send(largeDelta());
+    const view = new DataView(mailbox.buffer, 8 * Int32Array.BYTES_PER_ELEMENT);
+    if (kind === "uint") view.setUint32(field, value, true);
+    else view.setFloat64(field, value, true);
+    assert.throws(() => reader.drain(() => assert.fail("invalid chunk reached apply")), /chunk/);
+  }
+});
+
+test("chunk assembly validates the completed JSON against the worker carrier identity", () => {
+  const { writer, reader } = sharedPair();
+  const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 7, sequence: 5, snapshot: true };
+  const carrier = prepareExecutionDeltaTransportForSend(`${JSON.stringify(header)}\n${largeDelta()}`);
+  writer.send(carrier.json, carrier.metadata);
+  assert.throws(() => completeChunks(writer, reader, () => assert.fail("mismatched packet reached apply")), /metadata does not match/);
+});
+
+test("chunk identity preserves full safe-integer sessions and sequences", () => {
+  const { writer, reader } = sharedPair();
+  const large = largeDelta(Number.MAX_SAFE_INTEGER, { session: Number.MAX_SAFE_INTEGER });
+  writer.send(large);
+  const received = [];
+  completeChunks(writer, reader, (json, metadata) => received.push({ json, metadata }));
+  assert.equal(received.length, 1);
+  assert.equal(received[0].json, large);
+  assert.equal(received[0].metadata.session, Number.MAX_SAFE_INTEGER);
+  assert.equal(received[0].metadata.sequence, Number.MAX_SAFE_INTEGER);
+});
+
+test("packet limit and retirement reject work without growing or reviving the mailbox", () => {
+  const { writer, reader } = sharedPair();
+  assert.throws(() => writer.send(" ".repeat(MAX_SHARED_EXECUTION_DELTA_BYTES + 1)), /packet byte limit/);
+  assert.equal(writer.canSend(), true);
+  writer.send(largeDelta());
+  reader.drain(() => assert.fail("partial packet reached apply"));
+  writer.close(); reader.close();
+  assert.equal(writer.flush(), 0);
+  assert.equal(writer.canSend(), false);
+  assert.equal(reader.drain(() => assert.fail("retired packet reached apply")), 0);
+  assert.throws(() => writer.send(delta(1)), /closed/);
 });
