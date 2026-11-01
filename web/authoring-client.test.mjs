@@ -800,3 +800,38 @@ for (const duration of [0, 1]) test(`prepared result without a continuation requ
     } else await assert.rejects(running, /registered continuation/);
   } finally { client.terminate(); }
 });
+
+for (const [label, prepared, terminate] of [
+  ["prepared source failure waits for reader adoption", true, false],
+  ["termination retires a prepared error waiting for adoption", true, true],
+  ["live source failure remains immediate", false, false],
+]) {
+  test(label, async () => {
+    const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+    worker.emit("message", workerMessage("ready")); await client.ready();
+    const startup = deferred(), events = [];
+    const result = client.run("source", {}, { preparedPlayback: prepared,
+      onSemanticContinuation: async () => { await startup.promise; events.push("adopted"); },
+    });
+    const rejected = assert.rejects(result, terminate ? /terminated/ : /Replay\(UnsupportedDomain\)/)
+      .then(() => events.push("failed"));
+    await Promise.resolve();
+    worker.emit("message", workerMessage("semantic_continuation_registered", {
+      requestId: 0, generation: 21, duration: 0.8,
+      semanticExecution: { context_id: "partial-source", continuation_generation: 21,
+        prepared_playback: prepared },
+    }));
+    worker.emit("message", workerMessage("error", {
+      requestId: 0, message: "prepared prefix unavailable: Replay(UnsupportedDomain)",
+    }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(events, prepared ? [] : ["failed"]);
+    if (terminate) { client.terminate(); await rejected; }
+    startup.resolve(); await rejected;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(events, prepared && !terminate ? ["adopted", "failed"] : ["failed", "adopted"]);
+    assert.equal(client.terminated, terminate);
+    assert.equal(worker.messages.filter(message => message.type === "run").length, 1);
+    client.terminate();
+  });
+}

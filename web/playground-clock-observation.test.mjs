@@ -197,20 +197,28 @@ const readyReport = (presentedFrames, sampledAtMs) => {
   return value;
 };
 
-for (const [label, state, phase] of [
+for (const [label, state, phase, warmup] of [
   ["source-owned wait", { time: 0.5, playing: false }, "playing"],
   ["prepared running", preparedState({}), "playing"],
   ["prepared paused", preparedState({ playing: false }), "paused"],
   ["prepared buffering", preparedState({ buffering: true }), "buffering"],
+  ["failed preparation", preparedState({ buffering: true }), "preparation failed", "failed"],
+  ["rerun preparation", preparedState({ buffering: true }), "buffering", "started"],
+  ["cached playback after failure", preparedState({}), "playing", "failed"],
+  ["paused history after failure", preparedState({ playing: false, buffering: true }), "paused", "failed"],
   ["prepared paused while buffering", preparedState({ playing: false, buffering: true }), "paused"],
   ["prepared exact terminal", preparedState({ time: 4, durationSeconds: 4 }), "finished"],
 ]) {
   test(`${label} publishes the actual phase before delayed renderer telemetry`, async () => {
     const f = fixture();
+    if (warmup) f.context.status.dataset.authoringWarmup = warmup;
+    if (warmup === "failed") {
+      f.context.sceneRunPromise = null; f.context.activeSourceContinuation = null; f.context.busyDepth = 0;
+    }
     f.initial.setState(state);
     await f.api.poll();
-    // Keep the source pending in every case. Preparation still being active
-    // must not force an independent paused/buffering/finished reader to play.
+    // Active preparation cannot force the reader to play. A stopped producer
+    // changes the loading label without changing the Rust playback state.
     assert.equal(f.context.status.dataset.playbackPhase, phase);
     assert.equal(f.context.status.dataset.playbackPlaying, String(phase === "playing"));
     assert.match(f.context.statusText.textContent, new RegExp(`^${phase}`, "i"));

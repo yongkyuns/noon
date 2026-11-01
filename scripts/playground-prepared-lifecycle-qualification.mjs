@@ -121,7 +121,9 @@ async function pause(page) {
 }
 async function seekOpen(page, time, frontier = null) {
   const field = page.locator(".playback-prepared-seek");
-  await field.fill(String(time)); await field.dispatchEvent("change");
+  // Commit through native blur so a later button click cannot fire a second
+  // change event for the same edit and race its seek command.
+  await field.fill(String(time)); await field.press("Tab");
   await page.waitForFunction(t => {
     const c = document.querySelector(".playback-controls");
     return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t;
@@ -248,6 +250,16 @@ try {
         assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
         assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-partial-history`)));
         entry.checks.push("gallery-selection-cancels-demand-wait", "source-error-retains-open-seekable-history");
+        const failedGeneration = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+        await seekOpen(page, 29.9);
+        await page.locator(".playback-toggle").click();
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "true");
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.buffering === "true" &&
+          document.querySelector("#status")?.dataset.playbackPhase === "preparation failed");
+        await pause(page); await seekOpen(page, 5);
+        assert.equal(await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration), failedGeneration);
+        assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-failed-source-rewind`)));
+        entry.checks.push("failed-source-does-not-advertise-active-buffering", "failed-source-rewind-without-rerun");
         await selectGalleryExample(page, "prepared-lifecycle");
         await page.waitForFunction(() => __noonExampleGallery.selectedExampleId === "prepared-lifecycle");
         await openReady(page); await pause(page);
