@@ -25,6 +25,9 @@ fn local_property(property: Property) -> bool {
             | Property::Appearance
             | Property::Reveal
             | Property::Morph
+            | Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
     )
 }
 
@@ -53,9 +56,10 @@ impl CompiledScene {
     /// write into earlier timestamps when a row is changed more than once.
     ///
     /// Ordinary 2D lifecycle, content and property tracks are admitted. Family,
-    /// path-motion, spatial and effect-animation plans require separate qualification.
+    /// path-motion and spatial plans require separate qualification.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
-    /// Rows may carry one resource-free glow attachment; ordered stacks and
+    /// Rows may carry one resource-free glow attachment and its ordinary
+    /// generation-scoped color/radius/intensity tracks; ordered stacks and
     /// other effect definitions remain outside this suffix profile.
     /// Ordering reconstruction visits only affected rows and their neighbours;
     /// it never clones/scans the full painter/family order.
