@@ -247,6 +247,11 @@ fn prepared_worker_unavailable_seek_is_atomic_and_buffered_wall_time_is_not_char
     assert!(f.player.tick_delta_json(1_500.0).unwrap().is_none());
     assert!(f.player.playback.buffering());
     assert_eq!(f.player.playback.reader.frame(), &frame);
+    f.player.reset_receiver(76).unwrap();
+    let (recovered, _) = ready(&mut f.player);
+    assert_eq!(recovered.frame().unwrap(), &frame);
+    assert!(f.player.prepared_playing());
+    assert!(f.player.prepared_buffering());
     assert_eq!(f.player.execution_wake(90_000.0).unwrap().cadence(), "idle");
     assert!(f.player.needs_preparation(0.125).unwrap());
     let batch = f.next(false);
@@ -348,6 +353,56 @@ fn prepared_worker_cannot_rebootstrap_an_already_started_resource_stream() {
 }
 
 #[test]
+fn prepared_receiver_reset_cancels_old_contact_and_preserves_the_reader() {
+    let mut f = Fixture::new(80);
+    assert!(f.player.reset_receiver(81).is_err());
+    let (_, old_receipt) = ready(&mut f.player);
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(1_000.0).unwrap();
+    assert!(input(&mut f.player, "press", old_receipt, 1));
+    let identity = f.player.playback.reader.runtime_identity();
+    for invalid in [0, 79, 80] {
+        let context = f.player.playback.reader.publication_context();
+        assert!(f.player.reset_receiver(invalid).is_err());
+        assert_eq!(f.player.playback.reader.publication_context(), context);
+    }
+    f.player.reset_receiver(81).unwrap();
+    assert_eq!(f.player.playback.reader.runtime_identity(), identity);
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(f.player.prepared_frontier(), 1.0);
+    assert_eq!(f.player.prepared_end_time(), None);
+    assert!(f.player.prepared_playing());
+    assert_eq!(f.player.prepared_playback_time_at(90_000.0).unwrap(), 0.5);
+    assert!(!input(&mut f.player, "release", old_receipt, 1));
+    assert!(!f.player.playback.reader.interactions_active());
+    let (mirror, receipt) = ready(&mut f.player);
+    assert_eq!(receipt.session, 81);
+    assert_eq!(receipt.sequence, 0);
+    assert_eq!(receipt.presentation, 1);
+    assert_eq!(mirror.frame().unwrap(), f.player.playback.reader.frame());
+    assert_eq!(
+        f.player
+            .execution_wake(90_000.0)
+            .unwrap()
+            .timer_after_milliseconds(),
+        Some(500.0)
+    );
+    assert_eq!(f.player.prepared_playback_time_at(90_250.0).unwrap(), 0.75);
+    assert!(!f
+        .player
+        .note_pointer_presentation_json(&serde_json::to_string(&old_receipt).unwrap())
+        .unwrap());
+    assert!(input(&mut f.player, "press", receipt, 2));
+    assert!(input(&mut f.player, "release", receipt, 2));
+    assert!(f.player.playback.reader.interactions_active());
+    // Delivery continues through the same publisher after receiver replacement.
+    let next = f.next(true);
+    f.deliver(next);
+    assert_eq!(f.player.prepared_end_time(), Some(2.0));
+    assert_eq!(f.player.prepared_time(), 0.5);
+}
+
+#[test]
 fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
     let mut f = Fixture::new(81);
     let (mut mirror, _) = ready(&mut f.player);
@@ -377,6 +432,51 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
         .objects
         .iter()
         .any(|row| row.content.image().is_some()));
+    let selected = mirror.frame().unwrap().clone();
+    let identity = f.player.playback.reader.runtime_identity();
+    let future = f
+        .scene
+        .live(&mut f.source)
+        .create_image(noon::ImageMobjectOptions::rgba8(2, 2, [10, 230, 40, 255].repeat(4)).unwrap())
+        .unwrap();
+    f.scene.live(&mut f.source).add(&future).unwrap();
+    let segment = f.source.wait_segment(1.0).unwrap();
+    f.source.advance_to(3.0).unwrap();
+    let batch = f
+        .source
+        .publish_prepared_prefix(segment, &mut f.publisher)
+        .unwrap();
+    f.deliver(batch);
+    let reader_frame = f.player.playback.reader.frame().clone();
+    f.player.reset_receiver(82).unwrap();
+    let (recovered, _) = ready(&mut f.player);
+    // Each installed receiver remaps resource handles into its own local arena.
+    // Compare resource contents and all frame fields after that one remapping.
+    let old_image = selected.objects[1].content.image().unwrap();
+    let new_image = recovered.frame().unwrap().objects[1]
+        .content
+        .image()
+        .unwrap();
+    assert_eq!(
+        mirror.resources().images().get(old_image.resource()),
+        recovered.resources().images().get(new_image.resource())
+    );
+    assert_eq!(
+        (old_image.width(), old_image.height(), old_image.sampling()),
+        (new_image.width(), new_image.height(), new_image.sampling())
+    );
+    let mut remapped = recovered.frame().unwrap().clone();
+    remapped.objects[1].content = selected.objects[1].content.clone();
+    assert_eq!(remapped, selected);
+    assert_eq!(f.player.playback.reader.frame(), &reader_frame);
+    assert_eq!(
+        recovered.resources().inventory().counts()[0],
+        1,
+        "only the selected image is bootstrapped"
+    );
+    assert_eq!(f.player.playback.reader.runtime_identity(), identity);
+    assert_eq!(f.player.prepared_frontier(), 3.0);
+    mirror = recovered;
     assert!(f.player.drain_delta_json().unwrap().is_none());
     receive(
         &mut mirror,

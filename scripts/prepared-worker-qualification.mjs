@@ -35,7 +35,9 @@ function pixels(a, b) {
 try {
   server = await serveRepository(root, 0, { crossOriginIsolated: true });
   for (const backend of ["webgpu", "webgl"]) {
-    browser = await playwright.chromium.launch({ headless: true, channel: "chromium", args: browserArgs(backend) });
+    browser = await playwright.chromium.launch({ headless: true,
+      ...(process.env.NOON_BROWSER_EXECUTABLE ? { executablePath: process.env.NOON_BROWSER_EXECUTABLE } : { channel: "chromium" }),
+      args: browserArgs(backend) });
     for (const mode of ["transferable", "shared"]) {
       const result = { backend, mode, status: "running", checks: [] }; report.cases.push(result);
       const page = await browser.newPage({ viewport: { width:900, height:600 } });
@@ -59,6 +61,7 @@ try {
           const wasm = await import("./pkg/noon_web.js");
           await wasm.default();
           const { attachBrowserPointerInput } = await import("./browser-pointer-input.js");
+          const { replaceExecutionCanvas } = await import("./execution-canvas.js");
           const { SharedExecutionDeltaWriter, TransferableExecutionDeltaSender, createSharedExecutionMailbox,
             executionDeltaMetadata } = await import("./execution-transport.js");
           // Python mode uses the public canonical context factory, not a smoke
@@ -68,10 +71,18 @@ try {
             : new wasm.PreparedCanvasFixture();
           const player = source.createWorkerPlayer(710);
           player.setPreparedPlaying(false);
+          let receiverSession = 710, sourceId = 0, view = 1;
+          const attachReceiver = async (replacement = false) => {
+          const previous = replacement ? globalThis.preparedWorker : null;
+          if (previous) {
+            previous.abort.abort(); previous.worker.terminate(); previous.port.close();
+            replaceExecutionCanvas(document.querySelector("#scene"));
+            player.resetReceiver(++receiverSession);
+          }
           const canvas = document.querySelector("#scene"), rect = canvas.getBoundingClientRect();
-          player.setBrowserPointerViewJson(JSON.stringify({ revision:1, width:rect.width, height:rect.height }));
+          player.setBrowserPointerViewJson(JSON.stringify({ revision:view, width:rect.width, height:rect.height }));
           const ports = new MessageChannel(), worker = new Worker("./authoring-render-worker.js", { type:"module" });
-          const host = { source, player, worker, port:ports.port1, receipt:null, authorize:false,
+          const host = { source:previous ? previous.source : source, player, worker, port:ports.port1, receipt:null, authorize:previous?.authorize ?? false,
             errors:[], outcomes:[], sent:0, presented:0, pending:new Map(), requests:new Map(), nextRequest:1, ready:null };
           globalThis.preparedWorker = host;
           const fail = message => {
@@ -131,7 +142,7 @@ try {
             worker.postMessage({channel:"noon.render",protocolVersion:1,type:"metrics",requestId,includeGpuIdentity:true});
             return promise;
           };
-          const abort = new AbortController(); let sourceId = 0, view = 1;
+          const abort = new AbortController();
           host.abort = abort;
           host.collector = attachBrowserPointerInput(canvas, { signal:abort.signal, isCurrent:() => true,
             maxSamples:64, allocateSource:() => ++sourceId, viewRevision:() => view, advanceView:() => { view++; },
@@ -143,8 +154,11 @@ try {
             }, onError:fail,
           });
           // Bootstrap resources first; the first selected snapshot may be a seek.
-          await host.send(sourceKind === "python" ? player.seekDeltaJson(0.5) : player.initialDeltaJson());
+          await host.send(sourceKind === "python" && !replacement ? player.seekDeltaJson(0.5) : player.initialDeltaJson());
           return { isolated:crossOriginIsolated, metrics:await host.metrics(), receipt:host.receipt };
+          };
+          globalThis.recoverPreparedReceiver = () => attachReceiver(true);
+          return attachReceiver();
         }, { mode, sourceKind, modules, pyodideUrl });
         assert.equal(ready.isolated, true);
         assert.ok(ready.receipt, "actual renderer must return a presented-frame receipt");
@@ -181,6 +195,21 @@ try {
         assert.equal(pixels(baseline,await capture("historical-release-restored")),0);
         result.checks.push("future-history-sends-no-render-update", "pending-press-survives-delivery");
 
+        await page.mouse.move(320,180); await page.mouse.down();
+        const oldReceiver = await state();
+        const recovered = await page.evaluate(() => recoverPreparedReceiver());
+        await page.mouse.up();
+        assert.equal(recovered.receipt.session, oldReceiver.receipt.session + 1);
+        assert.equal(recovered.receipt.sequence, 0);
+        assert.equal(recovered.metrics.backend, metrics.backend);
+        assert.equal((await state()).time, oldReceiver.time);
+        assert.equal((await state()).frontier, oldReceiver.frontier);
+        assert.equal((await state()).interactions, false);
+        assert.equal(await page.evaluate(receipt => preparedWorker.player.notePointerPresentationJson(JSON.stringify(receipt)), oldReceiver.receipt), false);
+        assert.equal(pixels(baseline, await capture("receiver-recovered-open")), 0);
+        assert.equal(await page.evaluate(() => preparedWorker.source.producerAlive()), true);
+        result.checks.push("terminated-renderer-replaced-around-original-reader", "open-history-source-delivery-preserved", "old-contact-and-receipt-retired");
+
         const beforeTerminal = await state();
         await page.evaluate(() => preparedWorker.source.publishNextToWorker(preparedWorker.player,true));
         assert.equal(await page.evaluate(() => preparedWorker.source.producerAlive()),false);
@@ -193,10 +222,21 @@ try {
         assert.equal(pixels(baseline,await capture("source-destroyed-restored")),0);
         await page.evaluate(() => preparedWorker.send(preparedWorker.player.seekDeltaJson(3)));
         assert.equal((await state()).time,3);
-        assert.ok(pixels(baseline,await capture("terminal")) > 500);
+        const terminalPixels = await capture("terminal");
+        assert.ok(pixels(baseline,terminalPixels) > 500);
         await page.evaluate(() => preparedWorker.send(preparedWorker.player.seekDeltaJson(0.5)));
         assert.equal(pixels(baseline,await capture("rewind")),0);
         result.checks.push("terminal-delivery-preserves-display", "source-destruction-independent", "exact-final-frame-and-rewind");
+        const completed = await state();
+        const recoveredCompleted = await page.evaluate(() => recoverPreparedReceiver());
+        assert.equal(recoveredCompleted.receipt.session, completed.receipt.session + 1);
+        assert.equal((await state()).time, 0.5); assert.equal((await state()).end, 3);
+        assert.equal(pixels(baseline,await capture("receiver-recovered-completed")),0);
+        await page.evaluate(() => preparedWorker.send(preparedWorker.player.seekDeltaJson(3)));
+        assert.equal(pixels(terminalPixels,await capture("receiver-recovered-terminal")),0);
+        await page.evaluate(() => preparedWorker.send(preparedWorker.player.seekDeltaJson(0.5)));
+        assert.equal(pixels(baseline,await capture("receiver-recovered-rewind")),0);
+        result.checks.push("recovery-after-source-destruction", "recovered-endpoint-and-rewind-exact-pixels");
         const idle = await state(); await page.waitForTimeout(160);
         const settled = await state(); assert.equal(settled.sent,idle.sent); assert.equal(settled.presented,idle.presented);
         assert.deepEqual(settled.errors,[]); assert.deepEqual(errors,[]);
