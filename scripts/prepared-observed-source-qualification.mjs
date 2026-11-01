@@ -69,6 +69,8 @@ const lateCausalSource = causalSource.replace("        self.set_drag_targets(dra
 const nativeDeclarations = '        self.set_drag_targets(draggable)\n        self.on_click(target, Indicate(target, color=RED, run_time=0.5))\n';
 const terminalCausalSource = causalSource.replace(nativeDeclarations, "")
   .replace('        mark("end")', nativeDeclarations + '        mark("end")');
+const staticCausalSource = causalSource.replace("        self.wait(2)\n        target.shift(RIGHT)\n", "");
+const zeroCausalSource = staticCausalSource.replace(nativeDeclarations, "        self.wait(0)\n" + nativeDeclarations);
 const reference = `from noon import *
 class FinalPicture(Scene):
     def construct(self):
@@ -87,6 +89,7 @@ const report = {
   lateSourceSha256: hash(lateSource),
   lateCausalSourceSha256: hash(lateCausalSource),
   terminalCausalSourceSha256: hash(terminalCausalSource),
+  staticCausalSourceSha256: hash(staticCausalSource), zeroCausalSourceSha256: hash(zeroCausalSource),
   sourceSha256: hash(source), referenceSha256: hash(reference), cases: [],
   causalSourceSha256: hash(causalSource),
   causalReferenceSha256: hash(causalReference),
@@ -101,7 +104,7 @@ let server, unisolatedServer, browser;
 async function start(page, transportMode, arm) {
   const sources = { ordinary: source, incremental: source, reference, causal: causalSource, "causal-reference": causalReference,
     held: heldSource, "held-reference": heldReference, "late-ordinary": lateSource, "late-incremental": lateSource, "late-causal": lateCausalSource,
-    "terminal-causal": terminalCausalSource };
+    "terminal-causal": terminalCausalSource, "static-causal": staticCausalSource, "zero-causal": zeroCausalSource };
   await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
   await page.evaluate(async ({ source, transportMode, preparedPlayback, initiallyPaused }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
@@ -216,7 +219,7 @@ try {
     report.browserVersion = browser.version();
     for (const transportMode of ["transferable", "shared"]) {
       const pictures = new Map();
-      for (const arm of ["terminal-causal", "late-incremental", "late-causal", "late-ordinary", "ordinary", "incremental", "reference", "causal", "causal-reference", "held", "held-reference"]) {
+      for (const arm of ["static-causal", "zero-causal", "terminal-causal", "late-incremental", "late-causal", "late-ordinary", "ordinary", "incremental", "reference", "causal", "causal-reference", "held", "held-reference"]) {
         const entry = { backend, transportMode, arm, status: "running", observations: [] };
         report.cases.push(entry);
         const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
@@ -352,7 +355,18 @@ try {
           assert.equal(observed.metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
           assert.equal(observed.metrics.transportMode, transportMode);
           entry.gpu = classifyRendererGpuIdentity(observed.metrics.rendererGpuIdentity, backend);
-          if (!["reference", "causal-reference", "held-reference"].includes(arm)) {
+          const completedStatic = ["static-causal", "zero-causal"].includes(arm);
+          if (completedStatic) {
+            assert.equal(observed.registrations, arm === "static-causal" ? 0 : 1);
+            assert.equal(observed.state.time, 0);
+            assert.equal(observed.outcome.duration, 0);
+            assert.equal(observed.state.sourceExecution, "observed");
+            assert.equal(observed.state.sourcePlaybackControllable, false);
+            assert.equal(observed.state.replaySupported, false);
+            assert.notEqual(observed.state.preparedPlayback, true);
+            assert.deepEqual(observed.events, ["start", "end", "cleanup"]);
+            assert.deepEqual(observed.samples, []);
+          } else if (!["reference", "causal-reference", "held-reference"].includes(arm)) {
             assert.equal(observed.registrations, 1);
             assert.deepEqual(observed.events, [...(arm.startsWith("late-") ? ["prefix"] : []),
               ...(["causal", "held", "late-causal", "terminal-causal"].includes(arm) ? ["start", "end", "cleanup"] : ["start", "first", "end", "cleanup"])]);
@@ -363,7 +377,7 @@ try {
             assert.equal(observed.state.sourcePlaybackControllable, false);
             if (!["causal", "held", "late-causal", "terminal-causal"].includes(arm)) assert.ok(Math.abs(observed.samples.reduce((a, b) => a + b, 0) - 2) < 1e-9);
           }
-          if (["causal", "held", "late-causal", "terminal-causal"].includes(arm)) {
+          if (completedStatic || ["causal", "held", "late-causal", "terminal-causal"].includes(arm)) {
             if (arm === "terminal-causal") {
               assert.equal(observed.metrics.presentedSession, entry.terminalSource.initial.metrics.presentedSession + 1);
               assert.equal(observed.metrics.rendererRebuilds, entry.terminalSource.initial.metrics.rendererRebuilds + 1);
@@ -376,9 +390,9 @@ try {
             await page.mouse.move(rect.x + 650, rect.y + 200);
             await page.mouse.up();
             await untilSource(page, s => !s.metrics.needsPresent && s.metrics.bufferedDeltas === 0);
-            entry.completedClick = await clickWhileFrozen(page, `${backend}-${transportMode}-${arm}-completed-click`, arm === "held" ? 400 : 450);
+            entry.completedClick = await clickWhileFrozen(page, `${backend}-${transportMode}-${arm}-completed-click`, arm === "held" || completedStatic ? 400 : 450);
             entry.afterInput = await observeSource(page);
-            assert.equal(entry.afterInput.state.time, arm === "late-causal" ? 3 : 2);
+            assert.equal(entry.afterInput.state.time, completedStatic ? 0 : arm === "late-causal" ? 3 : 2);
             assert.deepEqual(entry.afterInput.events, [...(arm === "late-causal" ? ["prefix"] : []), "start", "end", "cleanup"]);
             assert.equal(entry.afterInput.metrics.gpuGeneration, observed.metrics.gpuGeneration);
             assert.equal(entry.afterInput.metrics.rendererRebuilds, observed.metrics.rendererRebuilds);
@@ -405,7 +419,7 @@ try {
           await writeFile(path.join(output, "report.json"), encode(report));
         }
       }
-      for (const [actual, reference] of [["ordinary", "reference"], ["incremental", "reference"], ["causal", "causal-reference"], ["held", "held-reference"], ["late-ordinary", "reference"], ["late-incremental", "reference"], ["late-causal", "causal-reference"], ["terminal-causal", "causal-reference"]]) {
+      for (const [actual, reference] of [["ordinary", "reference"], ["incremental", "reference"], ["causal", "causal-reference"], ["held", "held-reference"], ["late-ordinary", "reference"], ["late-incremental", "reference"], ["late-causal", "causal-reference"], ["terminal-causal", "causal-reference"], ["static-causal", "held-reference"], ["zero-causal", "held-reference"]]) {
         const image = pictures.get(actual), expected = pictures.get(reference);
         assert.equal(image.width, expected.width); assert.equal(image.height, expected.height);
         assert.ok(image.data.equals(expected.data), `${backend}/${transportMode}/${actual} final pixels must equal the static reference`);

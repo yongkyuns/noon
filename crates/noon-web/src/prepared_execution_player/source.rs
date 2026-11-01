@@ -225,14 +225,17 @@ mod wasm {
         pub fn create_finished_prepared_execution_player(
             &mut self,
             transport_session: u32,
-        ) -> Result<PreparedExecutionPlayer, JsValue> {
+        ) -> Result<Option<PreparedExecutionPlayer>, JsValue> {
             let reader = self
                 .inner
                 .create_finished_static_reader()
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let Some(reader) = reader else {
+                return Ok(None);
+            };
             let mut player = PreparedExecutionPlayer::from_reader(reader, transport_session);
             player.set_prepared_playing(false);
-            Ok(player)
+            Ok(Some(player))
         }
 
         /// Called after livePrepareSegment; no runtime lease leaves this context.

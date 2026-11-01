@@ -2251,6 +2251,34 @@ for (const stage of ["initial", "intermediate", "endpoint"]) {
 }
 
 
+for (const mode of ["shared", "transferable"]) {
+  test(`completed static input stays at authored zero without replay or source controls (${mode})`, async () => {
+    const f = fixture(mode, null, null, { completedStaticSource: true });
+    f.player.sealReplay = () => assert.fail("input owner cannot become immutable history");
+    f.player.freshFiniteSourceDuration = () => assert.fail("no invented source duration");
+    let endpoint;
+    try {
+      const ready = next(f.control.port2);
+      endpoint = await f.attach();
+      assert.equal((await ready).finiteSourceDuration, null);
+      const state = await request(f.control.port2, "state", 1);
+      assert.equal(state.time, 0);
+      assert.equal(state.sourceExecution, "observed");
+      assert.equal(state.sourcePlaybackControllable, false);
+      assert.equal(state.replaySupported, false);
+      assert.equal((await request(f.control.port2, "resume", 2)).playing, false);
+      assert.equal((await request(f.control.port2, "pause", 3)).time, 0);
+      for (const [index, type] of ["seek", "advance_to", "restart_playback", "set_loop_duration", "begin_finite_export"].entries()) {
+        assert.equal((await request(f.control.port2, type, index + 4, { time: 1, duration: 1 })).type, "error");
+      }
+      assert.equal((await request(f.control.port2, "state", 10)).time, 0);
+      assert.equal(f.stats().initialSnapshots, 1);
+      assert.equal(f.stats().completedSegments, 0);
+      assert.equal(f.stats().continuationDriveTimes.length, 0);
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}
+
 test("completed source attachment publishes once without starting its old callback protocol", async () => {
   const f = fixture("transferable", () => assert.fail("completed source callback cannot restart"), {
     generation: 27, completed: true,

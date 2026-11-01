@@ -55,6 +55,12 @@ class ZeroPrepared(Scene):
         self.wait(0)
         target.shift(LEFT)
 `;
+const staticInputSource = staticSource.replace("class StaticPrepared", "class StaticInput")
+  .replace("noon-static-source-invoked", "noon-static-input-invoked")
+  .replace("        self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0))",
+    "        target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)\n        self.add(target)\n        self.set_drag_targets(target)");
+const zeroInputSource = staticInputSource.replace("noon-static-input-invoked", "noon-zero-input-invoked")
+  .replace("        self.set_drag_targets(target)", "        self.wait(0)\n        self.set_drag_targets(target)");
 const largeSource = `from noon import *
 events = []
 class LargePrepared(Scene):
@@ -64,7 +70,7 @@ class LargePrepared(Scene):
                           position=((i % 100 - 49.5) * 0.14, (i // 100 - 34.5) * 0.10))
                    for i in range(7000)])
 `;
-const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "prepared-zero", "prepared-large"].map((id, order) => ({
+const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "prepared-zero", "prepared-large", "prepared-static-input", "prepared-zero-input"].map((id, order) => ({
   id, order, title: id, status: "ready", parity_status: "candidate",
   reuse: "manim-compatible-parity-v0.21", category: "qualification",
   path: `python/examples/${id}.py`, thumbnail: "prepared-fixture.svg",
@@ -74,6 +80,7 @@ const hash = value => createHash("sha256").update(value).digest("hex");
 const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
   sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
+report.staticInputSourceSha256 = hash(staticInputSource); report.zeroInputSourceSha256 = hash(zeroInputSource);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let browser, server;
 const largePixelsByBackend = new Map();
@@ -88,7 +95,7 @@ async function installFixture(page, evidence) {
   }));
   for (const entry of entries) {
     await page.route(`**/${entry.path}`, route => route.fulfill({ contentType: "text/x-python",
-      body: entry.id === "prepared-large" ? largeSource : entry.id === "prepared-zero" ? zeroSource : entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
+      body: entry.id === "prepared-static-input" ? staticInputSource : entry.id === "prepared-zero-input" ? zeroInputSource : entry.id === "prepared-large" ? largeSource : entry.id === "prepared-zero" ? zeroSource : entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
   }
   await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
@@ -197,8 +204,11 @@ try {
       page.setDefaultTimeout(180_000);
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
       let staticInvocations = 0, zeroInvocations = 0, largeInvocations = 0;
+      const inputInvocations = { static: 0, zero: 0 };
       page.on("console", message => { if (message.text() === "noon-static-source-invoked") staticInvocations++;
         if (message.text() === "noon-zero-source-invoked") zeroInvocations++;
+        if (message.text() === "noon-static-input-invoked") inputInvocations.static++;
+        if (message.text() === "noon-zero-input-invoked") inputInvocations.zero++;
         if (message.text() === "noon-large-source-invoked") largeInvocations++; });
       try {
         await installFixture(page, entry);
@@ -312,6 +322,33 @@ try {
         assert.equal(zeroInvocations, 2);
         assert.deepEqual(pageErrors, []);
         entry.checks.push("initial-zero-wait-before-open-prefix", "zero-only-final-edits-exact-pixels", "zero-only-restart-and-rerun");
+        for (const kind of ["static", "zero"]) {
+          await selectGalleryExample(page, `prepared-${kind}-input`);
+          await page.waitForFunction(id => !__noonExampleGallery.runInFlight &&
+            __noonExampleGallery.selectedExampleId === id &&
+            document.querySelector("#patch-status")?.dataset.state === "applied", `prepared-${kind}-input`);
+          const initial = await pixels(page, `${backend}-${transport}-${kind}-input`);
+          assert.ok(baseline.equals(initial));
+          assert.equal(await page.locator(".playback-toggle").isDisabled(), true);
+          assert.equal(await page.locator(".playback-scrubber").isDisabled(), true);
+          const rect = await page.locator("#scene").boundingBox();
+          await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          await page.mouse.down();
+          await page.mouse.move(rect.x + rect.width * 0.625, rect.y + rect.height / 2, { steps: 4 });
+          await page.mouse.up();
+          assert.equal(initial.equals(await pixels(page, `${backend}-${transport}-${kind}-input-dragged`)), false);
+          assert.equal(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"), "0");
+          assert.equal(inputInvocations[kind], 1);
+          const generation = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+          await page.locator("#replace-scene").click();
+          await page.waitForFunction(previous => !__noonExampleGallery.runInFlight &&
+            __noonExampleGallery.runPhaseMetrics.runGeneration > previous &&
+            document.querySelector("#patch-status")?.dataset.state === "applied", generation);
+          assert.ok(initial.equals(await pixels(page, `${backend}-${transport}-${kind}-input-rerun`)));
+          assert.equal(inputInvocations[kind], 2);
+          assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+          entry.checks.push(`${kind}-input-frozen-zero-drag`, `${kind}-input-rerun-warm-interpreter`);
+        }
         await selectGalleryExample(page, "prepared-large");
         await waitForObservation(page, async () => {
           const gallery = __noonExampleGallery, run = gallery.runPhaseMetrics;

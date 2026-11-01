@@ -784,8 +784,18 @@ impl CanonicalAuthoringScene {
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
+        self.build_live_player_with_session(self.lower_execution()?, duration, transport_session)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn build_live_player_with_session(
+        &self,
+        session: noon::ExecutionSession,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<crate::SemanticExecutionPlayer, String> {
         let mut player = crate::SemanticExecutionPlayer::from_live_session(
-            self.lower_execution()?,
+            session,
             std::rc::Rc::clone(self.scene.integration_store()),
             self.scene.root(),
             duration,
