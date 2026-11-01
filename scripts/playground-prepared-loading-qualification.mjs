@@ -25,7 +25,7 @@ const backend = env.NOON_PLAYBACK_LOADING_BACKEND ?? "webgpu";
 assert.ok(["webgpu", "webgl"].includes(backend));
 const output = path.resolve(env.NOON_PLAYBACK_LOADING_OUTPUT ?? path.join(os.tmpdir(), "noon-playback-loading"));
 const examples = (env.NOON_PLAYBACK_LOADING_EXAMPLES ??
-  "parity-create-circle,showcase-code-blocks,showcase-gpu-glow,showcase-cuda-transpose,showcase-triangle-light").split(",");
+  "parity-create-circle,showcase-code-blocks,showcase-gpu-glow,showcase-cuda-transpose,showcase-triangle-light,showcase-pointer-selection,showcase-always-redraw,showcase-translation-drag").split(",");
 const encode = value => JSON.stringify(value, (_key, item) => typeof item === "bigint" ? String(item) : item, 2);
 const digest = value => createHash("sha256").update(value).digest("hex");
 function gitObject(name) {
@@ -43,7 +43,7 @@ const report = { status: "running", scope: "loading observations on unchanged ca
   harnessRevision: revision, runtimeSourceTrees: runtimeTrees(revision), harnessSha256: digest(await readFile(fileURLToPath(import.meta.url))),
   backend, trials, launchArgs: browserArgs(backend, { gpuMode: "hardware" }), observer: { inkThreshold: 128, channelDifference: 8, edgeMargin: 8, pollIntervalMs: 25,
     usefulTiming: "upper bound at completion of the first positive canvas capture; native first-any-frame time is separate",
-    memoryWindow: "page navigation/reload through first useful observation plus 500 ms; aggregate sampled process-tree RSS" },
+    memoryWindow: "navigation/reload through first visible observation plus the recorded post-observation window; aggregate sampled process-tree RSS" },
   host: { platform: os.platform(), release: os.release(), arch: os.arch(), cpu: os.cpus()[0]?.model,
     logicalCpus: os.cpus().length, totalMemoryBytes: os.totalmem() }, packages: {}, cases: [] };
 await mkdir(output, { recursive: true });
@@ -99,7 +99,9 @@ async function observation(page) {
 }
 
 async function measure(page, example, arm, phase, trial, warmup) {
-  const row = { example, arm, phase, trial, warmup, status: "running", inkAttempts: 0, loadAvg: os.loadavg(),
+  const postObservationWindowMs = ["showcase-pointer-selection", "showcase-translation-drag"].includes(example) ? 4000 : 500;
+  const row = { example, arm, phase, trial, warmup, status: "running", inkAttempts: 0, captures: [],
+    postObservationWindowMs, loadAvg: os.loadavg(),
     freeMemoryBytes: os.freemem(), pageErrors: [], consoleErrors: [] };
   report.cases.push(row);
   const onPageError = error => row.pageErrors.push(String(error));
@@ -126,6 +128,9 @@ async function measure(page, example, arm, phase, trial, warmup) {
         const after = await observation(page);
         row.inkAttempts++;
         const ink = sceneInkPixels(PNG.sync.read(bytes));
+        row.captures.push({ beforeEpochMs: last.epochMs, afterEpochMs: after.epochMs,
+          sceneInkPixels: ink, captureAndObservationMs: performance.now() - captureStarted,
+          presentedSession: metrics.presentedSession, frameTimeBefore: metrics.time, frameTimeAfter: after.metrics?.time });
         if (ink >= 128 && after.run?.runGeneration === last.run.runGeneration && after.selected === example
             && after.metrics?.presentedSession === metrics.presentedSession) {
           if (after.status === "error") throw new Error(after.problem || "source failed during capture");
@@ -148,7 +153,7 @@ async function measure(page, example, arm, phase, trial, warmup) {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
     assert.ok(Number.isFinite(row.sourceToUsefulObservationUpperMs), "no useful authored-scene observation");
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, postObservationWindowMs));
     const settled = await observation(page);
     row.settledObservation = settled;
     if (settled.status === "error") throw new Error(settled.problem || "source failed in startup window");
@@ -160,6 +165,9 @@ async function measure(page, example, arm, phase, trial, warmup) {
     await page.screenshot({ path: path.join(output, `${example}-${trial}-${arm}-${phase}-failure.png`) }).catch(() => {});
   } finally {
     row.memory = await sampler.stop();
+    if (!row.memory.enabled || row.memory.sampleCount === 0 || row.memory.samplingError) {
+      row.status = "failed"; row.memoryError = row.memory.samplingError ?? "no RSS observations";
+    }
     page.off("pageerror", onPageError); page.off("console", onConsole);
     await writeFile(path.join(output, "report.json"), encode(report));
     console.log(JSON.stringify({ example, trial, arm, phase, warmup, status: row.status,
@@ -173,7 +181,7 @@ function summarize() {
     const rows = report.cases.filter(row => !row.warmup && row.example === example && row.phase === phase);
     const arm = name => {
       const selected = rows.filter(row => row.arm === name);
-      return { requested: selected.length, observed: selected.filter(row => row.status === "observed").length,
+      return { expected: trials, requested: selected.length, observed: selected.filter(row => row.status === "observed").length,
         usefulUpperMs: distribution(selected.map(row => row.sourceToUsefulObservationUpperMs)),
         firstAnyMs: distribution(selected.map(row => row.sourceToFirstAnyPresentedMs)),
         peakSampledRssBytes: distribution(selected.map(row => row.memory?.peakSampledRssBytes)) };
