@@ -37,6 +37,8 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const alive = () => assert.equal(freed, false, "retired WASM handle must never be reused");
   const trap = operation => { if (operation === trapAt) throw new WebAssembly.RuntimeError(`trap during ${operation}`); };
   const player = {
+    resetReceiver(session) { alive(); assert.ok(session > 3); events.push("reset-receiver"); },
+    preparedPlaying: () => false,
     prepareSourceSegment(value) {
       if (late) { events.push("require-source"); return false; }
       alive(); trap("segment"); assert.equal(value, context); counters.segments++; pending = 4; events.push("segment");
@@ -84,6 +86,10 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
       async publishContinuationResult(generation) { assert.equal(generation, args[1].generation); events.push("final-publication"); },
       sourcePrefixDelivered() { assert.equal(stopped, false); counters.delivered++; args[5].wakeSource(); },
       sourceExecutionRequired() { assert.equal(stopped, false); events.push("source-demand"); },
+      detachPreparedReceiver() {
+        assert.equal(stopped, false); stopped = true;
+        events.push("detach-receiver"); onStop(player); return args[5];
+      },
       stop() {
         if (stopped) return;
         stopped = true;
@@ -91,7 +97,13 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
         if (prepared) { player.stopSourcePreparation(); player.free(); }
       },
     };
-    if (attachGate && (!(late || terminalNative) || !prepared)) await attachGate.promise;
+    try {
+      if (attachGate && (!(late || terminalNative) || !prepared)) await attachGate.promise;
+    } catch (error) {
+      if (prepared && args[5].retainOnSetupFailure) { stopped = true; onStop(player); }
+      else endpoint.stop();
+      throw error;
+    }
     return endpoint;
   };
   api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
@@ -125,6 +137,20 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   };
   return {
     ...api, context, player, counters, events, tasks, posts, errors,
+    setAttachGate(value) { attachGate = value; },
+    async recover(extra = {}) {
+      const contextId = posts.findLast(post => post.type === "semantic_continuation_registered")?.semanticExecution.context_id
+        ?? JSON.parse(posts.findLast(post => post.type === "result").resultJson).semantic_execution.context_id;
+      const control = new MessageChannel(), render = new MessageChannel();
+      try {
+        return await api.handleContinuationControl(envelope("attach_semantic_execution", {
+          requestId: 4, contextId, controlPort: control.port1, renderPort: render.port1,
+          session: 4, transportMode: "transferable", sharedSlotCapacity: 1024,
+          loopDurationSeconds: 1, initiallyPaused: true, pacing: "realtime",
+          replaceExistingEndpoint: true, ...extra,
+        }));
+      } finally { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); }
+    },
     start(sourceBody, requestId = 1) {
       execute = sourceBody;
       return api.handleRequest(envelope("run", { requestId, source: "test source", context: {},
@@ -202,6 +228,54 @@ test("production source completes each barrier once, sleeps on Rust demand and s
   const result = h.posts.find(post => post.type === "result");
   assert.equal(JSON.parse(result.resultJson).semantic_execution.prepared_playback, true);
   h.endpoint().stop();
+});
+
+test("receiver replacement retains the original source before and after completion", async () => {
+  const h = host(); let invocations = 0, completed = 0;
+  const done = h.start(async api => {
+    invocations++; await api.awaitSemanticContinuation(h.context); completed++; return h.result();
+  });
+  await microtasks(); const initial = h.tick(); await h.attach(); await initial;
+  const original = h.run().continuation.preparedPlayer;
+  await h.recover();
+  assert.equal(h.run().continuation.preparedPlayer, original);
+  assert.equal(h.counters.freed, 0); assert.equal(completed, 0);
+  h.demand(true); await h.tick(); await done;
+  await h.recover({ session: 5 });
+  assert.equal(invocations, 1); assert.equal(completed, 1);
+  assert.equal(h.counters.initial, 1); assert.equal(h.counters.terminal, 1);
+  assert.equal(h.events.filter(event => event === "reset-receiver").length, 2);
+  assert.deepEqual(h.errors, []);
+  h.endpoint().stop(); assert.equal(h.counters.freed, 1); assert.equal(h.contexts.size, 0);
+});
+
+test("failed replacement setup retains static history for a newer receiver retry", async () => {
+  const h = host(); let invocations = 0;
+  await h.start(async () => { invocations++; return staticResult(h); });
+  await h.attachFinished();
+  const gate = deferred(); h.setAttachGate(gate);
+  const failed = h.recover(); await microtasks();
+  gate.reject(new Error("replacement setup failed")); await failed;
+  assert.match(String(h.errors.at(-1).error), /replacement setup failed/);
+  assert.equal(h.counters.freed, 0); assert.equal(h.contexts.size, 1);
+  h.setAttachGate(null); await h.recover({ session: 5 });
+  assert.equal(invocations, 1);
+  assert.equal(h.events.filter(event => event === "static-reader").length, 1);
+  h.endpoint().stop(); assert.equal(h.counters.freed, 1); assert.equal(h.contexts.size, 0);
+});
+
+test("cancellation during replacement waits for the candidate before freeing the reader", async () => {
+  const h = host(); let after = 0;
+  const done = h.start(async api => { await api.awaitSemanticContinuation(h.context); after++; return h.result(); });
+  await microtasks(); const initial = h.tick(); await h.attach(); await initial;
+  const gate = deferred(); h.setAttachGate(gate);
+  const recovering = h.recover(); await microtasks();
+  await h.cancel(); await done;
+  assert.equal(h.counters.freed, 0, "in-flight setup still owns the handle");
+  assert.equal(h.contexts.size, 1);
+  gate.resolve(); await recovering;
+  assert.equal(after, 0); assert.equal(h.counters.freed, 1); assert.equal(h.contexts.size, 0);
+  assert.equal(h.posts.some(post => post.type === "semantic_execution_attached" && post.requestId === 4), false);
 });
 
 test("cancellation before attachment rejects once and admits a fresh source", async () => {
@@ -572,7 +646,7 @@ test("released static source cannot revive after asynchronous renderer attachmen
   await microtasks();
   await h.releaseFinished();
   gate.resolve(); await attaching;
-  assert.match(String(h.errors.at(-1).error), /released during attachment/);
+  assert.match(String(h.errors.at(-1).error), /retired during attachment|released during attachment/);
   assert.equal(h.counters.freed, 1);
   assert.equal(h.contexts.size, 0);
   assert.equal(h.posts.some(post => post.type === "semantic_execution_attached"), false);

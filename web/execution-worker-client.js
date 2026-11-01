@@ -218,6 +218,8 @@ export class ExecutionWorkerClient {
     const initiallyPaused = validateInitiallyPaused(options.initiallyPaused);
     const pacing = validateSemanticPacing(options.pacing);
     const preparedPlayback = options.preparedPlayback ?? false;
+    const replaceExistingEndpoint = options.replaceExistingEndpoint ?? false;
+    if (typeof replaceExistingEndpoint !== "boolean") throw new TypeError("replaceExistingEndpoint must be a boolean");
     if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
     if (preparedPlayback && pacing !== SEMANTIC_PACING_REALTIME) {
       throw new Error("prepared playback requires realtime pacing");
@@ -246,6 +248,7 @@ export class ExecutionWorkerClient {
       pacing,
       initialPointerView,
       preparedPlayback,
+      replaceExistingEndpoint,
     );
   }
 
@@ -259,6 +262,7 @@ export class ExecutionWorkerClient {
     pacing,
     initialPointerView,
     preparedPlayback,
+    replaceExistingEndpoint,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -302,7 +306,7 @@ export class ExecutionWorkerClient {
           continuationGeneration,
           initiallyPaused,
           pacing,
-        ), initialPointerView },
+        ), initialPointerView, replaceExistingEndpoint },
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
         async ([engine, renderResult]) => {
@@ -332,7 +336,7 @@ export class ExecutionWorkerClient {
     } catch (error) {
       this.#assertLifecycleCurrent(generation);
       this.#renderPrepared = null;
-      this.#rollbackFailedStart(error, true);
+      this.#rollbackFailedStart(error, true, replaceExistingEndpoint && this.#semanticPreparedPlayback);
       throw error;
     } finally {
       if (this.#preparedStartReservation === reservation) {
@@ -839,9 +843,6 @@ export class ExecutionWorkerClient {
   }
 
   async restart({ failedOwner = this.#fatalOwner } = {}) {
-    if (this.#semanticPreparedPlayback) {
-      throw new Error("prepared playback receiver recovery requires a fresh Run");
-    }
     const hasAuthoring = this.#semanticContextId !== null && this.#semanticAuthoringClient !== null;
     if (!hasAuthoring || this.#transportMode === null) {
       throw new Error("ExecutionWorkerClient has not been started");
@@ -849,7 +850,7 @@ export class ExecutionWorkerClient {
     if (failedOwner !== null && failedOwner !== "engine" && failedOwner !== "render") {
       throw new TypeError(`unsupported failed execution owner ${failedOwner}`);
     }
-    if (failedOwner === "engine" && this.#renderWorker !== null) {
+    if (!this.#semanticPreparedPlayback && failedOwner === "engine" && this.#renderWorker !== null) {
       return this.#restartEngine();
     }
     return this.#restartAll();
@@ -886,6 +887,7 @@ export class ExecutionWorkerClient {
     const semanticAuthoringClient = this.#semanticAuthoringClient;
     const semanticContextId = this.#semanticContextId;
     const semanticCallbackSessionId = this.#semanticCallbackSessionId;
+    const preparedPlayback = this.#semanticPreparedPlayback;
 
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       this.terminate({ preserveHostConfiguration: true });
@@ -897,6 +899,8 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity,
       callbackSessionId: semanticCallbackSessionId,
       initiallyPaused: !wasPlaying,
+      preparedPlayback,
+      replaceExistingEndpoint: preparedPlayback,
     });
     this.#fatalOwner = null;
     return ready;
@@ -914,11 +918,13 @@ export class ExecutionWorkerClient {
     this.#candidateEngineReject = null;
     closeEndpoint(this.#candidateEngineWorker);
     this.#candidateEngineWorker = null;
-    retireSemanticEndpoint(this.#engineWorker);
+    if (preserveHostConfiguration && this.#semanticPreparedPlayback) closeEndpoint(this.#engineWorker);
+    else retireSemanticEndpoint(this.#engineWorker);
     if (!preserveHostConfiguration) {
       void releaseSemanticContext(
         this.#semanticAuthoringClient,
         this.#semanticContextId,
+        this.#semanticPreparedPlayback,
       );
     }
     this.#renderWorker?.terminate();
@@ -1244,9 +1250,10 @@ export class ExecutionWorkerClient {
     }
   }
 
-  #rollbackFailedStart(error, replaceCanvas) {
+  #rollbackFailedStart(error, replaceCanvas, preservePreparedReceiver = false) {
     this.#retireAudio();
-    retireSemanticEndpoint(this.#engineWorker);
+    if (preservePreparedReceiver) closeEndpoint(this.#engineWorker);
+    else retireSemanticEndpoint(this.#engineWorker);
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
@@ -1466,10 +1473,10 @@ function validateSemanticAuthoringClient(authoringClient) {
   }
 }
 
-async function releaseSemanticContext(authoringClient, contextId) {
+async function releaseSemanticContext(authoringClient, contextId, cancelActiveSource = false) {
   if (authoringClient === null || authoringClient === undefined || contextId === null) return;
   try {
-    await authoringClient.releaseSemanticExecution(contextId);
+    await authoringClient.releaseSemanticExecution(contextId, { cancelActiveSource });
   } catch (error) {
     console.warn(`[Noon execution] failed to release semantic context ${contextId}`, error);
   }

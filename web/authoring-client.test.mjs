@@ -118,12 +118,52 @@ test("prepared continuation metadata permits initial pause and prevents source r
         { ...options, ...override }), /reattach|replace|realtime pacing/);
     }
     assert.equal(worker.messages.length, 2);
+    const recovered = client.attachSemanticExecution("prepared", control.port1, render.port1,
+      { ...options, continuationGeneration: null, replaceExistingEndpoint: true, session: 8 });
+    await Promise.resolve();
+    const recoveryRequest = worker.messages.at(-1);
+    assert.equal(recoveryRequest.replaceExistingEndpoint, true);
+    assert.equal(recoveryRequest.continuationGeneration, undefined);
+    worker.emit("message", workerMessage("semantic_execution_attached", { requestId: recoveryRequest.requestId }));
+    await recovered;
     worker.emit("message", workerMessage("result", { requestId: 0,
       resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: descriptor, duration: 2 }) }));
     assert.equal((await result).semanticExecution.preparedPlayback, true);
   } finally {
     control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); client.terminate();
   }
+});
+
+for (const completedFirst of [false, true]) test(`owner retirement cancels an active source and tolerates its terminal race (${completedFirst})`, async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  const running = client.run("prepared source", {}, { preparedPlayback: true, onSemanticContinuation() {} });
+  const outcome = running.then(value => value, error => String(error));
+  await Promise.resolve();
+  const descriptor = { context_id: "prepared", continuation_generation: 3, prepared_playback: true };
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0, generation: 3, duration: 1, semanticExecution: descriptor,
+  }));
+  await Promise.resolve();
+  const retiring = client.releaseSemanticExecution("prepared", { cancelActiveSource: true });
+  await Promise.resolve(); await Promise.resolve();
+  const cancellation = worker.messages.at(-1);
+  assert.equal(cancellation.type, "cancel_semantic_continuation");
+  if (completedFirst) {
+    worker.emit("message", workerMessage("result", { requestId: 0,
+      resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: descriptor, duration: 2 }) }));
+    await outcome;
+    worker.emit("message", workerMessage("error", { requestId: cancellation.requestId, message: "stale semantic continuation cancellation" }));
+  } else {
+    worker.emit("message", workerMessage("error", { requestId: 0, message: "execution owner retired" }));
+    worker.emit("message", workerMessage("semantic_continuation_cancelled", { requestId: cancellation.requestId }));
+  }
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  const release = worker.messages.at(-1);
+  assert.equal(release.type, "release_semantic_execution");
+  worker.emit("message", workerMessage("semantic_execution_released", { requestId: release.requestId }));
+  await retiring; await outcome;
+  assert.equal(client.terminated, false); client.terminate();
 });
 
 test("preparation metadata cannot cross a different source run mode", async () => {

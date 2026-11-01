@@ -101,6 +101,7 @@ export async function attachSemanticEngine(
   // Transport sessions frame selected publications, never source/history state.
   let transport = null;
   let stopped = false;
+  let receiverFailed = false;
   let engineTrapped = false;
   let failedPreparedPublication = null;
   let latestTick = null;
@@ -134,7 +135,7 @@ export async function attachSemanticEngine(
   const controls = [];
   const post = (payload, transfer = []) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
   function requestSourceHandoff() {
-    if (stopped || prepared === null || sourceHandoffRequested || !player.sourceExecutionReady()) return;
+    if (stopped || receiverFailed || prepared === null || !preparedClockAdmitted || sourceHandoffRequested || !player.sourceExecutionReady()) return;
     sourceHandoffRequested = true;
     // Keep the selected reader alive for its last picture, but retire delivery
     // before another queued command can alter the frontier authorization.
@@ -322,6 +323,7 @@ export async function attachSemanticEngine(
           preparedClockAdmitted = true;
           observeExecutionWake(performance.now(), true);
           prepared.wakeSource();
+          requestSourceHandoff();
         } else observeContinuationWake(performance.now(), true);
       }
       catch (error) { terminateProgression(error); }
@@ -387,6 +389,7 @@ export async function attachSemanticEngine(
     });
   };
   const observeExecutionWake = (wallTime, force = false) => {
+    if (receiverFailed) return;
     if (prepared !== null && !preparedClockAdmitted) {
       emitExecutionWake("idle", null, force);
       return;
@@ -953,7 +956,7 @@ export async function attachSemanticEngine(
   }
 
   async function drain() {
-    if (stopped || !transport || draining) return;
+    if (stopped || receiverFailed || !transport || draining) return;
     draining = true;
     try {
       if (player !== null && writable() && applyPointerInvalidation()) {
@@ -1252,10 +1255,10 @@ export async function attachSemanticEngine(
         }
       }
     } catch (error) {
-      if (!stopped) terminateProgression(error);
+      if (!stopped && !receiverFailed) terminateProgression(error);
     } finally {
       draining = false;
-      if (!stopped && ((controls.length && writable()) || (latestTick !== null && writable()) ||
+      if (!stopped && !receiverFailed && ((controls.length && writable()) || (latestTick !== null && writable()) ||
           (pendingPointerInvalidation !== null && player !== null && writable()))) {
         void drain();
       }
@@ -1264,6 +1267,7 @@ export async function attachSemanticEngine(
   function terminateProgression(error, requestId = null) {
     if (stopped) return;
     if (notePreparedTrap(error)) { stop(); return; }
+    if (receiverFailed && prepared !== null) return;
     callbackFault = error instanceof Error ? error : new Error(String(error));
     fail(callbackFault, requestId);
     try {
@@ -1272,7 +1276,7 @@ export async function attachSemanticEngine(
       stop();
     }
   }
-  function stop({ retireSource = false } = {}) {
+  function stop({ retireSource = false, preservePreparedPlayer = false } = {}) {
     // Halt progression immediately, while retaining a rejected consuming exit
     // for an explicit retry. Final release happens only after ownership settles.
     if (stopped && player === null && transport === null) return;
@@ -1329,14 +1333,15 @@ export async function attachSemanticEngine(
     if (prepared !== null) {
       const retiringPlayer = player;
       player = null;
+      const retained = preservePreparedPlayer && !engineTrapped ? retiringPlayer : null;
       // Cancellation precedes reader disposal; a trapped WASM context is never re-entered.
-      try { onStop(); }
+      try { onStop(retained); }
       catch (error) { notePreparedTrap(error); throw error; }
       finally {
-        try { if (!engineTrapped) retiringPlayer?.stopSourcePreparation(); }
+        try { if (!engineTrapped && retained === null) retiringPlayer?.stopSourcePreparation(); }
         catch (error) { notePreparedTrap(error); throw error; }
         finally {
-          try { if (!engineTrapped) retiringPlayer?.free(); }
+          try { if (!engineTrapped && retained === null) retiringPlayer?.free(); }
           catch (error) { notePreparedTrap(error); throw error; }
           finally {
             transport?.close?.();
@@ -1393,6 +1398,7 @@ export async function attachSemanticEngine(
           post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
           return;
         }
+        if (receiverFailed) throw new Error("prepared receiver failed; replace the receiver before further controls");
         if (!FINITE_EXPORT_CONTROLS.has(message.type) && !["pause", "resume", "seek", "seek_section", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
           "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
@@ -1512,7 +1518,16 @@ export async function attachSemanticEngine(
         const error = new Error(message.message);
         rejectPendingRendererObservation(error);
         rejectEffectPreparation(error);
-        if (continuation !== null || prepared !== null) {
+        if (prepared !== null) {
+          // A failed renderer cannot consume further publications. Retain the
+          // exact reader/source cursor for receiver replacement, never replay C.
+          receiverFailed = true;
+          latestTick = null;
+          controls.length = 0;
+          emitExecutionWake("idle", null, true);
+          rejectPendingPresentation(error);
+          fail(error);
+        } else if (continuation !== null) {
           terminateProgression(error);
         } else {
           rejectPendingPresentation(error);
@@ -1551,13 +1566,25 @@ export async function attachSemanticEngine(
       finiteSourceDuration: continuation === null && prepared === null && !completedStaticSource ? player.freshFiniteSourceDuration() ?? null : null,
       ...(audioResources === null ? {} : { audioResources }),
     }, audioResources === null ? [] : [audioResources.buffer]);
-  } catch (error) { notePreparedTrap(error); stop(); throw error; }
+  } catch (error) {
+    notePreparedTrap(error);
+    stop({ preservePreparedPlayer: prepared?.retainOnSetupFailure === true });
+    throw error;
+  }
   return {
     stop,
+    detachPreparedReceiver() {
+      if (prepared === null || engineTrapped || player === null || transport === null) {
+        throw new Error("prepared receiver has no retained player to detach");
+      }
+      stop({ preservePreparedPlayer: true });
+      return prepared;
+    },
     sourceExecutionRequired() { requestSourceHandoff(); },
     sourcePrefixDelivered() {
       if (prepared === null) throw new Error("semantic endpoint has no prepared source");
       if (stopped) throw new Error("prepared execution endpoint is stopped");
+      if (receiverFailed) return;
       // History adoption alone neither selects another frame nor drains a
       // renderer delta. It may release Rust buffering/demand and wake sleepers.
       try {
