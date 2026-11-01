@@ -24,8 +24,6 @@ if (existsSync(join(process.cwd(), "web", "node_modules"))) {
 }
 
 const expectedJavascriptSurface = [
-  "sourceExecutionReady(",
-  "beginSourceExecution(",
   "export class WasmAudioSource",
   "export class WasmAudioClipOptions",
   "export class WasmAudioClipHandle",
@@ -359,9 +357,6 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
-  "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
-  "beginSourceExecution(context: CanonicalAuthoringSceneContext): boolean",
-  "sourceExecutionReady(): boolean",
   "requiresContentBoundary(): boolean",
   "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
   "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",
@@ -677,6 +672,15 @@ const expectedTypeSurface = [
   "export function resolveGlowPulseAnimationOptions(",
   "export function resolveTransformAnimationOptions(",
 ];
+
+// Prepared-prefix exports are optional. Require the complete handoff ABI when
+// either binding surface advertises it, without changing the normal package.
+if (javascript.includes("export class PreparedExecutionPlayer") || declarations.includes("export class PreparedExecutionPlayer")) {
+  expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(");
+  expectedTypeSurface.push("export class PreparedExecutionPlayer",
+    "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
+    "beginSourceExecution(context: CanonicalAuthoringSceneContext): boolean", "sourceExecutionReady(): boolean");
+}
 
 // Replay qualification is independent of renderer fixture availability.
 if (process.env.NOON_WASM_PROFILE === "dev"
