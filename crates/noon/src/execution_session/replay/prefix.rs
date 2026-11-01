@@ -48,6 +48,8 @@ fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
 /// These are capability metadata, not permission to speculate callback/input work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceExecutionRequirement {
+    /// The host continuation has no contract permitting execution ahead of presentation.
+    HostEffects,
     HostCallbacks,
     EffectiveDisplay,
     NativeInput,

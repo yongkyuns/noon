@@ -23,6 +23,7 @@ struct DelayedPrefix {
     calls: Rc<Cell<usize>>,
 }
 impl LiveContinuation for DelayedPrefix {
+    const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.calls.get();
@@ -113,6 +114,7 @@ impl Drop for LateDrag {
     }
 }
 impl LiveContinuation for LateDrag {
+    const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.calls.get();

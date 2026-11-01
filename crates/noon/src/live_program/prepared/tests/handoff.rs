@@ -15,6 +15,7 @@ fn terminal_drag_requirement_preserves_the_finished_rust_source() {
         calls: Rc<Cell<usize>>,
     }
     impl LiveContinuation for Tail {
+        const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
         fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
             let step = self.calls.get();
@@ -80,6 +81,7 @@ impl Drop for Script {
     }
 }
 impl LiveContinuation for Script {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.calls.get();

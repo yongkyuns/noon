@@ -200,6 +200,7 @@ impl Drop for CooperativeScene {
     }
 }
 impl LiveContinuation for CooperativeScene {
+    const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let stage = self.calls.get();
