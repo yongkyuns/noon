@@ -7,9 +7,10 @@ impl CanonicalAuthoringScene {
     pub(crate) fn prefix_source_requirement(
         &mut self,
         publisher: &PrefixPublisher,
+        finished: bool,
     ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
         self.active_live_player()?
-            .prefix_source_requirement(publisher)
+            .prefix_source_requirement(publisher, finished)
     }
 
     pub(crate) fn begin_observed_prefix_source(
@@ -17,9 +18,10 @@ impl CanonicalAuthoringScene {
         publisher: &PrefixPublisher,
         reader: &PrefixReader,
         playing: bool,
+        finished: bool,
     ) -> Result<(), AuthoringFailure> {
         self.active_live_player()?
-            .begin_observed_prefix_source(publisher, reader, playing)
+            .begin_observed_prefix_source(publisher, reader, playing, finished)
     }
     /// Initial admission only: keep the original pending segment and player for
     /// observed execution, releasing open history before any reader is created.
