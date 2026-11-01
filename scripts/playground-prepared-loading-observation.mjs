@@ -26,3 +26,26 @@ export function distribution(values) {
   return { n: sorted.length, min: sorted[0] ?? null, median: sorted.length ? (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.floor(sorted.length / 2)]) / 2 : null, p90: percentile(0.9),
     p95: percentile(0.95), max: sorted.at(-1) ?? null, percentileMethod: "midpoint median; nearest-rank tails" };
 }
+
+export function summarizeLoading(cases, examples, trials) {
+  return examples.flatMap(example => ["fresh-process", "reload-new-workers"].map(phase => {
+    const rows = cases.filter(row => !row.warmup && row.example === example && row.phase === phase);
+    const arm = name => {
+      const selected = rows.filter(row => row.arm === name);
+      const observed = selected.filter(row => row.status === "observed");
+      return { expected: trials, requested: selected.length, observed: observed.length,
+        usefulUpperMs: distribution(observed.map(row => row.sourceToUsefulObservationUpperMs)),
+        firstAnyMs: distribution(observed.map(row => row.sourceToFirstAnyPresentedMs)),
+        peakSampledRssBytes: distribution(observed.map(row => row.memory?.peakSampledRssBytes)) };
+    };
+    const deltas = [];
+    for (let trial = 0; trial < trials; trial++) {
+      const live = rows.find(row => row.arm === "live" && row.trial === trial);
+      const prepared = rows.find(row => row.arm === "prepared" && row.trial === trial);
+      if (live?.status === "observed" && prepared?.status === "observed") {
+        deltas.push(prepared.sourceToUsefulObservationUpperMs - live.sourceToUsefulObservationUpperMs);
+      }
+    }
+    return { example, phase, live: arm("live"), prepared: arm("prepared"), pairedPreparedMinusLiveMs: distribution(deltas) };
+  }));
+}

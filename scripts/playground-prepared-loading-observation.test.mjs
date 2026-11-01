@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sceneInkPixels, distribution } from "./playground-prepared-loading-observation.mjs";
+import { sceneInkPixels, distribution, summarizeLoading } from "./playground-prepared-loading-observation.mjs";
 
 function canvas() {
   const data = new Uint8Array(40 * 40 * 4);
@@ -33,4 +33,25 @@ test("timing summaries retain sample count and nearest-rank tails", () => {
     n: 4, min: 1, median: 4, p90: 9, p95: 9, max: 9, percentileMethod: "midpoint median; nearest-rank tails",
   });
   assert.equal(distribution([]).median, null);
+});
+
+test("failed runs retain counts without contributing initial pictures to successful timings", () => {
+  const common = { example: "scene", phase: "fresh-process", warmup: false, trial: 0,
+    sourceToUsefulObservationUpperMs: 20, sourceToFirstAnyPresentedMs: 10,
+    memory: { peakSampledRssBytes: 100 } };
+  const summaries = summarizeLoading([
+    { ...common, arm: "live", status: "observed" },
+    { ...common, arm: "prepared", status: "failed" },
+    { ...common, arm: "prepared", status: "observed", warmup: true },
+  ], ["scene"], 1);
+  assert.equal(summaries[0].live.usefulUpperMs.n, 1);
+  assert.equal(summaries[0].prepared.expected, 1);
+  assert.equal(summaries[0].prepared.requested, 1);
+  assert.equal(summaries[0].prepared.observed, 0);
+  for (const metric of ["usefulUpperMs", "firstAnyMs", "peakSampledRssBytes"]) {
+    assert.equal(summaries[0].prepared[metric].n, 0);
+  }
+  assert.equal(summaries[0].pairedPreparedMinusLiveMs.n, 0);
+  assert.equal(summaries[1].prepared.expected, 1);
+  assert.equal(summaries[1].prepared.requested, 0);
 });

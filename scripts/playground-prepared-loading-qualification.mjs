@@ -15,7 +15,7 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
-import { sceneInkPixels, distribution } from "./playground-prepared-loading-observation.mjs";
+import { sceneInkPixels, summarizeLoading } from "./playground-prepared-loading-observation.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = process.env;
@@ -176,28 +176,6 @@ async function measure(page, example, arm, phase, trial, warmup) {
   return row;
 }
 
-function summarize() {
-  return examples.flatMap(example => ["fresh-process", "reload-new-workers"].map(phase => {
-    const rows = report.cases.filter(row => !row.warmup && row.example === example && row.phase === phase);
-    const arm = name => {
-      const selected = rows.filter(row => row.arm === name);
-      return { expected: trials, requested: selected.length, observed: selected.filter(row => row.status === "observed").length,
-        usefulUpperMs: distribution(selected.map(row => row.sourceToUsefulObservationUpperMs)),
-        firstAnyMs: distribution(selected.map(row => row.sourceToFirstAnyPresentedMs)),
-        peakSampledRssBytes: distribution(selected.map(row => row.memory?.peakSampledRssBytes)) };
-    };
-    const deltas = [];
-    for (let trial = 0; trial < trials; trial++) {
-      const live = rows.find(row => row.arm === "live" && row.trial === trial);
-      const prepared = rows.find(row => row.arm === "prepared" && row.trial === trial);
-      if (live?.status === "observed" && prepared?.status === "observed") {
-        deltas.push(prepared.sourceToUsefulObservationUpperMs - live.sourceToUsefulObservationUpperMs);
-      }
-    }
-    return { example, phase, live: arm("live"), prepared: arm("prepared"), pairedPreparedMinusLiveMs: distribution(deltas) };
-  }));
-}
-
 try {
   overlay = await mkdtemp(path.join(os.tmpdir(), "noon-playback-loading-host-"));
   servers.live = await packageHost("live", env.NOON_PLAYBACK_LOADING_LIVE_ROOT);
@@ -239,7 +217,7 @@ try {
     assert.equal(await fileHash(path.join(root, "web", entry.path)), sourceHash, "source changed during measurement");
   }
   report.status = report.cases.every(row => row.status === "observed") ? "observed" : "incomplete";
-  report.summaries = summarize();
+  report.summaries = summarizeLoading(report.cases, examples, trials);
 } catch (error) {
   report.status = "failed"; report.error = String(error.stack ?? error); process.exitCode = 1;
 } finally {
