@@ -227,9 +227,10 @@ test("semantic rerun preflights its context before switching the live renderer",
   client.terminate();
 });
 
-test("source retirement waits for its owner and reuses the renderer for a paused replacement", async () => {
+for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"} source retirement waits for its owner and reuses the renderer for a paused replacement`, async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = prepared;
   const client = new AuthoringExecutionClient(new FakeCanvas());
   const render = await prepare(client);
   const initial = client.startSemanticExecution(
@@ -269,7 +270,7 @@ test("source retirement waits for its owner and reuses the renderer for a paused
   assert.equal((await rendererMetrics).metrics.presentedFrames, 9);
 
   const replacement = client.reconcileSemanticExecution(
-    { contextId: "semantic-new" }, { authoringClient: authoring },
+    { contextId: "semantic-new", preparedPlayback: prepared }, { authoringClient: authoring },
   );
   const rebuild = await waitForRequest(render, "rebuild_engine");
   render.emitMessage(envelope("noon.render", "engine_rebuilt", {
@@ -281,12 +282,16 @@ test("source retirement waits for its owner and reuses the renderer for a paused
   assert.equal(client.canvas, canvas);
   assert.equal(FakeWorker.instances.length, 1, "Run must reuse its retained renderer");
   assert.deepEqual(released, ["semantic-old"]);
+  if (prepared) await assert.rejects(client.reconcileSemanticExecution(
+    { contextId: "must-not-replace-history" }, { authoringClient: authoring },
+  ), /historical player/);
   client.terminate();
 });
 
-test("rejected source release keeps the same context and renderer available for retry", async () => {
+for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"} rejected source release keeps the same context and renderer available for retry`, async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = prepared;
   const client = new AuthoringExecutionClient(new FakeCanvas());
   const render = await prepare(client);
   const initial = client.startSemanticExecution(
@@ -307,6 +312,9 @@ test("rejected source release keeps the same context and renderer available for 
   assert.equal(engine.closed, false);
   assert.equal(render.terminated, false);
   assert.equal(authoring.attachments.length, 1);
+  if (prepared) await assert.rejects(client.reconcileSemanticExecution(
+    { contextId: "must-not-replace-unreleased-history" }, { authoringClient: authoring },
+  ), /historical player/);
   reject = false;
   await client.retireExecutionSource();
   assert.deepEqual(attempts, ["semantic-retained", "semantic-retained"]);

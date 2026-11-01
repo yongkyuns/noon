@@ -420,6 +420,7 @@ export class ExecutionWorkerClient {
     this.#semanticContextId = null;
     this.#semanticCallbackSessionId = null;
     this.#ready = null;
+    this.#semanticPreparedPlayback = false;
     this.#playing = false;
     this.#pointerView = null;
     this.#pointerViewRegistration = null;
