@@ -14,6 +14,7 @@ function section(begin, end) {
 const lifecycle = [
   section("function isPreparedPlayback(", "function showError("),
   section("function updatePlaybackControls(", "async function ensureExecutionReady("),
+  section("async function ensureExecutionReady(", "async function runPlaygroundTestHook("),
   section("async function runPlaygroundTestHook(", "async function loadDemoAuthoringSource("),
   section("function isCurrentRun(", "const runRequestRouter ="),
   section("async function updateWorkerMetrics(", "function isCurrentMetricsObservation("),
@@ -40,12 +41,13 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     initialCanvas, document, calls, errors,
     generations: new PlaygroundGeneration(),
     status: dom(), patchStatus: dom(), sceneButton: dom(), sceneSourceEditor: dom(),
+    recoverButton: Object.assign(new EventTarget(), dom()),
     resetButton: dom(), gallerySearch: dom(), categorySelect: dom(), paritySelect: dom(),
     previousGalleryPage: dom(), nextGalleryPage: dom(), metricObjects: dom(), metricTime: dom(),
     galleryGrid: { querySelectorAll: () => [] },
     previousPreview: Object.fromEntries(["hold", "showLive", "accept"].map(name =>
       [name, (...args) => calls.push([name, ...args])])),
-    diagnosticPanel: { beginRun() {}, invalidate() {} },
+    diagnosticPanel: { beginRun() {}, invalidate() {}, clear() { calls.push(["clear-diagnostic"]); } },
     example: { id: "test", title: "Test", parityStatus: "candidate", inspectionZoom: true },
     hooks: { authoringRunOptions: () => options },
     preparationGate: null, stateGate: null, initialPrepared: true,
@@ -120,7 +122,13 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
         calls.push(["retire-source", this]);
         this.status.playing = false;
       },
-      async restart() { calls.push(["restart"]); throw new Error("unexpected receiver restart"); },
+      async restart() {
+        calls.push(["restart"]);
+        if (!env.allowRecovery) throw new Error("unexpected receiver restart");
+        this.canvas = dom();
+        if (env.recoveryGate) await env.recoveryGate.promise;
+        return { render: { backend: this.rendererBackend } };
+      },
       terminate() {
         if (this.terminated) return;
         this.terminated = true; calls.push(["terminate-runtime", this]);
@@ -133,7 +141,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
   const api = new Function("env", "authoring", "createRuntimeClient", "PlaygroundPlaybackControls", `
     const { calls, errors, document, generations, status, patchStatus, sceneButton, sceneSourceEditor,
       resetButton, gallerySearch, categorySelect, paritySelect, previousGalleryPage, nextGalleryPage,
-      galleryGrid, previousPreview, diagnosticPanel, metricObjects, metricTime } = env;
+      galleryGrid, previousPreview, diagnosticPanel, metricObjects, metricTime, recoverButton } = env;
     const globalThis = { __NOON_PLAYGROUND_TEST_HOOKS__: env.hooks };
     const console = { warn() {}, debug() {}, error() {} };
     let canvas = env.initialCanvas, player = null, preparedPlaybackPlayer = null, playbackControls = null;
@@ -141,6 +149,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     let sceneRunPromise = null, latestRunPhaseMetrics = null, activeSourceContinuation = null;
     let activeRunRequest = null, runtimeStartPromise = null, runtimePreparation = null;
     let playerNeedsRestart = false, busyDepth = 0, galleryPage = 0, playbackDurationSeconds = 4;
+    let runtimeRecoveryPromise = null, runtimeFailureRevision = 0;
     let rendererBackend = "", playbackPending = null, metricsEpoch = 0;
     const currentExample = () => env.example;
     const resetPresentationRate = () => {};
@@ -157,15 +166,14 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
       observation.player === player && observation.epoch === metricsEpoch &&
       observation.runGeneration === generations.diagnostics.runGeneration;
     const updateRendererMetrics = () => {};
-    const ensureExecutionReady = async () => { if (playerNeedsRestart) await player.restart(); };
     const applyExampleInteraction = async (_example, target = player) => {
       target.setInspectionZoom(true); if (env.setupGate) await env.setupGate.promise;
     };
     const recordStale = (token, stage) => { generations.recordStale(token, stage); return { stale: true, stage }; };
     ${lifecycle}
-    return { runScene, stopForSourceEdit, playbackPresentation, updateWorkerMetrics,
+    return { runScene, stopForSourceEdit, playbackPresentation, updateWorkerMetrics, ensureExecutionReady,
       supersedeActiveSourceContinuation,
-      markFailed: () => { playerNeedsRestart = true; },
+      markFailed: () => { playerNeedsRestart = true; runtimeFailureRevision++; updatePreviewRecoveryControl(); },
       inspect: () => ({ player, preparedPlaybackPlayer, playbackControls, busyDepth, activeSourceContinuation,
         runtimePreparation, runInFlight: sceneRunPromise !== null, latestRunPhaseMetrics }) };
   `)(env, authoring, createRuntimeClient, Controls);
@@ -206,6 +214,61 @@ test("prepared startup releases only its UI busy ticket while the source remains
   assert.equal(job.options.preparationLookaheadSeconds, 0.75);
   f.finish(); await promise;
 });
+
+test("preview recovery joins one receiver replacement and preserves open readiness without another source Run", async () => {
+  const f = fixture(), { promise } = await f.start(); await f.register();
+  f.env.allowRecovery = true; f.env.recoveryGate = deferred(); f.markFailed();
+  assert.equal(f.env.recoverButton.hidden, false);
+  const recovering = f.ensureExecutionReady(), joined = f.ensureExecutionReady();
+  assert.equal(f.count("restart"), 1);
+  assert.equal(f.env.recoverButton.disabled, true); assert.equal(f.inspect().playbackControls.busy, true);
+  f.env.recoveryGate.resolve(); await Promise.all([recovering, joined]);
+  assert.equal(f.env.recoverButton.hidden, true); assert.equal(f.env.patchStatus.dataset.state, "applied");
+  assert.equal(f.inspect().playbackControls.state.durationSeconds, null);
+  assert.equal(f.inspect().playbackControls.state.preparedFrontier, 1);
+  assert.equal(f.inspect().playbackControls.busy, false);
+  assert.equal(f.count("clear-diagnostic"), 1); assert.equal(f.jobs.length, 1);
+  f.finish(); await promise;
+});
+
+test("failed preview recovery retains its retry affordance and adopts the replacement canvas", async () => {
+  const f = fixture(), { promise } = await f.start(); await f.register();
+  f.env.allowRecovery = true; f.env.recoveryGate = deferred(); f.markFailed();
+  const rejected = assert.rejects(f.ensureExecutionReady(), /replacement failed/);
+  f.env.recoveryGate.reject(new Error("replacement failed")); await rejected;
+  assert.equal(f.env.recoverButton.hidden, false); assert.equal(f.env.recoverButton.disabled, false);
+  assert.equal(f.count("clear-diagnostic"), 0); assert.equal(f.inspect().playbackControls.busy, false);
+  assert.equal(f.calls.findLast(call => call[0] === "adopt-canvas")[1], f.inspect().player);
+  f.env.recoveryGate = null; await f.ensureExecutionReady();
+  assert.equal(f.count("restart"), 2); assert.equal(f.env.recoverButton.hidden, true);
+  assert.equal(f.jobs.length, 1); f.finish(); await promise;
+});
+
+test("a new runtime failure during recovery cannot be cleared by stale readiness", async () => {
+  const f = fixture(), { promise } = await f.start(); await f.register();
+  f.env.allowRecovery = true; f.env.recoveryGate = deferred(); f.markFailed();
+  const rejected = assert.rejects(f.ensureExecutionReady(), /failed during recovery/);
+  f.markFailed(); f.env.recoveryGate.resolve(); await rejected;
+  assert.equal(f.env.recoverButton.hidden, false); assert.equal(f.count("clear-diagnostic"), 0);
+  f.finish(); await promise;
+});
+
+for (const rejected of [false, true]) {
+  test(`source edit supersedes preview recovery ${rejected ? "failure" : "readiness"}`, async () => {
+    const f = fixture(), { promise } = await f.start(); await f.register();
+    f.env.allowRecovery = true; f.env.recoveryGate = deferred(); f.markFailed();
+    const recovering = assert.rejects(f.ensureExecutionReady(), { name: "AbortError" });
+    await f.stopForSourceEdit(); await promise;
+    const adoptions = f.count("adopt-canvas"), status = f.env.patchStatus.value;
+    if (rejected) f.env.recoveryGate.reject(new Error("obsolete receiver failed"));
+    else f.env.recoveryGate.resolve();
+    await recovering;
+    assert.equal(f.count("adopt-canvas"), adoptions);
+    assert.equal(f.env.patchStatus.value, status);
+    assert.equal(f.env.recoverButton.hidden, true); assert.equal(f.count("clear-diagnostic"), 0);
+    assert.equal(f.inspect().player, null); assert.equal(f.jobs.length, 1);
+  });
+}
 
 test("terminal adoption keeps the reader, pause, playhead and inspection without reconciliation", async () => {
   const f = fixture(), { promise } = await f.start(); await f.register();

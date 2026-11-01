@@ -25,6 +25,7 @@ const statusText = document.querySelector("#status-text");
 const sceneButton = document.querySelector("#replace-scene");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
+const recoverButton = document.querySelector("#preview-recover");
 const sceneSourceEditor = document.querySelector("#python-scene-source");
 const diagnosticPanel = createPlaygroundDiagnostics({
   editor: sceneSourceEditor,
@@ -381,6 +382,8 @@ let activeRunRequest = null;
 let runtimeStartPromise = null;
 let runtimePreparation = null;
 let playerNeedsRestart = false;
+let runtimeRecoveryPromise = null;
+let runtimeFailureRevision = 0;
 let busyDepth = 0;
 let galleryPage = 0;
 let metricsTimer = null;
@@ -455,6 +458,7 @@ function setPlaybackRuntimeStatus(playbackState, detail = "") {
 }
 
 function setBusy(busy) {
+  updatePreviewRecoveryControl();
   // Unchanged warmup joins its current build. Edited source retires that
   // build before starting its replacement.
   const canRequestRun = activeRunRequest !== null && isCurrentRun(activeRunRequest.token);
@@ -563,7 +567,9 @@ function createRuntimeClient() {
       if (player !== candidate) return;
       if (editStopPromise !== null) return;
       playerNeedsRestart = true;
+      runtimeFailureRevision++;
       showError(error);
+      updatePreviewRecoveryControl();
     },
     onRecoverableError(error) {
       if (editStopPromise !== null) return;
@@ -693,6 +699,7 @@ async function ensureRuntimeReady({
         runtimePreparation = null;
       }
       playerNeedsRestart = false;
+      updatePreviewRecoveryControl();
       rendererBackend = ready.render.backend;
       status.dataset.rendererBackend = rendererBackend;
       status.dataset.executionMode = nextPlayer.mode;
@@ -743,24 +750,65 @@ async function ensureRuntimeReady({
 
 async function ensureExecutionReady() {
   if (!playerNeedsRestart) return;
-  patchStatus.value = "Restarting runtime workers…";
-  patchStatus.dataset.state = "running";
-  setRuntimeStatus("Restarting runtime workers…", "running");
-  const ready = await player.restart();
-  playerNeedsRestart = false;
-  rendererBackend = ready.render.backend;
-  status.dataset.rendererBackend = rendererBackend;
-  status.dataset.executionMode = player.mode;
-  const playbackState = await player.state();
-  playbackControls?.sync({
-    ...playbackState,
-    hasAudio: playbackState.hasAudio ?? false,
-    time: playbackState.time,
-    playing: playbackState.playing,
-    durationSeconds: playbackState.hasAudio ? playbackState.durationSeconds : playbackDurationSeconds,
-    canUndoTranslationDrag: playbackState.canUndoTranslationDrag ?? false,
-  });
+  if (runtimeRecoveryPromise !== null) return runtimeRecoveryPromise;
+  const recoveringPlayer = player;
+  const failureRevision = runtimeFailureRevision;
+  const runGeneration = generations.diagnostics.runGeneration;
+  const current = () => player === recoveringPlayer && generations.diagnostics.runGeneration === runGeneration;
+  const task = (async () => {
+    patchStatus.value = "Recovering preview…";
+    patchStatus.dataset.state = "running";
+    setRuntimeStatus("Recovering preview…", "running");
+    const ready = await recoveringPlayer.restart();
+    if (!current()) throw new DOMException("Preview recovery was superseded", "AbortError");
+    adoptRuntimeCanvas(recoveringPlayer);
+    rendererBackend = ready.render.backend;
+    status.dataset.rendererBackend = rendererBackend;
+    status.dataset.executionMode = player.mode;
+    const playbackState = await recoveringPlayer.state();
+    if (!current()) throw new DOMException("Preview recovery was superseded", "AbortError");
+    if (runtimeFailureRevision !== failureRevision) throw new Error("Preview receiver failed during recovery");
+    playerNeedsRestart = false;
+    playbackControls?.sync({
+      ...playbackState,
+      hasAudio: playbackState.hasAudio ?? false,
+      time: playbackState.time,
+      playing: playbackState.playing,
+      durationSeconds: playbackState.preparedPlayback || playbackState.hasAudio ? playbackState.durationSeconds : playbackDurationSeconds,
+      canUndoTranslationDrag: playbackState.canUndoTranslationDrag ?? false,
+    });
+    diagnosticPanel.clear();
+    setPlaybackRuntimeStatus(playbackState);
+    patchStatus.value = "Preview recovered";
+    patchStatus.dataset.state = "applied";
+  })();
+  runtimeRecoveryPromise = task;
+  updatePreviewRecoveryControl();
+  if (current()) playbackControls?.setBusy(true);
+  try { return await task; }
+  catch (error) {
+    if (!current()) throw new DOMException("Preview recovery was superseded", "AbortError");
+    adoptRuntimeCanvas(recoveringPlayer);
+    throw error;
+  }
+  finally {
+    if (runtimeRecoveryPromise === task) runtimeRecoveryPromise = null;
+    updatePreviewRecoveryControl();
+    if (current()) playbackControls?.setBusy(busyDepth > 0);
+  }
 }
+
+function updatePreviewRecoveryControl() {
+  recoverButton.hidden = !playerNeedsRestart || !isPreparedPlayback();
+  recoverButton.disabled = runtimeRecoveryPromise !== null;
+  recoverButton.textContent = runtimeRecoveryPromise === null ? "Recover preview" : "Recovering…";
+}
+
+recoverButton.addEventListener("click", () => {
+  void ensureExecutionReady().catch(error => {
+    if (error?.name !== "AbortError") showError(error, "Preview recovery failed");
+  });
+});
 
 async function runPlaygroundTestHook(name, payload) {
   const hook = globalThis.__NOON_PLAYGROUND_TEST_HOOKS__?.[name];
@@ -902,6 +950,7 @@ function discardEarlyContinuationRuntime(attachedPlayer) {
   playbackControls = null;
   player = null;
   playerNeedsRestart = false;
+  updatePreviewRecoveryControl();
   stopMetricsPolling();
 }
 
@@ -1082,6 +1131,7 @@ async function runScene() {
           discardEarlyContinuationRuntime(retainedPlayer);
         }
         playerNeedsRestart = false;
+        updatePreviewRecoveryControl();
         status.dataset.playbackPlaying = "false";
         status.dataset.playbackPhase = "stopped";
         status.dataset.playbackControls = "unavailable";
