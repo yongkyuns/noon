@@ -42,6 +42,10 @@ pub struct CompiledReplayRevision {
     // inverse tracks. Charge each side by its command count in the finite replay
     // payload budget just as camera intervals are charged by payload count.
     path_motion_commands: usize,
+    // Worst-side logical inline geometry retained by this revision. The runtime
+    // finalizes both sides after the compiler commits a validated patch.
+    #[cfg(feature = "prepared-prefix")]
+    geometry_payload_bytes: usize,
 }
 
 impl CompiledReplayRevision {
@@ -218,6 +222,8 @@ impl CompiledScene {
             inset_2d_view,
             camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
             path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
+            #[cfg(feature = "prepared-prefix")]
+            geometry_payload_bytes: 0,
             rows: rows
                 .into_iter()
                 .map(|index| SavedRow {

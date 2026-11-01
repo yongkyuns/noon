@@ -24,14 +24,13 @@ fn local_property(property: Property) -> bool {
             | Property::Opacity
             | Property::Appearance
             | Property::Reveal
+            | Property::Morph
     )
 }
 
 fn local_track(track: &Option<CompiledTrack>) -> bool {
     track.as_ref().is_none_or(|track| {
-        local_property(track.property)
-            && track.transform_geometry_plan.is_none()
-            && super::path_motion_command_count(&track.values) == 0
+        local_property(track.property) && super::path_motion_command_count(&track.values) == 0
     })
 }
 
@@ -55,6 +54,7 @@ impl CompiledScene {
     ///
     /// Ordinary 2D lifecycle, content and property tracks are admitted. Family,
     /// path-motion, spatial and effect-animation plans require separate qualification.
+    /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry one resource-free glow attachment; ordered stacks and
     /// other effect definitions remain outside this suffix profile.
     /// Ordering reconstruction visits only affected rows and their neighbours;
@@ -139,6 +139,7 @@ impl CompiledScene {
                 channels: old.channels.clone(),
                 camera_motion_payloads: 0,
                 path_motion_commands: 0,
+                geometry_payload_bytes: old.geometry_payload_bytes,
             });
         }
         output.reverse();
