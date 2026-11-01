@@ -64,6 +64,10 @@ pub(crate) struct ReplayHistory {
     end: Option<f64>,
     limits: ReplayLimits,
     failure: Option<ReplayError>,
+    #[cfg(feature = "prepared-prefix")]
+    inset_view_history: bool,
+    #[cfg(feature = "prepared-prefix")]
+    last_non_prefix_revision: Option<usize>,
     revisions: Vec<Revision>,
     applied: usize,
     stats: ReplayStats,
@@ -119,6 +123,10 @@ impl SceneInstance {
             end: None,
             limits,
             failure: unsupported.then_some(ReplayError::UnsupportedDomain),
+            #[cfg(feature = "prepared-prefix")]
+            inset_view_history: false,
+            #[cfg(feature = "prepared-prefix")]
+            last_non_prefix_revision: None,
             revisions: Vec::new(),
             applied: 0,
             stats: ReplayStats::default(),
@@ -312,6 +320,21 @@ impl SceneInstance {
         if let Some(error) = failure {
             self.invalidate_replay(error);
             return;
+        }
+        #[cfg(feature = "prepared-prefix")]
+        {
+            // Index unsupported payloads once at their publication. Repeated
+            // preflight across zero-duration yields must not rescan an expanding
+            // unpublished suffix; bootstrap can still admit ordinary replay.
+            if !inverse
+                .as_ref()
+                .is_some_and(|revision| self.compiled.supports_prefix_revision(revision))
+            {
+                history.last_non_prefix_revision = Some(history.revisions.len());
+            }
+            history.inset_view_history |= inverse
+                .as_ref()
+                .is_some_and(|revision| revision.changes_inset_2d_view());
         }
         history.stats.payloads_retained += cost;
         history.revisions.push(Revision {

@@ -46,6 +46,10 @@ fn source(initial_inset: bool) -> SceneInstance {
 fn initial_inset_is_rejected_before_prefix_bootstrap() {
     let source = source(true);
     assert!(matches!(
+        source.preflight_prefix_source(None),
+        Err(PrefixError::Replay(ReplayError::UnsupportedDomain))
+    ));
+    assert!(matches!(
         source.create_prefix_projection(),
         Err(PrefixError::Replay(ReplayError::UnsupportedDomain))
     ));
@@ -58,6 +62,11 @@ fn removed_inset_history_is_rejected_without_changing_ordinary_replay() {
     source.apply_execution_patch(&inset(true)).unwrap();
     source.advance_to(1.5).unwrap();
     source.apply_execution_patch(&inset(false)).unwrap();
+    assert!(matches!(
+        source.preflight_prefix_source(None),
+        Err(PrefixError::Replay(ReplayError::UnsupportedDomain))
+    ));
+    assert_eq!(source.frame().time, 1.5);
     source.advance_to(2.0).unwrap();
     assert_eq!(source.inset_2d_views().count(), 0);
     let before = source.publication_context();
@@ -82,6 +91,11 @@ fn removed_inset_in_suffix_keeps_the_previous_reader_and_publisher_cursor() {
     source.apply_execution_patch(&inset(true)).unwrap();
     source.advance_to(1.5).unwrap();
     source.apply_execution_patch(&inset(false)).unwrap();
+    assert!(matches!(
+        source.preflight_prefix_source(Some(&publisher)),
+        Err(PrefixError::Replay(ReplayError::UnsupportedDomain))
+    ));
+    assert_eq!(source.frame().time, 1.5);
     source.advance_to(2.0).unwrap();
     for _ in 0..2 {
         assert!(matches!(

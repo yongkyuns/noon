@@ -14,6 +14,10 @@ pub enum SourceExecutionRequirement {
     EffectiveDisplay,
     NativeInput,
     Signals,
+    /// The existing retained scope or new sparse suffix cannot supply playback.
+    ReplayUnavailable(noon_runtime::ReplayError),
+    /// The original program must complete its existing rendering-host handshake.
+    ExternalResources,
 }
 
 impl ExecutionSession {
@@ -32,8 +36,30 @@ impl ExecutionSession {
             Some(SourceExecutionRequirement::NativeInput)
         } else if !self.signal_timeline.is_empty() || !self.reactive_projection.is_empty() {
             Some(SourceExecutionRequirement::Signals)
+        } else if self.runtime.inset_2d_views().next().is_some() || self.has_audio() {
+            Some(SourceExecutionRequirement::ReplayUnavailable(
+                noon_runtime::ReplayError::UnsupportedDomain,
+            ))
         } else {
             None
+        }
+    }
+
+    pub(crate) fn preflight_prepared_source(
+        &self,
+        publisher: Option<&PrefixPublisher>,
+    ) -> Result<Option<SourceExecutionRequirement>, PrefixError> {
+        if let Some(requirement) = self.source_execution_requirement() {
+            return Ok(Some(requirement));
+        }
+        match self.runtime.preflight_prefix_source(publisher) {
+            Ok(()) => Ok(None),
+            Err(PrefixError::Replay(
+                error @ (noon_runtime::ReplayError::UnsupportedDomain
+                | noon_runtime::ReplayError::UnrecordedInput
+                | noon_runtime::ReplayError::RetentionLimit),
+            )) => Ok(Some(SourceExecutionRequirement::ReplayUnavailable(error))),
+            Err(error) => Err(error),
         }
     }
 
@@ -51,10 +77,7 @@ impl ExecutionSession {
 
     /// Pure completed-prefix admission remains separate from observed execution.
     pub fn validate_prepared_source_domain(&self) -> Result<(), PrefixError> {
-        if self.source_execution_requirement().is_some()
-            || self.runtime.inset_2d_views().next().is_some()
-            || self.has_audio()
-        {
+        if self.source_execution_requirement().is_some() {
             return Err(noon_runtime::ReplayError::UnsupportedDomain.into());
         }
         Ok(())

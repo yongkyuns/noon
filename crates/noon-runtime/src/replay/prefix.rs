@@ -676,14 +676,7 @@ impl SceneInstance {
         // Initial cloning includes retained inverse revisions. Checking only
         // active relations would admit an inset added and removed before this
         // boundary, then silently omit that view when the reader rewinds.
-        if self.compiled.inset_2d_views().next().is_some()
-            || history.revisions.iter().any(|revision| {
-                revision
-                    .inverse
-                    .as_ref()
-                    .is_some_and(|inverse| inverse.changes_inset_2d_view())
-            })
-        {
+        if self.compiled.inset_2d_views().next().is_some() || history.inset_view_history {
             return Err(ReplayError::UnsupportedDomain.into());
         }
         // Charge reserved entries, not just current history length. Reject a
@@ -826,6 +819,45 @@ impl SceneInstance {
             || !Arc::ptr_eq(&history.scope, &publisher.scope)
         {
             return Err(PrefixError::SourceChanged);
+        }
+        Ok(())
+    }
+
+    /// Constant-time source admission before a headless drive. Publication-time
+    /// profile indices qualify only the publisher's new suffix; bootstrap admits
+    /// ordinary retained history. This
+    /// does not promise extraction capacity/resource admission or advance a cursor.
+    #[doc(hidden)]
+    pub fn preflight_prefix_source(
+        &self,
+        publisher: Option<&PrefixPublisher>,
+    ) -> Result<(), PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        if let Some(publisher) = publisher {
+            self.validate_prefix_publisher(publisher)?;
+        }
+        if let Some(error) = history.failure {
+            return Err(error.into());
+        }
+        if history.end.is_some() || history.applied != history.revisions.len() {
+            return Err(PrefixError::NotReady);
+        }
+        if self.compiled.inset_2d_views().next().is_some() || history.inset_view_history {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        if let Some(publisher) = publisher {
+            if publisher.next_revision > history.revisions.len() {
+                return Err(PrefixError::SourceChanged);
+            }
+            if history
+                .last_non_prefix_revision
+                .is_some_and(|index| index >= publisher.next_revision)
+            {
+                return Err(ReplayError::UnsupportedDomain.into());
+            }
         }
         Ok(())
     }
