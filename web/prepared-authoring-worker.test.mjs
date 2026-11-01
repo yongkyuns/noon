@@ -313,6 +313,7 @@ for (const trapAt of ["initial", "reader", "segment", "terminal", "capacity", "r
     assert.ok(h.errors[0].error instanceof WebAssembly.RuntimeError);
     assert.equal(h.counters.stopped, 0, "trap cannot call source stop in the unusable engine");
     assert.equal(h.counters.freed, 0, "trap cannot run WASM destructors");
+    assert.equal(h.events.includes("retire-source"), false, "trap cannot re-enter Rust source retirement");
     assert.equal(h.posts.some(post => post.type === "result"), false);
   });
 }
@@ -440,4 +441,19 @@ test("cancellation while initial zero barriers are loading cannot revive an atta
   assert.equal(statements, 1); assert.equal(h.counters.initial, 1);
   assert.equal(h.events.includes("reader"), false); assert.equal(h.contexts.size, 0);
   assert.equal(h.tasks.size, 0);
+});
+
+
+test("zero-only source cleanup failure rejects pending attachment without a finished reader", async () => {
+  const h = host({ initialIntervals: [false] });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    throw new Error("zero-only cleanup failed");
+  });
+  await microtasks(); const attaching = h.attach();
+  await h.tick(); await attaching; await done;
+  assert.equal(h.events.includes("static-reader"), false);
+  assert.equal(h.posts.some(post => post.type === "result"), false);
+  assert.equal(h.contexts.size, 0);
+  assert.equal(h.counters.initial, 1);
 });
