@@ -1,14 +1,22 @@
 //! Cooperative headless preparation over the existing Rust continuation owner.
 //! One call resumes at most one source segment. Evaluation and completion still
-//! use LiveProgram; the independent reader remains the only presentation owner.
+//! use LiveProgram; preparation never acknowledges a displayed frame. Sources
+//! requiring observed execution retain their original program for typed transfer.
 use super::{LiveContinuation, LiveProgram, LiveProgramError, LiveProgramPhase, LiveProgramStatus};
-use crate::{ExecutionSegment, PrefixBatch, PrefixError, PrefixPublisher, PrefixReader, Scene};
+use crate::{
+    ExecutionSegment, PrefixBatch, PrefixError, PrefixPublisher, PrefixReader, Scene,
+    SourceExecutionRequirement,
+};
 use noon_runtime::{ReplayError, ReplayLimits};
 
 /// Producer lifecycle, not authored playback time or a rendering directive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreparedSourceStatus {
     Ready,
+    /// Preparation has not advanced the newly required source interval.
+    ExecutionRequired(SourceExecutionRequirement),
+    /// Canonical source ownership was taken once, without invoking it again.
+    Transferred,
     ReaderReady,
     BatchReady,
     Finished,
@@ -48,7 +56,8 @@ enum Pending {
     Batch(Box<PrefixBatch>),
 }
 
-/// Consumes one scene and its ordinary LiveContinuation for finite preparation.
+/// Cooperatively prepares one scene and its ordinary LiveContinuation.
+/// A source requiring observed callback/input execution remains owned until taken.
 ///
 /// The producer retains at most one undelivered reader/batch. A pending output
 /// applies backpressure: repeated preparation does not invoke source code again.
@@ -70,6 +79,7 @@ pub struct PreparedSource<C> {
 
 impl Scene {
     /// Opt in before source execution. No continuation runs in the constructor.
+    /// Callback/input requirements retain the program without starting history.
     pub fn into_prepared_source<C: LiveContinuation>(
         self,
         continuation: C,
@@ -78,15 +88,20 @@ impl Scene {
         let mut program = self
             .into_live_program(continuation)
             .map_err(PreparedSourceError::Lowering)?;
-        program
-            .session()
-            .validate_prepared_source_domain()
-            .map_err(PreparedSourceError::Prefix)?;
-        program
-            .scene
-            .owned_execution_mut()
-            .begin_replay_retention(limits)
-            .map_err(PreparedSourceError::Replay)?;
+        let phase = if let Some(requirement) = program.session().source_execution_requirement() {
+            PreparedSourceStatus::ExecutionRequired(requirement)
+        } else {
+            program
+                .session()
+                .validate_prepared_source_domain()
+                .map_err(PreparedSourceError::Prefix)?;
+            program
+                .scene
+                .owned_execution_mut()
+                .begin_replay_retention(limits)
+                .map_err(PreparedSourceError::Replay)?;
+            PreparedSourceStatus::Ready
+        };
         let published_until = program.session().frame().time;
         Ok(PreparedSource {
             program: Some(program),
@@ -94,7 +109,7 @@ impl Scene {
             boundary: None,
             published_until,
             pending: None,
-            phase: PreparedSourceStatus::Ready,
+            phase,
         })
     }
 }
@@ -140,6 +155,31 @@ impl<C: LiveContinuation> PreparedSource<C> {
         }
     }
 
+    /// Transfer the original scene/runtime/continuation after observed execution
+    /// is required. No resume, callback, seek, renderer acknowledgment or source
+    /// reconstruction occurs. The actual pending segment and host-local state
+    /// remain with the returned program. Earlier readers remain independently
+    /// usable; this is not a new completed range or a promise of callback replay.
+    pub fn take_execution_program(&mut self) -> Option<LiveProgram<C>> {
+        if !matches!(self.phase, PreparedSourceStatus::ExecutionRequired(_)) {
+            return None;
+        }
+        self.phase = PreparedSourceStatus::Failed;
+        let mut program = self
+            .program
+            .take()
+            .expect("execution requirement retains source");
+        self.publisher = None;
+        if program.session().replay_scope_active() {
+            program
+                .scene
+                .owned_execution_mut()
+                .release_prepared_source_history();
+        }
+        self.phase = PreparedSourceStatus::Transferred;
+        Some(program)
+    }
+
     /// Stop without pretending the previously delivered open range is finished.
     pub fn cancel(&mut self) {
         if self.program.is_some() || self.pending.is_some() {
@@ -182,7 +222,8 @@ impl<C: LiveContinuation> PreparedSource<C> {
 
     /// Invoke at most one continuation, complete its actual segment, and publish
     /// at most one suffix. Zero-duration waits yield without a busy inner loop.
-    /// Pending output and terminal states are idempotent no-ops.
+    /// Pending output and terminal states are idempotent no-ops. An observed
+    /// execution requirement retains the original program before headless drive.
     ///
     /// An unwinding panic propagates unchanged, but leaves this owner failed and
     /// releases its source-owned state. Already-transferred history is unaffected.
@@ -217,11 +258,19 @@ impl<C: LiveContinuation> PreparedSource<C> {
             .program
             .as_mut()
             .expect("ready source owns its live program");
+        if let Some(requirement) = program.session().source_execution_requirement() {
+            self.phase = PreparedSourceStatus::ExecutionRequired(requirement);
+            return Ok(());
+        }
         program
             .session()
             .validate_prepared_source_domain()
             .map_err(PreparedSourceError::Prefix)?;
         let status = program.resume().map_err(PreparedSourceError::Program)?;
+        if let Some(requirement) = program.session().source_execution_requirement() {
+            self.phase = PreparedSourceStatus::ExecutionRequired(requirement);
+            return Ok(());
+        }
         program
             .session()
             .validate_prepared_source_domain()

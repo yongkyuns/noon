@@ -743,7 +743,13 @@ ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each prepar
 call invokes at most one continuation and completes its actual admitted segment
 headlessly using the shared evaluator/completion path. One pending reader/batch
 applies backpressure; no further source invocation occurs until it is taken.
-Retention admits the producer publication, not a displayed-frame receipt. Failure
+Retention admits the producer publication, not a displayed-frame receipt.
+Callback, effective-display and unretained signal/input requirements instead yield
+`ExecutionRequired` before headless advancement. A one-use typed transfer retains
+the original program, runtime and actual pending segment, releasing only its open
+source-history scope; already-delivered readers stay valid. It invokes no source
+or callback and acknowledges no display. This does not admit callback replay or
+install an observed-execution path in the default viewer. Other preparation failure
 is terminal and never retries user code; cancellation releases only source-owned
 state while already-delivered history remains usable. An unwinding panic leaves
 that source owner terminally failed before propagating its original payload;
