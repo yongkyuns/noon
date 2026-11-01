@@ -96,6 +96,7 @@ export async function attachSemanticEngine(
   let callbackFault = null;
   let lastSentPublication = null;
   let lastPresentedPublication = null;
+  let lastAcknowledgedPointerReceipt = null;
   let pendingPresentation = null;
   let pendingPointerInvalidation = null;
   let pendingPointerPresentation = null;
@@ -188,6 +189,9 @@ export async function attachSemanticEngine(
     left.session === right.session && left.sequence === right.sequence;
   const publicationAlreadyPresented = (publication) =>
     samePublication(lastPresentedPublication, publication);
+  const acknowledgedPicture = publication => publicationAlreadyPresented(publication) &&
+    lastAcknowledgedPointerReceipt === lastPresentedPublication?.pointerReceipt
+    ? lastAcknowledgedPointerReceipt : null;
   const rejectPendingPresentation = (error) => {
     if (pendingPresentation === null) return;
     const { reject } = pendingPresentation;
@@ -206,7 +210,7 @@ export async function attachSemanticEngine(
     // metadata as the barrier without retaining a scene or frame mirror.
     const requiredPublication = publication ?? lastSentPublication;
     if (requiredPublication === null || publicationAlreadyPresented(requiredPublication)) {
-      return Promise.resolve();
+      return Promise.resolve(acknowledgedPicture(requiredPublication));
     }
     if (pendingPresentation !== null) {
       throw new Error("semantic endpoint already awaits a renderer publication");
@@ -245,7 +249,7 @@ export async function attachSemanticEngine(
         samePublication(pendingPresentation.publication, publication)) {
       const { resolve } = pendingPresentation;
       pendingPresentation = null;
-      resolve();
+      resolve(acknowledgedPicture(publication));
     }
     if (firstPresentation && continuationActive && player !== null &&
         pacing === SEMANTIC_PACING_REALTIME) {
@@ -558,6 +562,7 @@ export async function attachSemanticEngine(
   function acknowledgePointerReceipt(receipt) {
     try {
       if (player !== null && player.notePointerPresentationJson(JSON.stringify(receipt))) {
+        lastAcknowledgedPointerReceipt = receipt;
         post({ type: "pointer_presented", receipt });
       }
     } catch (error) { fail(error); }
@@ -919,6 +924,7 @@ export async function attachSemanticEngine(
       let sceneControl;
       let sceneControlAction;
       let sceneControlApplied;
+      let sceneControlPresentation;
       try {
         if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
           throw new Error("finite export owns paused execution until capture completes");
@@ -1056,7 +1062,7 @@ export async function attachSemanticEngine(
                   if (sceneControlApplied) {
                     sceneControlAction = action;
                     await applySceneControl(action);
-                    await awaitPresentation(null);
+                    sceneControlPresentation = await awaitPresentation(null);
                   }
                 }
               }
@@ -1088,7 +1094,8 @@ export async function attachSemanticEngine(
           // A control changes both outputs at one accepted Rust clock sample.
           // Presentation precedes the new device anchor; no device clock drives
           // the runtime and no frontend cursor is retained.
-          await awaitPresentation(null);
+          const controlPresentation = await awaitPresentation(null);
+          if (sceneControlApplied === true) sceneControlPresentation = controlPresentation;
           const sampledAt = performance.now();
           await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
           observeExecutionWake(sampledAt, true);
@@ -1107,6 +1114,9 @@ export async function attachSemanticEngine(
           ...(sceneControl === undefined ? {} : { sceneControl }),
           ...(sceneControlApplied === undefined ? {} : { sceneControlApplied }),
           ...(sceneControlAction === undefined ? {} : { sceneControlAction }),
+          // Return the exact Rust-acknowledged picture held by this control's
+          // existing presentation barrier. Never select a nearby/newer frame.
+          ...(sceneControlApplied !== true ? {} : { sceneControlPresentation: sceneControlPresentation ?? null }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
           ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
         }, audioBlock === undefined ? [] : [audioBlock.buffer]);
@@ -1366,6 +1376,7 @@ export async function attachSemanticEngine(
       else if (message?.type === "execution_presented") notePresentedPublication(message);
       else if (message?.type === "pointer_presentation_invalidated") {
         if (message.receipt?.session !== session) return;
+        lastAcknowledgedPointerReceipt = null;
         // Main retires the observed receipt immediately. Rust cancellation is
         // ordered through the existing drain/callback barrier before more input.
         post({ type: "pointer_presentation_invalidated", receipt: message.receipt });

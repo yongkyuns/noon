@@ -1273,13 +1273,16 @@ test("scene Play unlock starts in the release turn and completion preserves the 
     const completion = await waitForRequest(engine, "scene_control");
     assert.equal(completion.sequence, "9007199254740993", "u64 input receipts never round through Number");
     const anchor = { session: 1, playing: true, time: 0, sampledEpochMs: 1234 };
+    const picture = { session: 1, sequence: 2, presentation: 3, view_revision: 11 };
     engine.emitMessage(engineMessage("scene_control", { requestId: completion.requestId, time: 0, playing: true,
-      sceneControlApplied: true, sceneControlAction: "toggle_playback", audioAnchor: anchor }));
+      sceneControlApplied: true, sceneControlAction: "toggle_playback", audioAnchor: anchor,
+      sceneControlPresentation: picture }));
     const result = await clicked;
     assert.equal(result.type, "browser_pointer_input");
     assert.equal(result.pointerInputAccepted, true);
     assert.equal(result.sceneControlApplied, true);
     assert.equal(result.playing, true);
+    assert.deepEqual(result.sceneControlPresentation, picture);
     assert.equal(anchors.length, 1);
     assert.equal(anchors[0].anchor, anchor);
     assert.equal(anchors[0].session, 1);
