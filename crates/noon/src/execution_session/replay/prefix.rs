@@ -6,6 +6,44 @@ use noon_runtime::{PrefixBatch, PrefixError, PrefixPublisher};
 mod reader;
 pub use reader::PrefixReader;
 
+#[cfg(test)]
+#[test]
+fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
+    use crate::Scene;
+    use noon_core::{HostCallbackId, SemanticMutationTransaction};
+    use noon_runtime::ReplayLimits;
+    let mut scene = Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    scene.add(&target).unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.wait_segment(1.0).unwrap();
+    source.advance_to(1.0).unwrap();
+    let (publisher, reader) = source.create_prepared_prefix(segment).unwrap();
+    let (_, other_stream) = source.create_prepared_prefix(segment).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(target.node_id(), HostCallbackId::new(71), 1.0, None);
+    scene.live(&mut source).apply(transaction).unwrap();
+    source.wait_segment(1.0).unwrap();
+    let frame = source.frame().clone();
+    assert_eq!(
+        source.begin_observed_prefix_source(&publisher, &other_stream),
+        Err(PrefixError::SourceChanged)
+    );
+    assert_eq!(source.frame(), &frame);
+    source.validate_prepared_publisher(&publisher).unwrap();
+    assert_eq!(
+        source
+            .begin_observed_prefix_source(&publisher, &reader)
+            .unwrap(),
+        Some(SourceExecutionRequirement::HostCallbacks)
+    );
+    assert_eq!(source.frame(), &frame);
+    assert!(source.validate_prepared_publisher(&publisher).is_err());
+}
+
 /// Shared engine reasons why the current source needs observed execution.
 /// These are capability metadata, not permission to speculate callback/input work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +126,29 @@ impl ExecutionSession {
         }
         let requirement = self.preflight_prepared_source(None)?;
         if requirement.is_some() {
+            self.release_prepared_source_history();
+        }
+        Ok(requirement)
+    }
+
+    /// Transfer preparation back to its canonical source. The matching reader
+    /// contributes inspection only; contacts, clocks and input receipts stay local.
+    pub fn begin_observed_prefix_source(
+        &mut self,
+        publisher: &PrefixPublisher,
+        reader: &PrefixReader,
+    ) -> Result<Option<SourceExecutionRequirement>, PrefixError> {
+        self.validate_prepared_publisher(publisher)?;
+        if !reader.matches_publisher(publisher)
+            || reader.end_time().is_some()
+            || self.frame().time != publisher.frontier()
+            || self.runtime.replay_is_sealed()
+        {
+            return Err(PrefixError::SourceChanged);
+        }
+        let requirement = self.preflight_prepared_source(Some(publisher))?;
+        if requirement.is_some() {
+            self.inherit_prepared_inspection(reader.session());
             self.release_prepared_source_history();
         }
         Ok(requirement)

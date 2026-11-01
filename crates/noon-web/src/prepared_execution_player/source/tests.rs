@@ -51,6 +51,7 @@ fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
     player.source = Some(SourceDelivery {
         publisher,
         pending: Some(batch),
+        required: None,
     });
     player
 }

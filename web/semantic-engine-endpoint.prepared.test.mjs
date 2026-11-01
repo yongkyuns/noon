@@ -55,6 +55,7 @@ function fixture(mode = "transferable", options = {}) {
     preparedEndTime: () => end,
     preparedPlaying: () => playing,
     preparedBuffering: () => buffering,
+    sourceExecutionReady: () => options.sourceExecutionRequired === true && buffering,
     preparedPlaybackTimeAt(wallTime) { record("observe-time", wallTime); return observation ?? time; },
     pausePreparedAt(wallTime) {
       record("pause-at", wallTime); time = observation ?? time; playing = false;
@@ -93,7 +94,7 @@ function fixture(mode = "transferable", options = {}) {
         controlPort: control.port1, renderPort: render.port1,
         transportMode: mode, session: 7, loopDurationSeconds: 4, ...options, ...request,
       }, () => record("cancel-source"), null, null, null, null, null,
-      { player, wakeSource: () => record("source-wake") });
+      { player, wakeSource: () => record("source-wake"), generation: 19 });
       await when(() => replies.some(value => value.type === "ready") && deltas.length === 1);
       return endpoint;
     },
@@ -119,6 +120,7 @@ function fixture(mode = "transferable", options = {}) {
       await when(() => count("wake") > prior);
     },
     observe(value) { observation = value; },
+    buffer() { buffering = true; },
     publishOnTick(value = true) { tickDelta = value; },
     oversizePayload(bytes = 4096) { payloadPadding = "x".repeat(bytes); },
     setTickFailure(error) { tickFailure = error; },
@@ -135,6 +137,28 @@ function fixture(mode = "transferable", options = {}) {
 }
 
 for (const mode of ["transferable", "shared"]) {
+  test(`prepared ${mode} source handoff waits for demand, quiesces and frees on retirement`, { timeout: 3000 }, async () => {
+    const f = fixture(mode, { sourceExecutionRequired: true });
+    try {
+      await f.attach();
+      f.endpoint.sourceExecutionRequired();
+      assert.equal(f.replies.some(message => message.type === "source_handoff_required"), false);
+      f.buffer();
+      f.endpoint.sourceExecutionRequired();
+      await f.when(() => f.replies.some(message => message.type === "source_handoff_required"));
+      assert.equal(f.replies.find(message => message.type === "source_handoff_required").generation, 19);
+      f.endpoint.sourceExecutionRequired();
+      const ticks = f.count("tick");
+      f.tick();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(f.count("tick"), ticks);
+      assert.equal(f.count("free"), 0, "old picture remains owned until replacement retires its endpoint");
+      f.endpoint.stop();
+      assert.equal(f.count("free"), 1);
+      assert.equal(f.count("stop-source"), 1);
+      assert.equal(f.count("cancel-source"), 1);
+    } finally { f.close(); }
+  });
   test(`prepared ${mode} cold startup waits for actual presentation before clock use`, { timeout: 3000 }, async () => {
     const f = fixture(mode);
     try {

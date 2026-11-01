@@ -24,6 +24,8 @@ if (existsSync(join(process.cwd(), "web", "node_modules"))) {
 }
 
 const expectedJavascriptSurface = [
+  "sourceExecutionReady(",
+  "beginSourceExecution(",
   "export class WasmAudioSource",
   "export class WasmAudioClipOptions",
   "export class WasmAudioClipHandle",
@@ -357,6 +359,9 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
+  "beginSourceExecution(context: CanonicalAuthoringSceneContext): boolean",
+  "sourceExecutionReady(): boolean",
   "requiresContentBoundary(): boolean",
   "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
   "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",

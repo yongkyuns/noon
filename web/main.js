@@ -575,6 +575,7 @@ function createRuntimeClient() {
 }
 
 function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
+  if (playbackState?.sourceExecution === "observed" && isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
   if (playbackState?.hasAudio === true) durationSeconds = playbackState.durationSeconds;
   status.dataset.playbackControls = supported ? "available" : "unavailable";
   if (playbackControls === null) {
@@ -583,7 +584,7 @@ function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds
       document.querySelector(".preview-pane"),
       { durationSeconds, onError: showPlaybackError },
     );
-  } else if (playbackState?.preparedPlayback !== true) {
+  } else if (playbackState?.preparedPlayback !== true && playbackState?.sourceExecution !== "observed") {
     playbackControls.setDuration(durationSeconds);
   }
   playbackControls.setControllable(supported);
@@ -1566,6 +1567,10 @@ async function updateWorkerMetrics() {
   try {
     const playbackState = await activePlayer.state();
     if (!isCurrentMetricsObservation(observation)) return;
+    if (isPreparedPlayback(activePlayer) && playbackState.sourceExecution === "observed") {
+      preparedPlaybackPlayer = null;
+      status.dataset.playbackControls = "unavailable";
+    }
     rendererBackend = activePlayer.rendererBackend;
     status.dataset.rendererBackend = rendererBackend;
     status.dataset.executionMode = activePlayer.mode;
