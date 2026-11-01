@@ -153,7 +153,7 @@ fn prepared_worker_source_reservation_allows_capacity_retry_without_consuming_ba
 }
 
 #[test]
-fn prepared_worker_source_failed_reservation_keeps_pending_terminal_retryable() {
+fn prepared_worker_source_failed_reservation_and_receiver_reset_keep_pending_terminal_retryable() {
     let mut player = staged_player(94, true);
     let capacity = player.reserve_object_capacity(0).unwrap();
     let required = pending_capacity(&player).unwrap();
@@ -165,6 +165,13 @@ fn prepared_worker_source_failed_reservation_keeps_pending_terminal_retryable() 
     assert_eq!(player.prepared_end_time(), None);
     assert_eq!(player.playback.reader.frame(), &frame);
     assert_eq!(player.playback.reader.publication_context(), publication);
+    let identity = player.playback.reader.runtime_identity();
+    player.reset_receiver(95).unwrap();
+    player.initial_delta_json().unwrap();
+    assert_eq!(pending_capacity(&player), Some(required));
+    assert_eq!(player.playback.reader.frame(), &frame);
+    assert_eq!(player.playback.reader.publication_context(), publication);
+    assert_eq!(player.playback.reader.runtime_identity(), identity);
     assert!(player.reserve_source_prefix_capacity().unwrap());
     assert!(player.deliver_source_prefix().unwrap());
     assert_eq!(player.prepared_end_time(), Some(2.0));

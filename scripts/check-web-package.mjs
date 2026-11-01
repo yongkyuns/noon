@@ -678,6 +678,7 @@ const expectedTypeSurface = [
 if (javascript.includes("export class PreparedExecutionPlayer") || declarations.includes("export class PreparedExecutionPlayer")) {
   expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(");
   expectedTypeSurface.push("export class PreparedExecutionPlayer",
+    "resetReceiver(transport_session: number): void",
     "beginObservedPreparedSource(scene_only_source?: boolean | null): boolean",
     "createFinishedPreparedExecutionPlayer(transport_session: number): PreparedExecutionPlayer | undefined",
     "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
