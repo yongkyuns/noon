@@ -737,9 +737,12 @@ state while already-delivered history remains usable. An unwinding panic leaves
 that source owner terminally failed before propagating its original payload;
 source-owned unpublished output is released even if final cleanup panics. This
 is not rollback of external side effects or in-process recovery from abort/trap
-configurations, which require host-context teardown. Zero-duration waits yield,
-and sources with no positive readable interval are explicitly unsupported here.
-This is a work-count bound, not preemption of a long user call or resource operation.
+configurations, which require host-context teardown. Zero-duration waits yield;
+this is a work-count bound, not preemption of a long user call or resource operation.
+An open reader still requires a positive readable interval. After explicit
+source completion, a sealed static scene may bootstrap the same historical reader
+at the exact closed range `[0, 0]`, without an artificial segment or source retry.
+Its history index reserves only occupied entries because no future suffix exists.
 Explicitly sealed
 source completion can publish a terminal batch; only reader adoption changes the
 ready interval to the inclusive final endpoint, without seeking the display. It is disabled by default and does not change gallery
@@ -826,8 +829,10 @@ Source failure retires preparation and preserves already-adopted history; explic
 cancellation retires the endpoint and releases its reader. Late attachment results
 cannot revive a cancelled invocation. Terminal adoption keeps that same reader,
 rather than reconciling it into the source's latest-state player. This bounded
-profile rejects causal input, host callbacks, looping, and sources without an
-initial readable interval. A receiver restart still requires a fresh source run;
+profile rejects causal input, host callbacks and looping. An unfinished source
+requires an initial readable interval; completed static sources use that same
+reader with the exact zero endpoint after interpreter cleanup succeeds. A receiver
+restart still requires a fresh source run;
 it must reject before destroying the existing historical player. The gallery and
 default viewer do not opt into this experimental run option.
 

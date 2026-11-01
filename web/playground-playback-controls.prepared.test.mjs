@@ -292,3 +292,22 @@ test("admitting prepared history clears a previous scene's audio controls", () =
   assert.equal(f.input.hidden, false);
   assert.deepEqual(f.calls, []);
 });
+
+test("completed static reader exposes exact zero without an invented playback range", async () => {
+  const f = fixture(prepared({ time: 0, preparedFrontier: 0, durationSeconds: 0 }));
+  assert.equal(f.controls.durationSeconds, 0);
+  assert.equal(f.controls.element.dataset.durationKnown, "true");
+  assert.equal(f.output.value, "0.00 / 0.00 s");
+  assert.equal(f.toggle.disabled, true);
+  assert.equal(f.range.max, "0");
+  assert.equal(f.range.disabled, true);
+  assert.equal(f.input.hidden, true);
+  assert.equal(f.restart.disabled, false);
+  f.restart.click(); await flush();
+  assert.deepEqual(f.calls, [["restartPlayback", undefined]]);
+  for (const invalid of [
+    prepared({ time: 0, preparedFrontier: 0 }),
+    prepared({ time: 0, preparedFrontier: 0, durationSeconds: 0, buffering: true }),
+  ]) assert.throws(() => f.controls.sync(invalid), /reader frontier/);
+  assert.equal(f.output.value, "0.00 / 0.00 s");
+});

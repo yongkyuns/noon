@@ -173,6 +173,21 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
+        /// Completed static source uses the same reader/worker presentation path.
+        #[wasm_bindgen(js_name = createFinishedPreparedExecutionPlayer)]
+        pub fn create_finished_prepared_execution_player(
+            &self,
+            transport_session: u32,
+        ) -> Result<PreparedExecutionPlayer, JsValue> {
+            let reader = self
+                .inner
+                .create_finished_static_reader()
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            let mut player = PreparedExecutionPlayer::from_reader(reader, transport_session);
+            player.set_prepared_playing(false);
+            Ok(player)
+        }
+
         /// Called after livePrepareSegment; no runtime lease leaves this context.
         #[wasm_bindgen(js_name = createPreparedExecutionPlayer)]
         pub fn create_prepared_execution_player(
