@@ -373,6 +373,26 @@ for (const retire of [false, true]) test(`failed source handoff settles active q
   } finally { client.terminate(); }
 });
 
+test("completed source reconciliation returns its held player before reattachment", async () => {
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("source", authoring, {
+      transportMode: "transferable", continuationGeneration: 7,
+    });
+    const { render } = await finishStartup(starting, authoring, offset);
+    const reconcile = client.switchToSemanticExecution("source", authoring, { loopDurationSeconds: 3 });
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    assert.equal(authoring.attachments[1].contextId, "source");
+    assert.equal(authoring.attachments[1].options.replaceExistingEndpoint, true);
+    assert.equal(authoring.attachments[1].options.continuationGeneration, undefined);
+    replyRender(render, rebuild, "engine_rebuilt");
+    assert.equal((await reconcile).session, 2);
+    assert.deepEqual(authoring.releasedContexts, []);
+  } finally { client.terminate(); }
+});
+
 test("invalid prepared startup profiles reject before allocating a renderer", async () => {
   for (const options of [
     { preparedPlayback: "true", continuationGeneration: 1 },
