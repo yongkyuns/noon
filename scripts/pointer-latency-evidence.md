@@ -17,7 +17,7 @@ The module exports `summarizePointerLatency(trace)` and
 inputs. They exercise the reducer; they do not simulate browser qualification.
 
 `observePointerLatency(ExecutionWorkerClient, { clockId, capacity })` is a separate
-Window-only qualification observer. Install it before gestures, label each
+Window-only qualification observer. Install it before endpoint message handlers and gestures, label each
 physical action with `observer.action(name)`, then retain `snapshot(metadata)`.
 It joins a synchronous canvas DOM occurrence to its exact normalized input and
 MessagePort request, then matches replies and deferred controls by their issued
@@ -27,7 +27,7 @@ joins and bounded-record loss remain explicit. `stop()` removes its own hooks.
 
 The observer records presentation receipts but leaves control-to-presentation
 association unknown: the existing reply supplies no exact required receipt.
-Its reply reading follows the existing client message handler. These limitations,
+Its reply reading precedes the existing client message handler. These limitations,
 observer overhead, full provenance and a frozen scoring plan must be addressed
 before its traces can qualify performance; an installed observer is not a gate.
 

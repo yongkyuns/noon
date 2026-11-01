@@ -15,6 +15,7 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
   const originalSubmit = ExecutionWorkerClient.prototype.submitBrowserPointerInput;
   const originalPost = MessagePort.prototype.postMessage;
   const originalListen = MessagePort.prototype.addEventListener;
+  const listenDescriptor = Object.getOwnPropertyDescriptor(MessagePort.prototype, "addEventListener");
   const error = value => {
     if (observerErrors.length < 16) observerErrors.push(String(value));
     else dropped++;
@@ -112,6 +113,7 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
   function post(message, ...args) {
     observe(() => {
       if (stopped || message?.channel !== "noon.engine") return;
+      if (!ports.has(this)) error("observer installed after endpoint message handlers; reply ordering is unknown");
       const port = portId(this);
       if (port === null) return;
       let row;
@@ -157,8 +159,15 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
       throw failure;
     }
   }
+  function listen(type, listener, ...args) {
+    // Promise continuations can run between browser event listeners. Observe
+    // the reply before the client can issue its deferred scene-control request.
+    if (type === "message") observe(() => portId(this));
+    return originalListen.call(this, type, listener, ...args);
+  }
   ExecutionWorkerClient.prototype.submitBrowserPointerInput = submit;
   MessagePort.prototype.postMessage = post;
+  MessagePort.prototype.addEventListener = listen;
   return {
     action(name) {
       if (typeof name !== "string" || !name) throw new TypeError("named physical action required");
@@ -169,7 +178,7 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
         attempts, presentations, dropped, observerErrors,
         // The current control protocol does not identify an exact required
         // presentation. Do not infer one from the latest/nearest receipt.
-        presentationJoin: "unknown", replyObservation: "after-existing-client-message-handler" });
+        presentationJoin: "unknown", replyObservation: "before-existing-client-message-handler" });
     },
     stop() {
       if (stopped) return;
@@ -182,6 +191,10 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
       } else error("submit observer ownership changed before removal");
       if (MessagePort.prototype.postMessage === post) MessagePort.prototype.postMessage = originalPost;
       else error("port observer ownership changed before removal");
+      if (MessagePort.prototype.addEventListener === listen) {
+        if (listenDescriptor) Object.defineProperty(MessagePort.prototype, "addEventListener", listenDescriptor);
+        else delete MessagePort.prototype.addEventListener;
+      } else error("listener observer ownership changed before removal");
     },
   };
 }

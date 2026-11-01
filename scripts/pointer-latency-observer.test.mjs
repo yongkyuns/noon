@@ -31,6 +31,7 @@ function fixture(t, capacity) {
   const observer = observePointerLatency(Client, { clockId: "navigation-1", capacity });
   t.after(() => observer.stop());
   const port = new Port(), client = new Client();
+  port.addEventListener("message", () => {}); // Normal endpoint listener installation.
   const input = { kind: "release", source_id: 4, pointer_id: 9, view_revision: 2, surface_x: 50, surface_y: 40 };
   return { observer, port, client, input, result, resolve, reject, originalSubmit, originalPost,
     clock: value => { now = value; },
@@ -88,6 +89,21 @@ test("collector retains rejection, missing submissions, and observer capacity lo
   assert.deepEqual(trace.attempts.map(row => row.outcome), ["rejected", "pending"]);
   assert.equal(trace.attempts[1].postedMs, undefined);
   assert.equal(trace.dropped, 1);
+  f.resolve();
+});
+
+test("reply evidence precedes a client listener that immediately issues deferred Play", t => {
+  const f = fixture(t);
+  f.port.addEventListener("message", event => {
+    if (event.data.type !== "browser_pointer_input") return;
+    assert.equal(f.snapshot().attempts[0].replyMs, 105);
+    f.port.postMessage({ channel: "noon.engine", type: "scene_control", requestId: 2, sequence: "17" });
+  });
+  f.dom(); f.client.submitBrowserPointerInput(f.input); f.post();
+  f.clock(105); f.port.reply({ type: "browser_pointer_input", requestId: 1, pointerInputAccepted: true,
+    sceneControl: { sequence: "17", action: "toggle_playback" } });
+  f.clock(109); f.port.reply({ type: "scene_control", requestId: 2, sceneControlApplied: true });
+  assert.equal(f.snapshot().attempts[0].controlReplyMs, 109);
   f.resolve();
 });
 
