@@ -12,6 +12,7 @@ struct Source {
     stage: u8,
 }
 impl LiveContinuation for Source {
+    const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.stage;

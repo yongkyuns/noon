@@ -275,7 +275,8 @@ pub use latex_authoring::{
     DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
 };
 pub use live_program::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
+    ContinuationEffects, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError,
+    LiveProgramStatus,
 };
 #[cfg(feature = "prepared-prefix")]
 pub use live_program::{
@@ -429,7 +430,7 @@ pub mod prelude {
     };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
-        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DiGraph,
+        BooleanOperation, Color, ContinuationEffects, ContinuationStep, DeclaredAnimation, DiGraph,
         DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
         FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphOptions,
         LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
