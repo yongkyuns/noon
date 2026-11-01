@@ -173,9 +173,9 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
       await until(() => jobs.length > count);
       return { promise, job: jobs.at(-1) };
     },
-    async register(job = jobs.at(-1)) {
+    async register(job = jobs.at(-1), automaticAudio = false) {
       job.descriptor = { contextId: `source-${jobs.indexOf(job)}`, continuationGeneration: jobs.indexOf(job) + 1,
-        ...(job.options.preparedPlayback ? { preparedPlayback: true } : {}) };
+        ...(job.options.preparedPlayback || automaticAudio ? { preparedPlayback: true } : {}) };
       await job.options.onSemanticContinuation({ semanticExecution: job.descriptor, generation: job.descriptor.continuationGeneration, duration: 1 });
     },
     finish(job = jobs.at(-1), duration = 4) {
@@ -373,6 +373,27 @@ test("qualification can cross normal/prepared boundaries only through a fresh pr
   assert.equal(f.inspect().preparedPlaybackPlayer, null);
   assert.notEqual(f.inspect().playbackControls.state.preparedPlayback, true);
   assert.equal(f.count("terminate-authoring"), 0);
+});
+
+test("normal Run adopts Rust-selected audio preparation without a feature hook or source rerun", async () => {
+  const f = fixture(undefined); delete f.env.hooks.authoringRunOptions;
+  const first = await f.start(); await f.register(); f.finish(); await first.promise;
+  const normal = f.inspect().player;
+  const second = await f.start();
+  assert.equal(second.job.options.preparedPlayback, false);
+  await f.register(second.job, true);
+  assert.equal(normal.terminated, true);
+  assert.equal(f.inspect().player.status.preparedPlayback, true);
+  assert.equal(f.inspect().busyDepth, 0);
+  assert.equal(f.inspect().playbackControls.controllable, true);
+  assert.equal(f.jobs.length, 2, "one invocation per Run, including automatic audio selection");
+  f.finish(); await second.promise;
+  const reader = f.inspect().player;
+  const third = await f.start(); await f.register(); f.finish(); await third.promise;
+  assert.equal(reader.terminated, true);
+  assert.equal(f.inspect().preparedPlaybackPlayer, null);
+  assert.equal(f.count("terminate-authoring"), 0);
+  assert.deepEqual(f.errors, []);
 });
 
 test("unsupported prepared source is not silently rerun through the normal path", async () => {

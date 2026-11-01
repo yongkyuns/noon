@@ -67,6 +67,9 @@ export class ExecutionWorkerClient {
   #playing = true;
   #audioDevice = new WorkerAudioDevice(() => this.#audioInterrupted());
   #audioControlGeneration = 0;
+  // Only a successful current user control authorizes automatic prepared
+  // frontier reanchors. A pending unlock, pause or replacement revokes it.
+  #audioOutputAuthorized = false;
   #onError;
   #onRecoverableError;
   #semanticAuthoringClient = null;
@@ -400,6 +403,7 @@ export class ExecutionWorkerClient {
     const engine = this.#engineWorker;
     const contextId = this.#semanticContextId;
     this.#audioControlGeneration += 1;
+    this.#audioOutputAuthorized = false;
     this.#audioDevice.stop();
     // Await the canonical owner's stop + retirement, not a fire-and-forget
     // endpoint message. Rejection keeps that exact source available for retry.
@@ -452,6 +456,7 @@ export class ExecutionWorkerClient {
     const oldEngine = this.#engineWorker;
     if (this.#audioDevice.available) {
       this.#audioControlGeneration += 1;
+      this.#audioOutputAuthorized = false;
       this.#audioDevice.stop();
       this.#rememberPlaying(await this.#requestEngine("pause", {}));
     }
@@ -656,6 +661,7 @@ export class ExecutionWorkerClient {
 
   async beginFiniteExport(frameOptions) {
     this.#audioControlGeneration += 1;
+    this.#audioOutputAuthorized = false;
     this.#audioDevice.stop();
     const result = await this.#requestEngine("begin_finite_export", { frameOptions });
     this.#rememberPlaying(result);
@@ -682,6 +688,7 @@ export class ExecutionWorkerClient {
     const generation = ++this.#audioControlGeneration;
     const lifecycle = this.#lifecycleGeneration;
     const session = this.#session;
+    this.#audioOutputAuthorized = false;
     this.#audioDevice.pause();
     if (unlocked !== null) await unlocked;
     if (generation !== this.#audioControlGeneration || lifecycle !== this.#lifecycleGeneration) {
@@ -691,7 +698,10 @@ export class ExecutionWorkerClient {
     }
     const result = await this.#requestEngine(type, payload);
     if (generation === this.#audioControlGeneration && lifecycle === this.#lifecycleGeneration && session === this.#session) {
-      try { this.#audioDevice.applyAnchor(result.audioAnchor, session); }
+      try {
+        this.#audioDevice.applyAnchor(result.audioAnchor, session);
+        this.#audioOutputAuthorized = result.playing === true;
+      }
       catch (error) {
         this.#audioDevice.stop();
         await this.#requestEngine("pause", {});
@@ -1046,10 +1056,25 @@ export class ExecutionWorkerClient {
         validateWorkerEnvelope(message, channel);
         if (owner === "engine" && message.type === "audio_stopped") {
           this.#audioControlGeneration += 1;
+          this.#audioOutputAuthorized = false;
           this.#audioDevice.stop();
           return;
         }
         if (owner === "engine" && message.type === "audio_state") {
+          if (message.preparedPlayback === true && this.#semanticPreparedPlayback) {
+            if (message.audioAnchor?.session !== this.#session ||
+                !Number.isFinite(message.audioAnchor?.availableUntil) ||
+                typeof message.playing !== "boolean") {
+              throw new Error("invalid prepared worker audio state");
+            }
+            if (!this.#audioOutputAuthorized) return;
+            // Window output has no clock authority. Rust issued this bounded
+            // reanchor after adoption and the existing displayed-picture barrier.
+            if (this.#audioDevice.applyAnchor(message.audioAnchor, this.#session) !== false) {
+              this.#rememberPlaying(message);
+            }
+            return;
+          }
           // Unsolicited anchors can only retire naturally completed output.
           if (message.audioAnchor?.session !== this.#session || message.audioAnchor?.playing !== false) {
             throw new Error("invalid terminal worker audio state");
@@ -1355,6 +1380,7 @@ export class ExecutionWorkerClient {
 
   #retireAudio() {
     this.#audioControlGeneration += 1;
+    this.#audioOutputAuthorized = false;
     this.#audioDevice.dispose();
     globalThis.document?.removeEventListener?.("visibilitychange", this.#visibilityChanged);
     globalThis.window?.removeEventListener?.("pagehide", this.#audioInterrupted);
@@ -1366,6 +1392,7 @@ export class ExecutionWorkerClient {
 
   #audioInterrupted = () => {
     this.#audioControlGeneration += 1;
+    this.#audioOutputAuthorized = false;
     this.#audioDevice.stop();
     if (this.#engineWorker === null || !this.#playing) return;
     void this.#requestEngine("pause", {}).then(result => this.#rememberPlaying(result))

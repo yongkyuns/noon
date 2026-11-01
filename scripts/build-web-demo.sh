@@ -75,6 +75,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/browser-audio-observation.mjs
   node --test scripts/audio-retirement-reference.test.mjs
   node --check scripts/python-background-audio-smoke.mjs
+  node --check scripts/prepared-audio-qualification.mjs
   node --check scripts/export-python-scene.mjs
   node --check scripts/browser-backend-visual-parity.mjs
   node --check scripts/browser-visual-parity-lib.mjs

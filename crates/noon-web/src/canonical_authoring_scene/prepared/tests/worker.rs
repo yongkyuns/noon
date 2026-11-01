@@ -52,12 +52,12 @@ fn interpreter_worker_completion_is_separate_from_quiet_historical_adoption() {
     assert_eq!(state(&player)["frontier"], 1.0);
     assert!(player.pending_source_object_capacity().is_some());
     assert!(player.drain_delta_json().unwrap().is_none());
-    assert!(player.deliver_source_prefix().unwrap());
+    assert!(player.deliver_source_prefix(0.0).unwrap());
     assert_eq!(state(&player)["frontier"], 2.0);
     assert_eq!(state(&player)["time"], 0.5);
     assert!(player.pending_source_object_capacity().is_none());
     assert!(player.drain_delta_json().unwrap().is_none());
-    assert!(!player.deliver_source_prefix().unwrap());
+    assert!(!player.deliver_source_prefix(0.0).unwrap());
     assert!(player.seek_delta_json(1.5).unwrap().is_some());
 }
 
@@ -82,7 +82,7 @@ fn interpreter_worker_foreign_source_is_rejected_before_completion_or_sealing() 
     assert!(foreign.create_prepared_prefix().is_ok());
     context.begin_ordinary_wait(0.25).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
-    assert!(player.deliver_source_prefix().unwrap());
+    assert!(player.deliver_source_prefix(0.0).unwrap());
     assert_eq!(state(&player)["frontier"], 1.25);
 }
 
@@ -94,7 +94,7 @@ fn interpreter_worker_source_lease_rejection_preserves_the_rightful_binding() {
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
     context.return_execution_player(lease).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
-    assert!(player.deliver_source_prefix().unwrap());
+    assert!(player.deliver_source_prefix(0.0).unwrap());
     assert_eq!(state(&player)["frontier"], 1.25);
 }
 
@@ -111,7 +111,7 @@ fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source(
     let prepared = context.active_live_player().unwrap().debug_frame_json();
     let before = state(&player);
     assert!(player
-        .deliver_source_prefix()
+        .deliver_source_prefix(0.0)
         .unwrap_err()
         .contains("CapacityRequired"));
     assert_eq!(state(&player), before);
@@ -126,7 +126,7 @@ fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source(
         prepared
     );
     player.reserve_prefix_object_capacity(required).unwrap();
-    assert!(player.deliver_source_prefix().unwrap());
+    assert!(player.deliver_source_prefix(0.0).unwrap());
     assert_eq!(state(&player)["frontier"], 1.5);
     assert!(player.drain_delta_json().unwrap().is_none());
     assert!(player.pending_source_object_capacity().is_none());
@@ -143,15 +143,15 @@ fn interpreter_worker_terminal_capacity_failure_is_not_false_completion() {
     let required = player.pending_source_object_capacity().unwrap();
     drop(context);
     drop(extra);
-    assert!(player.deliver_source_prefix().is_err());
+    assert!(player.deliver_source_prefix(0.0).is_err());
     assert_eq!(state(&player)["end"], serde_json::Value::Null);
     assert!(player.seek_delta_json(1.0).is_err());
     player.reserve_prefix_object_capacity(required).unwrap();
-    assert!(player.deliver_source_prefix().unwrap());
+    assert!(player.deliver_source_prefix(0.0).unwrap());
     assert_eq!(state(&player)["end"], 1.0);
     assert_eq!(state(&player)["time"], 0.5);
     assert!(player.drain_delta_json().unwrap().is_none());
-    assert!(player.deliver_source_prefix().is_err());
+    assert!(player.deliver_source_prefix(0.0).is_err());
     assert!(player.seek_delta_json(1.0).unwrap().is_some());
     assert!(player.seek_delta_json(0.5).unwrap().is_some());
 }
@@ -167,11 +167,11 @@ fn interpreter_worker_zero_duration_completion_defers_same_time_edits() {
     context.begin_ordinary_wait(0.0).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
     assert!(player.pending_source_object_capacity().is_none());
-    assert!(!player.deliver_source_prefix().unwrap());
+    assert!(!player.deliver_source_prefix(0.0).unwrap());
     assert_eq!(state(&player)["frontier"], 1.0);
     assert!(player.seek_delta_json(1.0).is_err());
     player.finish_interpreter_source(&mut context).unwrap();
-    assert!(player.deliver_source_prefix().unwrap());
+    assert!(player.deliver_source_prefix(0.0).unwrap());
     let delta = player.seek_delta_json(1.0).unwrap().unwrap();
     let decoded: crate::RetainedFamilyExecutionDeltaEnvelope =
         serde_json::from_str(&delta).unwrap();
@@ -187,7 +187,7 @@ fn interpreter_worker_cancellation_releases_pending_only_and_never_seals_history
     player.stop_source_preparation();
     player.stop_source_preparation();
     assert!(player.pending_source_object_capacity().is_none());
-    assert!(player.deliver_source_prefix().is_err());
+    assert!(player.deliver_source_prefix(0.0).is_err());
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
     assert_eq!(state(&player)["frontier"], 1.0);
     assert_eq!(state(&player)["end"], serde_json::Value::Null);

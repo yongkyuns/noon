@@ -126,9 +126,12 @@ impl PreparedExecutionPlayer {
     /// Adopt the same retained suffix, or fail before consuming it. A capacity
     /// rejection can be followed by explicit reservation and this call again;
     /// never call prepareSourceSegment again to regenerate lost output.
+    /// The host timestamp samples the previously adopted horizon before this
+    /// suffix extends availability, including after synchronous source work.
     /// Returns false when a completed zero-duration segment produced no suffix.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = deliverSourcePrefix))]
-    pub fn deliver_source_prefix(&mut self) -> Result<bool, String> {
+    pub fn deliver_source_prefix(&mut self, wall_time_ms: f64) -> Result<bool, String> {
+        Self::validate_wall_time(wall_time_ms)?;
         let source = self
             .source
             .as_ref()
@@ -137,6 +140,7 @@ impl PreparedExecutionPlayer {
             return Ok(false);
         };
         self.preflight_append(batch).map_err(|e| e.to_string())?;
+        self.observe_delivery_clock(wall_time_ms)?;
         let batch = self
             .source
             .as_mut()

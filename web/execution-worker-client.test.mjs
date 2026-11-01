@@ -276,10 +276,11 @@ for (const failedOwner of ["engine", "render"]) {
   });
 }
 
-async function startClient(errors = []) {
+async function startClient(errors = [], { preparedPlayback = false } = {}) {
   const offset = FakeWorker.instances.length;
   const authoring = new FakeSemanticAuthoringClient();
   authoring.autoRespond = false;
+  authoring.preparedPlayback = preparedPlayback;
   const client = new ExecutionWorkerClient(new FakeCanvas(), {
     onError(error, owner) { errors.push(`${owner}: ${error.message}`); },
   });
@@ -1210,5 +1211,53 @@ test("pause supersedes an outstanding device unlock without a delayed restart", 
     completeUnlock();
     await assert.rejects(resumed, error => error.name === "AbortError");
     assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+  } finally { client.terminate(); }
+});
+
+test("prepared frontier reanchors require a current user play and cannot overtake pause or delayed unlock", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const applied = [], errors = [];
+  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", anchor => { applied.push(anchor); return true; });
+  const { client, engine, authoring } = await startClient(errors, { preparedPlayback: true });
+  const endpoint = authoring.attachments[0].controlPort;
+  let sequence = 0;
+  const anchor = (playing = true) => ({ session: 1, playing, time: 0.5,
+    sampledEpochMs: performance.timeOrigin + performance.now(), availableUntil: 3, audioSequence: ++sequence });
+  const send = (audioAnchor, playing = true) => endpoint.postMessage(engineMessage("audio_state", {
+    preparedPlayback: true, playing, audioAnchor,
+  }));
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    send(anchor()); await flush();
+    assert.equal(applied.length, 0, "preparation never authorizes sound");
+    const resume = client.resume();
+    const request = await waitForRequest(engine, "resume");
+    endpoint.postMessage(engineMessage("resume", { requestId: request.requestId, time: 0.5, playing: true, audioAnchor: anchor() }));
+    await resume;
+    send(anchor(false)); await flush();
+    assert.equal(applied.at(-1).playing, false, "buffering pauses output without cancelling user intent");
+    send(anchor()); await flush();
+    assert.equal(applied.at(-1).playing, true, "adoption can resume the already-authorized play");
+    const beforePause = applied.length;
+    const pause = client.pause();
+    send(anchor()); await flush();
+    assert.equal(applied.length, beforePause, "an in-flight user command supersedes old frontier messages");
+    const pausedRequest = await waitForRequest(engine, "pause");
+    endpoint.postMessage(engineMessage("pause", { requestId: pausedRequest.requestId, time: 0.5, playing: false, audioAnchor: anchor(false) }));
+    await pause;
+    const paused = applied.length;
+    send(anchor()); await flush();
+    assert.equal(applied.length, paused, "a newer availability message cannot restart a pause");
+
+    let completeUnlock;
+    t.mock.method(WorkerAudioDevice.prototype, "unlock", () => new Promise(resolve => { completeUnlock = resolve; }));
+    const pending = client.resume();
+    const aborted = assert.rejects(pending, error => error.name === "AbortError");
+    send(anchor()); await flush();
+    assert.equal(applied.length, paused);
+    client.terminate(); completeUnlock(); await aborted;
+    send(anchor()); await flush();
+    assert.equal(applied.length, paused, "retired output cannot be revived by a late source message");
+    assert.deepEqual(errors, []);
   } finally { client.terminate(); }
 });

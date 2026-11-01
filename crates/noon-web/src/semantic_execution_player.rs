@@ -68,6 +68,12 @@ use crate::{
     RetainedFamilyExecutionDeltaEnvelope, RetainedResourceBundle,
 };
 
+enum ExecutionAdmission {
+    Playback,
+    #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+    HeadlessSource,
+}
+
 /// A browser-host wake observation derived from one player-owned execution session.
 ///
 /// The browser receives only this derived scheduling directive. Runtime/segment identity,
@@ -546,10 +552,38 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
+        Self::from_scene_execution_with_admission(
+            source,
+            duration,
+            transport_session,
+            ExecutionAdmission::Playback,
+        )
+    }
+
+    fn from_scene_execution_with_admission(
+        source: SceneExecution,
+        duration: f64,
+        transport_session: u32,
+        admission: ExecutionAdmission,
+    ) -> Result<Self, String> {
         let (semantics, semantic_root, session) = source.into_integration_parts();
         #[cfg(not(any(target_arch = "wasm32", test)))]
         let _ = semantic_root;
-        Self::require_worker_execution_profile(&session)?;
+        let finite_audio_end = match admission {
+            ExecutionAdmission::Playback => {
+                Self::require_worker_execution_profile(&session)?;
+                session
+                    .has_audio()
+                    .then(|| duration.max(session.finite_timeline_end_time().unwrap()))
+            }
+            #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+            ExecutionAdmission::HeadlessSource => {
+                session
+                    .validate_prepared_source_domain()
+                    .map_err(|error| error.to_string())?;
+                None
+            }
+        };
         let clock = Self::playback_clock(&session, duration)?;
         let resource_bundle = Self::resource_bundle_for(&session)?;
         let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
@@ -560,9 +594,7 @@ impl SemanticExecutionPlayer {
             .encode_binary()
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            finite_audio_end: session
-                .has_audio()
-                .then(|| duration.max(session.finite_timeline_end_time().unwrap())),
+            finite_audio_end,
             finite_export: None,
             section_navigation: Default::default(),
             session,
@@ -682,6 +714,7 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<(), String> {
+        Self::require_worker_execution_profile(&self.session)?;
         if self.pending_callback_phase.is_some() {
             return Err(
                 "cannot rebind transport while a required callback phase is pending".into(),

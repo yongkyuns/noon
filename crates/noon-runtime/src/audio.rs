@@ -144,6 +144,25 @@ impl SceneInstance {
 }
 
 impl<'a> AudioPlaybackClip<'a> {
+    /// The shared phase/envelope projection with an explicit output horizon.
+    /// A disposable cross-context resource mirror uses the delivered horizon
+    /// carried by its accepted host anchor; having future PCM is not permission
+    /// to schedule it. The cutoff preserves the authored envelope and loop phase.
+    #[cfg(feature = "prepared-prefix")]
+    pub fn at_time_before(
+        clip: SemanticNodeId,
+        definition: &'a AudioClipDefinition,
+        pcm: &'a AudioResource,
+        time: f64,
+        available_until: f64,
+    ) -> Result<Option<Self>, AudioClipError> {
+        if !available_until.is_finite() || available_until < 0.0 {
+            return Err(AudioClipError::InvalidSceneTime);
+        }
+        Ok(Self::at_time(clip, definition, pcm, time)?
+            .and_then(|clip| clip.limit_duration(available_until - time - clip.start_delay)))
+    }
+
     /// Clip a derived instruction to the readable prefix, not its authored
     /// definition. Preserve source phase and the original gain at the cutoff:
     /// availability is not a new fade-out or a new loop boundary.

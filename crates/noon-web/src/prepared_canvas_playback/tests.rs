@@ -311,8 +311,8 @@ fn prepared_canvas_interpreter_demand_refills_open_wait_but_not_a_terminal_reade
     assert!(playback.needs_preparation(f64::NAN).is_err());
 }
 
-// The public headless reader may now own audio. These hosts still lack a
-// picture-qualified output anchor, so reject rather than silently discard it.
+// Direct canvases still lack output; the worker has an explicit bounded output
+// resource/anchor boundary and must bootstrap in silence even for delayed clips.
 fn audio_reader(start_time: f64) -> (PrefixReader, std::sync::Weak<[f32]>) {
     let mut scene = Scene::new();
     let samples: std::sync::Arc<[f32]> = vec![0.125; 8_000].into();
@@ -360,17 +360,31 @@ fn prepared_canvas_rejects_audio_before_installation_even_before_clip_onset() {
 }
 
 #[test]
-fn prepared_worker_rejects_audio_before_creating_a_visual_only_transport() {
+fn prepared_worker_audio_bootstraps_paused_and_retains_delayed_resources() {
     for start in [0.0, 2.0] {
         let (reader, pcm) = audio_reader(start);
-        let result = crate::PreparedExecutionPlayer::from_reader(reader, 123);
-        match result {
-            Err(message) => assert_eq!(
-                message,
-                "prepared audio output requires displayed-time synchronization (#2358)"
-            ),
-            Ok(_) => panic!("an audio reader must not acquire a silently muted worker host"),
-        }
+        let mut player = crate::PreparedExecutionPlayer::from_reader(reader, 123).unwrap();
+        assert!(player.has_audio());
+        assert!(!player.prepared_playing());
+        let before = player.prepared_time();
+        let resources = crate::worker_audio::WorkerAudioResources::decode(
+            &player.audio_resource_bundle_bytes().unwrap(),
+        )
+        .unwrap();
+        // Delayed resources exist at bootstrap, but no output beyond the
+        // delivered first-second interval can be constructed from its anchor.
+        assert_eq!(resources.at_time(0.0).unwrap().len(), 1);
+        assert_eq!(
+            resources.at_time_before(before, 1.0).unwrap().len(),
+            usize::from(start < 1.0)
+        );
+        let anchor: serde_json::Value =
+            serde_json::from_str(&player.audio_anchor_json(1000.0, 1000.0).unwrap()).unwrap();
+        assert_eq!(anchor["playing"], false);
+        assert_eq!(anchor["availableUntil"], 1.0);
+        assert_eq!(player.prepared_time(), before);
+        assert!(pcm.upgrade().is_some());
+        drop(player);
         assert!(pcm.upgrade().is_none());
     }
 }

@@ -4,7 +4,10 @@
 //! state. The receiver owns only ordered-delivery/readiness metadata. No mutable
 //! session/runtime accessor or authoring/causal input entry point is exposed.
 use crate::ExecutionSession;
-use noon_core::{ObjectId, PublicationContext, SemanticClickIndicate};
+use noon_core::{
+    AudioClipDefinition, AudioResource, ObjectId, PublicationContext, SemanticClickIndicate,
+    SemanticNodeId,
+};
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_changes,
     FrameState, PrefixBatch, PrefixBatchStats, PrefixError, PrefixReceiver,
@@ -44,6 +47,20 @@ impl PrefixReader {
         &self,
     ) -> Result<impl Iterator<Item = noon_runtime::AudioPlaybackClip<'_>>, PrefixError> {
         self.receiver.audio_playback(&self.session.runtime)
+    }
+
+    /// Immutable soundtrack definitions and PCM for one output-resource bootstrap.
+    /// This includes delayed clips beyond the current delivered frontier, since
+    /// their resources are already part of this reader's admitted closure. It
+    /// carries no time, playback instruction, or permission to emit sound. Hosts
+    /// must separately bound output to adopted history and an accepted picture.
+    pub fn audio_resource_closure(
+        &self,
+    ) -> impl Iterator<Item = (SemanticNodeId, &AudioClipDefinition, &AudioResource)> {
+        self.session
+            .audio_playback_at(0.0)
+            .expect("the resource bootstrap uses a valid fixed origin")
+            .map(|clip| (clip.clip, clip.definition, clip.pcm))
     }
 
     pub fn frontier(&self) -> f64 {

@@ -126,6 +126,14 @@ async function initializePyodide() {
   const authoringStoreCreatedAt = performance.now();
   self.noonCreateCanonicalAuthoringSceneContext = () => {
     const context = authoringStore.createSceneContext();
+    if (activeAuthoringRun?.preparedPlayback) {
+      if (typeof context.selectPreparedSource !== "function") {
+        throw new Error("prepared playback requires a prepared-prefix enabled engine build");
+      }
+      invokePreparedEngine(() => context.selectPreparedSource());
+    } else if (activeAuthoringRun !== null && typeof context.allowPreparedAudioSource === "function") {
+      invokePreparedEngine(() => context.allowPreparedAudioSource());
+    }
     authoringMilestones.firstSceneContextCreatedAtMs ??= performance.now();
     return context;
   };
@@ -638,6 +646,14 @@ function registerContinuationContext(context) {
   if (activeAuthoringRun === null) {
     throw new Error("semantic continuation requires an active Python authoring run");
   }
+  if (!activeAuthoringRun.preparedPlayback &&
+      typeof context.preparedSourceSelected === "function" &&
+      invokePreparedEngine(() => context.preparedSourceSelected())) {
+    if (activeAuthoringRun.continuation !== null) {
+      throw new Error("cannot change source preparation after its first continuation");
+    }
+    activeAuthoringRun.preparedPlayback = true;
+  }
   if (activeAuthoringRun.preparedPlayback &&
       ["failed", "cancelled", "finished"].includes(activeAuthoringRun.preparedDriver.state())) {
     throw new Error("prepared source invocation is retired");
@@ -778,7 +794,9 @@ function deliverPreparedSourcePrefix(continuation) {
   const capacity = invokePreparedEngine(() => player.pendingSourceObjectCapacity());
   if (capacity === undefined) return false; // Completed zero-duration segment.
   invokePreparedEngine(() => player.reservePrefixObjectCapacity(capacity));
-  if (!invokePreparedEngine(() => player.deliverSourcePrefix())) throw new Error("prepared source lost its retained suffix");
+  // Preparation can block this worker past the old readable horizon. Rust must
+  // observe that clock against the old availability before adopting new history.
+  if (!invokePreparedEngine(() => player.deliverSourcePrefix(performance.now()))) throw new Error("prepared source lost its retained suffix");
   // Future history is not a presentation. No transport/presentation await is
   // needed to release this source barrier, even while the reader is paused.
   continuation.endpoint.sourcePrefixDelivered();
@@ -804,6 +822,7 @@ function createPreparedSourceDriver(run) {
       return invokePreparedEngine(() => continuation.preparedPlayer.needsPreparation(run.preparationLookaheadSeconds));
     },
     finishSource(resultJson, signal) {
+      if (!run.preparedPlayback) return;
       if (run.continuation === null) throw new Error("prepared source produced no readable play or wait interval");
       const continuation = requirePreparedContinuation(run, run.continuation?.context, signal);
       const descriptor = JSON.parse(resultJson)?.semantic_execution;
@@ -1202,7 +1221,10 @@ async function handleRequest(request) {
         preparedDriver: null,
       };
       activeAuthoringRun = run;
-      if (run.preparedPlayback) run.preparedDriver = createPreparedSourceDriver(run);
+      // The driver invokes the original source exactly once. For normal scenes
+      // it stays dormant: Rust selects automatic soundtrack preparation at the
+      // first ordinary segment, before any driver barrier can be requested.
+      run.preparedDriver = createPreparedSourceDriver(run);
       let completed = false;
       try {
         const workerRunStartedAtMs = performance.now();
@@ -1212,7 +1234,7 @@ async function handleRequest(request) {
           request.context,
           requestId,
         );
-        let resultJson = await (run.preparedDriver ? run.preparedDriver.run(execute) : execute());
+        let resultJson = await run.preparedDriver.run(execute);
         const workerRunCompletedAtMs = performance.now();
         if (run.preparedPlayback) {
           const result = JSON.parse(resultJson);

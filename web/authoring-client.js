@@ -79,7 +79,8 @@ export class PythonAuthoringClient {
         requestId,
         source,
         context,
-        ...(preparedPlayback ? { preparedPlayback, preparationLookaheadSeconds } : {}),
+        ...(preparedPlayback ? { preparedPlayback } : {}),
+        ...(preparedPlayback || preparationLookaheadSeconds !== 1 ? { preparationLookaheadSeconds } : {}),
       }),
     );
     return result;
@@ -273,10 +274,12 @@ export class PythonAuthoringClient {
         const pending = this.#pendingFor(message.requestId);
         if (pending === null) return;
         const result = parseAuthoringResult(message.resultJson);
-        if (pending.preparedPlayback &&
-            (result.semanticExecution.preparedPlayback !== true ||
+        const preparedResult = result.semanticExecution.preparedPlayback === true;
+        if (preparedResult !== pending.preparedPlayback ||
+            (preparedResult &&
+            (
              result.semanticExecution.contextId !== pending.continuationDescriptor?.contextId ||
-             result.semanticExecution.continuationGeneration !== pending.continuationDescriptor?.continuationGeneration)) {
+             result.semanticExecution.continuationGeneration !== pending.continuationDescriptor?.continuationGeneration))) {
           throw new Error("prepared source result does not match its registered continuation");
         }
         if (message.workerRunTiming !== undefined && message.workerRunTiming !== null) {
@@ -339,7 +342,7 @@ export class PythonAuthoringClient {
     if (semanticExecution?.continuationGeneration !== message.generation) {
       throw new Error("Python semantic continuation registration generation does not match");
     }
-    if ((semanticExecution.preparedPlayback === true) !== pending.preparedPlayback) {
+    if (pending.preparedPlayback && semanticExecution.preparedPlayback !== true) {
       throw new Error("Python semantic continuation preparation mode does not match its source run");
     }
     const registration = Object.freeze({
@@ -351,6 +354,9 @@ export class PythonAuthoringClient {
       throw new Error("Python semantic continuation context is already registered");
     }
     pending.continuationRegistered = true;
+    // Only this current worker registration may select automatic audio
+    // preparation. The final result must retain its exact mode and identity.
+    pending.preparedPlayback = semanticExecution.preparedPlayback === true;
     pending.continuationDescriptor = semanticExecution;
     this.#continuations.set(semanticExecution.contextId, {
       generation: message.generation,

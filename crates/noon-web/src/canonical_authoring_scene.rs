@@ -612,6 +612,8 @@ pub struct CanonicalAuthoringScene {
     translation_drag_targets: Vec<noon::Mobject>,
     #[cfg(any(target_arch = "wasm32", test))]
     player_ownership: PlayerOwnership,
+    #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+    source_preparation: prepared::SourcePreparation,
 }
 
 impl Default for CanonicalAuthoringScene {
@@ -635,6 +637,8 @@ impl CanonicalAuthoringScene {
             translation_drag_targets: Vec::new(),
             #[cfg(any(target_arch = "wasm32", test))]
             player_ownership: PlayerOwnership::Unstarted,
+            #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+            source_preparation: prepared::SourcePreparation::Realtime,
         }
     }
 
@@ -768,8 +772,8 @@ impl CanonicalAuthoringScene {
         if let Some(player) = self.player_ownership.local_mut() {
             player.set_loop_duration(duration)?;
         } else {
-            let mut player = self.build_live_player(duration, 0)?;
-            player.begin_replay_retention()?;
+            let mut player = self.build_source_player(duration, 0)?;
+            self.begin_source_replay_retention(&mut player)?;
             self.player_ownership = PlayerOwnership::Active(player);
         }
         Ok(self
@@ -784,13 +788,56 @@ impl CanonicalAuthoringScene {
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
-        let mut player = crate::SemanticExecutionPlayer::from_live_session(
+        self.configure_live_player(crate::SemanticExecutionPlayer::from_live_session(
             self.lower_execution()?,
             std::rc::Rc::clone(self.scene.integration_store()),
             self.scene.root(),
             duration,
             transport_session,
-        )?;
+        )?)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn build_source_player(
+        &mut self,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<crate::SemanticExecutionPlayer, String> {
+        let session = self.lower_execution()?;
+        let constructor = crate::SemanticExecutionPlayer::from_live_session;
+        #[cfg(feature = "prepared-prefix")]
+        let headless = self.source_preparation == prepared::SourcePreparation::Prepared
+            || (self.source_preparation == prepared::SourcePreparation::AutomaticAudio
+                && session.has_audio());
+        #[cfg(feature = "prepared-prefix")]
+        let constructor = if headless {
+            crate::SemanticExecutionPlayer::from_prepared_source_session
+        } else {
+            constructor
+        };
+        let player = self.configure_live_player(constructor(
+            session,
+            std::rc::Rc::clone(self.scene.integration_store()),
+            self.scene.root(),
+            duration,
+            transport_session,
+        )?)?;
+        #[cfg(feature = "prepared-prefix")]
+        if self.source_preparation == prepared::SourcePreparation::AutomaticAudio {
+            self.source_preparation = if headless {
+                prepared::SourcePreparation::Prepared
+            } else {
+                prepared::SourcePreparation::Realtime
+            };
+        }
+        Ok(player)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn configure_live_player(
+        &self,
+        mut player: crate::SemanticExecutionPlayer,
+    ) -> Result<crate::SemanticExecutionPlayer, String> {
         player.set_section_navigation(self.scene.section_navigation());
         // Do not change pre-existing input/callback admission for scenes with
         // no drag declaration. A nonempty source declaration alone enables
@@ -799,6 +846,18 @@ impl CanonicalAuthoringScene {
             player.set_translation_drag_targets(&self.translation_drag_targets)?;
         }
         Ok(player)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn begin_source_replay_retention(
+        &self,
+        player: &mut crate::SemanticExecutionPlayer,
+    ) -> Result<(), String> {
+        #[cfg(feature = "prepared-prefix")]
+        if self.source_preparation == prepared::SourcePreparation::Prepared {
+            return player.begin_prepared_replay_retention();
+        }
+        player.begin_replay_retention()
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2055,8 +2114,8 @@ impl CanonicalAuthoringScene {
             }
             // A wait has no animation extent, but the presentation clock still needs a
             // positive valid range before its session-derived deadline replaces it.
-            let mut player = self.build_live_player(duration.max(1.0), 0)?;
-            player.begin_replay_retention()?;
+            let mut player = self.build_source_player(duration.max(1.0), 0)?;
+            self.begin_source_replay_retention(&mut player)?;
             let end_time = player.live_wait(duration)?;
             // Shared admission is fallible. Publish the first runtime only once
             // it owns a valid segment; rejection leaves this context unstarted.
@@ -2608,8 +2667,8 @@ impl CanonicalAuthoringScene {
         let composition = Self::ordinary_composition_request(kind, children, composition_options);
         let end = if self.player_ownership.is_unstarted() {
             self.prepare_local_player_for_run()?;
-            let mut player = self.build_live_player(bootstrap_duration, 0)?;
-            player.begin_replay_retention()?;
+            let mut player = self.build_source_player(bootstrap_duration, 0)?;
+            self.begin_source_replay_retention(&mut player)?;
             if !allow_required_callbacks && player.has_required_callbacks() {
                 return Err("ordinary composition with required callbacks needs an asynchronous continuation".into());
             }
@@ -4216,6 +4275,10 @@ impl CanonicalAuthoringScene {
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
+        #[cfg(feature = "prepared-prefix")]
+        if self.source_preparation == prepared::SourcePreparation::Prepared {
+            return Err("headless source preparation cannot be leased to realtime playback; attach its prepared reader".into());
+        }
         self.prepare_local_player_for_run()?;
         if let Some(player) = self.player_ownership.local_mut() {
             player.rebind_transport(duration, transport_session)?;
@@ -10315,7 +10378,30 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        /// Opt-in headless source barrier, not presentation or source scheduling.
+        /// Select headless admission before ordinary source execution begins.
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = selectPreparedSource)]
+        pub fn select_prepared_source(&mut self) -> Result<(), JsValue> {
+            self.inner.select_prepared_source().map_err(typed_js_error)
+        }
+
+        /// Normal Python source selects preparation only for an actual soundtrack
+        /// at its first ordinary segment. Finite authoring keeps its own admission.
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = allowPreparedAudioSource)]
+        pub fn allow_prepared_audio_source(&mut self) -> Result<(), JsValue> {
+            self.inner
+                .allow_prepared_audio_source()
+                .map_err(typed_js_error)
+        }
+
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = preparedSourceSelected)]
+        pub fn prepared_source_selected(&self) -> bool {
+            self.inner.source_preparation == prepared::SourcePreparation::Prepared
+        }
+
+        /// Headless source barrier, not presentation or source scheduling.
         #[cfg(feature = "prepared-prefix")]
         #[wasm_bindgen(js_name = livePrepareSegment)]
         pub fn live_prepare_segment(&mut self) -> Result<f64, JsValue> {

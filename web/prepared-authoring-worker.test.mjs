@@ -28,7 +28,8 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null,
+  preparedPlayback = true, selectedPrepared = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
@@ -44,13 +45,17 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     },
     pendingSourceObjectCapacity() { alive(); trap("capacity"); return pending; },
     reservePrefixObjectCapacity(value) { alive(); trap("reserve"); assert.equal(value, 4); counters.reserved++; },
-    deliverSourcePrefix() { alive(); trap("adopt"); assert.equal(pending, 4); pending = undefined; counters.adopted++; return true; },
+    deliverSourcePrefix(wallTime) {
+      alive(); trap("adopt"); assert.ok(Number.isFinite(wallTime) && wallTime >= 0);
+      assert.equal(pending, 4); pending = undefined; counters.adopted++; return true;
+    },
     needsPreparation() { alive(); trap("demand"); return demand; },
     stopSourcePreparation() { alive(); counters.stopped++; pending = undefined; },
     free() { alive(); freed = true; counters.freed++; events.push("free"); },
   };
   const context = {
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
+    preparedSourceSelected: () => selectedPrepared,
     retireExecutionSource() { events.push("retire-source"); },
     livePrepareSegment() { counters.initial++; events.push("initial"); trap("initial"); if (completeError) throw completeError; },
     createPreparedExecutionPlayer(session) { trap("reader"); assert.equal(session, 3); events.push("reader"); return player; },
@@ -105,7 +110,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     start(sourceBody, requestId = 1) {
       execute = sourceBody;
       return api.handleRequest(envelope("run", { requestId, source: "test source", context: {},
-        preparedPlayback: true, preparationLookaheadSeconds: 0.75 }));
+        ...(preparedPlayback ? { preparedPlayback: true } : {}), preparationLookaheadSeconds: 0.75 }));
     },
     async attach(extra = {}) {
       const control = new MessageChannel(), render = new MessageChannel();
@@ -132,6 +137,86 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     endpoint: () => endpoint,
   };
 }
+
+test("source delivery samples host time after resource reservation and before adoption", () => {
+  let wallTime = 100;
+  const events = [];
+  const deliver = new Function("invokePreparedEngine", "performance", `
+    ${section("function deliverPreparedSourcePrefix", "function createPreparedSourceDriver")}
+    return deliverPreparedSourcePrefix;
+  `)(callback => callback(), { now() { events.push("sample"); return wallTime; } });
+  const continuation = {
+    preparedPlayer: {
+      pendingSourceObjectCapacity() { events.push("capacity"); return 4; },
+      reservePrefixObjectCapacity(capacity) {
+        assert.equal(capacity, 4); events.push("reserve"); wallTime = 55_000;
+      },
+      deliverSourcePrefix(sample) {
+        assert.equal(sample, 55_000); events.push("adopt"); return true;
+      },
+    },
+    endpoint: { sourcePrefixDelivered() { events.push("notify"); } },
+  };
+  assert.equal(deliver(continuation), true);
+  assert.deepEqual(events, ["capacity", "reserve", "sample", "adopt", "notify"]);
+});
+
+test("normal run adopts canonical soundtrack preparation without restarting source", async () => {
+  const h = host({ preparedPlayback: false, selectedPrepared: true });
+  let entries = 0, after = 0;
+  const done = h.start(async api => {
+    entries++;
+    await api.awaitSemanticContinuation(h.context);
+    after++;
+    return h.result();
+  });
+  await microtasks();
+  assert.equal(h.posts[0].semanticExecution.prepared_playback, true);
+  assert.equal(entries, 1);
+  assert.equal(after, 0);
+  const initial = h.tick(); await h.attach(); await initial;
+  h.demand(true); await h.tick(); await done;
+  assert.equal(entries, 1);
+  assert.equal(after, 1);
+  assert.equal(h.counters.initial, 1);
+  assert.equal(h.counters.terminal, 1);
+  assert.equal(h.errors.length, 0);
+  h.endpoint().stop();
+});
+
+test("ordinary finite source leaves the interpreter preparation driver dormant", async () => {
+  const h = host({ preparedPlayback: false });
+  let entries = 0;
+  await h.start(async () => {
+    entries++;
+    return JSON.stringify({ kind: "semantic_scene", duration: 3,
+      semantic_execution: { context_id: "finite" } });
+  });
+  assert.equal(entries, 1);
+  assert.equal(h.tasks.size, 0);
+  assert.equal(h.counters.initial, 0);
+  assert.equal(h.counters.terminal, 0);
+  assert.equal(h.errors.length, 0);
+  assert.equal(JSON.parse(h.posts[0].resultJson).semantic_execution.prepared_playback, undefined);
+});
+
+test("ordinary realtime source keeps its existing suspension without preparation scheduling", async () => {
+  const h = host({ preparedPlayback: false });
+  let entries = 0;
+  const done = h.start(async api => {
+    entries++;
+    await api.awaitSemanticContinuation(h.context);
+    throw new Error("cancelled source must not resume");
+  });
+  await microtasks();
+  assert.equal(h.posts[0].semanticExecution.prepared_playback, undefined);
+  assert.equal(h.tasks.size, 0);
+  assert.equal(h.counters.initial, 0);
+  await h.cancel(); await done;
+  assert.equal(entries, 1);
+  assert.equal(h.errors.filter(error => error.requestId === 1).length, 1);
+  assert.equal(h.counters.terminal, 0);
+});
 
 test("production source completes each barrier once, sleeps on Rust demand and seals after cleanup", async () => {
   const h = host(); let statements = 0;

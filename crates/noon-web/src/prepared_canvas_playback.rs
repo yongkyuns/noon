@@ -18,11 +18,17 @@ impl PreparedCanvasPlayback {
         if reader.has_audio() {
             return Err("prepared audio output requires displayed-time synchronization (#2358)");
         }
-        Ok(Self {
+        Ok(Self::for_worker(reader))
+    }
+    /// The worker host supplies a bounded, picture-qualified Window audio path.
+    /// Direct canvases still use `new` until they implement their own output.
+    pub(crate) fn for_worker(reader: PrefixReader) -> Self {
+        let playing = !reader.has_audio();
+        Self {
             reader,
-            playing: true,
+            playing,
             buffering: false,
-        })
+        }
     }
     pub(crate) fn playing(&self) -> bool {
         self.playing

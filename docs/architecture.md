@@ -232,11 +232,11 @@ publication rejects its removal before resource materialization. Ordinary visual
 edits and segment completion can continue, including after a history budget is
 exhausted, while backward replay remains subject to that budget. Nested or mixed
 clip scopes, live clip creation/replacement/removal, callback/input publication,
-realtime source continuation and worker/device playback of this history retain
+realtime source continuation and native device playback of this history retain
 their explicit gates under #2263 and #2358. Device-neutral phase/envelope queries
 are not proof of audible output or host synchronization.
 
-Below the device-output gate, the Runtime's completed-prefix projection can
+The Runtime's completed-prefix projection can
 retain a fixed compiled soundtrack. Bootstrap charges shared PCM/resource headers
 once per resource handle and the immutable clip table once per reader before any
 projection clone. Subsequent visual-only history batches neither copy nor recharge
@@ -252,10 +252,24 @@ reanchor query is not a presentation receipt or device-output admission. The pub
 Headless `PreparedSource` admits fixed root soundtracks through the same session
 and continuation completion path, with its existing cancellation/backpressure
 contract. It does not pass through realtime live-source admission or start output.
-Prepared canvas and worker constructors explicitly reject audio readers before
-host installation until their displayed-time output contract is qualified. Python
-ordinary-play/output admission remains closed; unsupported hosts must not silently
-render an otherwise valid audio reader without its soundtrack.
+The direct canvas constructor still rejects audio readers before host installation.
+The prepared worker host supplies a bounded Window output profile: immutable PCM
+and clip metadata bootstrap once, while each picture-qualified audio anchor carries
+the adopted availability horizon and an ordered output sequence. The output mirror
+requires that bounded profile; it cannot fall back to unbounded finite scheduling
+when a horizon is missing. Pauses, seeks, replacement, cancellation and platform
+interruption retire output through the existing browser lifecycle. Late anchors and
+device-unlock completion cannot supersede a newer user control.
+
+Ordinary Python runs permit automatic fixed-soundtrack preparation. At the first
+ordinary `play()` or `wait()`, the canonical Rust context lowers once and selects
+the headless source profile from the actual compiled audio declaration, before
+realtime admission. Python then suspends that same invocation through the existing
+interpreter driver. Scenes without audio retain their realtime source path; finite
+declarative audio retains its immutable handoff. An unsupported audio source fails
+without retrying user code. The normal browser package includes the prepared-history
+machinery, while general non-audio prepared runs still require explicit selection.
+Unsupported hosts must not silently render an audio reader without its soundtrack.
 
 Finite Python audio uses the existing complete `result = Scene()` authoring handoff. Predeclared scalar animation, section metadata and audio lower into the same Rust scene and execution session. The authoring worker remains the sole runtime and playback-clock owner. At the worker/Window boundary, a bounded immutable PCM/clip resource bundle prepares a disposable Rust Web Audio output mirror; it contains no mutable scene or playhead. Accepted controls wait for their retained picture publication, then carry one worker clock sample and host timestamp. The output uses the shared Rust clip-phase/envelope query, including transport age, without driving execution from device time. Preparation is silent, explicit browser activation enables sound, and superseded commands or platform interruption retire output. Host playback controls and viewer mute/volume are available for this profile; source continuations, retained history and scene-authored worker click-control dispatch retain their explicit gates.
 
@@ -735,7 +749,7 @@ that every history domain has been implemented or qualified.
 
 ### Experimental completed-prefix delivery
 
-The opt-in `prepared-prefix` experiment keeps the producer's sole Semantic Scene
+The `prepared-prefix` machinery keeps the producer's sole Semantic Scene
 and uses the existing runtime evaluator in an independent derived history reader.
 After one explicit execution bootstrap, completed extensions transfer only new
 compiler-owned row/track revisions. Appending future history does not advance the
@@ -773,11 +787,13 @@ is not rollback of external side effects or in-process recovery from abort/trap
 configurations, which require host-context teardown. Zero-duration waits yield,
 and sources with no positive readable interval are explicitly unsupported here.
 This is a work-count bound, not preemption of a long user call or resource operation.
-Explicitly sealed
-source completion can publish a terminal batch; only reader adoption changes the
-ready interval to the inclusive final endpoint, without seeking the display. It is disabled by default and does not change gallery
-presentation or establish physical-device performance. Implementation and
-qualification remain in #2211; this is not another scene or rendering authority.
+Explicitly sealed source completion can publish a terminal batch; only reader
+adoption changes the
+ready interval to the inclusive final endpoint, without seeking the display.
+General prepared-source selection remains explicit; ordinary fixed-soundtrack
+Python uses the bounded worker profile above. Neither establishes physical-device
+performance. Implementation and qualification remain in #2211; this is not another
+scene or rendering authority.
 
 The opt-in direct Rust/WASM canvas can own this reader instead of a live source,
 using the same retained renderer, presentation receipts, pointer normalization and
@@ -824,8 +840,8 @@ reuses the existing complete control event and never automatically retries user
 statements. Asynchronous host bootstrap/cleanup must observe its abort signal
 before publishing after a wait; neither arbitrary Python execution nor such host
 work is preempted. The admitted ordinary construct path uses the existing portable
-source compiler, with no second rewrite or source-language engine. This same-context
-host integration remains opt-in and does not change the default viewer.
+source compiler, with no second rewrite or source-language engine. Its direct-canvas
+use remains opt-in; ordinary fixed-soundtrack Python uses the worker profile above.
 Hard byte budgets, preemption of heavy source work and restart/recovery policy
 remain separate qualifications.
 
@@ -844,7 +860,7 @@ A failure after source completion begins closes that delivery binding rather tha
 automatically retrying partially completed work. None of these operations is a
 presentation acknowledgment.
 
-An explicitly prepared Python run uses the same production authoring worker,
+A prepared Python run uses the same production authoring worker,
 canonical context and source generation. Its single-use interpreter driver wraps
 the whole source invocation and yields at ordinary play/wait barriers. The existing
 execution endpoint owns the independent prepared reader in that WASM context;
@@ -861,10 +877,29 @@ cannot revive a cancelled invocation. Terminal adoption keeps that same reader,
 rather than reconciling it into the source's latest-state player. This bounded
 profile rejects causal input, host callbacks, looping, and sources without an
 initial readable interval. A receiver restart still requires a fresh source run;
-it must reject before destroying the existing historical player. The gallery and
-default viewer do not opt into this experimental run option.
+it must reject before destroying the existing historical player. The normal gallery
+selects this profile for fixed soundtracks; other prepared source runs remain an
+explicit experiment under #2211.
 
-At the genuine execution-to-render-worker boundary, an opt-in prepared player
+For the prepared worker, missing-prefix buffering preserves the attained transport
+boundary in the existing Rust host clock observation, separately from its last
+coherent reader frame. Availability adoption alone never selects that boundary.
+Source delivery supplies its current monotonic host timestamp. After validating
+the pending suffix, Rust checks elapsed time against the old adopted frontier
+before extending availability. This also holds when synchronous Python or resource
+preparation prevented any intervening playback wake; blocked wall time cannot be
+charged to newly delivered history.
+The next ordinary playback tick evaluates it only after it becomes readable; its
+actual picture receipt then admits the existing clock again. Buffered and picture
+preparation wall time do not advance playback, and sound already heard during a
+static interval is not repeated after refill. Pause preserves the held observation;
+an explicit valid seek replaces it. No epsilon seek, frontend cursor or additional
+audio clock is introduced. Further source delivery cannot admit the clock while
+that picture is pending. An unexpired audio extension also requests an ordinary
+tick before its picture-qualified anchor, so source work cannot reanchor sound to
+an older active-animation sample.
+
+At the genuine execution-to-render-worker boundary, a prepared player
 may own the independent reader in the producing execution context. It encodes
 only that reader's selected RendererPublication with the existing retained
 codec, resource residency and input presentation receipts. The rendering worker

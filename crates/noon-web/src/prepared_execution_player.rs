@@ -16,6 +16,7 @@ use noon::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixReader};
 
 mod source;
 use source::SourceDelivery;
+mod audio;
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct PreparedExecutionPlayer {
@@ -29,6 +30,11 @@ pub struct PreparedExecutionPlayer {
     sequence: u64,
     // Optional interpreter delivery cursor; never the source scene/runtime.
     source: Option<SourceDelivery>,
+    // Ordered output anchors are disposable host transport state, not a clock.
+    audio_sequence: u32,
+    // Attained open frontier, held as a transport observation while the reader
+    // keeps its last coherent frame. This is not a speculative runtime sample.
+    held_frontier: Option<f64>,
 }
 
 impl PreparedExecutionPlayer {
@@ -37,7 +43,7 @@ impl PreparedExecutionPlayer {
     /// across WASM instances by this typed in-process constructor.
     pub fn from_reader(reader: PrefixReader, transport_session: u32) -> Result<Self, String> {
         Ok(Self {
-            playback: PreparedCanvasPlayback::new(reader).map_err(str::to_owned)?,
+            playback: PreparedCanvasPlayback::for_worker(reader),
             clock: BrowserExecutionWakeClock::default(),
             encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
             snapshot_sent: false,
@@ -46,6 +52,8 @@ impl PreparedExecutionPlayer {
             binding: None,
             sequence: 0,
             source: None,
+            audio_sequence: 0,
+            held_frontier: None,
         })
     }
 
@@ -118,9 +126,16 @@ impl PreparedExecutionPlayer {
         wall_time_ms: f64,
     ) -> Result<crate::BrowserExecutionWakeDirective, String> {
         Self::validate_wall_time(wall_time_ms)?;
+        if self.prepared_needs_frame() {
+            // Request one immediate evaluation once the held boundary is ready.
+            // Until then observations stay frozen; none acknowledges its picture.
+            self.clock
+                .reanchor(wall_time_ms, self.held_frontier.unwrap())
+                .ok_or("prepared held frontier cannot represent wall time")?;
+        }
         self.clock
             .directive(
-                BrowserExecutionWakePlan::from_runtime(self.playback.wake_state()),
+                BrowserExecutionWakePlan::from_runtime(self.wake_state()),
                 wall_time_ms,
                 self.playback.reader.frame().time,
             )
@@ -128,7 +143,23 @@ impl PreparedExecutionPlayer {
     }
 
     fn tick(&mut self, wall_time_ms: f64) -> Result<(), String> {
-        let plan = BrowserExecutionWakePlan::from_runtime(self.playback.wake_state());
+        Self::validate_wall_time(wall_time_ms)?;
+        if self.prepared_needs_frame() {
+            self.playback
+                .advance_clock_sample(self.held_frontier.unwrap())
+                .map_err(|error| error.to_string())?;
+            self.held_frontier = None;
+            // The endpoint must present this now-readable boundary before it
+            // starts the next interval. Neither buffering nor renderer latency
+            // is charged to playback by this catch-up evaluation.
+            self.clock = BrowserExecutionWakeClock::default();
+            self.playback
+                .reader
+                .advance_interactions(wall_time_ms / 1_000.0)
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        let plan = BrowserExecutionWakePlan::from_runtime(self.wake_state());
         let directive = self.observe_clock(wall_time_ms)?;
         let target = match (directive.wake(), plan.cadence()) {
             (BrowserHostWake::AnimationFrame, BrowserExecutionCadence::AnimationFrame) => Some(
@@ -151,6 +182,7 @@ impl PreparedExecutionPlayer {
             self.playback
                 .advance_clock_sample(target)
                 .map_err(|error| error.to_string())?;
+            self.hold_buffered_frontier();
         }
         self.playback
             .reader
@@ -158,6 +190,57 @@ impl PreparedExecutionPlayer {
             .map_err(|error| error.to_string())?;
         self.observe_clock(wall_time_ms)?;
         Ok(())
+    }
+
+    fn hold_buffered_frontier(&mut self) {
+        if self.playback.buffering() && self.held_frontier.is_none() {
+            self.held_frontier = Some(self.playback.reader.frontier());
+        }
+    }
+
+    /// Observe elapsed host time against the old adopted availability before a
+    /// suffix can extend it. Synchronous interpreter work may have prevented
+    /// every playback wake while sound reached that old frontier. Such elapsed
+    /// wall time must never be applied retroactively to newly delivered history.
+    fn observe_delivery_clock(&mut self, wall_time_ms: f64) -> Result<(), String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        if !self.playback.playing()
+            || self.held_frontier.is_some()
+            || self.playback.reader.end_time().is_some()
+        {
+            return Ok(());
+        }
+        let Some(observed) = self.clock.scene_time_at(wall_time_ms) else {
+            // A cold host has no admitted clock; observation cannot start one.
+            // An existing but unrepresentable mapping must fail closed instead.
+            return if self.clock.scene_time_at(0.0).is_some() {
+                Err("prepared delivery clock cannot represent wall time".into())
+            } else {
+                Ok(())
+            };
+        };
+        let frontier = self.playback.reader.frontier();
+        if observed >= frontier {
+            // The exact old frontier remains unreadable here. This operation
+            // only records missing-prefix backpressure, never a runtime frame.
+            self.playback
+                .advance_clock_sample(frontier)
+                .map_err(|error| error.to_string())?;
+            self.hold_buffered_frontier();
+            self.clock = BrowserExecutionWakeClock::default();
+        }
+        Ok(())
+    }
+
+    fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
+        let wake = self.playback.wake_state();
+        if self.prepared_needs_frame() {
+            wake.with_additional_timeline(noon_runtime::TimelineWakeState::Deadline(
+                self.held_frontier.unwrap(),
+            ))
+        } else {
+            wake
+        }
     }
 }
 
@@ -219,7 +302,7 @@ impl PreparedExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
     pub fn execution_wake(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
         let directive = self.observe_clock(wall_time_ms)?;
-        let wake = self.playback.wake_state();
+        let wake = self.wake_state();
         let wake = if self.playback.reader.interactions_active() {
             wake.with_additional_timeline(noon_runtime::TimelineWakeState::Continuous)
         } else {
@@ -240,6 +323,7 @@ impl PreparedExecutionPlayer {
         self.playback
             .seek(time)
             .map_err(|error| error.to_string())?;
+        self.held_frontier = None;
         self.clock = BrowserExecutionWakeClock::default();
         self.drain_delta_json()
     }
@@ -280,6 +364,13 @@ impl PreparedExecutionPlayer {
         self.playback.buffering()
     }
 
+    /// A previously attained frontier is now readable but not yet evaluated.
+    /// An ordinary tick selects it; append and this observation select nothing.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedNeedsFrame))]
+    pub fn prepared_needs_frame(&self) -> bool {
+        self.held_frontier.is_some() && self.playback.playing() && !self.playback.buffering()
+    }
+
     /// Observe elapsed time in a sleeping static interval through the existing
     /// Rust clock. This never starts/reanchors that clock or evaluates a frame.
     /// Active animation stays at its last coherent sample; a static observation
@@ -288,6 +379,9 @@ impl PreparedExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaybackTimeAt))]
     pub fn prepared_playback_time_at(&self, wall_time_ms: f64) -> Result<f64, String> {
         Self::validate_wall_time(wall_time_ms)?;
+        if let Some(held) = self.held_frontier {
+            return Ok(held);
+        }
         let current = self.prepared_time();
         let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
             BrowserExecutionWakePlan::from_runtime(self.playback.wake_state()).cadence()
@@ -313,6 +407,10 @@ impl PreparedExecutionPlayer {
             self.playback
                 .advance(time)
                 .map_err(|error| error.to_string())?;
+            self.hold_buffered_frontier();
+            if self.held_frontier == Some(self.prepared_time()) {
+                self.held_frontier = None;
+            }
         }
         self.set_prepared_playing(false);
         Ok(())

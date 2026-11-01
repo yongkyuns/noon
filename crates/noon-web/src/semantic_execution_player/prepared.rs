@@ -8,6 +8,35 @@ fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
 }
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn from_prepared_source_session(
+        session: noon::ExecutionSession,
+        semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+        semantic_root: noon_core::SemanticNodeId,
+        duration: f64,
+        transport_session: u32,
+    ) -> Result<Self, String> {
+        let scene = noon::Scene::with_integration_root(semantics, semantic_root)
+            .map_err(|error| error.to_string())?;
+        let source = scene
+            .into_execution_with_session(session)
+            .map_err(|error| error.to_string())?;
+        Self::from_scene_execution_with_admission(
+            source,
+            duration,
+            transport_session,
+            super::ExecutionAdmission::HeadlessSource,
+        )
+    }
+
+    pub(crate) fn begin_prepared_replay_retention(&mut self) -> Result<(), String> {
+        self.session
+            .validate_prepared_source_domain()
+            .map_err(|error| error.to_string())?;
+        self.session
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .map_err(|error| error.to_string())
+    }
+
     pub(crate) fn validate_prepared_publisher(
         &self,
         publisher: &PrefixPublisher,

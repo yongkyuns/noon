@@ -111,6 +111,8 @@ export async function attachSemanticEngine(
   let lastSentPublication = null;
   let lastPresentedPublication = null;
   let preparedClockAdmitted = false;
+  let preparedAudioDirty = false;
+  let preparedAudioNeedsTick = false;
   let pendingPresentation = null;
   let pendingPointerInvalidation = null;
   let pendingPointerPresentation = null;
@@ -305,11 +307,12 @@ export async function attachSemanticEngine(
         (admitsPreparedClock || (firstPresentation && continuationActive))) {
       try {
         if (admitsPreparedClock) {
-          // A cold seek may already have selected a newer frame. An older
-          // actual receipt must not start that newly selected frame's clock.
+          // Cold selection or a held boundary may await a newer frame. An
+          // older actual receipt cannot start that selected frame's clock.
           preparedClockAdmitted = true;
           observeExecutionWake(performance.now(), true);
           prepared.wakeSource();
+          if (preparedAudioDirty) void drain();
         } else observeContinuationWake(performance.now(), true);
       }
       catch (error) { terminateProgression(error); }
@@ -329,6 +332,7 @@ export async function attachSemanticEngine(
         buffering: player.preparedBuffering(),
         replaySupported: true, replayUnavailable: null,
         canUndoTranslationDrag: false, nextPatchSequence: "0",
+        ...(hasAudio ? { hasAudio, sections } : {}),
       };
     }
     if (player === null) {
@@ -359,6 +363,22 @@ export async function attachSemanticEngine(
         : { durationSeconds: null }),
     };
   };
+  const audioAnchorAt = sampledAt => JSON.parse(prepared === null
+    ? player.audioAnchorJson(performance.timeOrigin + sampledAt)
+    : player.audioAnchorJson(performance.timeOrigin + sampledAt, sampledAt));
+
+  async function publishPreparedAudioState() {
+    if (!preparedAudioDirty || preparedAudioNeedsTick || !preparedClockAdmitted || controls.length || stopped) return;
+    // A delivered suffix changes availability, never the displayed frame. Any
+    // selected frame already in flight must reach its existing picture barrier
+    // before that newly available sound can be scheduled.
+    await awaitPresentation(null);
+    if (stopped || controls.length || preparedAudioNeedsTick) return;
+    preparedAudioDirty = false;
+    const sampledAt = performance.now();
+    const audioAnchor = audioAnchorAt(sampledAt);
+    post({ ...state("audio_state"), time: audioAnchor.time, audioAnchor });
+  }
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
     if (!force && cadence === "idle" && executionWakeCadence === "idle") return;
     executionWakeCadence = cadence;
@@ -1004,12 +1024,24 @@ export async function attachSemanticEngine(
           case "resume": {
             if (hasAudio) {
               await awaitPresentation(null);
-              if (player.time() === player.finiteAudioDuration()) {
+              if (stopped) break;
+              const time = prepared === null ? player.time() : player.preparedTime();
+              const end = prepared === null ? player.finiteAudioDuration() : player.preparedEndTime();
+              if (end != null && time === end) {
                 await awaitPresentation(send(player.seekDeltaJson(0)));
+                if (stopped) break;
               }
             }
-            if (prepared !== null) player.setPreparedPlaying(true);
-            else player.resume();
+            if (prepared !== null) {
+              player.setPreparedPlaying(true);
+              if (player.preparedNeedsFrame()) {
+                const publication = send(player.tickDeltaJson(performance.now()));
+                preparedClockAdmitted = false;
+                await awaitPresentation(publication);
+                if (stopped) break;
+                preparedClockAdmitted = true;
+              }
+            } else player.resume();
             if (!hasAudio) observeExecutionWake(performance.now(), true);
             break;
           }
@@ -1021,15 +1053,20 @@ export async function attachSemanticEngine(
           case "seek_section":
           case "restart_playback": {
             latestTick = null;
-            const playing = hasAudio && player.isPlaying();
-            if (hasAudio) player.pause();
+            const playing = hasAudio && (prepared === null ? player.isPlaying() : player.preparedPlaying());
+            if (hasAudio && prepared === null) player.pause();
             const delta = message.type === "seek_section"
               ? player.seekSectionDeltaJson(message.previous)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             const publication = send(delta);
             if (hasAudio) {
+              if (prepared !== null) player.setPreparedPlaying(false);
               await awaitPresentation(publication);
-              if (playing) player.resume();
+              if (stopped) break;
+              if (playing) {
+                if (prepared !== null) player.setPreparedPlaying(true);
+                else player.resume();
+              }
             } else observeExecutionWake(performance.now());
             break;
           }
@@ -1129,10 +1166,14 @@ export async function attachSemanticEngine(
           // Presentation precedes the new device anchor; no device clock drives
           // the runtime and no frontend cursor is retained.
           await awaitPresentation(null);
+          if (stopped) break;
           const sampledAt = performance.now();
-          await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+          if (prepared === null) await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+          else if (player.preparedTime() === player.preparedEndTime()) player.setPreparedPlaying(false);
           observeExecutionWake(sampledAt, true);
-          audioAnchor = JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt));
+          audioAnchor = audioAnchorAt(sampledAt);
+          preparedAudioDirty = false;
+          preparedAudioNeedsTick = false;
         }
         post({
           requestId: message.requestId,
@@ -1141,7 +1182,7 @@ export async function attachSemanticEngine(
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
           ...(sampleTiming === null ? {} : { sampleTiming }),
-          ...(audioAnchor === undefined ? {} : { audioAnchor }),
+          ...(audioAnchor === undefined ? {} : { audioAnchor, time: audioAnchor.time }),
           ...(finiteExport === undefined ? {} : { finiteExport }),
           ...(audioBlock === undefined ? {} : { audioBlock }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
@@ -1167,10 +1208,31 @@ export async function attachSemanticEngine(
               // The render timestamp is a wake opportunity only. The prepared
               // reader maps this producing context's monotonic clock in Rust.
               if (preparedClockAdmitted) {
-                send(player.tickDeltaJson(testOnlyTickTimestamp === null
+                const wasBuffering = player.preparedBuffering();
+                const previousTime = player.preparedTime();
+                const neededFrame = player.preparedNeedsFrame();
+                preparedAudioNeedsTick = false;
+                const publication = send(player.tickDeltaJson(testOnlyTickTimestamp === null
                   ? performance.now() : testOnlyTickTimestamp()));
+                if (neededFrame) {
+                  // A following source delivery may arrive while this picture
+                  // is pending. Reuse the receipt gate so it cannot admit the
+                  // cleared Rust clock before this boundary is displayed.
+                  preparedClockAdmitted = false;
+                  await awaitPresentation(publication);
+                  if (stopped) return;
+                  preparedClockAdmitted = true;
+                  if (hasAudio) preparedAudioDirty = true;
+                }
+                if (hasAudio && player.preparedTime() === player.preparedEndTime()) {
+                  player.setPreparedPlaying(false);
+                }
                 observeExecutionWake(performance.now());
                 prepared.wakeSource();
+                if (hasAudio && (wasBuffering !== player.preparedBuffering() ||
+                    (previousTime !== player.preparedTime() && player.preparedTime() === player.preparedEndTime()))) {
+                  preparedAudioDirty = true;
+                }
               }
             } else if (continuationActive && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) {
               if (player.interactionsActive()) {
@@ -1209,6 +1271,7 @@ export async function attachSemanticEngine(
           }
         }
       }
+      if (prepared !== null && hasAudio) await publishPreparedAudioState();
     } catch (error) {
       if (!stopped) terminateProgression(error);
     } finally {
@@ -1324,7 +1387,7 @@ export async function attachSemanticEngine(
     }
     if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
-    sections = hasAudio ? JSON.parse(player.sectionsJson()) : [];
+    sections = hasAudio && prepared === null ? JSON.parse(player.sectionsJson()) : [];
     if (continuation === null && prepared === null) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
@@ -1509,6 +1572,17 @@ export async function attachSemanticEngine(
       try {
         observeExecutionWake(performance.now());
         prepared.wakeSource();
+        if (player.preparedNeedsFrame() || (hasAudio && player.preparedPlaying())) {
+          // Even an unexpired source stall leaves an active animation's last
+          // selected sample behind its clock. The ordinary tick selects its
+          // current picture before a newly extended audio plan is anchored.
+          latestTick = performance.now();
+        }
+        if (hasAudio && player.preparedPlaying()) {
+          preparedAudioDirty = true;
+          preparedAudioNeedsTick = true;
+        }
+        if (latestTick !== null || preparedAudioDirty) void drain();
       } catch (error) {
         if (notePreparedTrap(error)) stop();
         throw error;

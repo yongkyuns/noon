@@ -568,7 +568,9 @@ function createRuntimeClient() {
 }
 
 function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
-  if (playbackState?.hasAudio === true) durationSeconds = playbackState.durationSeconds;
+  if (playbackState?.hasAudio === true && playbackState.preparedPlayback !== true) {
+    durationSeconds = playbackState.durationSeconds;
+  }
   status.dataset.playbackControls = supported ? "available" : "unavailable";
   if (playbackControls === null) {
     playbackControls = new PlaygroundPlaybackControls(
@@ -1104,6 +1106,12 @@ async function runScene() {
             const loopDurationSeconds = registration.duration > 0
               ? registration.duration
               : playbackDurationSeconds;
+            // Rust can select headless preparation from the first actual audio
+            // segment during an ordinary Run. The previous realtime source was
+            // retired above; its renderer cannot be reconciled into a reader.
+            if (registration.semanticExecution.preparedPlayback === true && player !== null) {
+              discardEarlyContinuationRuntime(player);
+            }
             let result;
             if (player === null) {
               result = await ensureRuntimeReady({
