@@ -4,11 +4,13 @@ import { runInNewContext } from "node:vm";
 import { seekPausedGallery } from "./showcase-playback.mjs";
 
 function gallery({ playing = true, duration = 2.5999999999999996, controllable = true,
-  error = null, pauseFailure = false, seekFailure = false, staleSeek = false } = {}) {
+  error = null, pauseFailure = false, seekFailure = false, staleSeek = false,
+  pauseLocatorCount = null, lostPause = false } = {}) {
   const calls = [];
   const patch = { dataset: { state: error ? "error" : "applied" }, value: error };
   const controls = {
-    dataset: { busy: "false", controllable: String(controllable), elapsedSeconds: "0" },
+    dataset: { busy: "false", controllable: String(controllable), elapsedSeconds: "0",
+      playing: String(playing) },
     title: controllable ? "" : "Replay unavailable: History not retained",
     querySelector: () => ({ getAttribute: () => playing ? "Pause animation" : "Play animation" }),
   };
@@ -24,18 +26,20 @@ function gallery({ playing = true, duration = 2.5999999999999996, controllable =
   const page = {
     async waitForFunction(fn, args) {
       const ready = runInNewContext(`(${fn})(args)`, { document, args });
-      assert.equal(ready, true, "capture waited for a stable frame that cannot be reached");
+      assert.ok(ready, "capture waited for a stable frame that cannot be reached");
       calls.push("ready");
+      return { jsonValue: async () => ready, dispose: async () => {} };
     },
     getByRole(role, options) {
       assert.equal(role, "button"); assert.equal(options.name, "Pause animation");
       assert.equal(options.exact, true);
       return {
-        count: async () => Number(playing),
+        count: async () => pauseLocatorCount ?? Number(playing),
         async click() {
           calls.push("pause");
           if (pauseFailure) throw new Error("pause rejected");
-          playing = false;
+          if (!lostPause) playing = false;
+          controls.dataset.playing = String(playing);
         },
       };
     },
@@ -60,6 +64,19 @@ test("an already paused gallery is not toggled back into playback", async () => 
   const { page, calls } = gallery({ playing: false });
   await seekPausedGallery(page, 2.6);
   assert.deepEqual(calls, ["ready", "ready", "seek", "ready"]);
+});
+
+test("a transient zero role match cannot skip the required pause command", async () => {
+  const { page, calls } = gallery({ pauseLocatorCount: 0 });
+  await seekPausedGallery(page, 2.6);
+  assert.deepEqual(calls, ["ready", "pause", "ready", "seek", "ready"]);
+});
+
+test("a click that does not pause never proceeds to seek", async () => {
+  const { page, calls } = gallery({ lostPause: true });
+  await assert.rejects(seekPausedGallery(page, 2.6), /stable frame/);
+  assert.equal(calls.filter(call => call === "pause").length, 1);
+  assert.ok(!calls.includes("seek"));
 });
 
 test("unavailable replay and scene errors fail explicitly rather than time out", async () => {

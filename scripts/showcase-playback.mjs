@@ -20,7 +20,7 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
   assert.ok(sampleTime === null || (Number.isFinite(sampleTime) && sampleTime >= 0 && sampleTime <= storyboardDuration),
     "requested checkpoint is outside the storyboard");
   const waitReady = async (expectedTime = null, paused = false) => {
-    await page.waitForFunction(({ expectedTime, paused }) => {
+    const ready = await page.waitForFunction(({ expectedTime, paused }) => {
       const patch = document.querySelector("#patch-status");
       const controls = document.querySelector(".playback-controls");
       if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery execution failed");
@@ -29,15 +29,26 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
         throw new Error(controls.title || "Gallery replay is unavailable");
       }
       const toggle = controls.querySelector(".playback-toggle");
-      return controls.dataset.busy === "false" &&
-        (!paused || toggle?.getAttribute("aria-label") === "Play animation") &&
-        (expectedTime === null || Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7);
+      const playing = controls.dataset.playing === "true";
+      const label = toggle?.getAttribute("aria-label");
+      if (controls.dataset.busy !== "false" ||
+          !["true", "false"].includes(controls.dataset.playing) ||
+          label !== (playing ? "Pause animation" : "Play animation") ||
+          (paused && playing) ||
+          (expectedTime !== null && !(Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7))) {
+        return false;
+      }
+      return { playing };
     }, { expectedTime, paused });
+    try { return await ready.jsonValue(); }
+    finally { await ready.dispose(); }
   };
 
-  await waitReady();
-  const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-  if (await pause.count()) await pause.click();
+  const state = await waitReady();
+  // A momentary accessibility-query miss is not evidence of a paused player.
+  // If the settled controls are playing, require Playwright's normal actionable
+  // real click, then the same paused publication barrier used below.
+  if (state.playing) await page.getByRole("button", { name: "Pause animation", exact: true }).click();
   // Do not rely on seek to stop playback. Pause first so an advancing clock
   // cannot race the command-completion check or the screenshot.
   await waitReady(null, true);
