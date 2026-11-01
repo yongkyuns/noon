@@ -99,9 +99,10 @@ impl<C: LiveContinuation> LiveProgram<C> {
             ));
         }
         let program = &mut self;
-        let phase = if C::EFFECTS == super::ContinuationEffects::Opaque {
-            PreparedSourceStatus::ExecutionRequired(SourceExecutionRequirement::HostEffects)
-        } else if let Some(requirement) = program.session().source_execution_requirement() {
+        let phase = if let Some(requirement) = program
+            .session()
+            .continuation_execution_requirement(C::EFFECTS)
+        {
             PreparedSourceStatus::ExecutionRequired(requirement)
         } else {
             program

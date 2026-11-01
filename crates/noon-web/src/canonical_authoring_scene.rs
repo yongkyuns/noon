@@ -10368,9 +10368,16 @@ mod wasm {
 
         #[cfg(feature = "prepared-prefix")]
         #[wasm_bindgen(js_name = beginObservedPreparedSource)]
-        pub fn begin_observed_prepared_source(&mut self) -> Result<bool, JsValue> {
+        pub fn begin_observed_prepared_source(
+            &mut self,
+            scene_only_source: Option<bool>,
+        ) -> Result<bool, JsValue> {
             self.inner
-                .begin_observed_prepared_source()
+                .begin_observed_prepared_source(if scene_only_source == Some(true) {
+                    noon::ContinuationEffects::SceneOnly
+                } else {
+                    noon::ContinuationEffects::Opaque
+                })
                 .map_err(typed_js_error)
         }
 

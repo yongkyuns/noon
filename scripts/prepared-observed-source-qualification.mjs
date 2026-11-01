@@ -10,17 +10,16 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { installPreparedSourceCounterProbe } from "./prepared-source-counter-probe.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = process.env.NOON_OBSERVED_AUTHORING_ARTIFACTS ?? path.join(root, "browser-smoke-artifacts/prepared-observed-source");
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const encode = value => JSON.stringify(value, (_, item) => typeof item === "bigint" ? item.toString() : item, 2);
 const source = `from noon import *
-from js import JSON, postMessage
-import json
 events, samples = [], []
 def observe():
-    postMessage(JSON.parse(json.dumps({"channel": "observed.qualification", "events": events, "samples": samples})))
+    pass
 def mark(value):
     events.append(value)
     observe()
@@ -84,7 +83,7 @@ class FinalInputPicture(Scene):
 const heldSource = causalSource.replace("        target.shift(RIGHT)\n", "");
 const heldReference = causalReference.replace(".shift(RIGHT))", ")");
 const report = {
-  status: "running", scope: "observed admission, incremental reader-to-source handoff, pause/resume and completed-source input; original interpreter, pointer receipts and final pixels; no recovery, latency or default-cutover claim",
+  status: "running", scope: "observed admission, incremental reader-to-source handoff, pause/resume and completed-source input; original interpreter with read-only counter probe, pointer receipts and final pixels; no recovery, latency or default-cutover claim",
   lateSourceSha256: hash(lateSource),
   lateCausalSourceSha256: hash(lateCausalSource),
   terminalCausalSourceSha256: hash(terminalCausalSource),
@@ -222,6 +221,7 @@ try {
         report.cases.push(entry);
         const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
         page.setDefaultTimeout(180_000); await cache.install(page.context());
+        await installPreparedSourceCounterProbe(page.context(), "observed.qualification", entry);
         const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
         const watchdog = setTimeout(async () => {
           try {

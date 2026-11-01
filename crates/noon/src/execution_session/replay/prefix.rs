@@ -61,6 +61,18 @@ pub enum SourceExecutionRequirement {
 }
 
 impl ExecutionSession {
+    /// Classify host source effects separately from the scene's replay domain.
+    /// A quiet scene cannot prove that an arbitrary continuation is safe to run ahead.
+    pub fn continuation_execution_requirement(
+        &self,
+        effects: crate::ContinuationEffects,
+    ) -> Option<SourceExecutionRequirement> {
+        match effects {
+            crate::ContinuationEffects::Opaque => Some(SourceExecutionRequirement::HostEffects),
+            crate::ContinuationEffects::SceneOnly => self.source_execution_requirement(),
+        }
+    }
+
     /// Classify before any headless advance. The original source/continuation
     /// must keep executing through its ordinary callback/input protocol; a host
     /// may not reconstruct it or treat an endpoint-only callback sample as history.
@@ -122,11 +134,15 @@ impl ExecutionSession {
     /// This releases only open history; it never samples, completes or resets input.
     pub fn begin_observed_prepared_source(
         &mut self,
+        effects: crate::ContinuationEffects,
     ) -> Result<Option<SourceExecutionRequirement>, PrefixError> {
         if self.runtime.replay_is_sealed() {
             return Err(PrefixError::NotReady);
         }
-        let requirement = self.preflight_prepared_source(None)?;
+        let requirement = match self.continuation_execution_requirement(effects) {
+            Some(requirement) => Some(requirement),
+            None => self.preflight_prepared_source(None)?,
+        };
         if requirement.is_some() {
             self.release_prepared_source_history();
         }

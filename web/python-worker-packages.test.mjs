@@ -12,6 +12,10 @@ assert.ok(start >= 0 && end > start, "production source-startup boundary must ex
 // initializing WASM, a worker or Pyodide. Only the interpreter interface is mocked.
 const { prepareAuthoringDependencies, runAuthoringSource } = vm.runInNewContext(
   `(() => {
+// Dependency tests use an opaque environment; source-proof admission has its
+// own tests and does not change the package loader ordering asserted here.
+const activeAuthoringRun = {};
+let authoringLibrariesPristine = false;
 ${source.slice(start, end)}
 return { prepareAuthoringDependencies, runAuthoringSource };
 })()`,
