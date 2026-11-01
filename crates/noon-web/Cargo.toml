@@ -10,12 +10,12 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 wgsl-effects = ["noon/wgsl-effects"]
-default = ["renderer", "wgsl-effects"]
+default = ["renderer", "wgsl-effects", "prepared-prefix"]
 # Explicit release-profile qualification only; production builds omit the fixtures.
 renderer-smoke = ["renderer", "wgsl-effects"]
 # Opt-in typed replay fixtures for optimized qualification, not production exports.
 replay-smoke = []
-# Experimental historical input adapter; no default viewer switch.
+# Bounded incremental history; source/runtime admission controls its use.
 prepared-prefix = ["noon/prepared-prefix"]
 renderer = [
     "dep:noon-render-wgpu",

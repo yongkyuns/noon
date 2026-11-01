@@ -80,6 +80,7 @@ const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "p
 const hash = value => createHash("sha256").update(value).digest("hex");
 const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
+  runOptions: "viewer defaults; no qualification run-options hook",
   sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
 report.staticInputSourceSha256 = hash(staticInputSource); report.zeroInputSourceSha256 = hash(zeroInputSource);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
@@ -102,9 +103,6 @@ async function installFixture(page, evidence) {
   await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
   await page.addInitScript(() => {
-    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
-      authoringRunOptions: () => ({ preparedPlayback: true, preparationLookaheadSeconds: 0.75 }),
-    };
     // Count native worker construction without intercepting messages or work.
     globalThis.galleryWorkers = [];
     const NativeWorker = globalThis.Worker;

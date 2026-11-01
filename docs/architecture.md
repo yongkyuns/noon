@@ -700,9 +700,9 @@ full lifecycle contract. #1661 separately addresses wait-time observation. These
 issues carry dated evidence and repair status; their existence is not a claim
 that every history domain has been implemented or qualified.
 
-### Experimental completed-prefix delivery
+### Completed-prefix delivery
 
-The opt-in `prepared-prefix` experiment keeps the producer's sole Semantic Scene
+The `prepared-prefix` feature keeps the producer's sole Semantic Scene
 and uses the existing runtime evaluator in an independent derived history reader.
 After one explicit execution bootstrap, completed extensions transfer only new
 compiler-owned row/track revisions. Appending future history does not advance the
@@ -714,7 +714,7 @@ ordered, scope-bound stream may extend a reader; budgets and failures preserve
 already-published history. New suffix conversion uses a sparse reverse overlay,
 not a copy of the source scene or a rewind of either execution cursor.
 
-The experimental 2D slice admits sparse creation, removal/re-entry, order/content
+The 2D suffix profile admits sparse creation, removal/re-entry, order/content
 changes and ordinary property tracks. New physical rows are installed as inactive
 slots; they become visible only through historical revision selection. Source
 resource closures carry only not-yet-delivered immutable handles and dependencies.
@@ -768,8 +768,8 @@ Its history index reserves only occupied entries because no future suffix exists
 Explicitly sealed
 source completion can publish a terminal batch; only reader adoption changes the
 ready interval to the inclusive final endpoint, without seeking the display.
-This does not change gallery default presentation or establish physical-device performance. Implementation and
-qualification remain in #2211; this is not another scene or rendering authority.
+Viewer selection does not broaden this admission profile or establish physical-device
+performance. Further qualification remains in #2211; this is not another scene or rendering authority.
 
 The native continuation entry point uses the typed `PlaybackProgram` owner through
 the existing prefix feature. One cooperative call prepares and adopts at most one
@@ -785,7 +785,13 @@ buffering retains the last sample, preserves pause intent and reanchors only the
 existing host clock after delivery. Closed-range adoption is separate from source
 completion. This does not classify arbitrary host I/O or wall-time reads as pure,
 preempt long calls, or establish browser/default-cutover or total-memory qualification.
-The Python viewer still uses its separate temporary qualification gate in #2211.
+The Python viewer requests bounded incremental playback by default. Shared Rust
+admission separates scene-history compatibility from source effects: continuations
+are opaque unless admitted as scene-only, with Python supplying a conservative
+proof over its trusted API. Arbitrary host I/O, wall-time reads and opaque callbacks
+must not run ahead merely because their scene is replayable. Unsupported source
+profiles keep their original forward execution and report replay as unavailable;
+they are never rerun or reconstructed to obtain playback.
 
 The opt-in direct Rust/WASM canvas can own this reader instead of a live source,
 using the same retained renderer, presentation receipts, pointer normalization and
@@ -874,9 +880,10 @@ rather than reconciling it into the source's latest-state player. This bounded
 profile rejects causal input, host callbacks and looping. An unfinished source
 requires an initial readable interval; completed static sources use that same
 reader with the exact zero endpoint after interpreter cleanup succeeds. A receiver
-restart still requires a fresh source run;
-it must reject before destroying the existing historical player. The gallery and
-default viewer do not opt into this experimental run option.
+restart retains the same reader, original source and delivery cursor in a newer
+receiver namespace. The replacement must actually present before its clock or
+source handoff is admitted. Failed renderer setup preserves the reader for retry;
+explicit source retirement releases it. This recovery does not restart user code.
 
 Before a reader exists, Rust can instead admit the original pending interpreter
 segment to observed execution. This releases only its open source history and

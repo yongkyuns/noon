@@ -424,14 +424,25 @@ test("terminal metadata must match the actual adopted endpoint before gallery co
   assert.equal(f.inspect().player, null);
 });
 
-test("normal runs retain their existing source-owned controls and completed replay transition", async () => {
-  const f = fixture(undefined); delete f.env.hooks.authoringRunOptions;
+test("an explicit live comparison retains source-owned controls and completed replay", async () => {
+  const f = fixture({ preparedPlayback: false });
   const { promise, job } = await f.start(); await f.register();
   assert.equal(job.options.preparedPlayback, false);
   assert.equal(f.inspect().busyDepth, 1); assert.equal(f.inspect().playbackControls.controllable, false);
   f.finish(); const completed = await promise;
   assert.equal(completed.error, undefined); assert.equal(f.count("reconcile"), 1);
   assert.equal(f.inspect().busyDepth, 0); assert.equal(f.inspect().playbackControls.controllable, true);
+});
+
+test("a viewer Run without qualification hooks unlocks incremental playback before source completion", async () => {
+  const f = fixture(); delete f.env.hooks.authoringRunOptions;
+  const { promise, job } = await f.start(); await f.register();
+  assert.equal(job.options.preparedPlayback, true);
+  assert.equal(job.options.preparationLookaheadSeconds, 1);
+  assert.equal(f.inspect().runInFlight, true); assert.equal(f.inspect().busyDepth, 0);
+  assert.equal(f.inspect().playbackControls.controllable, true);
+  assert.equal(f.inspect().playbackControls.state.durationSeconds, null);
+  f.finish(); assert.equal((await promise).error, undefined);
 });
 
 test("observed pause beyond the initial segment does not claim the unfinished source is finished", () => {

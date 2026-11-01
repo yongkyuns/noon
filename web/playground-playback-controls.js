@@ -535,7 +535,10 @@ export class PlaygroundPlaybackControls {
     const status = this.#unavailableReason !== null ? "Replay unavailable" : open
       ? this.#seekNotice ?? `${this.#buffering ? "Buffering · " : ""}Prepared before ${this.#preparedFrontier} s · total unknown`
       : "Duration pending";
-    if (this.#liveStatus.textContent !== status) this.#liveStatus.textContent = status;
+    if (this.#liveStatus.textContent !== status) {
+      this.#liveStatus.textContent = status;
+      this.#liveStatus.title = status;
+    }
     this.#scrubber.max = String(this.#durationSeconds ?? 1);
     this.#undoDragButton.hidden = !this.#undoDragSupported || this.#preparedFrontier !== null;
     this.#root.dataset.undoSupport = String(!this.#undoDragButton.hidden);
@@ -733,8 +736,11 @@ function installStyles() {
       outline-offset: 2px;
     }
     .playback-timeline {
-      display: block;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
       min-width: 0;
+      min-height: 2.5rem;
     }
     .playback-scrubber {
       width: 100%;
@@ -774,10 +780,6 @@ function installStyles() {
       font-size: 0.68rem;
       white-space: nowrap;
       text-overflow: ellipsis;
-    }
-    .playback-controls[data-duration-known="false"] .playback-live-status {
-      white-space: normal;
-      overflow-wrap: anywhere;
     }
     .playback-controls [hidden] { display: none !important; }
     .playback-section-controls,
