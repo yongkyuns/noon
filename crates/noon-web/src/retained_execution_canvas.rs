@@ -832,6 +832,7 @@ mod wasm {
         }
 
         pub fn render(&mut self) -> Result<bool, JsValue> {
+            self.require_webgpu_device()?;
             if self.webgl_context_lifecycle.is_lost()
                 || self.webgl_context_lifecycle.recovery_pending()
             {
@@ -1321,6 +1322,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
         pub fn take_gpu_diagnostic_json(&self) -> Result<Option<String>, JsValue> {
+            self.require_webgpu_device()?;
             self.gpu_diagnostics
                 .take_for_generation(self.gpu_generation)
                 .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))
@@ -1329,6 +1331,19 @@ mod wasm {
 
         pub fn time(&self) -> f64 {
             self.mirror.frame().map_or(0.0, |frame| frame.time)
+        }
+
+        fn require_webgpu_device(&self) -> Result<(), JsValue> {
+            if self.backend == wgpu::Backend::BrowserWebGpu
+                && self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+            {
+                return Err(js_message(
+                    "WebGPU device lost; replace the retained receiver",
+                ));
+            }
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = objectCount)]

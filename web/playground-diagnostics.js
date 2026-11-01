@@ -112,6 +112,7 @@ export function createPlaygroundDiagnostics({ editor, details, traceback }) {
       executedSource = source;
     },
     invalidate,
+    clear: hide,
     show(error, fallbackTitle = "Scene failed") {
       let next = null;
       try { next = parseAuthoringDiagnostic(error?.authoringDiagnostic); } catch {}

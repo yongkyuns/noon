@@ -227,6 +227,7 @@ async function editBoundaryFixture({ prepared = false, pause = Promise.resolve()
     } },
     generations: { invalidateRun() {} },
     stopMetricsPolling() { pollsStopped += 1; },
+    updatePreviewRecoveryControl() {},
     status: { dataset: {} }, diagnosticPanel: { invalidate() {} }, setRuntimeStatus() {},
     setTimeout() { assert.fail("a completed source needs no cancellation watchdog"); },
     clearTimeout() { assert.fail("no watchdog should be allocated"); },
