@@ -444,7 +444,7 @@ mod tests {
                 Transform2D::IDENTITY,
                 Style::default(),
             )],
-            &[old.clone()],
+            std::slice::from_ref(&old),
         )
         .unwrap();
         let replacement = ExecutionPatch::ReplaceTrack(TrackDefinition {
