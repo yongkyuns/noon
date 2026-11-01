@@ -12,6 +12,7 @@ __pycache__/
 /output/playwright
 /.playwright-cli
 /ci-artifacts
+/browser-smoke-artifacts
 /web/ci-artifact.json
 /web/ci-Cargo.lock
 /node_modules

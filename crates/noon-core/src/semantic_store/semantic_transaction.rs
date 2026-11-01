@@ -1757,6 +1757,26 @@ impl SemanticMutationTransaction {
         token
     }
 
+    pub fn create_sampled_motion_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        motion: std::sync::Arc<crate::SampledMotionData>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::SampledMotion {
+                    target: target.into(),
+                    motion,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a transform declaration with an explicit geometry interpolation contract.
     pub fn create_transform_animation_with_interpolation(
         &mut self,

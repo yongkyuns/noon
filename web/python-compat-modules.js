@@ -15,6 +15,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_noon_shaders.py", runtimePath: "/tmp/_noon_shaders.py", label: "Noon typed shader values" },
   { sourcePath: "python/_noon_paints.py", runtimePath: "/tmp/_noon_paints.py", label: "Noon immutable paint adapter" },
   { sourcePath: "python/_noon_audio.py", runtimePath: "/tmp/_noon_audio.py", label: "Noon finite audio authoring" },
+  { sourcePath: "python/_noon_sampled_motion.py", runtimePath: "/tmp/_noon_sampled_motion.py", label: "Noon compact sampled motion authoring" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
   { sourcePath: "python/_manim_unit.py", runtimePath: "/tmp/_manim_unit.py", label: "Noon configuration-independent unit values" },
   { sourcePath: "python/_manim_enums.py", runtimePath: "/tmp/_manim_enums.py", label: "Manim enum tokens" },

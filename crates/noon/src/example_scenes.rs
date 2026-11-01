@@ -80,6 +80,7 @@ pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
 pub mod sample_space;
+pub mod sampled_motion;
 pub mod scope_opacity;
 #[cfg(feature = "wgsl-effects")]
 pub mod shader_sweep;

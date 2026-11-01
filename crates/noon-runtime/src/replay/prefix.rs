@@ -10,6 +10,7 @@ use std::sync::Arc;
 mod history_payload_budget;
 mod object_budget;
 mod resource_budget;
+mod sampled_motion_budget;
 mod storage;
 use history_payload_budget::HistoryPayloadBudget;
 use resource_budget::ResourceBudget;
@@ -111,7 +112,8 @@ pub struct PrefixBatchStats {
     pub payloads: usize,
     pub row_payloads: usize,
     pub new_object_slots: usize,
-    /// Unique immutable resource entries delivered, not resource bytes.
+    /// Registered immutable dependency entries, not bytes. Sampled motion tables
+    /// travel within tracks and are charged by key retention and resource bytes.
     pub resource_payloads: usize,
 }
 
@@ -131,6 +133,7 @@ pub struct PrefixPublisher {
     finished: bool,
     object_slots: usize,
     resources: CompiledResources,
+    sampled_motion_payloads: sampled_motion_budget::SampledMotionPayloads,
     resource_budget: ResourceBudget,
     history_payload_budget: HistoryPayloadBudget,
     object_vector_budget_bytes: usize,
@@ -555,7 +558,8 @@ impl SceneInstance {
 
     /// Same bootstrap with an explicit logical immutable-resource byte cap.
     /// Admission happens before cloning the projection or reserving its history.
-    /// Audio PCM/resource headers and immutable clip-table entries are included.
+    /// Audio PCM/resource headers, immutable clip-table entries, and sampled
+    /// motion plans/tables are included. Shared motion allocations count once.
     /// Zero permits resource-free scenes. No history is evicted to meet the cap.
     #[doc(hidden)]
     pub fn create_prefix_projection_with_resource_budget(
@@ -634,6 +638,19 @@ impl SceneInstance {
             self.compiled.objects().len(),
             object_vector_budget_bytes,
         )?;
+        let (sampled_motion_payloads, sampled_motion_bytes) =
+            sampled_motion_budget::SampledMotionPayloads::default().additional(
+                self.compiled
+                    .tracks_iter()
+                    .filter_map(|track| track.values.sampled_motion_plan())
+                    .chain(
+                        history
+                            .revisions
+                            .iter()
+                            .filter_map(|revision| revision.inverse.as_ref())
+                            .flat_map(|revision| revision.sampled_motion_plans()),
+                    ),
+            )?;
         let resource_bytes = self
             .compiled
             .resources()
@@ -642,6 +659,7 @@ impl SceneInstance {
             // shared PCM handle must not let arbitrarily many clips bypass the
             // bootstrap byte cap. No clip table is copied into future batches.
             .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(self.compiled.audio_clips())))
+            .and_then(|bytes| bytes.checked_add(sampled_motion_bytes))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
@@ -702,6 +720,7 @@ impl SceneInstance {
             finished: false,
             object_slots: self.compiled.objects().len(),
             resources: self.compiled.resources().clone(),
+            sampled_motion_payloads,
             resource_budget,
             history_payload_budget,
             object_vector_budget_bytes,
@@ -868,8 +887,15 @@ impl SceneInstance {
             .prefix_resource_delta(&forward, &publisher.resources)?;
         // Measure only the new dependency closure, never the retained arena.
         // Reject before moving the cursor or retaining new publisher pins.
+        let (sampled_motion_payloads, sampled_motion_bytes) =
+            publisher.sampled_motion_payloads.additional(
+                forward
+                    .iter()
+                    .flat_map(|revision| revision.sampled_motion_plans()),
+            )?;
         let resource_bytes = resources
             .prefix_resource_bytes()
+            .and_then(|bytes| bytes.checked_add(sampled_motion_bytes))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget = publisher.resource_budget.with_additional(resource_bytes)?;
         stats.resource_payloads = resources.prefix_payload_count();
@@ -909,6 +935,9 @@ impl SceneInstance {
             .resources
             .extend_prefix_knowledge(&batch.resources);
         publisher.resource_budget = resource_budget;
+        publisher
+            .sampled_motion_payloads
+            .extend(sampled_motion_payloads);
         publisher.history_payload_budget = history_payload_budget;
         publisher.extracted_payloads = extracted_payloads;
         publisher.object_slots = self.compiled.objects().len();

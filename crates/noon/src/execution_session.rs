@@ -201,6 +201,11 @@ pub(crate) enum SemanticCompositionRequest {
         path: SemanticNodeId,
         options: AnimationOptions,
     },
+    SampledMotion {
+        target: SemanticNodeId,
+        motion: std::sync::Arc<noon_core::SampledMotionData>,
+        options: AnimationOptions,
+    },
     CallbackInterval {
         target: SemanticNodeId,
         callback: noon_core::HostCallbackId,
@@ -384,7 +389,9 @@ impl SemanticCompositionRequest {
             Self::CallbackInterval { target, .. }
             | Self::LayoutReplaceInterval { target, .. }
             | Self::ResolvedLayoutReplace { target, .. } => Some(*target),
-            Self::MoveAlongPath { target, .. } => Some(*target),
+            Self::MoveAlongPath { target, .. } | Self::SampledMotion { target, .. } => {
+                Some(*target)
+            }
             Self::Indicate { target, .. }
             | Self::GlowPulse { target, .. }
             | Self::Dissolve { target, .. }
@@ -2426,6 +2433,20 @@ impl ExecutionSession {
                 admit(*path, admitted)?;
                 Ok(declaration.create_move_along_path_animation(*target, *path, *options))
             }
+            SemanticCompositionRequest::SampledMotion {
+                target,
+                motion,
+                options,
+            } => {
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*target).into())) {
+                    admit(*target, admitted)?;
+                }
+                Ok(declaration.create_sampled_motion_animation(
+                    *target,
+                    std::sync::Arc::clone(motion),
+                    *options,
+                ))
+            }
             SemanticCompositionRequest::WorldTransform {
                 target,
                 transform,
@@ -3422,6 +3443,15 @@ impl ExecutionSession {
                     });
                 }
                 Ok(declaration.create_move_along_path_animation(*target, *path, *options))
+            }
+            SemanticCompositionRequest::SampledMotion { target, motion, options } => {
+                if !self.reachability.is_object_reachable(*target) {
+                    return Err(ExecutionSessionAnimationError::CreateTarget {
+                        target: *target,
+                        error: ExecutionSessionCreateError::TargetIsNotDetached,
+                    });
+                }
+                Ok(declaration.create_sampled_motion_animation(*target, std::sync::Arc::clone(motion), *options))
             }
             SemanticCompositionRequest::GlowPulse { target, intensity, options } => {
                 self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration)
@@ -4515,6 +4545,14 @@ impl ExecutionSession {
                     world_transform: row.world_transform(),
                     camera_profile: row.camera_profile(),
                 })
+            },
+            |object, transform| {
+                if self.runtime.object_has_effective_driver(object) {
+                    return None;
+                }
+                self.runtime
+                    .retained_object_layout_bounds_at(object, transform)
+                    .map(|bounds| bounds.center())
             },
         )?;
         let schedule = projection.schedule();

@@ -92,7 +92,8 @@ def build_report(root: Path = ROOT) -> dict[str, Any]:
         raise ValueError("tutorial entries must be an array")
 
     inputs = {POLICY, TUTORIALS, "scripts/manim-api-coverage.py", "scripts/noon-capabilities.py", "web/python/noon.py"}
-    inputs.update(path.relative_to(root).as_posix() for path in (root / "web/python").glob("_manim*.py"))
+    for pattern in ("_manim*.py", "_noon*.py"):
+        inputs.update(path.relative_to(root).as_posix() for path in (root / "web/python").glob(pattern))
     for name in inputs:
         local_file(root, name)
     coverage = coverage_module(root)

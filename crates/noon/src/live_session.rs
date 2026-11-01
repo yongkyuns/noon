@@ -216,6 +216,13 @@ pub enum AnimationCompositionRequest<'a> {
         path: &'a Mobject,
         options: AnimationOptions,
     },
+    /// Piecewise-linear destination centers and unwrapped relative rotations.
+    /// The phase-zero pose and rigid center anchor are captured at activation.
+    SampledMotion {
+        target: &'a Mobject,
+        motion: std::sync::Arc<noon_core::SampledMotionData>,
+        options: AnimationOptions,
+    },
     /// Invoke a registered host callback during this compiler-scheduled interval.
     CallbackInterval {
         target: &'a Mobject,
@@ -1847,6 +1854,25 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
+    /// Atomically capture and activate one compact rigid-motion sample table.
+    /// Center destinations and unwrapped angular offsets share the ordinary
+    /// composition, driver, completion, and replay contracts.
+    pub fn declare_and_activate_sampled_motion(
+        &mut self,
+        target: &Mobject,
+        motion: std::sync::Arc<noon_core::SampledMotionData>,
+        options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
+        self.declare_and_activate_composition(
+            &AnimationCompositionRequest::SampledMotion {
+                target,
+                motion,
+                options,
+            },
+            AnimationOptions::new(),
+        )
+    }
+
     /// Transform two equivalent semantic families through one ordered composition.
     pub fn declare_and_activate_family_transform_to(
         &mut self,
@@ -2408,6 +2434,18 @@ impl<'a> LiveSession<'a> {
                 Request::MoveAlongPath {
                     target: target.node_id(),
                     path: path.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::SampledMotion {
+                target,
+                motion,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::SampledMotion {
+                    target: target.node_id(),
+                    motion: std::sync::Arc::clone(motion),
                     options: *options,
                 }
             }

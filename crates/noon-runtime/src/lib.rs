@@ -18,6 +18,8 @@ mod frame;
 mod graph_endpoints;
 mod numeric_text;
 #[cfg(test)]
+mod sampled_motion_tests;
+#[cfg(test)]
 mod seek_storage_tests;
 pub use numeric_text::{NumericTextDriverRevisionEntry, PreparedNumericTextDriverRevision};
 mod prepared_frame;
@@ -2310,6 +2312,12 @@ fn affine_base_at_time(
             continue;
         }
         match (property, &track.values) {
+            (Property::Position, TrackValues::SampledPosition { plan }) => {
+                transform.translation = plan.source_transform().translation
+            }
+            (Property::Rotation, TrackValues::SampledRotation { plan }) => {
+                transform.rotation = plan.source_transform().rotation
+            }
             (
                 Property::Position,
                 TrackValues::Vec2 { from, .. } | TrackValues::ArcVec2 { from, .. },
@@ -2851,6 +2859,24 @@ fn apply_group_to_row(
         // Admission excludes overshooting leaf rates. As with glow, remove only
         // endpoint roundoff from otherwise bounded polynomial rate functions.
         return apply_paint_track(&mut row, transition, progress.clamp(0.0, 1.0));
+    }
+    if let TrackValues::SampledPosition { plan } | TrackValues::SampledRotation { plan } =
+        &track.values
+    {
+        let phase =
+            world_track_progress(track, time).expect("selected sampled motion track is active");
+        let (translation, rotation) = plan.sample(phase);
+        let value = if group.channel.property == Property::Position {
+            EvaluatedValue::Vec2(translation)
+        } else {
+            EvaluatedValue::Scalar(rotation)
+        };
+        return apply_evaluated_value(
+            &mut row,
+            group.channel.property,
+            value,
+            preserve_render_frame,
+        );
     }
     if group.channel.property == Property::Transform {
         return apply_transform_track(&mut row, track, progress);
@@ -3672,6 +3698,12 @@ fn interpolate_track_values_with_path_plan(
     path_plan: Option<&noon_geometry::PathProportionPlan>,
 ) -> Option<EvaluatedValue> {
     match values {
+        TrackValues::SampledPosition { plan } => {
+            Some(EvaluatedValue::Vec2(plan.sample(f64::from(progress)).0))
+        }
+        TrackValues::SampledRotation { plan } => {
+            Some(EvaluatedValue::Scalar(plan.sample(f64::from(progress)).1))
+        }
         TrackValues::Emission { from, to } => Some(EvaluatedValue::Emission(
             from.interpolate(*to, f64::from(progress))
                 .expect("finite material interpolation"),

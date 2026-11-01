@@ -1890,6 +1890,7 @@ _PUBLIC_EXPORTS = {
     "ParametricFunction": "_manim_plotting",
     "Transform": "_manim_animate",
     "MoveAlongPath": "_manim_animate",
+    "SampledMotion": "_noon_sampled_motion",
     "ReplacementTransform": "_manim_animate",
     "TransformFromCopy": "_manim_animate",
     "TransformMatchingShapes": "_manim_animate",

@@ -135,6 +135,7 @@ impl CompiledScene {
                 channels: old.channels.clone(),
                 camera_motion_payloads: 0,
                 path_motion_commands: 0,
+                sampled_motion_keys: old.sampled_motion_keys,
             });
         }
         output.reverse();

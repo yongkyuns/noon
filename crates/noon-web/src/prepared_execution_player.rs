@@ -488,6 +488,13 @@ impl PreparedExecutionPlayer {
             .scroll(&mut self.playback.reader, &mut self.binding, input)
     }
 
+    /// Explicit historical-frame inspection through the same shared diagnostic
+    /// codec as ordinary execution. Reading never advances or prepares a frame.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugFrameJson))]
+    pub fn debug_frame_json(&self) -> String {
+        self.playback.reader.diagnostic_frame_value().to_string()
+    }
+
     /// Observations only. Hosts must use executionWake/needsPreparation to decide
     /// when to schedule work, never parse these diagnostics as another timeline.
     #[cfg(any(test, debug_assertions, feature = "renderer-smoke"))]

@@ -91,6 +91,7 @@ pub enum SemanticScheduledAnimationPayload {
         path: SemanticNodeId,
         path_execution_object_id: ObjectId,
     },
+    SampledMotion,
     TransformTo {
         target_state: SemanticNodeId,
         interpolation: SemanticTransformInterpolation,
@@ -270,6 +271,7 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         path: SemanticTransactionNodeRef,
         path_execution_object_id: ObjectId,
     },
+    SampledMotion,
     TransformTo {
         target_state: SemanticTransactionNodeRef,
         interpolation: SemanticTransformInterpolation,
@@ -871,6 +873,9 @@ fn published_payload(
             path,
             path_execution_object_id,
         },
+        ScheduledAnimationPayload::SampledMotion => {
+            SemanticScheduledAnimationPayload::SampledMotion
+        }
         ScheduledAnimationPayload::TransformTo {
             target_state,
             interpolation,
@@ -967,6 +972,9 @@ fn prepared_payload(
             path,
             path_execution_object_id,
         },
+        ScheduledAnimationPayload::SampledMotion => {
+            PreparedSemanticScheduledAnimationPayload::SampledMotion
+        }
         ScheduledAnimationPayload::TransformTo {
             target_state,
             interpolation,
@@ -1066,6 +1074,9 @@ enum AnimationDeclarationIntent<R> {
     MoveAlongPath {
         target: R,
         path: R,
+    },
+    SampledMotion {
+        target: R,
     },
     FamilyTransformTo {
         source: R,
@@ -1222,6 +1233,10 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
         let intent = match state.intent() {
             SemanticAnimationIntent::ObjectPropertyTrack { .. } => {
                 return Err(SemanticAnimationError::InvalidObjectPropertyTrack);
+            }
+            SemanticAnimationIntent::SampledMotion { target, .. } => {
+                self.store.semantic_object_state_checked(*target)?;
+                AnimationDeclarationIntent::SampledMotion { target: *target }
             }
             SemanticAnimationIntent::MoveAlongPath { target, path } => {
                 self.store.semantic_object_state_checked(*target)?;
@@ -1551,6 +1566,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             PreparedSemanticAnimationLookupError::InitialObjectPropertyTrack,
                         );
                     }
+                    SemanticAnimationIntent::SampledMotion { target, .. } => {
+                        AnimationDeclarationIntent::SampledMotion {
+                            target: (*target).into(),
+                        }
+                    }
                     SemanticAnimationIntent::MoveAlongPath { target, path } => {
                         self.prepared
                             .object_state(*target)
@@ -1739,6 +1759,9 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             PreparedSemanticAnimationLookupError::InitialObjectPropertyTrack,
                         );
                     }
+                    SemanticTransactionAnimationIntent::SampledMotion { target, .. } => {
+                        AnimationDeclarationIntent::SampledMotion { target: *target }
+                    }
                     SemanticTransactionAnimationIntent::MoveAlongPath { target, path } => {
                         AnimationDeclarationIntent::MoveAlongPath {
                             target: *target,
@@ -1921,6 +1944,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
                 }
             }
+            AnimationDeclarationIntent::SampledMotion { target } => {
+                self.prepared
+                    .object_state(*target)
+                    .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
+            }
             AnimationDeclarationIntent::MoveAlongPath { target, path } => {
                 self.prepared
                     .object_state(*target)
@@ -2081,6 +2109,7 @@ enum ScheduledAnimationPayload<R> {
         path: R,
         path_execution_object_id: ObjectId,
     },
+    SampledMotion,
     TransformTo {
         target_state: R,
         interpolation: SemanticTransformInterpolation,
@@ -2283,6 +2312,28 @@ where
         .map_err(|error| AnimationSchedulePlanError::Lookup { animation, error })?;
 
     match state.intent {
+        AnimationDeclarationIntent::SampledMotion { target } => {
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            let options = noon_core::resolve_sampled_motion_animation_options(
+                AnimationDefaults::MANIM,
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::SampledMotion,
+                    options,
+                },
+            })
+        }
         AnimationDeclarationIntent::MoveAlongPath { target, path } => {
             let execution_object_id = lookup
                 .execution_object_id(target)

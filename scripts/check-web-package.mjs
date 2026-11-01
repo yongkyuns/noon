@@ -242,6 +242,7 @@ const expectedJavascriptSurface = [
   "appendPointTransformTo(",
   "appendEnteringPointTransformTo(",
   "appendBoundRotate(",
+  "appendSampledMotionBatch(",
   "appendWait(",
   "appendFamilyTransformTo(",
   "appendGlowPulseMobject(",
@@ -507,6 +508,7 @@ const expectedTypeSurface = [
   "appendWait(child_run_time: number): void",
   "appendCallbackInterval(target: WasmAuthoringMobjectHandle, callback_id: string, child_run_time: number): void",
   "appendMoveAlongPath(target: WasmAuthoringMobjectHandle, path: WasmAuthoringMobjectHandle, child_run_time: number, rate_function: string): void",
+  "appendSampledMotionBatch(context: CanonicalAuthoringSceneContext, object_ids: string[], sample_ends: Uint32Array, phases: Float64Array, centers_xyz: Float64Array, rotation_offsets: Float64Array, option_presence: Uint8Array, option_values: Float64Array, rate_functions: string[], play_run_time: number | null | undefined, play_rate_function: string, play_lag_ratio?: number | null): void",
   "callbackLayoutReplace(source: WasmLayoutAnchor, target: WasmLayoutAnchor, revision: string, keys: Uint32Array, rows: Float64Array, dimension: number, stretch: boolean): Float64Array",
   "appendValueTracker(",
   "appendFamilyTransformTo(",
@@ -682,6 +684,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
   expectedJavascriptSurface.push(
+    "debugFrameJson()",
     "export function createDirectTypstTextSmokeRenderer(",
     "export function createDirectMathTypstTextSmokeRenderer(",
     "export function createDirectTypstCanvasRenderer(",
@@ -693,6 +696,7 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryLivePrimitiveConstructionSmokeRenderer(",
     "export function createDirectOrdinaryCallbackSparseReadsSmokeRenderer(",
     "export function createDirectOrdinaryCompositionPlaySmokeRenderer(",
+    "export function createDirectSampledMotionSmokeRenderer(",
     "export function createDirectOrdinaryCompositionSmokeRenderer(",
     "export function createDirectMixedScalarCompositionSmokeRenderer(",
     "export function createDirectFamilyStateSmokeRenderer(",
@@ -795,6 +799,8 @@ if (process.env.NOON_WASM_PROFILE === "dev"
     "export function createDirectOrdinaryBecomeSemanticsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryCallbackSparseReadsSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectOrdinaryCompositionPlaySmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "export function createDirectSampledMotionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
+    "debugFrameJson(): string",
     "export function createDirectOrdinaryCompositionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectMixedScalarCompositionSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",
     "export function createDirectFamilyStateSmokeRenderer(canvas: OffscreenCanvas): Promise<ExecutionCanvasRenderer>",

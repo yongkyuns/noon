@@ -1132,6 +1132,15 @@ pub async fn create_direct_ordinary_composition_play_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
+/// The shared native sampled-motion fixture, with no scene or motion codec.
+#[wasm_bindgen(js_name = createDirectSampledMotionSmokeRenderer)]
+pub async fn create_direct_sampled_motion_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::sampled_motion::session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+}
+
 /// Browser proof that flat composition segments return to the same direct Rust
 /// continuation program between their exact renderer publication barriers.
 #[wasm_bindgen(js_name = createDirectOrdinaryCompositionContinuationSmokeRenderer)]

@@ -324,6 +324,11 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         path: SemanticNodeId,
     },
+    /// Explicit piecewise-linear rigid motion with an activation-captured source.
+    SampledMotion {
+        target: SemanticNodeId,
+        motion: std::sync::Arc<crate::SampledMotionData>,
+    },
     /// Transform one semantic object toward the authored state of another semantic
     /// object. The target-state node is a semantic reference, not an execution
     /// snapshot; A1.6 lowering decides when/how to snapshot and interpolate it.
@@ -456,6 +461,7 @@ impl SemanticAnimationIntent {
             Self::FamilyTransformTo { source, .. } => Some(*source),
             Self::ObjectPropertyTrack { target, .. }
             | Self::MoveAlongPath { target, .. }
+            | Self::SampledMotion { target, .. }
             | Self::TransformTo { target, .. }
             | Self::EffectTargetTo { target, .. }
             | Self::WorldTransformTo { target, .. }
@@ -485,6 +491,7 @@ impl SemanticAnimationIntent {
             Self::WorldTransformTo { .. } | Self::CameraProfileTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
+            | Self::SampledMotion { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
@@ -527,6 +534,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
+            | Self::SampledMotion { .. }
             | Self::TransformTo { .. }
             | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
@@ -554,6 +562,7 @@ impl SemanticAnimationIntent {
         match self {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
+            | Self::SampledMotion { .. }
             | Self::TransformTo { .. }
             | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }

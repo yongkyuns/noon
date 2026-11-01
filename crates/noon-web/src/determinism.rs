@@ -167,6 +167,7 @@ pub fn verify_example_replay(
         "specialized-geometry" => example_scenes::specialized_geometry::session(),
         "family-placement" => example_scenes::family_placement::session(),
         "painter-order" => example_scenes::painter_order_overlap::session(),
+        "sampled-motion" => example_scenes::sampled_motion::session(),
         "analytic-stress" => example_scenes::analytic_profile::session(
             stress_count,
             example_scenes::analytic_profile::Layout::Fit,
@@ -263,6 +264,17 @@ mod wasm {
 #[cfg(test)]
 mod tests {
     use super::normalized_frames_equal;
+
+    #[test]
+    fn nonuniform_sampled_motion_fixture_replays_without_host_sampling() {
+        super::verify_example_replay(
+            "sampled-motion",
+            &[0.0, 0.071, 0.299, 0.73, 0.92, 1.679, 2.0, 2.3],
+            61,
+            0,
+        )
+        .unwrap();
+    }
 
     #[test]
     fn replay_equality_includes_the_effective_renderer_coordinate_frame() {
