@@ -31,11 +31,7 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
     const row = { clockId, attemptId: `${action}:${++serial}:${kind}`, action, kind,
       endpoint: "not-posted", domMs: now(), trusted: event.isTrusted === true, outcome: "pending" };
     if (!record(attempts, row)) return;
-    const occurrence = { event, row };
-    current = occurrence;
-    // The normal collector submits synchronously in this DOM dispatch. Once
-    // that dispatch ends, a later event must not inherit its occurrence.
-    queueMicrotask(() => { if (current === occurrence) current = null; });
+    current = { event, row };
   });
   for (const type of ["pointerdown", "pointerup"]) document.addEventListener(type, onDom, true);
 
@@ -86,7 +82,11 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
     observe(() => {
       const occurrence = current;
       if (!occurrence || occurrence.row.kind !== input.kind || occurrence.event.pointerId !== input.pointer_id ||
-          occurrence.event.target.closest("canvas") !== this.canvas) return;
+          occurrence.event.target.closest("canvas") !== this.canvas ||
+          occurrence.event.currentTarget !== this.canvas || occurrence.event.eventPhase === 0) return;
+      // A browser may run microtasks between capture and target listeners.
+      // Check the actual dispatch, rather than clearing association in a
+      // microtask or allowing a later async call to inherit the last event.
       current = null;
       row = occurrence.row;
       row.input = structuredClone(input);
@@ -174,6 +174,7 @@ export function observePointerLatency(ExecutionWorkerClient, { clockId, capacity
     stop() {
       if (stopped) return;
       stopped = true;
+      current = null;
       for (const type of ["pointerdown", "pointerup"]) document.removeEventListener(type, onDom, true);
       for (const [port, { listener }] of ports) port.removeEventListener("message", listener);
       if (ExecutionWorkerClient.prototype.submitBrowserPointerInput === submit) {

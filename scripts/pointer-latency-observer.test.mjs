@@ -34,8 +34,13 @@ function fixture(t, capacity) {
   const input = { kind: "release", source_id: 4, pointer_id: 9, view_revision: 2, surface_x: 50, surface_y: 40 };
   return { observer, port, client, input, result, resolve, reject, originalSubmit, originalPost,
     clock: value => { now = value; },
-    dom() { listeners.get("pointerup")({ type: "pointerup", isPrimary: true, button: 0, pointerId: 9,
-      target: { closest: () => canvas } }); },
+    dom() {
+      const event = { type: "pointerup", isPrimary: true, button: 0, pointerId: 9,
+        currentTarget: document, eventPhase: 1, target: { closest: () => canvas } };
+      listeners.get("pointerup")(event);
+      event.currentTarget = canvas; event.eventPhase = 2;
+      return event;
+    },
     post(id = 1) { port.postMessage({ channel: "noon.engine", type: "browser_pointer_input", requestId: id,
       input: structuredClone(input) }); },
     snapshot: () => observer.snapshot({ runStatus: "completed" }),
@@ -46,6 +51,7 @@ test("collector preserves the product promise and joins DOM, exact post, reply a
   const f = fixture(t);
   f.observer.action("restart-1");
   f.dom();
+  await Promise.resolve(); // Browsers can checkpoint between capture and target.
   assert.equal(f.client.submitBrowserPointerInput(f.input), f.result);
   f.clock(102); f.post();
   f.clock(105); f.port.reply({ type: "browser_pointer_input", requestId: 1, pointerInputAccepted: true,
@@ -93,6 +99,17 @@ test("ambiguous exact inputs are retained without guessing their request associa
   const trace = f.snapshot();
   assert.equal(trace.attempts.length, 2);
   assert.ok(trace.attempts.every(row => row.postedMs === undefined));
+  assert.match(trace.observerErrors[0], /one exact collected occurrence/);
+  f.resolve();
+});
+
+test("a later asynchronous submission cannot inherit an ended DOM dispatch", t => {
+  const f = fixture(t);
+  const event = f.dom();
+  event.currentTarget = null; event.eventPhase = 0;
+  f.client.submitBrowserPointerInput(f.input); f.post();
+  const trace = f.snapshot();
+  assert.equal(trace.attempts[0].postedMs, undefined);
   assert.match(trace.observerErrors[0], /one exact collected occurrence/);
   f.resolve();
 });
