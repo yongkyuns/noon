@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MessageChannel, MessagePort } from "node:worker_threads";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
-import { decodeTransferableExecutionDelta, SharedExecutionDeltaReader } from "./execution-transport.js";
+import { decodeTransferableExecutionDelta, SharedExecutionDeltaReader, MAX_SHARED_EXECUTION_DELTA_BYTES } from "./execution-transport.js";
 
 globalThis.MessagePort = MessagePort;
 
@@ -78,7 +78,9 @@ function fixture(mode = "transferable", options = {}) {
     messages.push(message);
     if (message.type === "execution_delta") receive(decodeTransferableExecutionDelta(message).json);
     if (message.type === "transport_setup") reader = new SharedExecutionDeltaReader(message.mailbox);
-    if (message.type === "shared_delta") reader.drain(receive);
+    if (message.type === "shared_delta" && reader.drain(receive) > 0) {
+      render.port2.postMessage({ type: "transport_writable" });
+    }
     changed();
   });
   control.port2.on("message", message => { replies.push(message); changed(); });
@@ -118,7 +120,7 @@ function fixture(mode = "transferable", options = {}) {
     },
     observe(value) { observation = value; },
     publishOnTick(value = true) { tickDelta = value; },
-    oversizePayload() { payloadPadding = "x".repeat(4096); },
+    oversizePayload(bytes = 4096) { payloadPadding = "x".repeat(bytes); },
     setTickFailure(error) { tickFailure = error; },
     makeDirty() { pendingDelta = true; },
     deliver(value, terminal = false) {
@@ -245,14 +247,14 @@ test("cold prepared seek starts its clock only after the newly selected frame pr
   } finally { f.close(); }
 });
 
-test("an oversized prepared shared publication retires the stream after extraction", { timeout: 3000 }, async () => {
+test("exceeding the prepared shared packet byte cap retires the stream after extraction", { timeout: 3000 }, async () => {
   const f = fixture("shared", { sharedSlotCapacity: 512 });
   try {
     await f.attach(); await f.present();
-    f.oversizePayload();
+    f.oversizePayload(MAX_SHARED_EXECUTION_DELTA_BYTES + 1);
     const failed = await f.request("seek", { time: 1 });
     assert.equal(failed.type, "error");
-    assert.match(failed.message, /capacity|capacity|bytes|size|slot/i);
+    assert.match(failed.message, /packet byte limit/);
     assert.equal(f.count("seek"), 1);
     assert.equal(f.count("cancel-source"), 1);
     assert.equal(f.count("free"), 1);
@@ -392,3 +394,22 @@ for (const stage of ["bootstrap", "tick", "control", "state", "notification"]) {
     }
   });
 }
+
+
+test("prepared shared chunks do not admit the selected clock before the complete frame presents", { timeout: 3000 }, async () => {
+  const f = fixture("shared", { sharedSlotCapacity: 512 });
+  try {
+    await f.attach();
+    const wakes = f.count("wake");
+    f.oversizePayload();
+    assert.equal((await f.request("seek", { time: 1 })).type, "seek");
+    await f.when(() => f.deltas.length === 2);
+    assert.equal(f.deltas[1].padding.length, 4096);
+    assert.equal(f.count("seek"), 1);
+    assert.equal(f.count("cancel-source"), 0);
+    assert.equal(f.count("free"), 0);
+    assert.equal(f.count("wake"), wakes, "chunk credit is not a displayed-frame receipt");
+    await f.present(f.deltas[1]);
+    assert.ok(f.count("wake") > wakes);
+  } finally { f.close(); }
+});
