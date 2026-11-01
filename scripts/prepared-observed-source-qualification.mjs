@@ -67,6 +67,9 @@ const lateSource = source.replace("        target.add_updater(update)",
   '        mark("prefix")\n        self.wait(1)\n        target.add_updater(update)');
 const lateCausalSource = causalSource.replace("        self.set_drag_targets(draggable)",
   '        mark("prefix")\n        self.wait(1)\n        self.set_drag_targets(draggable)');
+const nativeDeclarations = '        self.set_drag_targets(draggable)\n        self.on_click(target, Indicate(target, color=RED, run_time=0.5))\n';
+const terminalCausalSource = causalSource.replace(nativeDeclarations, "")
+  .replace('        mark("end")', nativeDeclarations + '        mark("end")');
 const reference = `from noon import *
 class FinalPicture(Scene):
     def construct(self):
@@ -84,19 +87,22 @@ const report = {
   status: "running", scope: "observed admission, incremental reader-to-source handoff, pause/resume and completed-source input; original interpreter, pointer receipts and final pixels; no recovery, latency or default-cutover claim",
   lateSourceSha256: hash(lateSource),
   lateCausalSourceSha256: hash(lateCausalSource),
+  terminalCausalSourceSha256: hash(terminalCausalSource),
   sourceSha256: hash(source), referenceSha256: hash(reference), cases: [],
   causalSourceSha256: hash(causalSource),
   causalReferenceSha256: hash(causalReference),
   heldSourceSha256: hash(heldSource), heldReferenceSha256: hash(heldReference),
   harnessSha256: hash(await readFile(fileURLToPath(import.meta.url))),
   gallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_always_redraw.py"))),
+  terminalGallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_translation_drag.py"))),
 };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let server, unisolatedServer, browser;
 
 async function start(page, transportMode, arm) {
   const sources = { ordinary: source, incremental: source, reference, causal: causalSource, "causal-reference": causalReference,
-    held: heldSource, "held-reference": heldReference, "late-ordinary": lateSource, "late-incremental": lateSource, "late-causal": lateCausalSource };
+    held: heldSource, "held-reference": heldReference, "late-ordinary": lateSource, "late-incremental": lateSource, "late-causal": lateCausalSource,
+    "terminal-causal": terminalCausalSource };
   await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
   await page.evaluate(async ({ source, transportMode, preparedPlayback, initiallyPaused }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
@@ -143,7 +149,7 @@ async function start(page, transportMode, arm) {
       if (host.registrations === 0) await attach(result.semanticExecution, result.duration);
       host.outcome = { status: "finished", duration: result.duration };
     }).catch(error => { host.outcome = { status: "failed", error: String(error) }; host.rejectFailure(error); });
-  }, { source: sources[arm], transportMode, preparedPlayback: !["ordinary", "late-ordinary"].includes(arm), initiallyPaused: ["incremental", "causal", "held", "late-incremental", "late-causal"].includes(arm) });
+  }, { source: sources[arm], transportMode, preparedPlayback: !["ordinary", "late-ordinary"].includes(arm), initiallyPaused: ["incremental", "causal", "held", "late-incremental", "late-causal", "terminal-causal"].includes(arm) });
 }
 
 async function observeSource(page) {
@@ -211,7 +217,7 @@ try {
     report.browserVersion = browser.version();
     for (const transportMode of ["transferable", "shared"]) {
       const pictures = new Map();
-      for (const arm of ["late-incremental", "late-causal", "late-ordinary", "ordinary", "incremental", "reference", "causal", "causal-reference", "held", "held-reference"]) {
+      for (const arm of ["terminal-causal", "late-incremental", "late-causal", "late-ordinary", "ordinary", "incremental", "reference", "causal", "causal-reference", "held", "held-reference"]) {
         const entry = { backend, transportMode, arm, status: "running", observations: [] };
         report.cases.push(entry);
         const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 1 });
@@ -231,6 +237,28 @@ try {
         try {
           process.stdout.write(`starting ${backend}/${transportMode}/${arm}\n`);
           await start(page, transportMode, arm);
+          if (arm === "terminal-causal") {
+            const initial = await untilSource(page, s => s.attached && s.metrics?.ready && !s.metrics.needsPresent && s.metrics.presentedFrames > 0);
+            assert.equal(initial.state.preparedPlayback, true);
+            assert.equal(initial.state.preparedFrontier, 2);
+            assert.equal(initial.state.time, 0);
+            assert.deepEqual(initial.events, ["start"]);
+            await page.evaluate(() => observedAuthoring.execution.seek(1.25));
+            const returned = await untilSource(page, s => s.events.includes("cleanup"));
+            assert.equal(returned.outcome, null, "source completion must wait for actual frontier demand before transferring its player");
+            assert.equal(returned.state.preparedPlayback, true);
+            assert.equal(returned.state.durationSeconds, null);
+            assert.equal(returned.state.time, 1.25);
+            assert.deepEqual(returned.events, ["start", "end", "cleanup"]);
+            await page.evaluate(() => observedAuthoring.execution.seek(0.5));
+            await page.waitForTimeout(220);
+            const cached = await observeSource(page);
+            assert.equal(cached.state.preparedPlayback, true);
+            assert.equal(cached.state.time, 0.5);
+            assert.deepEqual(cached.events, returned.events);
+            entry.terminalSource = { initial, returned, cached };
+            await page.getByRole("button", { name: "Play animation", exact: true }).click();
+          }
           if (arm === "late-incremental" || arm === "late-causal") {
             const initial = await untilSource(page, s => s.attached && s.metrics?.ready && s.metrics.presentedFrames > 0 && !s.metrics.needsPresent);
             entry.initial = initial;
@@ -327,15 +355,19 @@ try {
           if (!["reference", "causal-reference", "held-reference"].includes(arm)) {
             assert.equal(observed.registrations, 1);
             assert.deepEqual(observed.events, [...(arm.startsWith("late-") ? ["prefix"] : []),
-              ...(["causal", "held", "late-causal"].includes(arm) ? ["start", "end", "cleanup"] : ["start", "first", "end", "cleanup"])]);
+              ...(["causal", "held", "late-causal", "terminal-causal"].includes(arm) ? ["start", "end", "cleanup"] : ["start", "first", "end", "cleanup"])]);
             assert.equal(observed.state.sourceExecution, "observed");
             assert.equal(observed.state.replaySupported, false);
             assert.notEqual(observed.state.preparedPlayback, true);
             assert.equal(observed.state.time, arm.startsWith("late-") ? 3 : 2);
             assert.equal(observed.state.sourcePlaybackControllable, false);
-            if (!["causal", "held", "late-causal"].includes(arm)) assert.ok(Math.abs(observed.samples.reduce((a, b) => a + b, 0) - 2) < 1e-9);
+            if (!["causal", "held", "late-causal", "terminal-causal"].includes(arm)) assert.ok(Math.abs(observed.samples.reduce((a, b) => a + b, 0) - 2) < 1e-9);
           }
-          if (arm === "causal" || arm === "held" || arm === "late-causal") {
+          if (["causal", "held", "late-causal", "terminal-causal"].includes(arm)) {
+            if (arm === "terminal-causal") {
+              assert.equal(observed.metrics.presentedSession, entry.terminalSource.initial.metrics.presentedSession + 1);
+              assert.equal(observed.metrics.rendererRebuilds, entry.terminalSource.initial.metrics.rendererRebuilds + 1);
+            }
             const rect = await page.locator("#scene").boundingBox();
             if (arm !== "held") {
               await page.mouse.move(rect.x + 600, rect.y + 200);
@@ -373,12 +405,13 @@ try {
           await writeFile(path.join(output, "report.json"), encode(report));
         }
       }
-      for (const [actual, reference] of [["ordinary", "reference"], ["incremental", "reference"], ["causal", "causal-reference"], ["held", "held-reference"], ["late-ordinary", "reference"], ["late-incremental", "reference"], ["late-causal", "causal-reference"]]) {
+      for (const [actual, reference] of [["ordinary", "reference"], ["incremental", "reference"], ["causal", "causal-reference"], ["held", "held-reference"], ["late-ordinary", "reference"], ["late-incremental", "reference"], ["late-causal", "causal-reference"], ["terminal-causal", "causal-reference"]]) {
         const image = pictures.get(actual), expected = pictures.get(reference);
         assert.equal(image.width, expected.width); assert.equal(image.height, expected.height);
         assert.ok(image.data.equals(expected.data), `${backend}/${transportMode}/${actual} final pixels must equal the static reference`);
       }
-      const entry = { backend, transportMode, arm: "original-always-redraw-gallery", status: "running" };
+      for (const galleryExample of ["showcase-always-redraw", "showcase-translation-drag"]) {
+      const entry = { backend, transportMode, arm: `original-${galleryExample}-gallery`, status: "running" };
       report.cases.push(entry);
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 });
       page.setDefaultTimeout(180_000); await cache.install(page.context());
@@ -388,7 +421,7 @@ try {
           globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: true }) };
         });
         const galleryServer = transportMode === "shared" ? server : unisolatedServer;
-        await page.goto(`${galleryServer.baseUrl}/web/index.html?example=showcase-always-redraw&catalog=showcase`);
+        await page.goto(`${galleryServer.baseUrl}/web/index.html?example=${galleryExample}&catalog=showcase`);
         const deadline = Date.now() + 180_000;
         let observed;
         while (Date.now() < deadline) {
@@ -422,19 +455,20 @@ try {
         assert.ok(observed.metrics?.ready && !observed.metrics.needsPresent &&
           !observed.metrics.resourceBundlePending && observed.metrics.bufferedDeltas === 0,
         "gallery picture must settle before the deadline");
-        assert.equal(observed.selected, "showcase-always-redraw");
+        assert.equal(observed.selected, galleryExample);
         assert.ok(entry.pause, "the real gallery must accept pause beyond its initial segment");
         assert.equal(observed.run.runGeneration, entry.generation);
         assert.equal(observed.controls.controllable, "false");
         assert.equal(observed.metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
         assert.equal(observed.metrics.transportMode, transportMode);
         assert.deepEqual(pageErrors, []);
-        entry.final = observed; entry.file = `${backend}-${transportMode}-gallery.png`;
+        entry.final = observed; entry.file = `${backend}-${transportMode}-${galleryExample}-gallery.png`;
         await page.locator("#scene").screenshot({ path: path.join(output, entry.file) });
         entry.status = "passed";
         process.stdout.write(`passed ${backend}/${transportMode}/gallery\n`);
       } catch (error) { entry.status = "failed"; entry.error = String(error.stack ?? error); throw error; }
       finally { await page.close(); await writeFile(path.join(output, "report.json"), encode(report)); }
+      }
     }
     await browser.close(); browser = null;
   }

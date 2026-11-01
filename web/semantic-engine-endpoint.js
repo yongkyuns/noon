@@ -112,7 +112,7 @@ export async function attachSemanticEngine(
   let pointerView = null;
   let continuationActive = false;
   let sourceHandoffRequested = false;
-  let sourceFinished = false;
+  let sourceFinished = continuation?.completed === true;
   // Read-only observation of the last completed lease. The authoring context's
   // next segment horizon is future time, not elapsed playback time. Never use it
   // as a clock while Python holds the returned player.
@@ -1367,8 +1367,8 @@ export async function attachSemanticEngine(
       try { player.sealReplay(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
     }
-    if (continuation !== null && pacing === SEMANTIC_PACING_REALTIME && !initiallyPaused) player.resume();
-    if (initiallyPaused || hasAudio || replayUnavailable !== null ||
+    if (continuation !== null && !sourceFinished && pacing === SEMANTIC_PACING_REALTIME && !initiallyPaused) player.resume();
+    if (initiallyPaused || sourceFinished || hasAudio || replayUnavailable !== null ||
         (continuation !== null && pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES)) {
       if (prepared !== null) player.setPreparedPlaying(false);
       else player.pause();
@@ -1530,11 +1530,11 @@ export async function attachSemanticEngine(
     if (request.initialPointerView !== undefined) {
       applyNativeInput({ type: "browser_pointer_view", view: request.initialPointerView });
     }
-    if (prepared !== null) send(player.initialDeltaJson());
+    if (prepared !== null || sourceFinished) send(player.initialDeltaJson());
     else await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
     controlPort.start();
     renderPort.start();
-    continuationActive = continuation !== null;
+    continuationActive = continuation !== null && !sourceFinished;
     if (continuationActive) {
       if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES) emitExecutionWake("idle", null, true);
       else observeContinuationWake(performance.now(), true);

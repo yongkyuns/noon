@@ -7,6 +7,67 @@ use noon_core::{
 use std::cell::RefCell;
 
 const CALLBACK: HostCallbackId = HostCallbackId::new(701);
+
+#[test]
+fn terminal_drag_requirement_preserves_the_finished_rust_source() {
+    struct Tail {
+        target: Mobject,
+        calls: Rc<Cell<usize>>,
+    }
+    impl LiveContinuation for Tail {
+        type Error = LiveSessionError;
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            let step = self.calls.get();
+            self.calls.set(step + 1);
+            match step {
+                0 => Ok(ContinuationStep::Await(live.wait_segment(1.0)?)),
+                1 => {
+                    live.set_translation_drag_targets([&self.target])?;
+                    Ok(ContinuationStep::Finished)
+                }
+                _ => panic!("finished source must not execute again"),
+            }
+        }
+    }
+    let mut scene = Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    scene.add(&target).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let mut source = scene
+        .into_prepared_source(
+            Tail {
+                target,
+                calls: calls.clone(),
+            },
+            ReplayLimits::default(),
+        )
+        .unwrap();
+    source.prepare_next().unwrap();
+    let mut reader = source.take_reader().unwrap();
+    reader.seek(0.5).unwrap();
+    let identity = source
+        .program
+        .as_ref()
+        .unwrap()
+        .session()
+        .runtime_identity();
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::ExecutionRequired(SourceExecutionRequirement::NativeInput)
+    );
+    assert_eq!(calls.get(), 2);
+    let mut original = source.take_execution_program().unwrap();
+    assert_eq!(original.session().runtime_identity(), identity);
+    assert_eq!(original.status(), LiveProgramStatus::Finished);
+    assert!(
+        original.resume().is_err(),
+        "a finished continuation must reject another resume"
+    );
+    assert_eq!(calls.get(), 2);
+    assert_eq!(reader.frame().time, 0.5);
+    assert_eq!(reader.end_time(), None);
+}
+
 struct Script {
     target: Mobject,
     calls: Rc<Cell<usize>>,
