@@ -469,3 +469,59 @@ fn cooperative_source_demand_keeps_zero_bootstrap_cooperative_and_cancel_termina
 
 #[cfg(all(panic = "unwind", not(target_arch = "wasm32")))]
 mod unwind;
+
+#[test]
+fn zero_only_source_yields_then_retains_final_edits_at_exact_endpoint() {
+    struct ZeroOnly {
+        target: Mobject,
+        calls: Rc<Cell<usize>>,
+    }
+    impl LiveContinuation for ZeroOnly {
+        type Error = LiveSessionError;
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            let step = self.calls.get();
+            self.calls.set(step + 1);
+            if step < 2 {
+                return Ok(ContinuationStep::Await(live.wait_segment(0.0)?));
+            }
+            live.set_fill(&self.target, 0.0, 1.0, 0.0, 1.0)?;
+            Ok(ContinuationStep::Finished)
+        }
+    }
+    let mut scene = Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    scene.add(&target).unwrap();
+    let calls = Rc::new(Cell::new(0));
+    let mut source = scene
+        .into_prepared_source(
+            ZeroOnly {
+                target,
+                calls: calls.clone(),
+            },
+            ReplayLimits::default(),
+        )
+        .unwrap();
+    for expected in 1..=2 {
+        assert_eq!(source.prepare_next().unwrap(), PreparedSourceStatus::Ready);
+        assert_eq!(calls.get(), expected);
+        assert!(source.take_reader().is_none());
+    }
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::ReaderReady
+    );
+    assert_eq!(calls.get(), 3);
+    let mut reader = source.take_reader().unwrap();
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::Finished
+    );
+    assert_eq!(calls.get(), 3);
+    assert_eq!(reader.end_time(), Some(0.0));
+    reader.seek(0.0).unwrap();
+    assert_eq!(
+        reader.frame().objects[0].style.fill,
+        Some(Color::rgb(0.0, 1.0, 0.0))
+    );
+    assert!(reader.seek(f64::EPSILON).is_err());
+}

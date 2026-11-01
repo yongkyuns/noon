@@ -77,6 +77,16 @@ impl ExecutionSession {
         Ok((publisher, self.prepared_reader(runtime, receiver)?))
     }
 
+    /// Query availability after an actual completed source boundary, without
+    /// cloning a reader. Bootstrap retains its full domain and budget admission.
+    pub fn has_prepared_prefix_interval(
+        &self,
+        boundary: ExecutionSegment,
+    ) -> Result<bool, PrefixError> {
+        self.ensure_prefix_boundary(boundary)?;
+        self.runtime.has_prefix_interval()
+    }
+
     /// Create the same historical reader after explicit source completion.
     /// A sealed zero-duration scene has the exact readable range `[0, 0]`;
     /// neither an invented segment nor another source invocation is needed.
