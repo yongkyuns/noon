@@ -10333,6 +10333,14 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = beginObservedPreparedSource)]
+        pub fn begin_observed_prepared_source(&mut self) -> Result<bool, JsValue> {
+            self.inner
+                .begin_observed_prepared_source()
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveCompleteSegment)]
         pub fn live_complete_segment(&mut self) -> Result<(), JsValue> {
             self.inner

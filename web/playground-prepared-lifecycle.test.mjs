@@ -49,7 +49,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     example: { id: "test", title: "Test", parityStatus: "candidate", inspectionZoom: true },
     hooks: { authoringRunOptions: () => options },
     preparationGate: null, stateGate: null, initialPrepared: true,
-    setupGate: null,
+    setupGate: null, observedExecution: false,
   };
   class Controls {
     state = null;
@@ -98,6 +98,10 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
           preparedFrontier: 1, durationSeconds: null, buffering: false,
           canUndoTranslationDrag: false, replaySupported: true,
         } : { time: 0, playing: true, replaySupported: true };
+        if (env.observedExecution) this.status = {
+          sourceExecution: "observed", time: 0, playing: true, replaySupported: false,
+          replayUnavailable: "source execution is not retained for replay", durationSeconds: null,
+        };
         return { engine: { preparedPlayback: this.status.preparedPlayback }, render: { backend: "WebGL2" } };
       },
       async state() {
@@ -214,6 +218,21 @@ test("terminal adoption keeps the reader, pause, playhead and inspection without
   assert.equal(f.count("reconcile"), 0); assert.equal(f.count("pause"), 0);
   assert.equal(f.count("inspection"), 1); assert.equal(f.count("terminate-runtime"), 0);
   assert.equal(f.env.patchStatus.dataset.operation, "Prepared history retained");
+  assert.deepEqual(f.errors, []);
+});
+
+test("Rust-admitted initial observed execution finishes on its original endpoint without claiming history", async () => {
+  const f = fixture(); f.env.observedExecution = true;
+  const { promise } = await f.start(); await f.register();
+  const player = f.inspect().player;
+  assert.equal(f.inspect().preparedPlaybackPlayer, null);
+  assert.equal(f.inspect().playbackControls.controllable, false);
+  player.status.time = 4; player.status.playing = false;
+  f.finish(); const completed = await promise;
+  assert.equal(completed.error, undefined); assert.equal(completed.stale, false);
+  assert.equal(f.inspect().player, player);
+  assert.equal(f.count("reconcile"), 0); assert.equal(f.count("terminate-runtime"), 0);
+  assert.equal(f.inspect().playbackControls.controllable, false);
   assert.deepEqual(f.errors, []);
 });
 

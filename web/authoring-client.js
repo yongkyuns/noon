@@ -147,8 +147,8 @@ export class PythonAuthoringClient {
         (continuation === null || replaceExistingEndpoint)) {
       throw new Error("prepared playback cannot reattach or replace its endpoint");
     }
-    if (preparedPlayback && (callbackSessionId !== null || pacing !== "realtime")) {
-      throw new Error("prepared playback requires realtime pacing without Python callbacks");
+    if (preparedPlayback && pacing !== "realtime") {
+      throw new Error("prepared playback requires realtime pacing");
     }
     await this.ready();
     const requestId = this.#beginRequest();
@@ -514,9 +514,6 @@ export function validateSemanticExecutionDescriptor(descriptor) {
   }
   if (preparedPlayback !== undefined && typeof preparedPlayback !== "boolean") {
     throw new TypeError("semantic prepared playback mode must be a boolean");
-  }
-  if (preparedPlayback && callbackSessionId != null) {
-    throw new Error("prepared playback requires a source without Python callbacks");
   }
   return Object.freeze({
     contextId: descriptor.context_id,
