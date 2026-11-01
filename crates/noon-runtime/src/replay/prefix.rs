@@ -587,6 +587,23 @@ impl SceneInstance {
         )
     }
 
+    /// Whether completed retained history has an open interval. This performs
+    /// no projection allocation; bootstrap still applies domain and byte caps.
+    #[doc(hidden)]
+    pub fn has_prefix_interval(&self) -> Result<bool, PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        if let Some(error) = history.failure {
+            return Err(error.into());
+        }
+        if history.end.is_some() || history.applied != history.revisions.len() {
+            return Err(PrefixError::NotReady);
+        }
+        Ok(self.frame.time > history.start)
+    }
+
     fn create_prefix_projection_for_state(
         &self,
         resource_budget_bytes: usize,

@@ -46,6 +46,26 @@ impl SemanticExecutionPlayer {
         Ok(segment)
     }
 
+    pub(crate) fn prepare_initial_source_segment(&mut self) -> Result<bool, AuthoringFailure> {
+        self.live_prepare_segment()?;
+        self.session
+            .has_prepared_prefix_interval(self.completed_prepared_boundary()?)
+            .map_err(prefix_error)
+    }
+
+    pub(crate) fn create_finished_static_reader(
+        &mut self,
+    ) -> Result<PrefixReader, AuthoringFailure> {
+        let boundary = self.completed_prepared_boundary()?;
+        if boundary.end_time() != 0.0 || self.session.finite_timeline_end_time() != Some(0.0) {
+            return Err(prefix_error(noon::PrefixError::NotReady));
+        }
+        self.seal_prepared_source()?;
+        self.session
+            .create_finished_prepared_reader()
+            .map_err(prefix_error)
+    }
+
     pub(crate) fn create_prepared_prefix(
         &self,
     ) -> Result<(PrefixPublisher, PrefixReader), AuthoringFailure> {

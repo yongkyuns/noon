@@ -22,8 +22,6 @@ pub enum PreparedSourceError<E> {
     Replay(ReplayError),
     Prefix(PrefixError),
     Program(LiveProgramError<E>),
-    /// This slice needs a nonzero readable prefix; do not invent source time.
-    NoPreparedInterval,
     /// A headless prefix cannot admit externally prepared GPU resources.
     ResourcePreparationUnavailable,
     /// Invalid demand is rejected before invoking source code or changing state.
@@ -39,9 +37,6 @@ impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
             Self::InvalidPreparationTarget(time) => write!(f, "invalid preparation target {time}"),
             Self::ResourcePreparationUnavailable => {
                 f.write_str("external shader preparation requires a rendering host")
-            }
-            Self::NoPreparedInterval => {
-                f.write_str("prepared source finished without a readable interval")
             }
         }
     }
@@ -235,23 +230,34 @@ impl<C: LiveContinuation> PreparedSource<C> {
             return Err(PreparedSourceError::ResourcePreparationUnavailable);
         }
         if status == LiveProgramStatus::Finished {
-            let boundary = self
-                .boundary
-                .ok_or(PreparedSourceError::NoPreparedInterval)?;
-            let publisher = self
-                .publisher
-                .as_mut()
-                .ok_or(PreparedSourceError::NoPreparedInterval)?;
+            if self.publisher.is_none()
+                && program.session().finite_timeline_end_time()
+                    != Some(program.session().frame().time)
+            {
+                return Err(PreparedSourceError::Prefix(PrefixError::NotReady));
+            }
             program
                 .scene
                 .owned_execution_mut()
                 .seal_replay()
                 .map_err(PreparedSourceError::Replay)?;
-            let batch = program
-                .session()
-                .finish_prepared_prefix(boundary, publisher)
-                .map_err(PreparedSourceError::Prefix)?;
-            self.pending = Some(Pending::Batch(Box::new(batch)));
+            self.pending = Some(match self.publisher.as_mut() {
+                Some(publisher) => Pending::Batch(Box::new(
+                    program
+                        .session()
+                        .finish_prepared_prefix(
+                            self.boundary.expect("publisher has a completed boundary"),
+                            publisher,
+                        )
+                        .map_err(PreparedSourceError::Prefix)?,
+                )),
+                None => Pending::Reader(Box::new(
+                    program
+                        .session()
+                        .create_finished_prepared_reader()
+                        .map_err(PreparedSourceError::Prefix)?,
+                )),
+            });
             self.phase = PreparedSourceStatus::Finished;
             self.program = None;
             self.publisher = None;
