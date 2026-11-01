@@ -367,9 +367,7 @@ export class AuthoringExecutionClient {
   async restart() {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();
-    if (this.#preparedPlayback) {
-      throw new Error("prepared playback receiver recovery requires a fresh Run");
-    }
+    this.#retirePointerInput();
     const ready = await this.#runTransition(async () => {
       const player = this.#player;
       const mode = this.#mode;

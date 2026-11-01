@@ -1203,7 +1203,7 @@ function isContinuationControl(request) {
     (request.type === "release_semantic_execution" ||
       request.type === "cancel_semantic_continuation" ||
       (request.type === "attach_semantic_execution" &&
-       request.continuationGeneration !== undefined));
+       (request.continuationGeneration !== undefined || request.replaceExistingEndpoint === true)));
 }
 
 async function handleContinuationControl(request) {
@@ -1213,7 +1213,7 @@ async function handleContinuationControl(request) {
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
     if (request.type === "attach_semantic_execution") {
-      await attachSemanticExecutionRequest(request, true, pyodide);
+      await attachSemanticExecutionRequest(request, request.continuationGeneration !== undefined, pyodide);
       post("semantic_execution_attached", { requestId });
       return;
     }
@@ -1252,7 +1252,7 @@ async function handleContinuationControl(request) {
     }
     failContinuation(continuation, new Error(request.reason));
     entry.released = true;
-    continuation.endpoint?.stop();
+    for (const endpoint of [...entry.endpoints]) endpoint.stop();
     if (continuation.preparedPlayback && continuation.endpoint === null) {
       retireSemanticContext(request.contextId, entry);
     }
@@ -1359,6 +1359,10 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
   const entry = semanticContexts.get(request.contextId);
   if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
   const continuation = activeAuthoringRun?.continuation;
+  if (entry.preparedPlayback && request.replaceExistingEndpoint === true) {
+    if (continuationOnly || request.sourceHandoff === true) throw new Error("receiver replacement cannot restart source continuation attachment");
+    return replacePreparedSemanticReceiver(request, entry);
+  }
   if (continuationOnly) {
     if (!continuation || continuation.contextId !== request.contextId ||
         continuation.generation !== request.continuationGeneration ||
@@ -1527,23 +1531,10 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
       continuation.preparedReady.resolve();
       return;
     }
-    endpoint = await attachSemanticEngine(entry.context, request, () => {
-      // This reader is single-use. A control-port stop owns retirement even if
-      // a concurrent explicit release arrived while the source was still active.
-      entry.endpoints.delete(endpoint);
-      continuation.preparedPlayer = null;
-      if (continuation.observedExecution) { retireSemanticContext(request.contextId, entry); return; }
-      entry.released = true;
-      failContinuation(continuation, new Error("prepared playback endpoint stopped"));
-      retireSemanticContext(request.contextId, entry);
-    }, null, null, null, null, null, {
-      player: continuation.preparedPlayer,
-      wakeSource: () => continuation.preparedDriver.wake(),
-      generation: continuation.generation,
-    });
-    entry.endpoints.add(endpoint);
+    const receiver = createPreparedReceiver(request, entry, continuation, continuation.preparedPlayer);
+    endpoint = await attachPreparedReceiver(request, entry, receiver, false);
     requirePreparedContinuation(run, entry.context);
-    continuation.endpoint = endpoint;
+    continuation.endpoint = receiver;
     continuation.preparedReady.resolve();
   } catch (error) {
     entry.released = true;
@@ -1578,12 +1569,9 @@ async function attachFinishedPreparedSemanticExecution(request, entry, pyodide) 
       if (entry.released) throw new Error("completed static source was released during attachment");
       return;
     }
-    endpoint = await attachSemanticEngine(entry.context, request, () => {
-      player = null; // The endpoint already owns cleanup of this WASM handle.
-      entry.released = true;
-      entry.endpoints.delete(endpoint);
-      retireSemanticContext(request.contextId, entry);
-    }, null, null, null, null, null, { player, wakeSource() {} });
+    const receiver = createPreparedReceiver(request, entry, null, player);
+    player = null; // The receiver now owns cleanup, including failed setup.
+    endpoint = await attachPreparedReceiver(request, entry, receiver, false);
     if (entry.released) throw new Error("completed prepared source was released during attachment");
     entry.endpoints.add(endpoint);
   } catch (error) {
@@ -1596,6 +1584,97 @@ async function attachFinishedPreparedSemanticExecution(request, entry, pyodide) 
     throw error;
   } finally {
     entry.endpoints.delete(pendingAttachment);
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
+  }
+}
+
+// One lifecycle handle around the same Rust reader. No source, history, clock
+// or resource inventory is reconstructed in JavaScript. While detached it also
+// keeps registry retirement behind any pending source delivery/renderer setup.
+function createPreparedReceiver(request, entry, continuation, player) {
+  const receiver = {
+    endpoint: null, continuation, replacing: false, attaching: false, stopRequested: false, sourceRequired: false,
+    prepared: { player, generation: continuation?.generation,
+      wakeSource: () => continuation?.preparedDriver.wake() },
+    sourcePrefixDelivered() { receiver.endpoint?.sourcePrefixDelivered(); },
+    sourceExecutionRequired() {
+      receiver.sourceRequired = true;
+      receiver.endpoint?.sourceExecutionRequired();
+    },
+    stop() {
+      if (receiver.attaching) { receiver.stopRequested = true; return; }
+      if (receiver.endpoint) { receiver.endpoint.stop(); return; }
+      const owned = receiver.prepared.player;
+      if (!owned) return;
+      receiver.finish(null);
+      if (!fatalAuthoringFailure) {
+        invokePreparedEngine(() => owned.stopSourcePreparation());
+        invokePreparedEngine(() => owned.free());
+      }
+    },
+    finish(retained) {
+      entry.endpoints.delete(receiver.endpoint);
+      receiver.endpoint = null;
+      if (retained) {
+        receiver.prepared.player = retained;
+        entry.endpoints.add(receiver);
+        return;
+      }
+      receiver.prepared.player = null;
+      entry.endpoints.delete(receiver);
+      if (entry.preparedReceiver === receiver) entry.preparedReceiver = null;
+      if (continuation) continuation.preparedPlayer = null;
+      if (!continuation?.observedExecution) {
+        entry.released = true;
+        if (continuation) failContinuation(continuation, new Error("prepared playback endpoint stopped"));
+      }
+      retireSemanticContext(request.contextId, entry);
+    },
+  };
+  entry.preparedReceiver = receiver;
+  entry.endpoints.add(receiver);
+  return receiver;
+}
+
+async function attachPreparedReceiver(request, entry, receiver, recovering) {
+  receiver.attaching = true;
+  let endpoint;
+  try {
+    endpoint = await attachSemanticEngine(entry.context, request,
+      retained => receiver.finish(retained), null, null, null, null, null,
+      { ...receiver.prepared, retainOnSetupFailure: recovering });
+  } finally { receiver.attaching = false; }
+  receiver.endpoint = endpoint;
+  entry.endpoints.delete(receiver);
+  entry.endpoints.add(endpoint);
+  if (entry.released || receiver.stopRequested || entry.preparedReceiver !== receiver) {
+    endpoint.stop();
+    throw new Error("prepared receiver was retired during attachment");
+  }
+  if (receiver.continuation) receiver.continuation.endpoint = receiver;
+  if (receiver.sourceRequired) endpoint.sourceExecutionRequired();
+  return endpoint;
+}
+
+async function replacePreparedSemanticReceiver(request, entry) {
+  validatePreparedTransport(request);
+  const receiver = entry.preparedReceiver;
+  if (!receiver?.prepared.player || receiver.continuation?.observedExecution ||
+      receiver.replacing || request.callbackSessionId != null || request.pacing !== "realtime") {
+    throw new Error("receiver replacement requires its original retained prepared reader");
+  }
+  receiver.replacing = true;
+  try {
+    // Rust rejects reused/older namespaces before the old endpoint is detached.
+    invokePreparedEngine(() => receiver.prepared.player.resetReceiver(request.session));
+    receiver.endpoint?.detachPreparedReceiver();
+    const initiallyPaused = !invokePreparedEngine(() => receiver.prepared.player.preparedPlaying());
+    await attachPreparedReceiver({ ...request, initiallyPaused }, entry, receiver, true);
+  } catch (error) {
+    if ((entry.released || receiver.stopRequested) && !fatalAuthoringFailure) receiver.stop();
+    throw error;
+  } finally {
+    receiver.replacing = false;
     if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
   }
 }

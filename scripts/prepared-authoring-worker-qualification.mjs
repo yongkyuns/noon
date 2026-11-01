@@ -60,13 +60,31 @@ function changedPixels(a, b) {
 
 async function start(page, source, transportMode, cancelBeforeAttach = false, evidence = report) {
   await installPreparedSourceCounterProbe(page.context(), "prepared.qualification", evidence);
+  await page.addInitScript(() => {
+    globalThis.preparedRenderWorkers = [];
+    const NativeWorker = Worker;
+    globalThis.Worker = class extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        this.qualificationRenderer = options?.name === "noon-render";
+        if (this.qualificationRenderer) preparedRenderWorkers.push(this);
+      }
+      postMessage(message, transfer) {
+        if (this.qualificationRenderer && globalThis.failPreparedReceiverSetup && message.type === "start_engine") {
+          globalThis.failPreparedReceiverSetup = false;
+          return super.postMessage({ ...message, type: "qualification_recovery_setup_failure" }, transfer);
+        }
+        return super.postMessage(message, transfer);
+      }
+    };
+  });
   await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
   await page.evaluate(async ({ source, transportMode, cancelBeforeAttach }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
     const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
     const worker = new Worker("./python-worker.js", { type: "module" });
-    const host = { events: [], errors: [], registration: null, outcome: null, attached: false };
+    const host = { events: [], errors: [], failures: [], registration: null, outcome: null, attached: false };
     globalThis.preparedAuthoring = host;
     // Observe explicit user-program side effects without altering source control.
     worker.addEventListener("message", event => {
@@ -79,7 +97,7 @@ async function start(page, source, transportMode, cancelBeforeAttach = false, ev
     canvas.width = 800; canvas.height = 400; canvas.style.width = "800px"; canvas.style.height = "400px";
     host.execution = new AuthoringExecutionClient(canvas, {
       inspectionZoom: true,
-      onError: error => host.errors.push(String(error)),
+      onError: (error, owner) => { host.errors.push(String(error)); host.failures.push({ owner, message: String(error) }); },
       onRecoverableError: error => host.errors.push(String(error)),
     });
     host.run = host.authoring.run(source, {}, {
@@ -190,6 +208,28 @@ try {
         await page.waitForTimeout(950);
         assert.equal(changedPixels(baseline, await capture("click-restored")), 0);
         entry.checks.push("navigation-resumes-same-source", "historical-click-autonomous-wakes", "click-restores-exact-pixels");
+        const recover = async name => {
+          const before = await state();
+          const result = await page.evaluate(async () => {
+            const canvas = document.querySelector("#scene");
+            const ready = await preparedAuthoring.execution.restart();
+            return { canvasReplaced: canvas !== document.querySelector("#scene"), engine: ready.engine };
+          });
+          assert.equal(result.canvasReplaced, true);
+          assert.equal(result.engine.preparedPlayback, true);
+          await page.waitForFunction(async () => {
+            const m = (await preparedAuthoring.execution.metrics()).metrics;
+            return m.ready && m.presentedFrames > 0 && !m.needsPresent && m.bufferedDeltas === 0;
+          });
+          const after = await state();
+          assert.equal(after.time, before.time); assert.equal(after.preparedFrontier, before.preparedFrontier);
+          assert.equal(after.durationSeconds, before.durationSeconds); assert.equal(after.playing, before.playing);
+          assert.deepEqual(after.events, before.events);
+          assert.equal(changedPixels(baseline, await capture(name)), 0);
+          return { before, after, ...result };
+        };
+        entry.openRecovery = await recover("recovered-open");
+        entry.checks.push("normal-client-replaces-open-receiver-without-source-reexecution");
 
         const rejected = await page.evaluate(async () => {
           const before = await preparedAuthoring.execution.state();
@@ -222,13 +262,22 @@ try {
         await waitState(s => s.time === 0.5 && s.playing === false);
         assert.equal(changedPixels(baseline, await capture("rewind")), 0);
         entry.checks.push("controls-terminal-slider-and-rewind");
-        const recovery = await page.evaluate(async () => {
-          try { await preparedAuthoring.execution.restart(); return null; } catch (error) { return String(error); }
-        });
-        assert.match(recovery, /fresh Run/); assert.equal((await state()).time, 0.5);
-        assert.equal(changedPixels(baseline, await capture("rejected-recovery")), 0);
+        entry.completedRecovery = await recover("recovered-completed");
+        assert.equal((await state()).time, 0.5);
+        await page.evaluate(() => preparedRenderWorkers.at(-1).postMessage({
+          channel: "noon.render", protocolVersion: 1, type: "qualification_renderer_failure",
+        }));
+        await page.waitForFunction(() => preparedAuthoring.failures.some(f => f.owner === "render") &&
+          preparedAuthoring.failures.some(f => f.owner === "engine"));
+        const failure = await page.evaluate(() => ({ failures: preparedAuthoring.failures,
+          errors: preparedAuthoring.errors.splice(0) }));
+        assert.ok(failure.errors.length >= 2);
+        assert.ok(failure.errors.every(error => /qualification_renderer_failure/.test(error)), JSON.stringify(failure));
+        entry.renderFailure = failure;
+        entry.failedReceiverRecovery = await recover("recovered-render-error");
+        entry.checks.push("real-render-controller-error-retains-reader", "failed-receiver-replaced-without-source-reexecution");
         assert.deepEqual((await state()).errors, []); assert.deepEqual(pageErrors, []);
-        entry.checks.push("autonomous-playback-refills", "source-statements-execute-once", "terminal-adoption-keeps-reader", "exact-terminal-and-rewind", "recovery-rejects-before-teardown");
+        entry.checks.push("autonomous-playback-refills", "source-statements-execute-once", "terminal-adoption-keeps-reader", "exact-terminal-and-rewind", "completed-history-recovery-keeps-original-reader");
         entry.status = "passed";
       } catch (error) {
         entry.error = String(error.stack ?? error);
@@ -243,7 +292,7 @@ try {
   // Failure and bootstrap cancellation use the same actual worker, with no
   // callback/fixture substitute. Backends/transports are covered above.
   browser = await playwright.chromium.launch(launchOptions("webgl"));
-  for (const mode of ["source-error", "cancel-bootstrap", "cancel-waiting"]) {
+  for (const mode of ["source-error", "cancel-bootstrap", "cancel-waiting", "cancel-recovery", "fail-recovery-setup"]) {
     const entry = { mode, status: "running", checks: [] }; report.cases.push(entry);
     const page = await browser.newPage(); page.setDefaultTimeout(180_000); await cache.install(page.context());
     try {
@@ -252,12 +301,53 @@ try {
         await page.waitForFunction(() => preparedAuthoring.attached || preparedAuthoring.outcome?.status === "failed");
         assert.equal(await page.evaluate(() => preparedAuthoring.attached), true);
         if (mode === "source-error") await page.evaluate(() => preparedAuthoring.execution.seek(0.5));
-        else await page.evaluate(() => preparedAuthoring.authoring.cancelSemanticContinuation(preparedAuthoring.registration.semanticExecution.contextId, preparedAuthoring.registration.generation, "cancel demand-paused source"));
+        else if (mode === "fail-recovery-setup") {
+          const settled = async () => page.waitForFunction(async () => {
+            const m = (await preparedAuthoring.execution.metrics()).metrics;
+            return m.ready && m.presentedFrames > 0 && !m.needsPresent && m.bufferedDeltas === 0;
+          });
+          await settled();
+          const before = await page.locator("#scene").screenshot();
+          const failure = await page.evaluate(async () => {
+            globalThis.failPreparedReceiverSetup = true;
+            try { await preparedAuthoring.execution.restart(); return null; }
+            catch (error) { return String(error); }
+          });
+          assert.match(failure, /qualification_recovery_setup_failure/);
+          assert.equal(await page.evaluate(() => preparedAuthoring.outcome), null);
+          await page.evaluate(() => preparedAuthoring.execution.restart());
+          await settled();
+          const after = await page.locator("#scene").screenshot();
+          assert.equal(changedPixels(PNG.sync.read(before), PNG.sync.read(after)), 0);
+          await writeFile(path.join(output, "failed-recovery-setup-before.png"), before);
+          await writeFile(path.join(output, "failed-recovery-setup-retried.png"), after);
+          entry.recoveryFailure = failure;
+          entry.checks.push("failed-normal-renderer-setup-retains-reader", "newer-receiver-retry-restores-exact-picture");
+          await page.evaluate(() => preparedAuthoring.authoring.cancelSemanticContinuation(
+            preparedAuthoring.registration.semanticExecution.contextId, preparedAuthoring.registration.generation, "cancel after receiver retry"));
+        } else if (mode === "cancel-recovery") {
+          let unblock, requested;
+          const gate = new Promise(resolve => { unblock = resolve; });
+          const seen = new Promise(resolve => { requested = resolve; });
+          await page.route("**/execution-render-worker.js", async route => {
+            const response = await route.fetch(); requested(); await gate;
+            await route.fulfill({ response }).catch(() => {}); // Termination can cancel this request.
+          });
+          await page.evaluate(() => {
+            preparedAuthoring.recovering = preparedAuthoring.execution.restart().then(
+              () => ({ status: "unexpected success" }), error => ({ status: "cancelled", error: String(error) }));
+          });
+          await seen;
+          await page.evaluate(() => preparedAuthoring.execution.terminate()); unblock();
+          const recovery = await page.evaluate(() => preparedAuthoring.recovering);
+          assert.equal(recovery.status, "cancelled"); entry.recovery = recovery;
+          entry.checks.push("termination-before-receiver-attachment-retires-original-source");
+        } else await page.evaluate(() => preparedAuthoring.authoring.cancelSemanticContinuation(preparedAuthoring.registration.semanticExecution.contextId, preparedAuthoring.registration.generation, "cancel demand-paused source"));
       }
       await page.waitForFunction(() => preparedAuthoring.outcome !== null);
       const outcome = await page.evaluate(() => preparedAuthoring.outcome);
       assert.equal(outcome.status, "failed");
-      assert.match(outcome.error, mode === "source-error" ? /intentional prepared production failure/ : /cancel/i);
+      assert.match(outcome.error, mode === "source-error" ? /intentional prepared production failure/ : mode === "cancel-recovery" ? /cancel|retired/i : /cancel/i);
       assert.deepEqual(await page.evaluate(() => preparedAuthoring.events), mode === "source-error" ? ["start", "first"] : ["start"]);
       if (mode === "source-error") {
         const status = await page.evaluate(() => preparedAuthoring.execution.state());
