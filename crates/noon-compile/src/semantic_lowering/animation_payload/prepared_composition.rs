@@ -101,6 +101,10 @@ impl PreparedSemanticAnimationActivation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
+    PhaseReveal {
+        animation: SemanticTransactionNodeRef,
+        error: super::PhaseRevealLoweringError,
+    },
     SampledMotion {
         animation: SemanticTransactionNodeRef,
         error: super::SampledMotionLoweringError,
@@ -430,6 +434,7 @@ where
                     | PreparedSemanticScheduledAnimationPayload::GlowPulse { .. }
                     | PreparedSemanticScheduledAnimationPayload::Dissolve { .. }
                     | PreparedSemanticScheduledAnimationPayload::SampledMotion
+                    | PreparedSemanticScheduledAnimationPayload::PhaseReveal
             );
         captures.begin_leaf(
             leaf,
@@ -603,6 +608,30 @@ where
                 error,
             }
         })?;
+        if leaf.payload == PreparedSemanticScheduledAnimationPayload::PhaseReveal {
+            let error = |error| PreparedSemanticAnimationLoweringError::PhaseReveal {
+                animation: leaf.animation,
+                error,
+            };
+            if has_host_updaters {
+                return Err(error(super::PhaseRevealLoweringError::UnsupportedTarget));
+            }
+            let phase_map =
+                super::phase_reveal::prepared_data(prepared, leaf.animation).map_err(error)?;
+            let path = super::phase_reveal::retained_path(source, prepared.store())
+                .or_else(|| prepared.pending_geometry_path(leaf.target).ok())
+                .ok_or_else(|| error(super::PhaseRevealLoweringError::UnsupportedTarget))?;
+            let channel = super::phase_reveal::channel(
+                prepared.store(),
+                source,
+                path,
+                phase_map,
+                leaf.options,
+            )
+            .map_err(error)?;
+            push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+            continue;
+        }
         if leaf.payload == PreparedSemanticScheduledAnimationPayload::SampledMotion {
             let error = |error| PreparedSemanticAnimationLoweringError::SampledMotion {
                 animation: leaf.animation,
@@ -798,6 +827,9 @@ where
         let channel = match leaf.payload {
             PreparedSemanticScheduledAnimationPayload::SampledMotion => {
                 unreachable!("sampled motion lowered through the shared affine channels")
+            }
+            PreparedSemanticScheduledAnimationPayload::PhaseReveal => {
+                unreachable!("phase reveal lowered through the retained reveal channel")
             }
             PreparedSemanticScheduledAnimationPayload::MoveAlongPath { .. } => {
                 unreachable!("MoveAlongPath was lowered through its activation snapshot helper")
@@ -1437,6 +1469,19 @@ where
         push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
     }
 
+    if let Some(animation) = super::phase_reveal::content_conflict(tracks.iter().map(|track| {
+        (
+            track.execution_object_id,
+            track.animation,
+            track.property,
+            &track.values,
+        )
+    })) {
+        return Err(PreparedSemanticAnimationLoweringError::PhaseReveal {
+            animation,
+            error: super::PhaseRevealLoweringError::ContentDriverConflict,
+        });
+    }
     let family_animations = super::text_write::lower_prepared_text_glyph_animations_with_tracks(
         prepared.store(),
         &schedule,
@@ -1712,6 +1757,7 @@ fn push_prepared_channel(
             &leaf.payload,
             PreparedSemanticScheduledAnimationPayload::TransformTo { .. }
                 | PreparedSemanticScheduledAnimationPayload::SampledMotion
+                | PreparedSemanticScheduledAnimationPayload::PhaseReveal
         );
     tracks.push(PreparedSemanticAnimationTrack {
         animation: leaf.animation,

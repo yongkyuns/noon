@@ -111,6 +111,7 @@ impl<'a> TransactionNodeCatalog<'a> {
         &self,
         node: SemanticTransactionNodeRef,
         state: &crate::SemanticObjectState,
+        max_commands: usize,
     ) -> bool {
         if !state.signal_bindings().is_empty() {
             return false;
@@ -131,7 +132,7 @@ impl<'a> TransactionNodeCatalog<'a> {
             .and_then(crate::StoredGeometry::resource_handle)
             .and_then(|handle| self.store.geometry_resources().get(handle))
             .is_some_and(|resource| {
-                matches!(resource, crate::GeometryResource::VectorPath(path) if path.has_drawable_segments() && path.retained_command_count() <= crate::MAX_PATH_MOTION_COMMANDS)
+                matches!(resource, crate::GeometryResource::VectorPath(path) if path.has_drawable_segments() && path.retained_command_count() <= max_commands)
             })
     }
 

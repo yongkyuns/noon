@@ -1891,6 +1891,7 @@ _PUBLIC_EXPORTS = {
     "Transform": "_manim_animate",
     "MoveAlongPath": "_manim_animate",
     "SampledMotion": "_noon_sampled_motion",
+    "PhaseReveal": "_noon_phase_reveal",
     "ReplacementTransform": "_manim_animate",
     "TransformFromCopy": "_manim_animate",
     "TransformMatchingShapes": "_manim_animate",

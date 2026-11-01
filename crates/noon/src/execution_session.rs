@@ -357,6 +357,11 @@ pub(crate) enum SemanticCompositionRequest {
         target: SemanticNodeId,
         options: AnimationOptions,
     },
+    PhaseReveal {
+        target: SemanticNodeId,
+        phase_map: std::sync::Arc<noon_core::RevealPhaseMap>,
+        options: AnimationOptions,
+    },
     Uncreate {
         target: SemanticNodeId,
         options: AnimationOptions,
@@ -410,6 +415,7 @@ impl SemanticCompositionRequest {
             | Self::Add { target, .. }
             | Self::Fade { target, .. }
             | Self::Create { target, .. }
+            | Self::PhaseReveal { target, .. }
             | Self::Uncreate { target, .. }
             | Self::AffineLifecycle { target, .. } => Some(*target),
             Self::FocusOn { .. }
@@ -3244,6 +3250,16 @@ impl ExecutionSession {
                 }
                 Ok(declaration.create_create_animation(*target, *options))
             }
+            SemanticCompositionRequest::PhaseReveal {
+                target,
+                phase_map,
+                options,
+            } => {
+                if self.require_uncreate_target(store, root, *target)? {
+                    admit(*target, admitted)?;
+                }
+                Ok(declaration.create_phase_reveal_animation(*target, phase_map.clone(), *options))
+            }
             SemanticCompositionRequest::Uncreate { target, options } => {
                 if self.require_uncreate_target(store, root, *target)? {
                     admit(*target, admitted)?;
@@ -4407,6 +4423,51 @@ impl ExecutionSession {
             self.runtime.frame().time,
             play_options,
         )?;
+        for leaf in schedule
+            .leaves()
+            .iter()
+            .filter(|leaf| leaf.payload == PreparedSemanticScheduledAnimationPayload::PhaseReveal)
+        {
+            let target = leaf.target.existing();
+            if lifecycle.is_none()
+                && (leaf.options.remover
+                    || !target.is_some_and(|target| self.reachability.is_object_reachable(target)))
+            {
+                return Err(ExecutionSessionAnimationError::InvalidComposition(
+                    "PhaseReveal introduction/removal requires a scene root".into(),
+                ));
+            }
+            if let Some(target) = target {
+                if self.lifecycle_target_has_pending_updaters(prepared.store(), target) {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "PhaseReveal requires a retained path without active host updaters".into(),
+                    ));
+                }
+                if let Some(object) = self.execution_index.execution_object_id(target) {
+                    let overridden =
+                        self.runtime
+                            .frame_index_for_object(object)
+                            .is_some_and(|index| {
+                                let frame = self.runtime.frame();
+                                frame.render_geometries[index].is_some()
+                                    || frame.render_transforms[index].is_some()
+                                    || frame.morphs[index] != 0.0
+                                    || frame.family_animations[index].is_some()
+                            });
+                    if self.runtime.effective_content_lease(object).is_some()
+                        || self.runtime.object_has_current_or_future_content_track(
+                            object,
+                            self.runtime.frame().time,
+                        )
+                        || overridden
+                    {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "PhaseReveal requires the current static retained path without effective content or morph overrides".into(),
+                        ));
+                    }
+                }
+            }
+        }
         if lifecycle.is_none() {
             if schedule.leaves().iter().any(|leaf| {
                 matches!(

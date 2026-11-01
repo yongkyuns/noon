@@ -842,6 +842,10 @@ pub enum TrackValues {
         from: f32,
         to: f32,
     },
+    /// Checked authored phase knots mapped onto the retained path's curve index.
+    PhaseReveal {
+        phase_map: Arc<crate::RevealPhaseMap>,
+    },
     Vec2 {
         from: Vec2,
         to: Vec2,
@@ -903,6 +907,12 @@ pub enum TrackValues {
 }
 
 impl TrackValues {
+    pub fn reveal_phase_map(&self) -> Option<&Arc<crate::RevealPhaseMap>> {
+        match self {
+            Self::PhaseReveal { phase_map } => Some(phase_map),
+            _ => None,
+        }
+    }
     /// Immutable sampled pose allocation, shared by its ordinary affine channels.
     pub fn sampled_motion_plan(&self) -> Option<&Arc<crate::SampledMotionPlan>> {
         match self {
@@ -940,7 +950,9 @@ impl TrackValues {
             Self::Effect { .. } => ValueKind::Effect,
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
-            Self::Scalar { .. } | Self::SampledRotation { .. } => ValueKind::Scalar,
+            Self::Scalar { .. } | Self::SampledRotation { .. } | Self::PhaseReveal { .. } => {
+                ValueKind::Scalar
+            }
             Self::Emission { .. } => ValueKind::Emission,
             Self::Vec2 { .. }
             | Self::ArcVec2 { .. }
@@ -960,6 +972,9 @@ impl TrackValues {
         property: Property,
     ) -> Result<(), TimelineError> {
         match self {
+            Self::PhaseReveal { .. } if property != Property::Reveal => {
+                Err(TimelineError::InvalidPhaseRevealValues(property))
+            }
             Self::SampledPosition { .. } if property != Property::Position => {
                 Err(TimelineError::InvalidSampledMotionValues(property))
             }
@@ -1221,6 +1236,8 @@ pub struct TrackDefinition {
 pub enum TimelineError {
     InvalidSampledMotionValues(Property),
     UnsupportedSampledMotionRateFunction(RateFunction),
+    InvalidPhaseRevealValues(Property),
+    UnsupportedPhaseRevealRateFunction(RateFunction),
     InvalidPaintValues,
     UnsupportedPaintRateFunction(RateFunction),
     InvalidEffectValues(Property),
@@ -1286,6 +1303,8 @@ impl std::fmt::Display for TimelineError {
         match self {
             Self::InvalidSampledMotionValues(property) => write!(formatter, "sampled rigid motion cannot drive {property:?}"),
             Self::UnsupportedSampledMotionRateFunction(rate) => write!(formatter, "sampled motion requires a leaf rate bounded to [0, 1], got {rate:?}"),
+            Self::InvalidPhaseRevealValues(property) => write!(formatter, "phase-mapped reveal cannot drive {property:?}"),
+            Self::UnsupportedPhaseRevealRateFunction(rate) => write!(formatter, "phase-mapped reveal requires a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidPaintValues => formatter.write_str("continuous paint track is outside the finite planar fill profile"),
             Self::UnsupportedPaintRateFunction(rate) => write!(formatter, "continuous paint tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectValues(property) => write!(formatter, "invalid or incompatible effect endpoints for {property:?}"),
@@ -1434,6 +1453,13 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     track
         .values
         .validate_numeric_values(track.object, track.property)?;
+    if matches!(track.values, TrackValues::PhaseReveal { .. })
+        && !track.timing.easing.preserves_unit_interval()
+    {
+        return Err(TimelineError::UnsupportedPhaseRevealRateFunction(
+            track.timing.easing,
+        ));
+    }
     if matches!(
         track.values,
         TrackValues::SampledPosition { .. } | TrackValues::SampledRotation { .. }

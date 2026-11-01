@@ -39,6 +39,10 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         motion: std::sync::Arc<crate::SampledMotionData>,
     },
+    PhaseReveal {
+        target: SemanticTransactionNodeRef,
+        phase_map: std::sync::Arc<crate::RevealPhaseMap>,
+    },
     TransformTo {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
@@ -143,7 +147,9 @@ impl SemanticTransactionAnimationIntent {
                 _ => Some([Some(*target), None, None]),
             },
             Self::MoveAlongPath { target, path } => Some([Some(*target), Some(*path), None]),
-            Self::SampledMotion { target, .. } => Some([Some(*target), None, None]),
+            Self::SampledMotion { target, .. } | Self::PhaseReveal { target, .. } => {
+                Some([Some(*target), None, None])
+            }
             Self::TransformTo {
                 target,
                 target_state,
@@ -189,6 +195,7 @@ impl SemanticTransactionAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::SampledMotion { .. }
+            | Self::PhaseReveal { .. }
             | Self::TransformTo { .. }
             | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
@@ -274,6 +281,12 @@ impl SemanticTransactionAnimation {
                 SemanticTransactionAnimationIntent::SampledMotion {
                     target: (*target).into(),
                     motion: motion.clone(),
+                }
+            }
+            SemanticAnimationIntent::PhaseReveal { target, phase_map } => {
+                SemanticTransactionAnimationIntent::PhaseReveal {
+                    target: (*target).into(),
+                    phase_map: phase_map.clone(),
                 }
             }
             SemanticAnimationIntent::TransformTo {
@@ -468,6 +481,12 @@ impl SemanticTransactionAnimation {
                 SemanticAnimationIntent::SampledMotion {
                     target: resolve_node_ref(*target, committed),
                     motion: motion.clone(),
+                }
+            }
+            SemanticTransactionAnimationIntent::PhaseReveal { target, phase_map } => {
+                SemanticAnimationIntent::PhaseReveal {
+                    target: resolve_node_ref(*target, committed),
+                    phase_map: phase_map.clone(),
                 }
             }
             SemanticTransactionAnimationIntent::TransformTo {
@@ -739,6 +758,14 @@ pub(super) fn preflight_transaction_animation(
         SemanticTransactionAnimationIntent::SampledMotion { target, .. } => {
             catalog.ensure_animation_target(*target, index)?;
         }
+        SemanticTransactionAnimationIntent::PhaseReveal { target, .. } => {
+            catalog.ensure_animation_target(*target, index)?;
+            let state =
+                catalog.staged_object_state(staged_objects, staged_object_order, *target, index)?;
+            if !catalog.is_static_vector_path(*target, state, crate::MAX_REVEAL_PHASE_KEYS + 1) {
+                return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
+            }
+        }
         SemanticTransactionAnimationIntent::MoveAlongPath { target, path } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.ensure_animation_target(*path, index)?;
@@ -750,7 +777,11 @@ pub(super) fn preflight_transaction_animation(
                 .clone();
             if target == path
                 || target_state.content.image().is_some()
-                || !catalog.is_static_vector_path(*path, &path_state)
+                || !catalog.is_static_vector_path(
+                    *path,
+                    &path_state,
+                    crate::MAX_PATH_MOTION_COMMANDS,
+                )
             {
                 return Err(SemanticMutationTransactionError::InvalidObjectPropertyTrack { index });
             }
@@ -1162,7 +1193,7 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::MoveAlongPath { target, path } => store
             .insert_semantic_move_along_path_animation(*target, *path, options)
             .expect("preflighted MoveAlongPath insertion must remain valid while transaction owns the store"),
-        SemanticAnimationIntent::SampledMotion { .. } => store.insert_semantic_animation_state(state),
+        SemanticAnimationIntent::SampledMotion { .. } | SemanticAnimationIntent::PhaseReveal { .. } => store.insert_semantic_animation_state(state),
         SemanticAnimationIntent::TransformTo { .. } | SemanticAnimationIntent::EffectTargetTo { .. } => {
             // Final candidate correspondence was captured before publication.
             // All object/options references are covered by transaction preflight.

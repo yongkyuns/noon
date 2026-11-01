@@ -385,6 +385,12 @@ pub enum AnimationCompositionRequest<'a> {
         target: &'a Mobject,
         options: AnimationOptions,
     },
+    /// Introduce/reveal a retained path with explicit phase at each curve boundary.
+    PhaseReveal {
+        target: &'a Mobject,
+        phase_map: std::sync::Arc<noon_core::RevealPhaseMap>,
+        options: AnimationOptions,
+    },
     Uncreate {
         target: &'a Mobject,
         options: AnimationOptions,
@@ -2807,6 +2813,18 @@ impl<'a> LiveSession<'a> {
                 self.require_mobject(target)?;
                 Request::Create {
                     target: target.node_id(),
+                    options: *options,
+                }
+            }
+            AnimationCompositionRequest::PhaseReveal {
+                target,
+                phase_map,
+                options,
+            } => {
+                self.require_mobject(target)?;
+                Request::PhaseReveal {
+                    target: target.node_id(),
+                    phase_map: phase_map.clone(),
                     options: *options,
                 }
             }

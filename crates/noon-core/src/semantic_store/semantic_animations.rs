@@ -329,6 +329,11 @@ pub enum SemanticAnimationIntent {
         target: SemanticNodeId,
         motion: std::sync::Arc<crate::SampledMotionData>,
     },
+    /// Reveal one retained path according to explicitly authored phase knots.
+    PhaseReveal {
+        target: SemanticNodeId,
+        phase_map: std::sync::Arc<crate::RevealPhaseMap>,
+    },
     /// Transform one semantic object toward the authored state of another semantic
     /// object. The target-state node is a semantic reference, not an execution
     /// snapshot; A1.6 lowering decides when/how to snapshot and interpolate it.
@@ -462,6 +467,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { target, .. }
             | Self::MoveAlongPath { target, .. }
             | Self::SampledMotion { target, .. }
+            | Self::PhaseReveal { target, .. }
             | Self::TransformTo { target, .. }
             | Self::EffectTargetTo { target, .. }
             | Self::WorldTransformTo { target, .. }
@@ -492,6 +498,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::SampledMotion { .. }
+            | Self::PhaseReveal { .. }
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
@@ -535,6 +542,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::SampledMotion { .. }
+            | Self::PhaseReveal { .. }
             | Self::TransformTo { .. }
             | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
@@ -563,6 +571,7 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::SampledMotion { .. }
+            | Self::PhaseReveal { .. }
             | Self::TransformTo { .. }
             | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }

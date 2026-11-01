@@ -45,6 +45,7 @@ pub struct CompiledReplayRevision {
     // Both exchange sides retain immutable sample tables. The entry budget is
     // conservative per track; prepared resource bytes deduplicate shared Arcs.
     sampled_motion_keys: usize,
+    reveal_phase_keys: usize,
 }
 
 impl CompiledReplayRevision {
@@ -67,6 +68,7 @@ impl CompiledReplayRevision {
             + self.camera_motion_payloads
             + self.path_motion_commands
             + self.sampled_motion_keys
+            + self.reveal_phase_keys
     }
 
     /// New-suffix resource accounting inspects only saved track payloads.
@@ -76,6 +78,14 @@ impl CompiledReplayRevision {
         self.tracks
             .iter()
             .filter_map(|(_, track)| track.as_ref()?.values.sampled_motion_plan())
+    }
+
+    pub fn reveal_phase_maps(
+        &self,
+    ) -> impl Iterator<Item = &std::sync::Arc<noon_core::RevealPhaseMap>> {
+        self.tracks
+            .iter()
+            .filter_map(|(_, track)| track.as_ref()?.values.reveal_phase_map())
     }
 }
 
@@ -239,12 +249,24 @@ impl CompiledScene {
                 .map_or(0, |plan| plan.motion().len()),
             _ => 0,
         };
+        let saved_reveal_phase_keys = tracks
+            .iter()
+            .filter_map(|id| self.track(*id))
+            .filter_map(|track| track.values.reveal_phase_map())
+            .try_fold(0usize, |total, map| total.checked_add(map.len()))?;
+        let incoming_reveal_phase_keys = match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {
+                track.values.reveal_phase_map().map_or(0, |map| map.len())
+            }
+            _ => 0,
+        };
         Some(CompiledReplayRevision {
             inset_2d_view,
             camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
             path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
             sampled_motion_keys: saved_sampled_motion_keys
                 .checked_add(incoming_sampled_motion_keys)?,
+            reveal_phase_keys: saved_reveal_phase_keys.checked_add(incoming_reveal_phase_keys)?,
             rows: rows
                 .into_iter()
                 .map(|index| SavedRow {
@@ -389,6 +411,80 @@ mod tests {
     use super::*;
     use crate::CompiledInset2DView;
     use noon_core::{GeometryRef, Style, Transform2D, Vec2};
+
+    #[test]
+    fn phase_reveal_revision_charges_both_exchange_sides_and_shares_maps() {
+        use noon_core::{
+            CompositionTimeMap, Property, RateFunction, RevealPhaseMap, TrackDefinition,
+            TrackTiming, TrackValues, VectorPath,
+        };
+        use std::sync::Arc;
+        let old_map = Arc::new(RevealPhaseMap::new(vec![0.0, 0.1, 1.0]).unwrap());
+        let new_map = Arc::new(RevealPhaseMap::new(vec![0.0, 0.9, 1.0]).unwrap());
+        let path = Arc::new(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::ONE)
+                .line_to(Vec2::new(2.0, 0.0)),
+        );
+        let old = TrackDefinition {
+            id: TrackId::new(1),
+            object: ObjectId::new(1),
+            property: Property::Reveal,
+            values: TrackValues::PhaseReveal {
+                phase_map: old_map.clone(),
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let mut scene = CompiledScene::compile_objects(
+            vec![CompiledObject::new(
+                ObjectId::new(1),
+                GeometryRef::VectorPath(path),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )],
+            &[old.clone()],
+        )
+        .unwrap();
+        let replacement = ExecutionPatch::ReplaceTrack(TrackDefinition {
+            values: TrackValues::PhaseReveal {
+                phase_map: new_map.clone(),
+            },
+            ..old
+        });
+        let mut revision = scene.prepare_replay_revision(&replacement).unwrap();
+        assert_eq!(revision.retention_cost(), 9); // row + channel + track + both three-knot maps.
+        assert!(Arc::ptr_eq(
+            revision.reveal_phase_maps().next().unwrap(),
+            &old_map
+        ));
+        scene.apply_execution_patch(&replacement).unwrap();
+        #[cfg(feature = "prepared-prefix")]
+        {
+            let forward = scene.forward_prefix_revisions(&[&revision]).unwrap();
+            assert_eq!(forward[0].retention_cost(), revision.retention_cost());
+            assert!(Arc::ptr_eq(
+                forward[0].reveal_phase_maps().next().unwrap(),
+                &new_map
+            ));
+        }
+        scene.exchange_replay_revision(&mut revision);
+        assert!(Arc::ptr_eq(
+            revision.reveal_phase_maps().next().unwrap(),
+            &new_map
+        ));
+        assert!(Arc::ptr_eq(
+            scene
+                .track(TrackId::new(1))
+                .unwrap()
+                .values
+                .reveal_phase_map()
+                .unwrap(),
+            &old_map
+        ));
+        assert_eq!(revision.retention_cost(), 9);
+    }
 
     #[test]
     fn inset_revision_cost_is_sparse_and_identity_links_survive_compaction() {

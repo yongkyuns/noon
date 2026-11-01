@@ -1777,6 +1777,27 @@ impl SemanticMutationTransaction {
         token
     }
 
+    /// Stage one retained-path phase reveal through the ordinary animation graph.
+    pub fn create_phase_reveal_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        phase_map: std::sync::Arc<crate::RevealPhaseMap>,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::PhaseReveal {
+                    target: target.into(),
+                    phase_map,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
     /// Stage a transform declaration with an explicit geometry interpolation contract.
     pub fn create_transform_animation_with_interpolation(
         &mut self,

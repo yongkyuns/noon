@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod history_payload_budget;
 mod object_budget;
+mod phase_reveal_budget;
 mod resource_budget;
 mod sampled_motion_budget;
 mod storage;
@@ -112,8 +113,9 @@ pub struct PrefixBatchStats {
     pub payloads: usize,
     pub row_payloads: usize,
     pub new_object_slots: usize,
-    /// Registered immutable dependency entries, not bytes. Sampled motion tables
-    /// travel within tracks and are charged by key retention and resource bytes.
+    /// Registered immutable dependency entries, not bytes. Sampled motion and
+    /// reveal phase tables travel within tracks and are charged by key retention
+    /// and resource bytes.
     pub resource_payloads: usize,
 }
 
@@ -134,6 +136,7 @@ pub struct PrefixPublisher {
     object_slots: usize,
     resources: CompiledResources,
     sampled_motion_payloads: sampled_motion_budget::SampledMotionPayloads,
+    phase_reveal_payloads: phase_reveal_budget::PhaseRevealPayloads,
     resource_budget: ResourceBudget,
     history_payload_budget: HistoryPayloadBudget,
     object_vector_budget_bytes: usize,
@@ -651,6 +654,19 @@ impl SceneInstance {
                             .flat_map(|revision| revision.sampled_motion_plans()),
                     ),
             )?;
+        let (phase_reveal_payloads, phase_reveal_bytes) =
+            phase_reveal_budget::PhaseRevealPayloads::default().additional(
+                self.compiled
+                    .tracks_iter()
+                    .filter_map(|track| track.values.reveal_phase_map())
+                    .chain(
+                        history
+                            .revisions
+                            .iter()
+                            .filter_map(|revision| revision.inverse.as_ref())
+                            .flat_map(|revision| revision.reveal_phase_maps()),
+                    ),
+            )?;
         let resource_bytes = self
             .compiled
             .resources()
@@ -660,6 +676,7 @@ impl SceneInstance {
             // bootstrap byte cap. No clip table is copied into future batches.
             .and_then(|bytes| bytes.checked_add(std::mem::size_of_val(self.compiled.audio_clips())))
             .and_then(|bytes| bytes.checked_add(sampled_motion_bytes))
+            .and_then(|bytes| bytes.checked_add(phase_reveal_bytes))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
@@ -721,6 +738,7 @@ impl SceneInstance {
             object_slots: self.compiled.objects().len(),
             resources: self.compiled.resources().clone(),
             sampled_motion_payloads,
+            phase_reveal_payloads,
             resource_budget,
             history_payload_budget,
             object_vector_budget_bytes,
@@ -893,9 +911,16 @@ impl SceneInstance {
                     .iter()
                     .flat_map(|revision| revision.sampled_motion_plans()),
             )?;
+        let (phase_reveal_payloads, phase_reveal_bytes) =
+            publisher.phase_reveal_payloads.additional(
+                forward
+                    .iter()
+                    .flat_map(|revision| revision.reveal_phase_maps()),
+            )?;
         let resource_bytes = resources
             .prefix_resource_bytes()
             .and_then(|bytes| bytes.checked_add(sampled_motion_bytes))
+            .and_then(|bytes| bytes.checked_add(phase_reveal_bytes))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget = publisher.resource_budget.with_additional(resource_bytes)?;
         stats.resource_payloads = resources.prefix_payload_count();
@@ -938,6 +963,9 @@ impl SceneInstance {
         publisher
             .sampled_motion_payloads
             .extend(sampled_motion_payloads);
+        publisher
+            .phase_reveal_payloads
+            .extend(phase_reveal_payloads);
         publisher.history_payload_budget = history_payload_budget;
         publisher.extracted_payloads = extracted_payloads;
         publisher.object_slots = self.compiled.objects().len();

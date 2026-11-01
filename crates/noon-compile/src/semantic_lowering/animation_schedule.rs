@@ -92,6 +92,7 @@ pub enum SemanticScheduledAnimationPayload {
         path_execution_object_id: ObjectId,
     },
     SampledMotion,
+    PhaseReveal,
     TransformTo {
         target_state: SemanticNodeId,
         interpolation: SemanticTransformInterpolation,
@@ -272,6 +273,7 @@ pub enum PreparedSemanticScheduledAnimationPayload {
         path_execution_object_id: ObjectId,
     },
     SampledMotion,
+    PhaseReveal,
     TransformTo {
         target_state: SemanticTransactionNodeRef,
         interpolation: SemanticTransformInterpolation,
@@ -876,6 +878,7 @@ fn published_payload(
         ScheduledAnimationPayload::SampledMotion => {
             SemanticScheduledAnimationPayload::SampledMotion
         }
+        ScheduledAnimationPayload::PhaseReveal => SemanticScheduledAnimationPayload::PhaseReveal,
         ScheduledAnimationPayload::TransformTo {
             target_state,
             interpolation,
@@ -974,6 +977,9 @@ fn prepared_payload(
         },
         ScheduledAnimationPayload::SampledMotion => {
             PreparedSemanticScheduledAnimationPayload::SampledMotion
+        }
+        ScheduledAnimationPayload::PhaseReveal => {
+            PreparedSemanticScheduledAnimationPayload::PhaseReveal
         }
         ScheduledAnimationPayload::TransformTo {
             target_state,
@@ -1076,6 +1082,9 @@ enum AnimationDeclarationIntent<R> {
         path: R,
     },
     SampledMotion {
+        target: R,
+    },
+    PhaseReveal {
         target: R,
     },
     FamilyTransformTo {
@@ -1237,6 +1246,10 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
             SemanticAnimationIntent::SampledMotion { target, .. } => {
                 self.store.semantic_object_state_checked(*target)?;
                 AnimationDeclarationIntent::SampledMotion { target: *target }
+            }
+            SemanticAnimationIntent::PhaseReveal { target, .. } => {
+                self.store.semantic_object_state_checked(*target)?;
+                AnimationDeclarationIntent::PhaseReveal { target: *target }
             }
             SemanticAnimationIntent::MoveAlongPath { target, path } => {
                 self.store.semantic_object_state_checked(*target)?;
@@ -1571,6 +1584,11 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                             target: (*target).into(),
                         }
                     }
+                    SemanticAnimationIntent::PhaseReveal { target, .. } => {
+                        AnimationDeclarationIntent::PhaseReveal {
+                            target: (*target).into(),
+                        }
+                    }
                     SemanticAnimationIntent::MoveAlongPath { target, path } => {
                         self.prepared
                             .object_state(*target)
@@ -1762,6 +1780,9 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     SemanticTransactionAnimationIntent::SampledMotion { target, .. } => {
                         AnimationDeclarationIntent::SampledMotion { target: *target }
                     }
+                    SemanticTransactionAnimationIntent::PhaseReveal { target, .. } => {
+                        AnimationDeclarationIntent::PhaseReveal { target: *target }
+                    }
                     SemanticTransactionAnimationIntent::MoveAlongPath { target, path } => {
                         AnimationDeclarationIntent::MoveAlongPath {
                             target: *target,
@@ -1944,7 +1965,8 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                         .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
                 }
             }
-            AnimationDeclarationIntent::SampledMotion { target } => {
+            AnimationDeclarationIntent::SampledMotion { target }
+            | AnimationDeclarationIntent::PhaseReveal { target } => {
                 self.prepared
                     .object_state(*target)
                     .map_err(PreparedSemanticAnimationLookupError::Transaction)?;
@@ -2110,6 +2132,7 @@ enum ScheduledAnimationPayload<R> {
         path_execution_object_id: ObjectId,
     },
     SampledMotion,
+    PhaseReveal,
     TransformTo {
         target_state: R,
         interpolation: SemanticTransformInterpolation,
@@ -2897,6 +2920,40 @@ where
                         direction,
                         endpoint,
                     },
+                    options,
+                },
+            })
+        }
+        AnimationDeclarationIntent::PhaseReveal { target } => {
+            let options = noon_core::resolve_phase_reveal_animation_options(
+                AnimationDefaults {
+                    introducer: true,
+                    ..AnimationDefaults::MANIM
+                },
+                state.options,
+                play_options,
+            )
+            .map_err(|error| AnimationSchedulePlanError::Options { animation, error })?;
+            if !options.introducer {
+                return Err(
+                    AnimationSchedulePlanError::UnsupportedCompositionLifecycle {
+                        animation,
+                        remover: options.remover,
+                        introducer: options.introducer,
+                    },
+                );
+            }
+            let execution_object_id = lookup
+                .execution_object_id(target)
+                .or_else(|| lookup.entering_execution_object_id(target))
+                .ok_or(AnimationSchedulePlanError::MissingExecutionTarget { animation, target })?;
+            Ok(PlannedAnimation {
+                animation,
+                run_time: options.run_time,
+                kind: PlannedAnimationKind::Leaf {
+                    target,
+                    execution_object_id,
+                    payload: ScheduledAnimationPayload::PhaseReveal,
                     options,
                 },
             })

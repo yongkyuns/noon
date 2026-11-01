@@ -136,6 +136,7 @@ impl CompiledScene {
                 camera_motion_payloads: 0,
                 path_motion_commands: 0,
                 sampled_motion_keys: old.sampled_motion_keys,
+                reveal_phase_keys: old.reveal_phase_keys,
             });
         }
         output.reverse();

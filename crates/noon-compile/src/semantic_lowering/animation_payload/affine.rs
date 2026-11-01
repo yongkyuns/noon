@@ -180,6 +180,10 @@ impl SemanticAffineAnimationTrackProjection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAffineAnimationTrackError {
+    PhaseReveal {
+        animation: SemanticNodeId,
+        error: super::PhaseRevealLoweringError,
+    },
     SampledMotion {
         animation: SemanticNodeId,
         error: super::SampledMotionLoweringError,
@@ -307,6 +311,7 @@ impl std::fmt::Display for SemanticAffineAnimationTrackError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SampledMotion { animation, error } => write!(formatter, "sampled motion {animation:?}: {error}"),
+            Self::PhaseReveal { animation, error } => write!(formatter, "phase reveal {animation:?}: {error}"),
             Self::EffectTarget { animation, error } => write!(formatter, "animation {animation:?}: {error}"),
             Self::GlowDriverConflict { first_animation, next_animation, property } => write!(formatter,
                 "glow channel {property:?} has conflicting drivers {first_animation:?} and {next_animation:?}"),
@@ -591,6 +596,32 @@ where
 
     for leaf in schedule.leaves() {
         validate_leaf_matches_declaration(store, leaf)?;
+        if leaf.payload == SemanticScheduledAnimationPayload::PhaseReveal {
+            let error = |error| SemanticAffineAnimationTrackError::PhaseReveal {
+                animation: leaf.animation,
+                error,
+            };
+            let source = object_state(store, leaf, leaf.target)?;
+            if store
+                .semantic_updater_registrations(leaf.target)
+                .is_ok_and(|items| !items.is_empty())
+            {
+                return Err(error(super::PhaseRevealLoweringError::UnsupportedTarget));
+            }
+            let state = store
+                .semantic_animation_state(leaf.animation)
+                .map_err(SemanticAffineAnimationTrackError::Animation)?;
+            let SemanticAnimationIntent::PhaseReveal { phase_map, .. } = state.intent() else {
+                return Err(error(super::PhaseRevealLoweringError::InvalidDeclaration));
+            };
+            let path = super::phase_reveal::retained_path(source, store)
+                .ok_or_else(|| error(super::PhaseRevealLoweringError::UnsupportedTarget))?;
+            let channel =
+                super::phase_reveal::channel(store, source, path, phase_map.clone(), leaf.options)
+                    .map_err(error)?;
+            push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+            continue;
+        }
         if leaf.payload == SemanticScheduledAnimationPayload::SampledMotion {
             let error = |error| SemanticAffineAnimationTrackError::SampledMotion {
                 animation: leaf.animation,
@@ -1132,7 +1163,8 @@ where
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Add
             | SemanticScheduledAnimationPayload::Rotate { .. }
-            | SemanticScheduledAnimationPayload::SampledMotion => {
+            | SemanticScheduledAnimationPayload::SampledMotion
+            | SemanticScheduledAnimationPayload::PhaseReveal => {
                 return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation: leaf.animation,
                     remover: leaf.options.remover,
@@ -1256,6 +1288,19 @@ where
         }
     }
 
+    if let Some(animation) = super::phase_reveal::content_conflict(tracks.iter().map(|track| {
+        (
+            track.execution_object_id,
+            track.animation,
+            track.property,
+            &track.values,
+        )
+    })) {
+        return Err(SemanticAffineAnimationTrackError::PhaseReveal {
+            animation,
+            error: super::PhaseRevealLoweringError::ContentDriverConflict,
+        });
+    }
     Ok(SemanticAffineAnimationTrackProjection { tracks })
 }
 
@@ -1424,6 +1469,12 @@ fn validate_leaf_matches_declaration(
         .semantic_animation_state(leaf.animation)
         .map_err(SemanticAffineAnimationTrackError::Animation)?;
     match animation.intent() {
+        SemanticAnimationIntent::PhaseReveal { target, .. }
+            if *target == leaf.target
+                && leaf.payload == SemanticScheduledAnimationPayload::PhaseReveal =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::SampledMotion { target, .. }
             if *target == leaf.target
                 && leaf.payload == SemanticScheduledAnimationPayload::SampledMotion =>
@@ -1729,6 +1780,7 @@ fn push_published_channel(
             &leaf.payload,
             SemanticScheduledAnimationPayload::TransformTo { .. }
                 | SemanticScheduledAnimationPayload::SampledMotion
+                | SemanticScheduledAnimationPayload::PhaseReveal
         );
     tracks.push(SemanticAffineAnimationTrack {
         animation: leaf.animation,

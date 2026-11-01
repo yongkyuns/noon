@@ -261,6 +261,7 @@ mod tests {
             camera_motion_payloads: 0,
             path_motion_commands: 0,
             sampled_motion_keys: 0,
+            reveal_phase_keys: 0,
         }
     }
 
