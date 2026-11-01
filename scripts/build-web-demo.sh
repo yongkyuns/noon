@@ -102,6 +102,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/manim-compat-smoke.mjs
   node --check scripts/manim-tutorial-smoke.mjs
   node --check scripts/python-editor-input-smoke.mjs
+  node --check scripts/playground-prepared-loading-qualification.mjs
+  node --test scripts/playground-prepared-loading-observation.test.mjs
   node --check scripts/playground-layout-smoke.mjs
   node --check scripts/playground-product-e2e.mjs
   node --check scripts/playground-product-fps.mjs
