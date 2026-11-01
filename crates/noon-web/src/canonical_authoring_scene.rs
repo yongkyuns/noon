@@ -7961,6 +7961,26 @@ mod wasm {
             self.inner.live_execution_ownership().to_owned()
         }
 
+        /// Between continuation leases the same Rust player retains play intent.
+        #[wasm_bindgen(js_name = setSourcePlaybackPlaying)]
+        pub fn set_source_playback_playing(&mut self, playing: bool) -> Result<(), JsValue> {
+            let player = self.inner.active_live_player().map_err(js_error)?;
+            if playing {
+                player.resume();
+            } else {
+                player.pause();
+            }
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = sourcePlaybackPlaying)]
+        pub fn source_playback_playing(&mut self) -> Result<bool, JsValue> {
+            self.inner
+                .active_live_player()
+                .map(|player| player.is_playing())
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = requiresLiveMutationRouting)]
         pub fn requires_live_mutation_routing(&self) -> bool {
             self.inner.requires_live_mutation_routing()
@@ -16424,6 +16444,8 @@ mod tests {
             assert!(!player.is_playing());
             player.live_complete_segment().unwrap();
             assert_eq!(player.live_wait(0.25).unwrap(), 2.25);
+            assert!(!player.is_playing(), "a new segment preserves manual pause");
+            player.resume();
             assert!(player.is_playing());
             assert!(player.live_advance_segment_to(2.25).unwrap());
             assert_eq!(player.time(), 2.25);
@@ -16569,6 +16591,8 @@ mod tests {
         context.begin_ordinary_wait(0.0).unwrap();
         let mut zero_wait = context.resume_execution_player().unwrap();
         assert!(zero_wait.live_wait(1.0).is_err());
+        assert!(!zero_wait.is_playing());
+        zero_wait.resume();
         let wake = zero_wait.live_segment_wake(1_000.0).unwrap();
         assert_eq!(wake.cadence(), "timer");
         assert_eq!(wake.timer_after_milliseconds(), Some(0.0));

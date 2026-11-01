@@ -425,6 +425,9 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
     if (playbackState.buffering) return { label: "Buffering", state: "running" };
     return { label: "Playing", state: "running" };
   }
+  if (playbackState?.sourcePlaybackControllable === true) {
+    return playing ? { label: "Playing", state: "running" } : { label: "Paused", state: "ready" };
+  }
   const atEnd =
     Number.isFinite(time) &&
     Number.isFinite(durationSeconds) &&
@@ -437,7 +440,7 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
 
 function setPlaybackRuntimeStatus(playbackState, detail = "") {
   const sourceOwnsPlayback = sceneRunPromise !== null && activeSourceContinuation !== null &&
-    playbackState?.preparedPlayback !== true;
+    playbackState?.preparedPlayback !== true && playbackState?.sourcePlaybackControllable !== true;
   const failedPreparation = playbackState?.preparedPlayback === true &&
     playbackState.playing === true && playbackState.buffering === true &&
     status.dataset.authoringWarmup === "failed";
@@ -1148,10 +1151,10 @@ async function runScene() {
             });
             earlyContinuation = { registration, attachedPlayer, result, client, runToken };
             activeSourceContinuation = earlyContinuation;
-            if (result.preparedPlayback === true) {
+            if (result.preparedPlayback === true || result.sourcePlaybackControllable === true) {
               // Only startup owns this busy ticket. Source demand can remain
               // suspended indefinitely while controls and gallery stay usable.
-              await applyExampleInteraction(example, attachedPlayer);
+              if (result.preparedPlayback === true) await applyExampleInteraction(example, attachedPlayer);
               if (!isCurrentRun(runToken)) {
                 throw new Error("prepared source was superseded during interaction setup");
               }

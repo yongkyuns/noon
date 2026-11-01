@@ -135,9 +135,6 @@ export class AuthoringExecutionClient {
     if (typeof initiallyPaused !== "boolean") {
       throw new TypeError("initiallyPaused must be a boolean");
     }
-    if (initiallyPaused && semantic.continuationGeneration !== null && !semantic.preparedPlayback) {
-      throw new Error("source-owned semantic continuations cannot start paused");
-    }
     validateSemanticPacing(pacing);
     if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && semantic.continuationGeneration === null) {
       throw new Error("external sample pacing requires a source-owned semantic continuation");
