@@ -387,6 +387,8 @@ export class ExecutionWorkerClient {
       callbackSessionId: validateOptionalCallbackSessionId(callbackSessionId),
       continuationGeneration: validateOptionalContinuationGeneration(continuationGeneration),
       renderCommand: "rebuild_engine",
+      replaceExistingEndpoint: continuationGeneration === null &&
+        contextId === this.#semanticContextId && authoringClient === this.#semanticAuthoringClient,
     });
   }
 
