@@ -62,6 +62,7 @@ function fixture(mode = "transferable", options = {}) {
     preparedEndTime: () => end,
     preparedPlaying: () => playing,
     preparedBuffering: () => buffering,
+    debugFrameJson: () => JSON.stringify({ engine: "noon", time, objects: [] }),
     preparedNeedsFrame: () => needsFrame && playing && !buffering,
     preparedPlaybackTimeAt(wallTime) { record("observe-time", wallTime); return observation ?? time; },
     pausePreparedAt(wallTime) {
@@ -295,7 +296,7 @@ test("prepared pause commits Rust's static-wait sample and unsupported controls 
     assert.equal(f.count("pause-at"), 1);
     const mutations = f.calls.length;
     for (const type of ["set_loop_duration", "advance_to", "sample_to_authored_time",
-      "native_state_input", "native_event", "undo_translation_drag", "debug_frame"]) {
+      "native_state_input", "native_event", "undo_translation_drag"]) {
       const result = await f.request(type, { time: 2, loopDurationSeconds: 8 });
       assert.equal(result.type, "error"); assert.match(result.message, /prepared playback does not support/);
     }
@@ -305,6 +306,25 @@ test("prepared pause commits Rust's static-wait sample and unsupported controls 
     assert.equal((await f.request("resume")).playing, true);
   } finally { f.close(); }
 });
+
+for (const mode of ["transferable", "shared"]) {
+  test(`prepared ${mode} frame inspection observes without advancing or publishing`, { timeout: 3000 }, async () => {
+    const f = fixture(mode, { initiallyPaused: true });
+    try {
+      await f.attach(); f.acknowledge(); await f.present();
+      const before = await f.request("state");
+      const mutations = f.calls.length;
+      const publications = f.deltas.length;
+      const result = await f.request("debug_frame");
+      assert.deepEqual(result.debugFrame, { engine: "noon", time: before.time, objects: [] });
+      assert.equal(f.calls.length, mutations);
+      assert.equal(f.deltas.length, publications);
+      const after = await f.request("state");
+      assert.equal(after.time, before.time);
+      assert.equal(after.playing, false);
+    } finally { f.close(); }
+  });
+}
 
 test("prepared stop cancels source before freeing its reader and rejects late adoption", { timeout: 3000 }, async () => {
   const f = fixture();
@@ -523,6 +543,63 @@ test("prepared audio extension samples an unexpired animation before its new anc
     assert.equal(anchor.availableUntil, 8);
   } finally { f.close(); }
 });
+
+for (const mode of ["transferable", "shared"]) {
+  test(`prepared ${mode} audio forwards the Rust clock observation after a delayed picture`, { timeout: 3000 }, async t => {
+    let wallTime = 1000;
+    t.mock.method(performance, "now", () => wallTime);
+    const f = fixture(mode, { audio: true });
+    // Double the native audio observation, independently of its coherent frame.
+    // Native tests own the clock projection; this test pins the real endpoint's
+    // receipt gate and timestamp plumbing without adding another product clock.
+    const originalAnchor = f.player.audioAnchorJson;
+    f.player.audioAnchorJson = (sampledEpochMs, sampledAt) => {
+      const anchor = JSON.parse(originalAnchor(sampledEpochMs, sampledAt));
+      if (anchor.playing) anchor.time = Math.min(anchor.availableUntil, (sampledAt - 1000) / 1000);
+      return JSON.stringify(anchor);
+    };
+    try {
+      await f.attach(); f.acknowledge(); await f.present();
+      await f.request("resume");
+      const anchors = f.count("audio-anchor");
+      wallTime = 1200;
+      f.publishOnTick(); f.setTickState({ time: 0.2 }); f.deliver(8);
+      await f.when(() => f.deltas.length === 2);
+      assert.equal(f.deltas[1].time, 0.2);
+      assert.equal(f.count("audio-anchor"), anchors);
+
+      // An 80 ms picture delay leaves the coherent frame at its selected time.
+      // Consumption alone still cannot authorize the newly available audio.
+      wallTime = 1280;
+      f.acknowledge(f.deltas[1]);
+      assert.equal((await f.request("state")).time, 0.2);
+      assert.equal(f.count("audio-anchor"), anchors);
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[1].sequence });
+      await f.when(() => f.replies.some(value => value.type === "audio_state"));
+      const delayed = f.replies.findLast(value => value.type === "audio_state");
+      assert.equal(delayed.audioAnchor.time, 0.28);
+      assert.equal(delayed.time, 0.28, "the endpoint must forward the native audio observation unchanged");
+      assert.equal(delayed.audioAnchor.sampledEpochMs, performance.timeOrigin + 1280);
+      assert.equal(f.calls.findLast(value => value[0] === "audio-anchor")[1], 1280);
+      assert.equal(f.player.preparedTime(), 0.2, "observing sound does not evaluate another frame");
+
+      // The following picture has no delay. Its audio clock advances by exactly
+      // elapsed wall time, although the two selected frames are 280 ms apart.
+      wallTime = 1480;
+      f.setTickState({ time: 0.48 }); f.deliver(10);
+      await f.when(() => f.deltas.length === 3);
+      f.acknowledge(f.deltas[2]);
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[2].sequence });
+      await f.when(() => f.replies.filter(value => value.type === "audio_state").length === 2);
+      const following = f.replies.findLast(value => value.type === "audio_state").audioAnchor;
+      assert.equal(following.time, 0.48);
+      assert.equal(following.sampledEpochMs - delayed.audioAnchor.sampledEpochMs, 200);
+      assert.ok(Math.abs(following.time - delayed.audioAnchor.time - 0.2) < 1e-12);
+      assert.equal(following.availableUntil, 10);
+      assert.ok(following.audioSequence > delayed.audioAnchor.audioSequence);
+    } finally { f.close(); }
+  });
+}
 
 test("backpressure cannot publish an audio extension before its requested ordinary tick", { timeout: 3000 }, async () => {
   const f = fixture("transferable", { audio: true });

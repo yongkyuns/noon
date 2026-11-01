@@ -16,9 +16,10 @@ impl PreparedExecutionPlayer {
     }
 
     /// Observe the current reader only after the host's retained picture barrier.
-    /// Sleeping waits use the existing Rust clock; source progress contributes
-    /// only the adopted availability bound. The monotonically issued sequence
-    /// lets Window discard a late anchor after a newer pause, seek or refill.
+    /// Sleeping waits and active animation use the existing Rust clock; source
+    /// progress contributes only the adopted availability bound. The monotonically
+    /// issued sequence lets Window discard a late anchor after a newer pause,
+    /// seek or refill.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJson))]
     pub fn audio_anchor_json(
         &mut self,
@@ -30,6 +31,23 @@ impl PreparedExecutionPlayer {
         }
         let time = self.prepared_playback_time_at(wall_time_ms)?;
         let available_until = self.playback.reader.frontier();
+        // The retained frame or its next static deadline may predate this host
+        // observation. Pair the new timestamp with its admitted clock time,
+        // bounded by the adopted frontier, across both playback cadences. This
+        // reads no new history and does not advance, reanchor or evaluate the
+        // reader; the public coherent-frame/deadline observation is unchanged.
+        let time = if self.playback.playing()
+            && !self.playback.buffering()
+            && self.held_frontier.is_none()
+        {
+            self.clock
+                .scene_time_at(wall_time_ms)
+                .unwrap_or(time)
+                .max(time)
+                .min(available_until)
+        } else {
+            time
+        };
         let sequence = self
             .audio_sequence
             .checked_add(1)

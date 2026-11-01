@@ -109,6 +109,7 @@ mod tests {
             tracks: Vec::with_capacity(5),
             camera_motion_payloads: 0,
             path_motion_commands: 0,
+            sampled_motion_keys: 0,
         };
         assert_eq!(revision.prefix_clone_payload_bytes(), Some(0));
         let reserved = revision_payload_bytes(

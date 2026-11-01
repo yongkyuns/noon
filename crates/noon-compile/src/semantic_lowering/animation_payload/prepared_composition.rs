@@ -101,6 +101,10 @@ impl PreparedSemanticAnimationActivation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PreparedSemanticAnimationLoweringError {
+    SampledMotion {
+        animation: SemanticTransactionNodeRef,
+        error: super::SampledMotionLoweringError,
+    },
     EffectTarget {
         animation: SemanticTransactionNodeRef,
         error: super::glow_target::EffectTargetLoweringError,
@@ -277,7 +281,17 @@ where
     let schedule =
         lower_prepared_semantic_animation_schedule(prepared, index, root, start_time, play_options)
             .map_err(PreparedSemanticAnimationLoweringError::Schedule)?;
-    lower_prepared_animation_activation(prepared, schedule, &HashSet::new(), effective_properties)
+    lower_prepared_animation_activation(
+        prepared,
+        schedule,
+        &HashSet::new(),
+        effective_properties,
+        |object, transform| {
+            let target = index.semantic_object_id(object)?;
+            let source = prepared.object_state(target).ok()?;
+            super::sampled_motion::declared_center(source, prepared.store(), transform)
+        },
+    )
 }
 
 /// Lower payloads from the schedule of this prepared transaction without scheduling again.
@@ -286,14 +300,19 @@ where
 /// Consuming the projection keeps timing and payloads together in the returned activation.
 /// `input_temporary_glow` contains exact generations proven to remain owned by
 /// active input invocations; it never identifies a persistent attachment by value.
-pub fn lower_prepared_animation_activation<F>(
+/// `motion_center` projects current retained content at the candidate pose after
+/// earlier composition children complete. It is a read-only bounds query, never
+/// source execution or a temporary runtime seek.
+pub fn lower_prepared_animation_activation<F, B>(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     schedule: PreparedSemanticAnimationScheduleProjection,
     input_temporary_glow: &HashSet<SemanticNodeId>,
     mut effective_properties: F,
+    mut motion_center: B,
 ) -> Result<PreparedSemanticAnimationActivation, PreparedSemanticAnimationLoweringError>
 where
     F: FnMut(ObjectId) -> Option<EffectiveAnimationProperties>,
+    B: FnMut(ObjectId, noon_core::Transform2D) -> Option<noon_core::Vec2>,
 {
     let start_time = schedule.start_time();
     // Only allocator-proven neutral attachments for this activation's pulse
@@ -410,6 +429,7 @@ where
                     | PreparedSemanticScheduledAnimationPayload::CameraProfileTo { .. }
                     | PreparedSemanticScheduledAnimationPayload::GlowPulse { .. }
                     | PreparedSemanticScheduledAnimationPayload::Dissolve { .. }
+                    | PreparedSemanticScheduledAnimationPayload::SampledMotion
             );
         captures.begin_leaf(
             leaf,
@@ -583,6 +603,64 @@ where
                 error,
             }
         })?;
+        if leaf.payload == PreparedSemanticScheduledAnimationPayload::SampledMotion {
+            let error = |error| PreparedSemanticAnimationLoweringError::SampledMotion {
+                animation: leaf.animation,
+                error,
+            };
+            if has_host_updaters {
+                return Err(error(super::SampledMotionLoweringError::UnsupportedTarget));
+            }
+            if let Some(first_animation) =
+                affine_center_dependency_conflict(&driven, leaf.execution_object_id, leaf.animation)
+            {
+                return Err(PreparedSemanticAnimationLoweringError::MultipleDrivers {
+                    first_animation,
+                    next_animation: leaf.animation,
+                    target: leaf.target,
+                    property: SemanticObjectProperty::Translation,
+                });
+            }
+            let from = capture_effective(
+                leaf,
+                source,
+                admitted.contains(&leaf.target),
+                &mut captures,
+                &mut effective_properties,
+            )?;
+            let center = motion_center(leaf.execution_object_id, from.transform).or_else(|| {
+                admitted
+                    .contains(&leaf.target)
+                    .then(|| {
+                        super::sampled_motion::declared_center(
+                            source,
+                            prepared.store(),
+                            from.transform,
+                        )
+                    })
+                    .flatten()
+            });
+            let motion =
+                super::sampled_motion::prepared_data(prepared, leaf.animation).map_err(error)?;
+            let channels = super::sampled_motion::channels(
+                prepared.store(),
+                source,
+                &from,
+                center,
+                motion,
+                leaf.options,
+            )
+            .map_err(error)?;
+            for channel in channels {
+                push_prepared_channel(leaf, channel, &mut driven, &mut tracks)?;
+            }
+            reserve_affine_center_dependencies(
+                &mut driven,
+                leaf.execution_object_id,
+                leaf.animation,
+            );
+            continue;
+        }
         if let PreparedSemanticScheduledAnimationPayload::WorldTransformTo { transform } =
             leaf.payload
         {
@@ -718,6 +796,9 @@ where
             continue;
         }
         let channel = match leaf.payload {
+            PreparedSemanticScheduledAnimationPayload::SampledMotion => {
+                unreachable!("sampled motion lowered through the shared affine channels")
+            }
             PreparedSemanticScheduledAnimationPayload::MoveAlongPath { .. } => {
                 unreachable!("MoveAlongPath was lowered through its activation snapshot helper")
             }
@@ -1630,13 +1711,18 @@ fn push_prepared_channel(
         && matches!(
             &leaf.payload,
             PreparedSemanticScheduledAnimationPayload::TransformTo { .. }
+                | PreparedSemanticScheduledAnimationPayload::SampledMotion
         );
     tracks.push(PreparedSemanticAnimationTrack {
         animation: leaf.animation,
         target: leaf.target,
         execution_object_id: leaf.execution_object_id,
         property: channel.property,
-        completion: super::affine::completion_at_endpoint(channel.completion, timing),
+        completion: if leaf.payload == PreparedSemanticScheduledAnimationPayload::SampledMotion {
+            channel.completion
+        } else {
+            super::affine::completion_at_endpoint(channel.completion, timing)
+        },
         values: channel.values,
         timing,
         time_map: leaf.time_map.clone(),
@@ -1850,8 +1936,11 @@ mod tests {
             AnimationOptions::new().run_time(6.0),
         )
         .unwrap();
-        let projection =
-            lower_prepared_animation_activation(&prepared, schedule, &HashSet::new(), |object| {
+        let projection = lower_prepared_animation_activation(
+            &prepared,
+            schedule,
+            &HashSet::new(),
+            |object| {
                 captures += 1;
                 (object == index.execution_object_id(left).unwrap())
                     .then_some(effective(Vec2::new(0.5, 0.0)))
@@ -1859,8 +1948,10 @@ mod tests {
                         (object == index.execution_object_id(right).unwrap())
                             .then_some(effective(Vec2::new(-0.5, 0.0)))
                     })
-            })
-            .unwrap();
+            },
+            |_, _| None,
+        )
+        .unwrap();
 
         assert_eq!(projection.root(), root.into());
         assert_eq!(projection.start_time(), 4.0);

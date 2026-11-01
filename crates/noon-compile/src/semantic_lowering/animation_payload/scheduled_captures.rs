@@ -17,7 +17,7 @@ use super::prepared_composition::PreparedSemanticAnimationTrack;
 pub(super) struct ScheduledCaptures {
     base: HashMap<ObjectId, EffectiveAnimationProperties>,
     effect_base: HashMap<ObjectId, std::sync::Arc<crate::CompiledEffectStack>>,
-    completed: DriverMap<(Property, TrackValues, bool)>,
+    completed: DriverMap<(Property, TrackValues, f64)>,
     latest_tracks: DriverMap<usize>,
     recorded_tracks: usize,
 }
@@ -25,8 +25,8 @@ pub(super) struct ScheduledCaptures {
 impl ScheduledCaptures {
     pub fn get(&self, object: ObjectId) -> Option<EffectiveAnimationProperties> {
         let mut value = self.base.get(&object)?.clone();
-        for (_, (property, values, at_end)) in object_drivers(&self.completed, object) {
-            apply_effective_track_endpoint(&mut value, *property, values, *at_end)?;
+        for (_, (property, values, progress)) in object_drivers(&self.completed, object) {
+            apply_effective_track_at_progress(&mut value, *property, values, *progress)?;
         }
         Some(value)
     }
@@ -51,7 +51,7 @@ impl ScheduledCaptures {
             return value.effects;
         }
         let mut stack = self.effect_base.get(&object)?.clone();
-        for (_, (_, values, at_end)) in object_drivers(&self.completed, object) {
+        for (_, (_, values, progress)) in object_drivers(&self.completed, object) {
             let TrackValues::Effect {
                 attachment,
                 from,
@@ -62,7 +62,7 @@ impl ScheduledCaptures {
                 continue;
             };
             let mut effect = stack.get(*attachment)?;
-            effect.definition = (if *at_end { *to } else { *from })
+            effect.definition = (if *progress == 1.0 { *to } else { *from })
                 .update(&effect.definition)
                 .ok()?
                 .apply_to(effect.definition)
@@ -134,12 +134,20 @@ impl ScheduledCaptures {
             if let Some(index) = self.latest_tracks.get(&key) {
                 let track = &tracks[*index];
                 if track.animation == owner {
-                    let alpha = track.values.terminal_progress(track.timing);
-                    if alpha != 0.0 && alpha != 1.0 {
+                    let sampled = track.values.sampled_motion_plan().is_some();
+                    let alpha = if sampled {
+                        track
+                            .values
+                            .terminal_progress_f64(track.timing)
+                            .clamp(0.0, 1.0)
+                    } else {
+                        f64::from(track.values.terminal_progress(track.timing))
+                    };
+                    if !sampled && alpha != 0.0 && alpha != 1.0 {
                         continue;
                     }
                     self.completed
-                        .insert(key, (track.property, track.values.clone(), alpha == 1.0));
+                        .insert(key, (track.property, track.values.clone(), alpha));
                 }
             }
             driven.remove(&key);
@@ -168,14 +176,22 @@ pub(super) fn completed_effective_properties_before(
             TrackActivationRelation::Overlapping => return None,
             TrackActivationRelation::Completed => {}
         }
-        let alpha = track.values.terminal_progress(track.timing);
-        if alpha != 0.0 && alpha != 1.0 {
+        let sampled = track.values.sampled_motion_plan().is_some();
+        let alpha = if sampled {
+            track
+                .values
+                .terminal_progress_f64(track.timing)
+                .clamp(0.0, 1.0)
+        } else {
+            f64::from(track.values.terminal_progress(track.timing))
+        };
+        if !sampled && alpha != 0.0 && alpha != 1.0 {
             return None;
         }
         if track.property == Property::Transform {
             return None;
         }
-        apply_effective_track_endpoint(&mut value, track.property, &track.values, alpha == 1.0)?;
+        apply_effective_track_at_progress(&mut value, track.property, &track.values, alpha)?;
     }
     Some(value)
 }
@@ -218,6 +234,24 @@ pub(super) fn completed_content_before(
         }
     }
     Some(content)
+}
+
+fn apply_effective_track_at_progress(
+    value: &mut EffectiveAnimationProperties,
+    property: Property,
+    values: &TrackValues,
+    progress: f64,
+) -> Option<()> {
+    match (property, values) {
+        (Property::Position, TrackValues::SampledPosition { plan }) => {
+            value.transform.translation = plan.sample(progress).0
+        }
+        (Property::Rotation, TrackValues::SampledRotation { plan }) => {
+            value.transform.rotation = plan.sample(progress).1
+        }
+        _ => return apply_effective_track_endpoint(value, property, values, progress == 1.0),
+    }
+    Some(())
 }
 
 fn apply_effective_track_endpoint(

@@ -1,7 +1,8 @@
 use super::*;
 use crate::worker_audio::WorkerAudioResources;
 use noon::{
-    AudioClipOptions, AudioResource, ExecutionSession, PrefixBatch, PrefixPublisher, Scene,
+    AnimationOptions, AudioClipOptions, AudioResource, ExecutionSession, PrefixBatch,
+    PrefixPublisher, RateFunction, Scene,
 };
 use noon_runtime::ReplayLimits;
 use serde_json::Value;
@@ -14,6 +15,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_animation(false)
+    }
+
+    fn with_animation(animated: bool) -> Self {
         let mut scene = Scene::new();
         scene
             .audio(
@@ -36,8 +41,25 @@ impl Fixture {
         source
             .begin_replay_retention(ReplayLimits::default())
             .unwrap();
-        let segment = source.wait_segment(1.0).unwrap();
+        let segment = if animated {
+            let mut live = scene.live(&mut source);
+            let target = live.target_editor(&circle).unwrap();
+            live.set_translation(&target, 2.0, 0.0).unwrap();
+            live.declare_and_activate_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap()
+        } else {
+            source.wait_segment(1.0).unwrap()
+        };
         source.advance_to(1.0).unwrap();
+        if animated {
+            scene.live(&mut source).complete_segment(segment).unwrap();
+        }
         let (publisher, mut reader) = source.create_prepared_prefix(segment).unwrap();
         reader.seek(0.5).unwrap();
         let player = PreparedExecutionPlayer::from_reader(reader, 123).unwrap();
@@ -72,6 +94,172 @@ impl Fixture {
         )
         .unwrap()
     }
+}
+
+#[test]
+fn animated_audio_anchor_pairs_delayed_observation_with_the_admitted_clock() {
+    let mut f = Fixture::with_animation(true);
+    f.player.initial_delta_json().unwrap();
+    let observe = |f: &mut Fixture, wall| {
+        let frame = f.player.playback.reader.frame().clone();
+        let publication = f.player.playback.reader.publication_context();
+        let frontier = f.player.prepared_frontier();
+        let clock = f.player.clock;
+        let source_frame = f.source.frame().clone();
+        let anchor = f.anchor(wall);
+        assert_eq!(f.player.playback.reader.frame(), &frame);
+        assert_eq!(f.player.playback.reader.publication_context(), publication);
+        assert_eq!(f.player.prepared_frontier(), frontier);
+        assert_eq!(f.player.clock, clock);
+        assert_eq!(f.source.frame(), &source_frame);
+        assert!(f.player.drain_delta_json().unwrap().is_none());
+        anchor
+    };
+
+    let cold = observe(&mut f, 900.0);
+    assert_eq!(cold["time"], 0.5);
+    assert_eq!(cold["playing"], false);
+    f.player.set_prepared_playing(true);
+    assert_eq!(observe(&mut f, 1_000.0)["time"], 0.5);
+    assert_eq!(f.player.clock.scene_time_at(1_000.0), None);
+    f.player.execution_wake(1_000.0).unwrap();
+    assert_eq!(
+        crate::BrowserExecutionWakePlan::from_runtime(f.player.playback.wake_state()).cadence(),
+        crate::BrowserExecutionCadence::AnimationFrame
+    );
+
+    f.player.tick_delta_json(1_100.0).unwrap();
+    let delayed = observe(&mut f, 1_180.0);
+    assert!((delayed["time"].as_f64().unwrap() - 0.68).abs() < 1e-12);
+    assert_eq!(delayed["playing"], true);
+    assert_eq!(f.player.prepared_time(), 0.6);
+    assert_eq!(f.player.prepared_playback_time_at(1_180.0).unwrap(), 0.6);
+
+    f.player.tick_delta_json(1_380.0).unwrap();
+    let next = observe(&mut f, 1_380.0);
+    assert!((next["time"].as_f64().unwrap() - 0.88).abs() < 1e-12);
+    let authored_delta_ms =
+        (next["time"].as_f64().unwrap() - delayed["time"].as_f64().unwrap()) * 1_000.0;
+    let wall_delta_ms =
+        next["sampledEpochMs"].as_f64().unwrap() - delayed["sampledEpochMs"].as_f64().unwrap();
+    assert!((authored_delta_ms - wall_delta_ms).abs() < 1e-9);
+
+    let bounded = observe(&mut f, 2_000.0);
+    assert_eq!(bounded["time"], 1.0);
+    assert_eq!(bounded["availableUntil"], 1.0);
+    assert_eq!(bounded["playing"], false);
+    assert!(!f.player.prepared_buffering());
+    assert!((f.player.prepared_time() - 0.88).abs() < 1e-12);
+    f.player.pause_prepared_at(2_000.0).unwrap();
+    let paused = observe(&mut f, 5_000.0);
+    assert!((paused["time"].as_f64().unwrap() - 0.88).abs() < 1e-12);
+    assert_eq!(paused["playing"], false);
+}
+
+#[test]
+fn static_deadline_audio_anchor_pairs_delayed_observation_with_the_admitted_clock() {
+    let mut scene = Scene::new();
+    scene
+        .audio(
+            AudioResource::from_interleaved(8_000, 1, vec![0.125; 16_000], 64_000).unwrap(),
+            AudioClipOptions {
+                duration: Some(8.0),
+                looped: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let circle = scene.circle(0.5).unwrap();
+    scene.add(&circle).unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let wait = source.wait_segment(1.0).unwrap();
+    source.advance_to(wait.end_time()).unwrap();
+    let (mut publisher, mut reader) = source.create_prepared_prefix(wait).unwrap();
+    reader.seek(0.5).unwrap();
+    let animation = {
+        let mut live = scene.live(&mut source);
+        let target = live.target_editor(&circle).unwrap();
+        live.set_translation(&target, 2.0, 0.0).unwrap();
+        live.declare_and_activate_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap()
+    };
+    source.advance_to(animation.end_time()).unwrap();
+    scene.live(&mut source).complete_segment(animation).unwrap();
+    let animation_prefix = source
+        .publish_prepared_prefix(animation, &mut publisher)
+        .unwrap();
+    let player = PreparedExecutionPlayer::from_reader(reader, 123).unwrap();
+    let mut f = Fixture {
+        source,
+        publisher,
+        player,
+    };
+    f.player.initial_delta_json().unwrap();
+    f.player.append(animation_prefix).unwrap();
+    assert_eq!(f.player.prepared_frontier(), 2.0);
+    let observe = |f: &mut Fixture, wall| {
+        let frame = f.player.playback.reader.frame().clone();
+        let publication = f.player.playback.reader.publication_context();
+        let frontier = f.player.prepared_frontier();
+        let clock = f.player.clock;
+        let wake = f.player.playback.wake_state();
+        let held_frontier = f.player.held_frontier;
+        let buffering = f.player.prepared_buffering();
+        let source_frame = f.source.frame().clone();
+        let anchor = f.anchor(wall);
+        assert_eq!(f.player.playback.reader.frame(), &frame);
+        assert_eq!(f.player.playback.reader.publication_context(), publication);
+        assert_eq!(f.player.prepared_frontier(), frontier);
+        assert_eq!(f.player.clock, clock);
+        assert_eq!(f.player.playback.wake_state(), wake);
+        assert_eq!(f.player.held_frontier, held_frontier);
+        assert_eq!(f.player.prepared_buffering(), buffering);
+        assert_eq!(f.source.frame(), &source_frame);
+        assert!(f.player.drain_delta_json().unwrap().is_none());
+        anchor
+    };
+
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(1_000.0).unwrap();
+    f.player.tick_delta_json(1_490.0).unwrap();
+    assert_eq!(
+        crate::BrowserExecutionWakePlan::from_runtime(f.player.playback.wake_state()).cadence(),
+        crate::BrowserExecutionCadence::TimerAtSceneTime(1.0)
+    );
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(f.player.prepared_playback_time_at(1_580.0).unwrap(), 1.0);
+    let delayed = observe(&mut f, 1_580.0);
+    assert!((delayed["time"].as_f64().unwrap() - 1.08).abs() < 1e-12);
+    assert_eq!(delayed["playing"], true);
+
+    f.player.tick_delta_json(1_680.0).unwrap();
+    assert_eq!(
+        crate::BrowserExecutionWakePlan::from_runtime(f.player.playback.wake_state()).cadence(),
+        crate::BrowserExecutionCadence::AnimationFrame
+    );
+    let next = observe(&mut f, 1_680.0);
+    assert!((next["time"].as_f64().unwrap() - 1.18).abs() < 1e-12);
+    let authored_delta_ms =
+        (next["time"].as_f64().unwrap() - delayed["time"].as_f64().unwrap()) * 1_000.0;
+    let wall_delta_ms =
+        next["sampledEpochMs"].as_f64().unwrap() - delayed["sampledEpochMs"].as_f64().unwrap();
+    assert!((authored_delta_ms - wall_delta_ms).abs() < 1e-9);
+
+    let bounded = observe(&mut f, 3_000.0);
+    assert_eq!(bounded["time"], 2.0);
+    assert_eq!(bounded["availableUntil"], 2.0);
+    assert_eq!(bounded["playing"], false);
+    assert!(!f.player.prepared_buffering());
+    assert!((f.player.prepared_time() - 1.18).abs() < 1e-12);
 }
 
 #[test]

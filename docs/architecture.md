@@ -896,8 +896,11 @@ static interval is not repeated after refill. Pause preserves the held observati
 an explicit valid seek replaces it. No epsilon seek, frontend cursor or additional
 audio clock is introduced. Further source delivery cannot admit the clock while
 that picture is pending. An unexpired audio extension also requests an ordinary
-tick before its picture-qualified anchor, so source work cannot reanchor sound to
-an older active-animation sample.
+tick before its picture-qualified anchor. Each audio anchor pairs its supplied
+wall timestamp with a current observation of that already-admitted Rust clock,
+capped by adopted availability. This projection also covers a static interval
+whose deadline elapsed while its picture was pending. Public frame/status
+observations retain their coherent-sample and static-deadline contract.
 
 At the genuine execution-to-render-worker boundary, a prepared player
 may own the independent reader in the producing execution context. It encodes
@@ -1748,6 +1751,25 @@ sampling plans are derived once, shared across equivalent snapshots, rebuilt
 before changed-track evaluation, and retired with their tracks. Replay retains
 immutable path snapshots and charges their complexity against its budget.
 Unsupported simultaneous path drivers fail before publication.
+
+`SampledMotion` authors one immutable table of explicit piecewise-linear center
+destinations and signed, unwrapped angular offsets. Its strictly increasing
+normalized keys lie in `(0, 1]` and end at one; the implicit zero key captures
+the activation-effective pose and bounds center. That center remains a fixed
+rigid anchor as it moves through world-space destinations, including for
+off-origin content. Rotation offsets act around the moving anchor, preserving
+captured scale and retained geometry. An asymmetric object's rotated bounding
+box is not a new pivot. Each table admits at most 65,536 destination keys and
+lowers to the ordinary Position and Rotation channels sharing one activation
+plan. The existing composition time maps, driver arbitration, completion and
+seek machinery own its execution; no sample creates a target object or another
+animation leaf. Bounded rate functions and explicit reversal are supported;
+spatial targets, competing affine/content drivers, path arcs, lifecycle options
+and leaf lag are rejected before publication. Samples are an authored
+approximation whose accuracy the author chooses; `MoveAlongPath` retains its
+existing retained-path contract. Native Rust passes typed immutable data, while
+Python batches sample records and options at the actual WASM language boundary.
+Replay retention and prepared-prefix resource limits include the sample data.
 
 `UpdateFromFunc` registers a host callback over a compiler-scheduled finite
 composition interval. It reuses the existing callback phase barrier; nested

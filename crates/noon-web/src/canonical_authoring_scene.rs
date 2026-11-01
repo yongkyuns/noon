@@ -21,6 +21,8 @@ mod matrix;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
 #[cfg(any(target_arch = "wasm32", test))]
+mod sampled_motion;
+#[cfg(any(target_arch = "wasm32", test))]
 mod spatial;
 #[cfg(target_arch = "wasm32")]
 mod table;
@@ -432,6 +434,11 @@ enum OrdinaryCompositionChild {
     MoveAlongPath {
         target: noon::Mobject,
         path: noon::Mobject,
+        options: noon_core::AnimationOptions,
+    },
+    SampledMotion {
+        target: noon::Mobject,
+        motion: std::sync::Arc<noon_core::SampledMotionData>,
         options: noon_core::AnimationOptions,
     },
     CallbackInterval {
@@ -2346,6 +2353,15 @@ impl CanonicalAuthoringScene {
                     path,
                     options: *options,
                 },
+                OrdinaryCompositionChild::SampledMotion {
+                    target,
+                    motion,
+                    options,
+                } => noon::AnimationCompositionRequest::SampledMotion {
+                    target,
+                    motion: std::sync::Arc::clone(motion),
+                    options: *options,
+                },
                 OrdinaryCompositionChild::CallbackInterval {
                     target,
                     callback,
@@ -2701,6 +2717,7 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::WorldTransform { .. }
                 | OrdinaryCompositionChild::CameraProfile { .. }
                 | OrdinaryCompositionChild::MoveAlongPath { .. }
+                | OrdinaryCompositionChild::SampledMotion { .. }
                 | OrdinaryCompositionChild::CallbackInterval { .. }
                 | OrdinaryCompositionChild::LayoutReplaceInterval { .. } => {}
                 OrdinaryCompositionChild::TransformTo {
@@ -2955,6 +2972,32 @@ impl CanonicalAuthoringScene {
                         );
                     }
                     noon_core::resolve_animation_options(
+                        noon_core::AnimationDefaults::MANIM,
+                        *options,
+                        noon_core::AnimationOptions::new(),
+                    )
+                    .map_err(|error| error.to_string())?;
+                    continue;
+                }
+                OrdinaryCompositionChild::SampledMotion {
+                    target, options, ..
+                } => {
+                    if !std::rc::Rc::ptr_eq(
+                        self.scene.integration_store(),
+                        target.integration_store(),
+                    ) {
+                        return Err(
+                            "ordinary SampledMotion target belongs to another authoring store"
+                                .into(),
+                        );
+                    }
+                    target.validate().map_err(|error| error.to_string())?;
+                    if !self.identities.contains_key(&target.node_id()) {
+                        return Err(
+                            "ordinary SampledMotion target must belong to this Scene".into()
+                        );
+                    }
+                    noon_core::resolve_sampled_motion_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
                         noon_core::AnimationOptions::new(),
@@ -4410,6 +4453,7 @@ mod wasm {
     mod matrix_family;
     mod numbers;
     mod sample_space;
+    mod sampled_motion;
     mod spatial;
     mod world_composition;
     use noon_core::{Color, Style, Transform2D, Vec2};

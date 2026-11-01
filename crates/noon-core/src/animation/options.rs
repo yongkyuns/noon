@@ -251,6 +251,24 @@ pub fn resolve_glow_pulse_animation_options(
     resolve_reversible_options_without_path(defaults, animation, play)
 }
 
+/// Resolve one sampled rigid-motion leaf with the ordinary option precedence.
+pub fn resolve_sampled_motion_animation_options(
+    defaults: AnimationDefaults,
+    animation: AnimationOptions,
+    play: AnimationOptions,
+) -> Result<ResolvedAnimationOptions, AnimationOptionsError> {
+    let options = resolve_reversible_options_without_path(defaults, animation, play)?;
+    if options.path_arc != 0.0 {
+        return Err(AnimationOptionsError::UnsupportedPathArc(options.path_arc));
+    }
+    if options.lag_ratio != 0.0 {
+        return Err(AnimationOptionsError::UnsupportedLagRatio(
+            options.lag_ratio,
+        ));
+    }
+    Ok(options)
+}
+
 fn resolve_reversible_options_without_path(
     defaults: AnimationDefaults,
     animation: AnimationOptions,

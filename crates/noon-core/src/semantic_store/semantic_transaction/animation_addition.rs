@@ -35,6 +35,10 @@ pub enum SemanticTransactionAnimationIntent {
         target: SemanticTransactionNodeRef,
         path: SemanticTransactionNodeRef,
     },
+    SampledMotion {
+        target: SemanticTransactionNodeRef,
+        motion: std::sync::Arc<crate::SampledMotionData>,
+    },
     TransformTo {
         target: SemanticTransactionNodeRef,
         target_state: SemanticTransactionNodeRef,
@@ -139,6 +143,7 @@ impl SemanticTransactionAnimationIntent {
                 _ => Some([Some(*target), None, None]),
             },
             Self::MoveAlongPath { target, path } => Some([Some(*target), Some(*path), None]),
+            Self::SampledMotion { target, .. } => Some([Some(*target), None, None]),
             Self::TransformTo {
                 target,
                 target_state,
@@ -183,6 +188,7 @@ impl SemanticTransactionAnimationIntent {
             Self::Composition { children, .. } => children.as_slice(),
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
+            | Self::SampledMotion { .. }
             | Self::TransformTo { .. }
             | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
@@ -262,6 +268,12 @@ impl SemanticTransactionAnimation {
                 SemanticTransactionAnimationIntent::MoveAlongPath {
                     target: (*target).into(),
                     path: (*path).into(),
+                }
+            }
+            SemanticAnimationIntent::SampledMotion { target, motion } => {
+                SemanticTransactionAnimationIntent::SampledMotion {
+                    target: (*target).into(),
+                    motion: motion.clone(),
                 }
             }
             SemanticAnimationIntent::TransformTo {
@@ -450,6 +462,12 @@ impl SemanticTransactionAnimation {
                 SemanticAnimationIntent::MoveAlongPath {
                     target: resolve_node_ref(*target, committed),
                     path: resolve_node_ref(*path, committed),
+                }
+            }
+            SemanticTransactionAnimationIntent::SampledMotion { target, motion } => {
+                SemanticAnimationIntent::SampledMotion {
+                    target: resolve_node_ref(*target, committed),
+                    motion: motion.clone(),
                 }
             }
             SemanticTransactionAnimationIntent::TransformTo {
@@ -718,6 +736,9 @@ pub(super) fn preflight_transaction_animation(
         preflight_animation_options(animation.options(), index)?;
     }
     match animation.intent() {
+        SemanticTransactionAnimationIntent::SampledMotion { target, .. } => {
+            catalog.ensure_animation_target(*target, index)?;
+        }
         SemanticTransactionAnimationIntent::MoveAlongPath { target, path } => {
             catalog.ensure_animation_target(*target, index)?;
             catalog.ensure_animation_target(*path, index)?;
@@ -1141,6 +1162,7 @@ pub(super) fn commit_add_animation(
         SemanticAnimationIntent::MoveAlongPath { target, path } => store
             .insert_semantic_move_along_path_animation(*target, *path, options)
             .expect("preflighted MoveAlongPath insertion must remain valid while transaction owns the store"),
+        SemanticAnimationIntent::SampledMotion { .. } => store.insert_semantic_animation_state(state),
         SemanticAnimationIntent::TransformTo { .. } | SemanticAnimationIntent::EffectTargetTo { .. } => {
             // Final candidate correspondence was captured before publication.
             // All object/options references are covered by transaction preflight.

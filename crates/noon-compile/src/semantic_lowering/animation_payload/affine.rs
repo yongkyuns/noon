@@ -180,6 +180,10 @@ impl SemanticAffineAnimationTrackProjection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticAffineAnimationTrackError {
+    SampledMotion {
+        animation: SemanticNodeId,
+        error: super::SampledMotionLoweringError,
+    },
     EffectTarget {
         animation: SemanticNodeId,
         error: super::glow_target::EffectTargetLoweringError,
@@ -302,6 +306,7 @@ pub enum SemanticAffineAnimationTrackError {
 impl std::fmt::Display for SemanticAffineAnimationTrackError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SampledMotion { animation, error } => write!(formatter, "sampled motion {animation:?}: {error}"),
             Self::EffectTarget { animation, error } => write!(formatter, "animation {animation:?}: {error}"),
             Self::GlowDriverConflict { first_animation, next_animation, property } => write!(formatter,
                 "glow channel {property:?} has conflicting drivers {first_animation:?} and {next_animation:?}"),
@@ -586,6 +591,63 @@ where
 
     for leaf in schedule.leaves() {
         validate_leaf_matches_declaration(store, leaf)?;
+        if leaf.payload == SemanticScheduledAnimationPayload::SampledMotion {
+            let error = |error| SemanticAffineAnimationTrackError::SampledMotion {
+                animation: leaf.animation,
+                error,
+            };
+            let source = object_state(store, leaf, leaf.target)?;
+            if store
+                .semantic_updater_registrations(leaf.target)
+                .is_ok_and(|items| !items.is_empty())
+            {
+                return Err(error(super::SampledMotionLoweringError::UnsupportedTarget));
+            }
+            if let Some(first_animation) =
+                affine_center_dependency_conflict(&driven, leaf.execution_object_id, leaf.animation)
+            {
+                return Err(SemanticAffineAnimationTrackError::MultipleDrivers {
+                    first_animation,
+                    next_animation: leaf.animation,
+                    target: leaf.target,
+                    property: SemanticObjectProperty::Translation,
+                });
+            }
+            let from = if let Some(captured) = captures.get(&leaf.execution_object_id) {
+                captured.clone()
+            } else {
+                let captured = effective_properties(leaf.execution_object_id).ok_or_else(|| {
+                    error(super::SampledMotionLoweringError::MissingEffectiveCenter)
+                })?;
+                captures.insert(leaf.execution_object_id, captured.clone());
+                captured
+            };
+            let state = store
+                .semantic_animation_state(leaf.animation)
+                .map_err(SemanticAffineAnimationTrackError::Animation)?;
+            let SemanticAnimationIntent::SampledMotion { motion, .. } = state.intent() else {
+                return Err(error(super::SampledMotionLoweringError::InvalidDeclaration));
+            };
+            let center = super::sampled_motion::declared_center(source, store, from.transform);
+            let channels = super::sampled_motion::channels(
+                store,
+                source,
+                &from,
+                center,
+                motion.clone(),
+                leaf.options,
+            )
+            .map_err(error)?;
+            for channel in channels {
+                push_published_channel(leaf, channel, &mut driven, &mut tracks)?;
+            }
+            reserve_affine_center_dependencies(
+                &mut driven,
+                leaf.execution_object_id,
+                leaf.animation,
+            );
+            continue;
+        }
         if matches!(
             leaf.payload,
             SemanticScheduledAnimationPayload::MoveAlongPath { .. }
@@ -1069,7 +1131,8 @@ where
             | SemanticScheduledAnimationPayload::AffineLifecycle { .. }
             | SemanticScheduledAnimationPayload::Create
             | SemanticScheduledAnimationPayload::Add
-            | SemanticScheduledAnimationPayload::Rotate { .. } => {
+            | SemanticScheduledAnimationPayload::Rotate { .. }
+            | SemanticScheduledAnimationPayload::SampledMotion => {
                 return Err(SemanticAffineAnimationTrackError::UnsupportedLifecycle {
                     animation: leaf.animation,
                     remover: leaf.options.remover,
@@ -1361,6 +1424,12 @@ fn validate_leaf_matches_declaration(
         .semantic_animation_state(leaf.animation)
         .map_err(SemanticAffineAnimationTrackError::Animation)?;
     match animation.intent() {
+        SemanticAnimationIntent::SampledMotion { target, .. }
+            if *target == leaf.target
+                && leaf.payload == SemanticScheduledAnimationPayload::SampledMotion =>
+        {
+            Ok(())
+        }
         SemanticAnimationIntent::MoveAlongPath { target, path }
             if *target == leaf.target
                 && matches!(
@@ -1659,13 +1728,18 @@ fn push_published_channel(
         && matches!(
             &leaf.payload,
             SemanticScheduledAnimationPayload::TransformTo { .. }
+                | SemanticScheduledAnimationPayload::SampledMotion
         );
     tracks.push(SemanticAffineAnimationTrack {
         animation: leaf.animation,
         target: leaf.target,
         execution_object_id: leaf.execution_object_id,
         property: channel.property,
-        completion: completion_at_endpoint(channel.completion, timing),
+        completion: if leaf.payload == SemanticScheduledAnimationPayload::SampledMotion {
+            channel.completion
+        } else {
+            completion_at_endpoint(channel.completion, timing)
+        },
         values: channel.values,
         timing,
         time_map: leaf.time_map.clone(),

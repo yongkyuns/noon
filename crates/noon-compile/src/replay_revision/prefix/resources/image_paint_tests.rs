@@ -65,6 +65,7 @@ fn image_fill_and_historical_track_endpoints_are_pinned_once_per_handle() {
         tracks: vec![(track.id, Some(track))],
         camera_motion_payloads: 0,
         path_motion_commands: 0,
+        sampled_motion_keys: 0,
     };
     let revisions = std::slice::from_ref(&revision);
     let mut scene = blank_scene();

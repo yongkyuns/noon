@@ -260,6 +260,7 @@ mod tests {
             tracks: Vec::new(),
             camera_motion_payloads: 0,
             path_motion_commands: 0,
+            sampled_motion_keys: 0,
         }
     }
 

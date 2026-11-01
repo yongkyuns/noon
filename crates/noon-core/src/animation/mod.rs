@@ -30,3 +30,6 @@ pub use text_members::*;
 
 mod timeline;
 pub use timeline::*;
+
+mod sampled_motion;
+pub use sampled_motion::*;

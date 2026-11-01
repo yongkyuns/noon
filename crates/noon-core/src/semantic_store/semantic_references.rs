@@ -672,6 +672,7 @@ fn outgoing_references(node: &SemanticNode) -> Vec<(SemanticNodeId, SemanticRefe
                 references.push((*target_state, SemanticReferenceKind::AnimationTargetState));
             }
             SemanticAnimationIntent::Rotate { target, .. }
+            | SemanticAnimationIntent::SampledMotion { target, .. }
             | SemanticAnimationIntent::WorldTransformTo { target, .. }
             | SemanticAnimationIntent::CameraProfileTo { target, .. }
             | SemanticAnimationIntent::Indicate { target, .. }

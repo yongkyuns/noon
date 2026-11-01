@@ -861,6 +861,14 @@ pub enum TrackValues {
         path_transform: crate::Transform2D,
         target_center_offset: Vec2,
     },
+    /// One rigid pose table shared with its Rotation channel.
+    SampledPosition {
+        plan: Arc<crate::SampledMotionPlan>,
+    },
+    /// Unwrapped angles, sharing the Position channel's activation snapshot.
+    SampledRotation {
+        plan: Arc<crate::SampledMotionPlan>,
+    },
     Color {
         from: Option<crate::Color>,
         to: Option<crate::Color>,
@@ -895,6 +903,13 @@ pub enum TrackValues {
 }
 
 impl TrackValues {
+    /// Immutable sampled pose allocation, shared by its ordinary affine channels.
+    pub fn sampled_motion_plan(&self) -> Option<&Arc<crate::SampledMotionPlan>> {
+        match self {
+            Self::SampledPosition { plan } | Self::SampledRotation { plan } => Some(plan),
+            _ => None,
+        }
+    }
     /// Endpoint used by ordinary subsequent activation captures. A restoring
     /// pulse releases to its source independently of easing; other channels keep
     /// the existing f32 terminal-rate contract.
@@ -925,9 +940,12 @@ impl TrackValues {
             Self::Effect { .. } => ValueKind::Effect,
             Self::Bool { .. } => ValueKind::Bool,
             Self::ZIndex { .. } => ValueKind::ZIndex,
-            Self::Scalar { .. } => ValueKind::Scalar,
+            Self::Scalar { .. } | Self::SampledRotation { .. } => ValueKind::Scalar,
             Self::Emission { .. } => ValueKind::Emission,
-            Self::Vec2 { .. } | Self::ArcVec2 { .. } | Self::PathVec2 { .. } => ValueKind::Vec2,
+            Self::Vec2 { .. }
+            | Self::ArcVec2 { .. }
+            | Self::PathVec2 { .. }
+            | Self::SampledPosition { .. } => ValueKind::Vec2,
             Self::Color { .. } => ValueKind::Color,
             Self::PreparedMorph { .. } => ValueKind::Scalar,
             Self::Object { .. } => ValueKind::Object,
@@ -942,6 +960,12 @@ impl TrackValues {
         property: Property,
     ) -> Result<(), TimelineError> {
         match self {
+            Self::SampledPosition { .. } if property != Property::Position => {
+                Err(TimelineError::InvalidSampledMotionValues(property))
+            }
+            Self::SampledRotation { .. } if property != Property::Rotation => {
+                Err(TimelineError::InvalidSampledMotionValues(property))
+            }
             Self::Effect { from, to, .. } => {
                 if from.property() != property
                     || to.property() != property
@@ -1195,6 +1219,8 @@ pub struct TrackDefinition {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TimelineError {
+    InvalidSampledMotionValues(Property),
+    UnsupportedSampledMotionRateFunction(RateFunction),
     InvalidPaintValues,
     UnsupportedPaintRateFunction(RateFunction),
     InvalidEffectValues(Property),
@@ -1258,6 +1284,8 @@ pub enum TimelineError {
 impl std::fmt::Display for TimelineError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidSampledMotionValues(property) => write!(formatter, "sampled rigid motion cannot drive {property:?}"),
+            Self::UnsupportedSampledMotionRateFunction(rate) => write!(formatter, "sampled motion requires a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidPaintValues => formatter.write_str("continuous paint track is outside the finite planar fill profile"),
             Self::UnsupportedPaintRateFunction(rate) => write!(formatter, "continuous paint tracks require a leaf rate bounded to [0, 1], got {rate:?}"),
             Self::InvalidEffectValues(property) => write!(formatter, "invalid or incompatible effect endpoints for {property:?}"),
@@ -1406,6 +1434,15 @@ pub fn validate_track_definition(track: &TrackDefinition) -> Result<(), Timeline
     track
         .values
         .validate_numeric_values(track.object, track.property)?;
+    if matches!(
+        track.values,
+        TrackValues::SampledPosition { .. } | TrackValues::SampledRotation { .. }
+    ) && !track.timing.easing.preserves_unit_interval()
+    {
+        return Err(TimelineError::UnsupportedSampledMotionRateFunction(
+            track.timing.easing,
+        ));
+    }
     if matches!(track.values, TrackValues::Effect { .. })
         && !track.timing.easing.preserves_unit_interval()
     {

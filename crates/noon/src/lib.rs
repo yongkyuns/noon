@@ -330,6 +330,7 @@ pub use noon_core::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
 pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
+pub use noon_core::{SampledMotionData, SampledMotionError};
 #[cfg(test)]
 mod gradient_authoring_tests;
 #[cfg(test)]
@@ -340,6 +341,8 @@ mod image_paint_authoring_tests;
 mod noise_authoring_tests;
 #[cfg(test)]
 mod radial_authoring_tests;
+#[cfg(test)]
+mod sampled_motion_tests;
 pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,

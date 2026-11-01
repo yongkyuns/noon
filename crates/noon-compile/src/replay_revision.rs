@@ -42,6 +42,9 @@ pub struct CompiledReplayRevision {
     // inverse tracks. Charge each side by its command count in the finite replay
     // payload budget just as camera intervals are charged by payload count.
     path_motion_commands: usize,
+    // Both exchange sides retain immutable sample tables. The entry budget is
+    // conservative per track; prepared resource bytes deduplicate shared Arcs.
+    sampled_motion_keys: usize,
 }
 
 impl CompiledReplayRevision {
@@ -63,6 +66,16 @@ impl CompiledReplayRevision {
             + self.tracks.len()
             + self.camera_motion_payloads
             + self.path_motion_commands
+            + self.sampled_motion_keys
+    }
+
+    /// New-suffix resource accounting inspects only saved track payloads.
+    pub fn sampled_motion_plans(
+        &self,
+    ) -> impl Iterator<Item = &std::sync::Arc<noon_core::SampledMotionPlan>> {
+        self.tracks
+            .iter()
+            .filter_map(|(_, track)| track.as_ref()?.values.sampled_motion_plan())
     }
 }
 
@@ -214,10 +227,24 @@ impl CompiledScene {
             }
             _ => 0,
         };
+        let saved_sampled_motion_keys = tracks
+            .iter()
+            .filter_map(|id| self.track(*id))
+            .filter_map(|track| track.values.sampled_motion_plan())
+            .try_fold(0usize, |total, plan| total.checked_add(plan.motion().len()))?;
+        let incoming_sampled_motion_keys = match patch {
+            ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => track
+                .values
+                .sampled_motion_plan()
+                .map_or(0, |plan| plan.motion().len()),
+            _ => 0,
+        };
         Some(CompiledReplayRevision {
             inset_2d_view,
             camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
             path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
+            sampled_motion_keys: saved_sampled_motion_keys
+                .checked_add(incoming_sampled_motion_keys)?,
             rows: rows
                 .into_iter()
                 .map(|index| SavedRow {

@@ -137,6 +137,15 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                     })
                 });
             let center = bounds.map(Rect::center).unwrap_or(transform.translation);
+            let path_endpoints = geometry.as_ref().and_then(|geometry| match geometry {
+                GeometryRef::VectorPath(path) => noon_geometry::drawable_endpoints(path),
+                GeometryRef::Line { start, end } => Some((*start, *end)),
+                _ => None,
+            }).map(|(start, end)| {
+                let start = transform.transform_point(start);
+                let end = transform.transform_point(end);
+                json!([[start.x, start.y], [end.x, end.y]])
+            });
             let opacity = object.style.opacity * object.appearance;
             let spatial = object.spatial.as_deref().map(|state| {
                 let world = state.world;
@@ -193,6 +202,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
             json!({
                 "id": object.id.get(), "present": frame.is_present(index),
                 "center": [center.x, center.y], "bounds": bounds_json(bounds),
+                "path_endpoints": path_endpoints,
                 "transform": transform,
                 "spatial": spatial,
                 "fill": paint_json(object.style.fill, opacity),

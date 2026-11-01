@@ -127,6 +127,29 @@ impl crate::Scene {
         )
     }
 
+    /// Declare compact sampled rigid motion through the shared timeline.
+    ///
+    /// The destination centers place the rigid anchor captured from the target's
+    /// effective bounds center at activation. Angular samples are signed,
+    /// unwrapped offsets from the effective rotation; geometry and scale remain
+    /// retained. The implicit phase-zero sample is the activation-effective pose.
+    pub fn declare_sampled_motion(
+        &self,
+        target: &Mobject,
+        motion: std::sync::Arc<noon_core::SampledMotionData>,
+        options: AnimationOptions,
+    ) -> Result<DeclaredAnimation, String> {
+        self.require_object(target)
+            .map_err(|error| error.to_string())?;
+        self.declare_animation(
+            SemanticAnimationIntent::SampledMotion {
+                target: target.node_id(),
+                motion,
+            },
+            options,
+        )
+    }
+
     /// Declare a replayable intensity pulse. Activation captures the effective glow;
     /// an absent canonical attachment is enrolled neutrally by the live session.
     pub fn declare_glow_pulse(

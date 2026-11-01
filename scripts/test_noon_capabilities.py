@@ -199,6 +199,26 @@ class CapabilityTests(unittest.TestCase):
         (self.root / path).write_text("# changed\n", encoding="utf-8")
         self.assertNotEqual(self.report()["examples"]["circle"]["source_sha256"], expected)
 
+    def test_native_adapter_provenance_does_not_claim_manim_parity(self):
+        module = "web/python/_noon_sampled_motion.py"
+        (self.root / module).write_text(
+            'raise RuntimeError("must not import native adapter")\n', encoding="utf-8",
+        )
+        (self.root / "web/python/noon.py").write_text(
+            '_PUBLIC_EXPORTS = {"SampledMotion": "_noon_sampled_motion"}\n'
+            '__all__ = ["Circle", "Text", *_PUBLIC_EXPORTS]\n', encoding="utf-8",
+        )
+        report = self.report()
+        expected = hashlib.sha256((self.root / module).read_bytes()).hexdigest()
+        self.assertEqual(report["provenance"]["input_sha256"][module], expected)
+        symbol = report["symbols"]["SampledMotion"]
+        self.assertTrue(symbol["exported"])
+        self.assertEqual(symbol["classification_source"], "unclassified-export")
+        self.assertFalse(symbol["runtime_verified"])
+        self.assertEqual(symbol["ready_examples"], [])
+        (self.root / module).write_text("# new implementation\n", encoding="utf-8")
+        self.assertNotEqual(self.report()["provenance"]["input_sha256"][module], expected)
+
     def test_output_is_deterministic(self):
         self.assertEqual(self.report(), self.report())
 

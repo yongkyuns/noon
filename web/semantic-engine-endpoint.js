@@ -33,7 +33,7 @@ const FINITE_EXPORT_CONTROLS = new Set([
 ]);
 const PREPARED_PLAYBACK_CONTROLS = new Set([
   "pause", "resume", "seek", "restart_playback", "browser_pointer_input",
-  "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
+  "browser_pointer_view", "pointer_fill_selection", "inspection_scroll", "debug_frame",
 ]);
 
 function normalizeReplayUnavailableReason(error) {
@@ -376,6 +376,9 @@ export async function attachSemanticEngine(
     if (stopped || controls.length || preparedAudioNeedsTick) return;
     preparedAudioDirty = false;
     const sampledAt = performance.now();
+    // Rust observes its existing running clock at this post-presentation sample.
+    // Restamping the older evaluated frame would turn variable renderer latency
+    // into an apparent jump when the next audio anchor catches up.
     const audioAnchor = audioAnchorAt(sampledAt);
     post({ ...state("audio_state"), time: audioAnchor.time, audioAnchor });
   }
@@ -1160,7 +1163,7 @@ export async function attachSemanticEngine(
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
-        if (prepared !== null) prepared.wakeSource();
+        if (prepared !== null && message.type !== "debug_frame") prepared.wakeSource();
         if (hasAudio && ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
           // A control changes both outputs at one accepted Rust clock sample.
           // Presentation precedes the new device anchor; no device clock drives

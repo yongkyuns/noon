@@ -2302,6 +2302,7 @@ def _build_canonical_composition_candidate(
 ):
     """Build one inert recursive composition tree owned by the WASM context."""
     import _manim_rotate as _rotate
+    import _noon_sampled_motion as _sampled_motion
 
     root_play_kwargs = dict(kwargs)
     if group is None:
@@ -3003,6 +3004,19 @@ def _build_canonical_composition_candidate(
             return
         raise NotImplementedError(f"canonical composition does not support {type(animation).__name__}")
 
+    def append_children(builder, children, child_kwargs):
+        pending = []
+        for animation in children:
+            if type(animation) is _sampled_motion.SampledMotion:
+                pending.append(animation)
+                continue
+            if pending:
+                _sampled_motion.append_batch(self, context, builder, pending, child_kwargs)
+                pending.clear()
+            append_leaf(builder, animation, child_kwargs)
+        if pending:
+            _sampled_motion.append_batch(self, context, builder, pending, child_kwargs)
+
     def build(root_kind: str, root_animations: tuple[object, ...], root_group: object | None, root_kwargs: dict[str, object]):
         # Recursion uses a fresh inert builder while one reservation accumulator is shared.
         nested = context.beginOrdinaryCompositionBuilder(
@@ -3017,12 +3031,10 @@ def _build_canonical_composition_candidate(
         play_rate = _canonical_composition_rate_id(root_kwargs)
         if play_rate is not None:
             nested.setPlayRateFunction(play_rate)
-        for child_animation in root_animations:
-            append_leaf(nested, child_animation, {} if root_group is not None else root_kwargs)
+        append_children(nested, root_animations, {} if root_group is not None else root_kwargs)
         return nested
 
-    for animation in animations:
-        append_leaf(candidate, animation, {} if group is not None else kwargs)
+    append_children(candidate, animations, {} if group is not None else kwargs)
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:

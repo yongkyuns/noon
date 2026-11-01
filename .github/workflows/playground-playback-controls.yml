@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/playground-playback-controls.yml"
       - "crates/noon/**"
+      - "crates/noon-core/**"
       - "crates/noon-compile/**"
       - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
@@ -36,6 +37,8 @@ on:
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/prepared-audio-qualification.mjs"
+      - "scripts/sampled-motion-qualification.mjs"
+      - "scripts/sampled-motion-fixture-check.py"
       - "scripts/browser-audio-observation.mjs"
       - "tests/fixtures/fourier_audio/**"
       - "scripts/playground-prepared-lifecycle-qualification.mjs"
@@ -47,6 +50,7 @@ on:
   pull_request:
     paths:
       - "crates/noon/**"
+      - "crates/noon-core/**"
       - "crates/noon-compile/**"
       - "crates/noon-runtime/**"
       - "crates/noon-web/**"
@@ -80,6 +84,8 @@ on:
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/prepared-audio-qualification.mjs"
+      - "scripts/sampled-motion-qualification.mjs"
+      - "scripts/sampled-motion-fixture-check.py"
       - "scripts/browser-audio-observation.mjs"
       - "tests/fixtures/fourier_audio/**"
       - "scripts/playground-prepared-lifecycle-qualification.mjs"
@@ -161,6 +167,14 @@ jobs:
           npx playwright install chromium
       - name: Qualify unchanged ordinary audio and complete Fourier playback
         run: node scripts/prepared-audio-qualification.mjs
+      - name: Install sampled motion numerical oracle
+        run: |
+          noon_sampled_motion_venv="$RUNNER_TEMP/noon-sampled-motion-oracle"
+          python3 -m venv "$noon_sampled_motion_venv"
+          "$noon_sampled_motion_venv/bin/python" -m pip install --disable-pip-version-check numpy==2.4.6
+          echo "NOON_SAMPLED_MOTION_PYTHON=$noon_sampled_motion_venv/bin/python" >> "$GITHUB_ENV"
+      - name: Qualify compact sampled motion and unchanged Fourier semantics
+        run: node scripts/sampled-motion-qualification.mjs
       - name: Qualify actual DOM samples and paused click-selection pixels
         run: |
           node scripts/shader-time-qualification.mjs
@@ -227,6 +241,7 @@ jobs:
             browser-smoke-artifacts/playground-playback-dynamic
             browser-smoke-artifacts/playground-playback-dynamic-webgpu
             browser-smoke-artifacts/prepared-audio
+            browser-smoke-artifacts/sampled-motion
           if-no-files-found: error
           retention-days: 3
 

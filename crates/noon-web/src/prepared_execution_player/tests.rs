@@ -83,6 +83,36 @@ fn decode(json: &str) -> RetainedFamilyExecutionDeltaEnvelope {
     serde_json::from_str(json).unwrap()
 }
 
+#[test]
+fn prepared_frame_diagnostic_reads_the_selected_history_without_publication() {
+    let mut fixture = Fixture::new(17);
+    let (_, _) = ready(&mut fixture.player);
+    let later = fixture.next(true);
+    fixture.deliver(later);
+    fixture.player.seek_delta_json(1.5).unwrap();
+    let later: serde_json::Value =
+        serde_json::from_str(&fixture.player.debug_frame_json()).unwrap();
+    assert_eq!(later["time"], 1.5);
+    assert_eq!(later["objects"][0]["center"][0], 1.0);
+
+    fixture.player.seek_delta_json(0.5).unwrap();
+    let before = fixture.player.playback.reader.publication_context();
+    let frontier = fixture.player.playback.reader.frontier();
+    let json = fixture.player.debug_frame_json();
+    let frame: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(frame["time"], 0.5);
+    assert_eq!(frame["objects"][0]["center"][0], 0.0);
+    assert_eq!(fixture.player.debug_frame_json(), json);
+    assert_eq!(fixture.player.playback.reader.publication_context(), before);
+    assert_eq!(fixture.player.playback.reader.frontier(), frontier);
+    assert!(!fixture.player.playback.playing());
+    assert!(fixture
+        .player
+        .drain_delta_transport_json()
+        .unwrap()
+        .is_none());
+}
+
 fn receive(mirror: &mut InstalledRetainedExecutionMirror, json: &str) {
     let (outcome, _) = mirror.apply_json(json).unwrap();
     assert_ne!(outcome, RetainedTransportApplyOutcome::DroppedStale);
