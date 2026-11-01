@@ -93,6 +93,22 @@ test("new history does not move the playhead, resume a pause or emit a command",
   assert.deepEqual(f.calls, []);
 });
 
+test("observed source handoff retires history controls and preserves forward pause", async () => {
+  const f = fixture(prepared({ buffering: true }));
+  f.setState({ time: 2, playing: true, sourceExecution: "observed", replaySupported: false,
+    sourcePlaybackControllable: true, durationSeconds: null });
+  assert.equal(f.controls.durationSeconds, null);
+  assert.equal(f.controls.element.dataset.buffering, "false");
+  assert.equal(f.controls.element.dataset.controllable, "false");
+  assert.equal(f.input.disabled, true);
+  assert.equal(f.restart.disabled, true);
+  assert.equal(f.toggle.disabled, false);
+  f.toggle.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, [["pause", undefined]]);
+  assert.equal(f.output.value, "2.00 / — s");
+  f.controls.setDuration(3); // No stale reader capability blocks later source updates.
+});
+
 test("open boundary and invalid input never send a guessed last-frame or queued future seek", async () => {
   const f = fixture();
   for (const value of [2, 3, -1, "", "NaN", "Infinity"]) {

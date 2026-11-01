@@ -823,7 +823,14 @@ function createPreparedSourceDriver(run) {
         continuation.preparedBootstrapObserved = true;
         return;
       }
-      invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceSegment(context));
+      const prepared = invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceSegment(context));
+      if (prepared === false) {
+        // This is still the original suspended play/wait. Only a reader request
+        // at the required frontier may activate its normal callback protocol.
+        const event = awaitContinuationEvent(continuation);
+        continuation.endpoint.sourceExecutionRequired();
+        return event;
+      }
       deliverPreparedSourcePrefix(continuation);
     },
     needsPreparation() {
@@ -1332,6 +1339,9 @@ async function handleRequest(request) {
 }
 
 async function attachSemanticExecutionRequest(request, continuationOnly, pyodide) {
+  if (request.sourceHandoff !== undefined && typeof request.sourceHandoff !== "boolean") {
+    throw new TypeError("sourceHandoff must be boolean");
+  }
   const entry = semanticContexts.get(request.contextId);
   if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
   const continuation = activeAuthoringRun?.continuation;
@@ -1343,8 +1353,37 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
         continuation.terminal) {
       throw new Error("stale semantic continuation attachment");
     }
-    if (continuation.endpoint !== null) {
+    if (continuation.endpoint !== null && request.sourceHandoff !== true) {
       throw new Error("semantic continuation endpoint is already attached");
+    }
+  }
+  if (request.sourceHandoff === true) {
+    if (!continuationOnly || !entry.preparedPlayback || !continuation?.preparedPlayer ||
+        continuation.observedExecution || request.replaceExistingEndpoint || request.pacing !== "realtime") {
+      throw new Error("source handoff requires its original prepared continuation");
+    }
+    const run = activeAuthoringRun, previousEndpoint = continuation.endpoint;
+    // Keep registry retirement behind the asynchronous lease attachment. A
+    // cancellation stops the old reader immediately; the candidate must return
+    // or discard its source lease before this reservation can be relinquished.
+    const pendingAttachment = { stop() {} };
+    entry.endpoints.add(pendingAttachment);
+    let endpoint;
+    try {
+      const playing = invokePreparedEngine(() => continuation.preparedPlayer.beginSourceExecution(entry.context));
+      continuation.observedExecution = true;
+      endpoint = await attachObservedSemanticExecution({ ...request, initiallyPaused: !playing,
+        loopDurationSeconds: Math.max(1, entry.context.liveHandoffDuration()) }, entry, continuation, true, pyodide);
+      requirePreparedContinuation(run, entry.context);
+      return endpoint;
+    } catch (error) {
+      entry.released = true;
+      failContinuation(continuation, error);
+      if (!fatalAuthoringFailure) { endpoint?.stop(); previousEndpoint.stop(); }
+      throw error;
+    } finally {
+      entry.endpoints.delete(pendingAttachment);
+      if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
     }
   }
   if (entry.preparedPlayback) {
@@ -1461,14 +1500,16 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
     endpoint = await attachSemanticEngine(entry.context, request, () => {
       // This reader is single-use. A control-port stop owns retirement even if
       // a concurrent explicit release arrived while the source was still active.
-      entry.released = true;
       entry.endpoints.delete(endpoint);
       continuation.preparedPlayer = null;
+      if (continuation.observedExecution) { retireSemanticContext(request.contextId, entry); return; }
+      entry.released = true;
       failContinuation(continuation, new Error("prepared playback endpoint stopped"));
       retireSemanticContext(request.contextId, entry);
     }, null, null, null, null, null, {
       player: continuation.preparedPlayer,
       wakeSource: () => continuation.preparedDriver.wake(),
+      generation: continuation.generation,
     });
     entry.endpoints.add(endpoint);
     requirePreparedContinuation(run, entry.context);

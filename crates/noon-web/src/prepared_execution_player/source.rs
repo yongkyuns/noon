@@ -8,6 +8,7 @@ use noon::{PrefixBatch, PrefixPublisher};
 pub(super) struct SourceDelivery {
     publisher: PrefixPublisher,
     pending: Option<PrefixBatch>,
+    required: Option<noon::SourceExecutionRequirement>,
 }
 
 impl PreparedExecutionPlayer {
@@ -24,6 +25,7 @@ impl PreparedExecutionPlayer {
         player.source = Some(SourceDelivery {
             publisher,
             pending: None,
+            required: None,
         });
         Ok(player)
     }
@@ -50,8 +52,15 @@ impl PreparedExecutionPlayer {
     pub fn prepare_interpreter_segment(
         &mut self,
         context: &mut CanonicalAuthoringScene,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.validate_source(context)?;
+        let source = self.source.as_mut().expect("validated source delivery");
+        source.required = context
+            .prefix_source_requirement(&source.publisher)
+            .map_err(|e| e.to_string())?;
+        if source.required.is_some() {
+            return Ok(false);
+        }
         // An engine failure/unwind cannot leave partially completed work eligible
         // for another attempt. The historical reader remains independent. This
         // does not catch a panic, recover a WASM trap, or retry user statements.
@@ -71,7 +80,24 @@ impl PreparedExecutionPlayer {
         // A zero-duration segment may complete without a new readable interval.
         // Its same-time edits remain in ordinary source history for a later suffix.
         self.source = Some(source);
-        Ok(())
+        Ok(true)
+    }
+
+    pub fn begin_source_execution(
+        &mut self,
+        context: &mut CanonicalAuthoringScene,
+    ) -> Result<bool, String> {
+        self.validate_source(context)?;
+        if !self.source_execution_ready() {
+            return Err("source execution requires actual playback demand at its frontier".into());
+        }
+        let playing = self.playback.playing();
+        let source = self.source.as_ref().expect("validated source delivery");
+        context
+            .begin_observed_prefix_source(&source.publisher, &self.playback.reader, playing)
+            .map_err(|e| e.to_string())?;
+        self.source = None;
+        Ok(playing)
     }
 
     /// Explicit interpreter completion retains a terminal suffix; only adoption
@@ -95,6 +121,13 @@ impl PreparedExecutionPlayer {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl PreparedExecutionPlayer {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sourceExecutionReady))]
+    pub fn source_execution_ready(&self) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|source| source.required.is_some())
+            && self.playback.buffering()
+    }
     /// Explicit maintenance for the single borrowed pending suffix. Rust owns
     /// object/plan counts and permanent admission; JavaScript carries no batch.
     /// False denotes no pending output, including a zero-duration boundary.
@@ -196,8 +229,17 @@ mod wasm {
         pub fn prepare_source_segment(
             &mut self,
             context: &mut CanonicalAuthoringSceneContext,
-        ) -> Result<(), JsValue> {
+        ) -> Result<bool, JsValue> {
             self.prepare_interpreter_segment(&mut context.inner)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = beginSourceExecution)]
+        pub fn begin_source_execution_wasm(
+            &mut self,
+            context: &mut CanonicalAuthoringSceneContext,
+        ) -> Result<bool, JsValue> {
+            self.begin_source_execution(&mut context.inner)
                 .map_err(|e| JsValue::from_str(&e))
         }
 

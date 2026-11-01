@@ -254,6 +254,12 @@ pub struct PrefixReceiver {
     object_vector_budget_bytes: usize,
 }
 impl PrefixReceiver {
+    /// Same source/scope/stream, with every extracted suffix already adopted.
+    pub fn matches_publisher(&self, publisher: &PrefixPublisher) -> bool {
+        Arc::ptr_eq(&self.scope, &publisher.scope)
+            && Arc::ptr_eq(&self.stream, &publisher.stream)
+            && self.frontier == publisher.frontier
+    }
     /// Saved vectors and logical inline geometry held, including future history.
     /// Seeking or removing visible membership does not release this charge.
     pub fn retained_history_payload_bytes(&self) -> usize {
