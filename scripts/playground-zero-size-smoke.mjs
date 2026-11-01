@@ -266,6 +266,16 @@ try {
     waitUntil: "load",
   });
   await waitForInitialRuntime(page);
+  // Incremental source completion can precede playback completion. Resize
+  // stability is measured on a paused frame, after the public command settles.
+  if (await page.locator(".playback-controls").getAttribute("data-playing") === "true") {
+    await page.locator(".playback-toggle").click();
+  }
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.playing === "false" && controls.dataset.busy === "false";
+  });
+  await waitForQuiescentMetrics(page, "paused resize baseline");
 
   diagnostics.snapshots.baseline = await snapshot(page);
   assert.ok(diagnostics.snapshots.baseline.cssWidth >= 320, "baseline canvas must be visible");

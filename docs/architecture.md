@@ -884,6 +884,11 @@ restart retains the same reader, original source and delivery cursor in a newer
 receiver namespace. The replacement must actually present before its clock or
 source handoff is admitted. Failed renderer setup preserves the reader for retry;
 explicit source retirement releases it. This recovery does not restart user code.
+Receiver failure commits elapsed static-wait time through Rust before freezing
+the clock, preserving playback intent without publishing to the failed renderer.
+After acknowledged retirement, a new source Run can reuse the render worker and
+canvas with a newer transport session and fresh controls. An active historical
+reader still cannot be replaced by reconciliation.
 
 Before a reader exists, Rust can instead admit the original pending interpreter
 segment to observed execution. This releases only its open source history and

@@ -581,7 +581,8 @@ function createRuntimeClient() {
 }
 
 function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
-  if (playbackState?.sourceExecution === "observed" && isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
+  if (playbackState?.preparedPlayback === true) preparedPlaybackPlayer = nextPlayer;
+  else if (playbackState?.sourceExecution === "observed" && isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
   if (playbackState?.hasAudio === true) durationSeconds = playbackState.durationSeconds;
   status.dataset.playbackControls = supported ? "available" : "unavailable";
   if (playbackControls === null) {
@@ -1004,8 +1005,7 @@ function stopForSourceEdit() {
   const client = authoringClient;
   const continuation = activeSourceContinuation;
   let cancellation = continuation === null ? null : supersedeActiveSourceContinuation();
-  if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart &&
-      !isPreparedPlayback()) {
+  if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart) {
     // A completed source run can keep its renderer, canvas and warm VM. The
     // existing semantic transition replaces the execution endpoint atomically.
     // Active/stuck source continuations still use bounded cancellation below.
@@ -1126,8 +1126,13 @@ async function runScene() {
         stopMetricsPolling();
         await retainedPlayer.retireExecutionSource();
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-source-retirement");
-        if (isPreparedPlayback() || preparedPlayback) {
-          discardEarlyContinuationRuntime(retainedPlayer);
+        if (playerNeedsRestart) discardEarlyContinuationRuntime(retainedPlayer);
+        else if (isPreparedPlayback() || preparedPlayback) {
+          // The old reader has been released. Keep the renderer and canvas for
+          // the next endpoint, but retire controls bound to its old readiness.
+          playbackControls?.destroy();
+          playbackControls = null;
+          preparedPlaybackPlayer = null;
         }
         playerNeedsRestart = false;
         updatePreviewRecoveryControl();

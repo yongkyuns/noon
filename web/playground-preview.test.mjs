@@ -243,8 +243,8 @@ function assertStopped(context) {
   assert.equal(context.status.dataset.playbackPlaying, "false");
 }
 
-test("actual edit boundary freezes pixels before hiding or retiring the renderer", async () => {
-  const f = await editBoundaryFixture();
+for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"} edit freezes pixels before pausing and retains the renderer`, async () => {
+  const f = await editBoundaryFixture({ prepared });
   await f.stop();
   assert.deepEqual(f.order, ["snapshot", "pause"]);
   assert.equal(f.canvas.style.visibility, "hidden");
@@ -253,23 +253,7 @@ test("actual edit boundary freezes pixels before hiding or retiring the renderer
   assert.equal(f.context.authoringClient, f.client);
   assert.deepEqual(f.counts(), { terminated: 0, authoringTerminated: 0, pollsStopped: 1 });
   assertStopped(f.context);
-});
-
-test("completed prepared edit freezes before retiring its reader and keeps the warm interpreter", async () => {
-  const f = await editBoundaryFixture({ prepared: true });
-  const stopping = f.stop();
-  assert.deepEqual(f.order, ["snapshot", "terminate", "destroy-controls"]);
-  assert.equal(f.context.player, null);
-  assert.equal(f.context.preparedPlaybackPlayer, null);
-  assert.equal(f.context.playbackControls, null);
-  assert.equal(f.context.canvas, f.replacementCanvas);
-  assert.equal(f.context.canvas.style.visibility, "");
-  assert.equal(f.context.playerNeedsRestart, false);
-  assert.equal(f.context.authoringClient, f.client);
-  assertStopped(f.context);
-  await stopping;
-  assert.deepEqual(f.counts(), { terminated: 1, authoringTerminated: 0, pollsStopped: 1 });
-  assert.equal(f.overlay.hidden, true, "an unfinished optional encode must not block retirement");
+  assert.equal(f.overlay.hidden, true, "an unfinished optional encode must not block pausing");
   f.encode(); await flush();
   assert.equal(f.overlay.hidden, false);
   assert.equal(f.overlay.dataset.runGeneration, "1");
