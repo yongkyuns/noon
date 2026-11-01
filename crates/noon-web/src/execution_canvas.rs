@@ -2272,8 +2272,17 @@ mod wasm {
                 source.prepare_until(target)
             }
             .map_err(js_error)?;
-            if progress.is_none() {
-                return Ok(None);
+            match progress {
+                Some(noon::PreparedSourceStatus::ExecutionRequired(requirement)) => {
+                    return Err(js_error(format!(
+                        "source requires observed execution: {requirement:?}"
+                    )));
+                }
+                Some(noon::PreparedSourceStatus::Transferred) => {
+                    return Err(js_message("source execution ownership was transferred"));
+                }
+                None => return Ok(None),
+                _ => {}
             }
             if let Some(batch) = source.pending_batch() {
                 let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
