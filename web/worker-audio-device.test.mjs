@@ -230,7 +230,7 @@ test("absent and invalid resources never initialize the audio module", async t =
   assert.equal(state.outputs.length, 0);
 });
 
-test("recovery preserves the Rust anchor arguments and original rejection", async t => {
+test("recovery preserves the Window bracket arguments and original Rust rejection", async t => {
   const { state, device: createDevice } = await fixture(t);
   const device = createDevice();
   state.initialize = async () => { throw new Error("initialization failed"); };
@@ -240,10 +240,31 @@ test("recovery preserves the Rust anchor arguments and original rejection", asyn
   const rejection = new Error("stale or invalid worker audio anchor");
   state.startError = rejection;
   const anchor = { session: 7, playing: true, time: 2.1, sampledEpochMs: 1_792_956_040_812 };
-  assert.throws(() => device.applyAnchor(anchor, 7), error => error === rejection);
-  const [session, time, sampled, received] = state.outputs[0].starts[0];
-  assert.deepEqual([session, time, sampled], [7, 2.1, 1_792_956_040_812]);
-  assert.ok(Number.isFinite(received));
+  t.mock.method(performance, "now", () => 110);
+  assert.throws(() => device.applyAnchor(anchor, 7, { session: 7, sentMs: 100, receivedMs: 106 }),
+    error => error === rejection);
+  assert.deepEqual(state.outputs[0].starts[0], [7, 2.1, 100, 106, 110]);
   assert.equal(state.outputs[0].starts.length, 1);
   assert.equal(state.initializations, 2);
+});
+
+test("playing anchors require a matching bracket and never compare cross-realm epochs", async t => {
+  const { state, device: createDevice } = await fixture(t);
+  const device = createDevice();
+  await device.install(bundle);
+  t.mock.method(performance, "now", () => 110);
+  const sampled = 1_793_152_307_172.3;
+  const bracket = { session: 7, sentMs: 100, receivedMs: 106 };
+  const anchor = { session: 7, playing: true, time: 2.1, sampledEpochMs: sampled };
+  assert.throws(() => device.applyAnchor(anchor, 7), /correlated Window bracket/);
+  assert.throws(() => device.applyAnchor(anchor, 7, { ...bracket, session: 8 }), /correlated Window bracket/);
+  assert.throws(() => device.applyAnchor({ ...anchor, session: 8 }, 7, bracket), /different playback session/);
+  assert.deepEqual(state.outputs[0].starts, []);
+  // The recorded 1-ULP epoch reversal is diagnostic data, not admission or a
+  // rewritten timestamp. The native call contains the original Window readings.
+  t.mock.getter(performance, "timeOrigin", () => sampled - 110 - 0.000244140625);
+  device.applyAnchor(anchor, 7, bracket);
+  assert.deepEqual(state.outputs[0].starts, [[7, 2.1, 100, 106, 110]]);
+  device.applyAnchor({ session: 7, playing: false }, 7);
+  assert.equal(state.outputs[0].pauses, 1);
 });

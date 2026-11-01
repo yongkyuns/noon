@@ -31,6 +31,10 @@ const source = await readFile(path.join(root, "web", entry.path));
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const json = value => `${JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2)}\n`;
 const report = {
+  // The original fixture's cases and numeric tolerances remain intact. Only
+  // its explicit Start ABI/phase oracle changes with the product timing policy.
+  originalFixtureSha256: "7c55278f83df2ecb1494a449729afa637f615f63f8b3d341e455011b00d7f61a",
+  audioTimingPolicy: "best-effort-correlated-window-bracket-midpoint",
   scope: "finite-python-gallery-shared-rust-real-web-audio", status: "running", browserName, backend,
   revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
@@ -59,6 +63,7 @@ async function state() {
   return page.evaluate(async () => ({
     ...audioQualification.snapshot(),
     anchors: audioQualification.anchors,
+    anchorAttempts: audioQualification.anchorAttempts,
     transport: await audioQualification.execution.state(),
   }));
 }
@@ -235,12 +240,19 @@ function assertEnvelope(snapshot, start, expected) {
   }
 }
 
+function windowBracketPhase(anchor) {
+  assert.ok(Number.isFinite(anchor.sentMs) && anchor.sentMs >= 0);
+  assert.ok(anchor.sentMs <= anchor.receivedMs && anchor.receivedMs <= anchor.appliedMs);
+  return anchor.time + ((anchor.appliedMs - anchor.receivedMs) +
+    (anchor.receivedMs - anchor.sentMs) / 2) / 1000;
+}
+
 function correctedPhase(snapshot, start, requested) {
   const anchor = snapshot.anchors.find(anchor => anchor.sources.includes(start.node));
   assert.ok(anchor, "actual device start must be associated with an accepted worker anchor");
   assert.ok(anchor.time >= requested, "worker anchor must not precede the requested authored time");
-  const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
-  near(start.args[1], phase, "shared clip phase includes exact transport age");
+  const phase = windowBracketPhase(anchor);
+  near(start.args[1], phase, "shared clip phase uses the declared Window bracket estimate");
   near(start.args[2], 30 - phase, "finite source ends at the shared endpoint");
   return phase;
 }
@@ -355,12 +367,22 @@ try {
     const { WasmWorkerAudioOutput } = await import("./pkg/noon_web.js");
     const start = WasmWorkerAudioOutput.prototype.start;
     audioQualification.anchors = [];
-    WasmWorkerAudioOutput.prototype.start = function (session, time, sampledEpochMs, receivedEpochMs) {
+    audioQualification.anchorAttempts = [];
+    WasmWorkerAudioOutput.prototype.start = function (session, time, sentMs, receivedMs, appliedMs) {
       const before = audioQualification.starts.length;
-      const result = start.call(this, session, time, sampledEpochMs, receivedEpochMs);
-      audioQualification.anchors.push({ session, time, sampledEpochMs, receivedEpochMs,
-        sources: audioQualification.starts.slice(before).map(source => source.node) });
-      return result;
+      const attempt = { session, time, sentMs, receivedMs, appliedMs, status: "pending" };
+      audioQualification.anchorAttempts.push(attempt);
+      try {
+        const result = start.call(this, session, time, sentMs, receivedMs, appliedMs);
+        attempt.status = "accepted";
+        audioQualification.anchors.push({ session, time, sentMs, receivedMs, appliedMs,
+          sources: audioQualification.starts.slice(before).map(source => source.node) });
+        return result;
+      } catch (error) {
+        attempt.status = "rejected";
+        attempt.error = String(error);
+        throw error;
+      }
     };
   });
   release();
@@ -796,7 +818,7 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     const anchor = running.anchors.find(anchor => anchor.sources.includes(sources[0].node));
     assert.ok(anchor, "overlapping sources must share an accepted worker clock sample");
     assert.deepEqual(anchor.sources, sources.map(source => source.node));
-    const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
+    const phase = windowBracketPhase(anchor);
     assert.ok(phase >= 2.1 && phase < 29.75);
     for (const [index, source] of sources.entries()) {
       assert.equal(source.loop, true);

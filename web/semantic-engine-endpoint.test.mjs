@@ -3130,6 +3130,35 @@ function sceneControlFixture(audio = true) {
   };
 }
 
+for (const accepted of [true, false]) {
+  test(`control presentation evidence requires the exact Rust-acknowledged picture (${accepted})`, async () => {
+    const f = sceneControlFixture();
+    let observations = 0;
+    f.player.notePointerPresentationJson = () => ++observations === 1 || accepted;
+    let endpoint;
+    try {
+      endpoint = await f.attachPresented();
+      const previous = { session: 7, sequence: 0, presentation: 1, view_revision: 2 };
+      const observed = nextMatching(f.control.port2, message => message.type === "pointer_presented");
+      f.render.port2.postMessage({ type: "execution_presented", session: 7, sequence: 0, pointerReceipt: previous });
+      await observed;
+      f.arm("next_section");
+      const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
+      const outcome = nextMatching(f.control.port2, message => message.requestId === 9);
+      f.control.port2.postMessage({ channel: "noon.engine", protocolVersion: 1,
+        type: "browser_pointer_input", requestId: 9, input: { kind: "release" } });
+      const delta = await changed;
+      const receipt = { session: delta.session, sequence: delta.sequence, presentation: 4, view_revision: 2 };
+      f.render.port2.postMessage({ type: "execution_ack", session: delta.session, sequence: delta.sequence });
+      f.render.port2.postMessage({ type: "execution_presented", session: delta.session,
+        sequence: delta.sequence, pointerReceipt: receipt });
+      const result = await outcome;
+      assert.equal(result.sceneControlApplied, true);
+      assert.deepEqual(result.sceneControlPresentation, accepted ? receipt : null);
+    } finally { endpoint?.stop(); f.close(); }
+  });
+}
+
 test("scene Play retains only its Rust receipt across device unlock and hover cannot redeliver it", async () => {
   const f = sceneControlFixture();
   let endpoint;

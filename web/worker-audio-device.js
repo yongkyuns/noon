@@ -63,7 +63,7 @@ export class WorkerAudioDevice {
   // Called synchronously by the gesture handler before any worker round trip.
   unlock() { return this.#output?.unlock() ?? Promise.resolve(); }
 
-  applyAnchor(anchor, session) {
+  applyAnchor(anchor, session, bracket = null) {
     if (this.#output === null || anchor === undefined) return;
     if (!anchor || anchor.session !== session || typeof anchor.playing !== "boolean") {
       throw new Error("worker audio anchor belongs to a different playback session");
@@ -73,8 +73,12 @@ export class WorkerAudioDevice {
       return;
     }
     if (!this.ready) throw new Error("Play with sound to enable audio output");
-    this.#output.start(session, anchor.time, anchor.sampledEpochMs,
-      performance.timeOrigin + performance.now());
+    if (!bracket || bracket.session !== session) {
+      throw new Error("playing worker audio anchor requires its correlated Window bracket");
+    }
+    // Rust validates and projects this best-effort bracket. Cross-realm epoch
+    // sums are not ordered observations and cannot certify transport age.
+    this.#output.start(session, anchor.time, bracket.sentMs, bracket.receivedMs, performance.now());
     this.#started = true;
   }
 
