@@ -540,19 +540,22 @@ function directLifecycle() {
   const before = structuredClone(python.runs[0].before.frame);
   return { oracle, observation: { before, after: structuredClone(before),
     backend: "WebGPU", cadence: "idle",
-    denial: "typed execution APIs require a direct session source" } };
+    denial: "live continuation does not support arbitrary seek" } };
 }
 
-test("direct continuation ownership denial is distinct from Python callback replay admission", () => {
-  const { observation, oracle } = directLifecycle();
-  assert.deepEqual(assertFollowingDirectLifecycle(observation, oracle, "WebGPU"), {
-    replay: "denied", denialKind: "live-program-ownership", failureAtomic: true,
-    reason: observation.denial,
+for (const backend of ["WebGPU", "WebGL2"]) {
+  test(`direct continuation ownership denial is distinct from Python replay on ${backend}`, () => {
+    const { observation, oracle } = directLifecycle();
+    observation.backend = backend;
+    assert.deepEqual(assertFollowingDirectLifecycle(observation, oracle, backend), {
+      replay: "denied", denialKind: "live-program-ownership", failureAtomic: true,
+      reason: observation.denial,
+    });
+    // Require the exact live-program guard, not a callback replay, missing-API,
+    // or low-level session-access error. A generic thrown error is insufficient.
+    assert.doesNotMatch(observation.denial, /opaque host callback|typed execution APIs/i);
   });
-  // The old assertion rejected the actual source-ownership guard, despite the
-  // denied seek preserving state. Do not replace it with an accept-any-error test.
-  assert.doesNotMatch(observation.denial, /replay|callback|continuation/i);
-});
+}
 
 for (const [name, mutate] of [
   ["source failure", data => { data.error = "source failed"; }],
@@ -561,6 +564,7 @@ for (const [name, mutate] of [
   ["missing publication", data => { delete data.before.publication; }],
   ["wrong endpoint", data => { data.before.time = 2; }],
   ["accepted seek", data => { data.denial = null; }],
+  ["obsolete session-access diagnostic", data => { data.denial = "typed execution APIs require a direct session source"; }],
   ["presentation barrier", data => { data.denial = "direct execution host must present pending runtime changes before advancing again"; }],
   ["missing API", data => { data.denial = "TypeError: renderer.seekDirect is not a function"; }],
   ["callback denial on wrong source type", data => { data.denial = "opaque host callback sessions do not support seek or replay"; }],
