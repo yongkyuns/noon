@@ -36,8 +36,10 @@ lessons and motion design; they do not establish a speed advantage over Manim.
 Use `self.next_section("Name")` between ordinary `play` and `wait` calls to
 annotate the current authored time. After a replayable lesson finishes, the
 viewer shows cue ticks, the active cue name/index, Previous/Next, and a named
-jump menu. These controls work with or without audio; the wave-interference
-and editorial-cover demos include examples.
+jump menu. Click a timeline marker to jump to its exact cue; hover for its name
+and time. The markers also support native button keyboard activation. These
+controls work with or without audio; the wave-interference and editorial-cover
+demos include examples.
 
 Tab to the playback panel itself for keyboard controls: **Space** plays/pauses,
 **Left/Right** navigate cues, and **Home** restarts. Focused buttons, menus,

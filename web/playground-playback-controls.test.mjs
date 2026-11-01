@@ -216,7 +216,8 @@ test("silent lessons expose annotated cues and delegate navigation without resol
   const menu = f.preview.querySelector(".playback-section-names");
   assert.deepEqual(menu.children.slice(1).map(option => option.value), ["0", "1", "2"]);
   assert.match(menu.children[2].textContent, /2\. Same name/);
-  const markers = f.preview.querySelector(".playback-section-markers").children;
+  const markerGroup = f.preview.querySelector(".playback-section-markers");
+  const markers = markerGroup.children;
   assert.equal(markers.length, 3);
   assert.notEqual(markers[1].style.left, markers[2].style.left);
   assert.equal(f.preview.querySelector(".playback-previous-section").disabled, true);
@@ -238,18 +239,38 @@ test("silent lessons expose annotated cues and delegate navigation without resol
   menu.dispatchEvent(new Event("change"));
   await flush();
   assert.equal(selected, sections[2].time, "explicit cue jumps preserve the exact Rust timestamp");
+  assert.equal(markers[2].tagName, "BUTTON");
+  assert.match(markers[2].getAttribute("aria-label"), /Jump to 3\. Same name/);
+  markers[1].click();
+  await flush();
+  assert.equal(selected, sections[1].time, "marker jumps use the cue timestamp, not its visual percentage");
   assert.equal(f.controls.element.dataset.playing, "true");
+  f.controls.setBusy(true);
+  assert.equal(markerGroup.disabled, true);
+  markers[2].click();
+  await flush();
+  assert.equal(selected, sections[1].time, "a busy marker cannot seek");
+  f.controls.setBusy(false);
+  assert.equal(markerGroup.disabled, false);
   assert.equal(f.preview.querySelector(".playback-section-markers").children, markers,
     "ordinary time observations do not rebuild cue annotations");
   f.controls.setControllable(false);
   assert.equal(menu.disabled, true);
+  assert.equal(markerGroup.disabled, true);
   selected = null;
+  markers[2].click();
   menu.value = "1";
   menu.dispatchEvent(new Event("change"));
   await flush();
   assert.equal(selected, null);
   f.controls.sync({ time: 0, playing: false, sections: [] });
   assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true);
+  assert.equal(markerGroup.children.length, 0);
+  f.controls.setControllable(true);
+  f.controls.destroy();
+  markers[1].click();
+  await flush();
+  assert.equal(selected, null, "retired markers cannot issue commands");
 });
 
 test("focused panel shortcuts reuse admitted buttons and leave native controls alone", async () => {

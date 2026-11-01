@@ -103,7 +103,7 @@ export class PlaygroundPlaybackControls {
     this.#undoDragButton.addEventListener("click", this.#handleUndoDrag);
     this.#undoDragButton.hidden = !this.#undoDragSupported;
 
-    const timeline = document.createElement("label");
+    const timeline = document.createElement("div");
     timeline.className = "playback-timeline";
 
     this.#scrubber = document.createElement("input");
@@ -129,9 +129,9 @@ export class PlaygroundPlaybackControls {
     this.#liveStatus.textContent = "Duration pending";
     this.#liveStatus.setAttribute("role", "status");
     this.#liveStatus.setAttribute("aria-live", "polite");
-    this.#sectionMarkers = document.createElement("div");
+    this.#sectionMarkers = document.createElement("fieldset");
     this.#sectionMarkers.className = "playback-section-markers";
-    this.#sectionMarkers.setAttribute("aria-hidden", "true");
+    this.#sectionMarkers.setAttribute("aria-label", "Lesson key points");
     timeline.append(this.#scrubber, this.#sectionMarkers, this.#preparedSeek, this.#liveStatus);
 
     this.#timeOutput = document.createElement("output");
@@ -397,6 +397,10 @@ export class PlaygroundPlaybackControls {
   #handleSectionJump = () => {
     const section = this.#sections.find(section => String(section.index) === this.#sectionNames.value);
     this.#sectionNames.value = "";
+    this.#jumpToSection(section);
+  };
+
+  #jumpToSection(section) {
     if (!section) return;
     // An explicit user-selected Rust cue supplies the absolute seek target;
     // Previous/Next selection continues to run in shared Rust.
@@ -404,7 +408,7 @@ export class PlaygroundPlaybackControls {
       const result = await this.#player.seek(section.time);
       if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
     });
-  };
+  }
 
   #handleMute = () => {
     try {
@@ -541,9 +545,13 @@ export class PlaygroundPlaybackControls {
         option.textContent = label;
         this.#sectionNames.append(option);
         if (this.#durationSeconds !== null && section.time <= this.#durationSeconds) {
-          const marker = document.createElement("span");
+          const marker = document.createElement("button");
+          marker.type = "button";
+          marker.className = "playback-section-marker";
           marker.title = label;
+          marker.setAttribute("aria-label", `Jump to ${label}`);
           marker.style.left = `${100 * section.time / this.#durationSeconds}%`;
+          marker.addEventListener("click", () => this.#jumpToSection(section));
           this.#sectionMarkers.append(marker);
         }
       }
@@ -593,6 +601,7 @@ export class PlaygroundPlaybackControls {
     this.#previousSection.disabled = blockCommands || this.#sectionState?.previous === null;
     this.#nextSection.disabled = blockCommands || this.#sectionState?.next === null;
     this.#sectionNames.disabled = blockCommands;
+    this.#sectionMarkers.disabled = blockCommands;
     this.#muteButton.disabled = this.#externalBusy;
     this.#volume.disabled = this.#externalBusy;
     this.#root.dataset.busy = String(busy);
@@ -702,7 +711,8 @@ function installStyles() {
     .playback-button:focus-visible,
     .playback-scrubber:focus-visible,
     .playback-prepared-seek:focus-visible,
-    .playback-section-names:focus-visible {
+    .playback-section-names:focus-visible,
+    .playback-section-marker:focus-visible {
       outline: 2px solid var(--accent-strong);
       outline-offset: 2px;
     }
@@ -773,10 +783,34 @@ function installStyles() {
       color: #d9deeb;
       font-size: 0.7rem;
     }
-    .playback-section-markers { position: relative; height: 0.3rem; margin: 0 0.4rem; }
-    .playback-section-markers span {
-      position: absolute; height: 100%; border-left: 2px solid var(--accent);
+    .playback-section-markers {
+      position: relative;
+      min-width: 0;
+      height: 1.5rem;
+      margin: 0 0.4rem;
+      padding: 0;
+      border: 0;
     }
+    .playback-section-marker {
+      position: absolute;
+      width: 1.5rem;
+      height: 1.5rem;
+      padding: 0;
+      border: 0;
+      border-radius: 0.2rem;
+      background: transparent;
+      transform: translateX(-50%);
+      cursor: pointer;
+    }
+    .playback-section-marker::before {
+      content: "";
+      display: block;
+      width: 2px;
+      height: 0.5rem;
+      margin: auto;
+      background: var(--accent);
+    }
+    .playback-section-marker:hover:not(:disabled)::before { background: var(--accent-strong); }
     .playback-volume-label {
       display: flex;
       align-items: center;
