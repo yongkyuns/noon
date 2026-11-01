@@ -225,3 +225,27 @@ fn interpreter_worker_raw_reader_has_no_implicit_source_authority() {
         .has_pending_live_segment());
     assert!(player.finish_interpreter_source(&mut context).is_err());
 }
+
+#[test]
+fn interpreter_worker_retains_single_glow_edits_between_prefixes() {
+    use noon::effects::{EffectUpdate, Pixels};
+    use noon::Color;
+    let (mut context, target, mut player) = start();
+    for color in [Color::RED, Color::BLUE] {
+        context
+            .active_live_player()
+            .unwrap()
+            .live_set_glow(
+                &target,
+                EffectUpdate::default()
+                    .color(color)
+                    .radius(Pixels(3.0))
+                    .intensity(0.6),
+            )
+            .unwrap();
+        context.begin_ordinary_wait(0.5).unwrap();
+        player.prepare_interpreter_segment(&mut context).unwrap();
+        assert!(player.deliver_source_prefix().unwrap());
+    }
+    assert_eq!(state(&player)["frontier"], 2.0);
+}

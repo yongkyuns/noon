@@ -114,7 +114,12 @@ impl Raster {
         }
     }
     pub fn capture(&mut self, publication: &RendererPublication<'_>) -> Vec<u8> {
-        self.capture_frame(publication, false, None, None)
+        self.capture_frame(publication, false, None, None, false)
+    }
+
+    #[allow(dead_code)]
+    pub fn capture_effects(&mut self, publication: &RendererPublication<'_>) -> Vec<u8> {
+        self.capture_frame(publication, false, None, None, true)
     }
 
     // Shared support is compiled independently by non-interactive integration tests.
@@ -124,7 +129,7 @@ impl Raster {
         publication: &RendererPublication<'_>,
         overlay: Option<noon_render_wgpu::AnalyticOverlay>,
     ) -> Vec<u8> {
-        self.capture_frame(publication, true, overlay, None)
+        self.capture_frame(publication, true, overlay, None, false)
     }
 
     #[allow(dead_code)]
@@ -133,7 +138,7 @@ impl Raster {
         publication: &RendererPublication<'_>,
         visible_indices: &[usize],
     ) -> Vec<u8> {
-        self.capture_frame(publication, false, None, Some(visible_indices))
+        self.capture_frame(publication, false, None, Some(visible_indices), false)
     }
 
     fn capture_frame(
@@ -142,6 +147,7 @@ impl Raster {
         interactive: bool,
         overlay: Option<noon_render_wgpu::AnalyticOverlay>,
         visible_indices: Option<&[usize]>,
+        effects: bool,
     ) -> Vec<u8> {
         self.last_overlay_upload_bytes = if interactive {
             self.overlay
@@ -150,19 +156,45 @@ impl Raster {
         } else {
             0
         };
-        let metrics = TextDeviceMetrics::uniform(self.layout.height() as f32 / WORLD_SIZE).unwrap();
-        let prepared = match visible_indices {
-            Some(indices) => self.preparer.prepare_publication_visible(
-                &self.device,
-                publication,
-                indices,
-                metrics,
-            ),
-            None => self
-                .preparer
-                .prepare_publication(&self.device, publication, metrics),
+        if effects {
+            pollster::block_on(
+                self.renderer
+                    .prepare_effect_programs(&self.device, publication),
+            )
+            .unwrap();
         }
-        .unwrap();
+        let metrics = TextDeviceMetrics::uniform(self.layout.height() as f32 / WORLD_SIZE).unwrap();
+        let effect_rows = if effects {
+            publication
+                .painter_order()
+                .iter()
+                .map(|&index| index as usize)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let prepared = if effects {
+            let visible = self
+                .renderer
+                .effect_source_visibility(publication, &effect_rows)
+                .unwrap();
+            self.preparer
+                .prepare_planned_publication_visible(&self.device, publication, visible, metrics)
+                .unwrap()
+        } else {
+            match visible_indices {
+                Some(indices) => self.preparer.prepare_publication_visible(
+                    &self.device,
+                    publication,
+                    indices,
+                    metrics,
+                ),
+                None => self
+                    .preparer
+                    .prepare_publication(&self.device, publication, metrics),
+            }
+            .unwrap()
+        };
         self.last_scene_repacked = prepared.geometry_stats().instances_repacked;
         self.last_scene_path_batches = prepared
             .geometry_render_chunks()
@@ -180,6 +212,20 @@ impl Raster {
             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)
             .bytes_uploaded();
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        if effects {
+            self.renderer
+                .prepare_retained_effects(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    &prepared,
+                    &self.text,
+                    publication,
+                    wgpu::Color::BLACK,
+                    64 * 1024 * 1024,
+                )
+                .unwrap();
+        }
         if interactive {
             self.renderer
                 .encode_retained_with_transient_presentations_and_overlay(
