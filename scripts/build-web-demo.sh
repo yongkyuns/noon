@@ -94,6 +94,8 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/host-callback-perf.mjs
   node --check scripts/playground-cold-start.mjs
   node --check scripts/playground-cold-start-memory.mjs
+  node --check scripts/playground-prepared-loading-qualification.mjs
+  node --check scripts/playground-prepared-loading-observation.mjs
   node --check scripts/deterministic-replay-smoke.mjs
   node --check scripts/browser-test-server.mjs
   node --test scripts/browser-test-server.test.mjs
@@ -156,6 +158,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --test scripts/pyodide-resource-cache.test.mjs
   node --test scripts/direct-program-sample.test.mjs
   node --test scripts/playground-cold-start-memory.test.mjs
+  node --test scripts/playground-prepared-loading-observation.test.mjs
   node --test scripts/playground-browser-failure-evidence.test.mjs
   node --test scripts/webgpu-device-capture.test.mjs
   node --test scripts/manim-raster-support.test.mjs
