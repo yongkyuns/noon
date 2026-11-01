@@ -59,10 +59,10 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
           attempt("prepare", id);
           record.pending = quiet ? null : { terminal: false };
         },
-        pendingSourceObjectCapacity() { return record.pending === null ? undefined : 2; },
-        reservePrefixObjectCapacity(capacity) {
-          assert.equal(capacity, 2);
+        reserveSourcePrefixCapacity() {
+          if (record.pending === null) return false;
           attempt(record.pending.terminal ? "terminal-reserve" : "reserve", id);
+          return true;
         },
         deliverSourcePrefix() {
           attempt(record.pending.terminal ? "terminal-deliver" : "deliver", id);

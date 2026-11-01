@@ -4,6 +4,7 @@ use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
 use noon_core::{Property, TrackId};
 use std::collections::BTreeMap;
 
+mod family;
 mod order;
 mod resources;
 mod storage;
@@ -55,8 +56,9 @@ impl CompiledScene {
     /// Capturing each revision from the latest scene directly would leak a later
     /// write into earlier timestamps when a row is changed more than once.
     ///
-    /// Ordinary 2D lifecycle, content and property tracks are admitted. Family,
-    /// path-motion and spatial plans require separate qualification.
+    /// Ordinary 2D lifecycle, content and property tracks are admitted. Family
+    /// transforms, path-motion and spatial plans require separate qualification.
+    /// Append-only glyph plans travel through the existing immutable plan table.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry one resource-free glow attachment and its ordinary
     /// generation-scoped color/radius/intensity tracks; ordered stacks and
@@ -75,9 +77,9 @@ impl CompiledScene {
         let mut track_overlay: BTreeMap<TrackId, Option<CompiledTrack>> = BTreeMap::new();
         let mut output = Vec::with_capacity(inverse.len());
         for old in inverse.iter().rev() {
-            // Empty revisions denote append-only family plans, not a quiet wait.
-            if old.rows.is_empty()
-                || old.inset_2d_view.is_some()
+            // Empty revisions denote append-only glyph plans. Their immutable
+            // table suffix is delivered separately; mapped starts gate activity.
+            if old.inset_2d_view.is_some()
                 || old.camera_motion_payloads != 0
                 || old.path_motion_commands != 0
                 || old.channels.iter().any(|key| !local_property(key.property))

@@ -39,9 +39,7 @@ assert source_context.liveExecutionOwnership() == "active"
   context = pyodide.globals.get("source_context");
   let player = null, delivered = 0;
   function adopt() {
-    const capacity = player.pendingSourceObjectCapacity();
-    if (capacity === undefined) throw new Error("source segment failed to retain its suffix");
-    player.reservePrefixObjectCapacity(capacity);
+    if (!player.reserveSourcePrefixCapacity()) throw new Error("source segment failed to retain its suffix");
     if (!player.deliverSourcePrefix()) throw new Error("retained suffix was not adopted");
   }
   return {

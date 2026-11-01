@@ -2179,13 +2179,16 @@ mod wasm {
 
         /// Explicit allocation barrier, separate from future-history adoption.
         #[cfg(feature = "prepared-prefix")]
-        pub fn reserve_prepared_prefix_capacity(&mut self, total: usize) -> Result<usize, JsValue> {
+        pub fn reserve_prepared_prefix_capacity(
+            &mut self,
+            batch: &noon::PrefixBatch,
+        ) -> Result<(), JsValue> {
             let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
                 return Err(js_message("canvas does not own a prepared reader"));
             };
             playback
                 .reader
-                .reserve_object_capacity(total)
+                .reserve_append_capacity(batch)
                 .map_err(js_error)
         }
 
@@ -2276,19 +2279,10 @@ mod wasm {
                 let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
                     unreachable!()
                 };
-                // A foreign stream is rejected before capacity maintenance.
-                match playback.reader.preflight_append(batch) {
-                    Err(noon::PrefixError::CapacityRequired { object_slots }) => {
-                        playback
-                            .reader
-                            .reserve_object_capacity(object_slots)
-                            .map_err(js_error)?;
-                        playback.reader.preflight_append(batch).map_err(js_error)?;
-                    }
-                    other => {
-                        other.map_err(js_error)?;
-                    }
-                }
+                playback
+                    .reader
+                    .reserve_append_capacity(batch)
+                    .map_err(js_error)?;
                 self.append_prepared_prefix(
                     source.take_batch().expect("borrowed batch was admitted"),
                 )?;
