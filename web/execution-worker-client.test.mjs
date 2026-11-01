@@ -661,9 +661,8 @@ test("engine reconnect restores pause mode", async () => {
   const pausePromise = client.pause();
   const initialPause = await waitForRequest(oldEngine, "pause");
   oldEngine.emitMessage(
-    engineMessage("result", {
+    engineMessage("pause", {
       requestId: initialPause.requestId,
-      operation: "pause",
       time: 0.5,
       playing: false,
         }),
@@ -1136,6 +1135,90 @@ test("inspection reserved before termination is never delivered to a retired end
   assert.equal(engine.messages.filter(m => m.type === "inspection_scroll").length, 0);
 });
 
+test("audio timing uses the matched response once and ignores duplicate or unissued responses", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const applied = [], errors = [];
+  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", (anchor, session, bracket) => {
+    applied.push({ anchor, session, bracket });
+  });
+  const { client, engine } = await startClient(errors);
+  let now = 100;
+  t.mock.method(performance, "now", () => now);
+  try {
+    const playing = client.resume();
+    const request = await waitForRequest(engine, "resume");
+    now = 106;
+    const anchor = { session: 1, playing: true, time: 2.1, sampledEpochMs: 9999 };
+    const response = engineMessage("resume", { requestId: request.requestId, audioAnchor: anchor });
+    engine.emitMessage(response);
+    now = 110;
+    await playing;
+    assert.equal(applied.length, 1);
+    assert.equal(applied[0].anchor, anchor);
+    assert.equal(applied[0].bracket.sentMs, 100);
+    assert.equal(applied[0].bracket.receivedMs, 106,
+      "receipt is read at settlement, before the later Promise continuation");
+    assert.equal(applied[0].bracket.requestId, request.requestId);
+    assert.equal(applied[0].bracket.worker, engine);
+    assert.equal(applied[0].bracket.session, 1);
+    assert.equal(Object.getOwnPropertySymbols({ ...response }).length, 0,
+      "host-only timing metadata must not become enumerable wire data");
+    engine.emitMessage(response);
+    assert.equal(client.diagnostics.engine.staleResponses, 1);
+    engine.emitMessage(engineMessage("resume", { requestId: request.requestId + 1, audioAnchor: anchor }));
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /unissued request ID/);
+    assert.equal(applied.length, 1);
+  } finally { client.terminate(); }
+});
+
+test("an issued ID with the wrong response type cannot authorize audio timing", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const applied = [];
+  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", (...args) => applied.push(args));
+  const { client, engine } = await startClient();
+  try {
+    const playing = client.resume();
+    const rejected = assert.rejects(playing, /does not match its issued command/);
+    const request = await waitForRequest(engine, "resume");
+    engine.emitMessage(engineMessage("seek", { requestId: request.requestId,
+      audioAnchor: { session: 1, playing: true, time: 2.1, sampledEpochMs: 9999 } }));
+    await rejected;
+    assert.deepEqual(applied, []);
+    assert.equal(client.diagnostics.engine.pendingRequests, 0);
+  } finally { client.terminate(); }
+});
+
+test("a late response from a retired audio session cannot acquire a fresh timing bracket", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const applied = [];
+  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", (anchor, session, bracket) => {
+    applied.push({ anchor, session, bracket });
+  });
+  const { client, authoring, engine: oldEngine } = await startClient();
+  try {
+    const playing = client.resume();
+    const rejected = assert.rejects(playing, /restart|terminated|retired/i);
+    const oldRequest = await waitForRequest(oldEngine, "resume");
+    const offset = FakeWorker.instances.length;
+    const restarting = client.restart();
+    const { engine } = await finishStartup(restarting, authoring, offset);
+    await rejected;
+    oldEngine.emitMessage(engineMessage("resume", { requestId: oldRequest.requestId,
+      audioAnchor: { session: 1, playing: true, time: 2.1, sampledEpochMs: 9999 } }));
+    assert.deepEqual(applied, []);
+    const fresh = client.resume();
+    const request = await waitForRequest(engine, "resume");
+    engine.emitMessage(engineMessage("resume", { requestId: request.requestId,
+      audioAnchor: { session: 2, playing: true, time: 0, sampledEpochMs: 10000 } }));
+    await fresh;
+    assert.equal(applied.length, 1);
+    assert.equal(applied[0].bracket.session, 2);
+    assert.equal(applied[0].bracket.worker, engine);
+    assert.equal(applied[0].bracket.requestId, request.requestId);
+  } finally { client.terminate(); }
+});
+
 test("a retired device unlock cannot resume its former worker", async t => {
   const { WorkerAudioDevice } = await import("./worker-audio-device.js");
   let completeUnlock;
@@ -1175,7 +1258,7 @@ test("scene Play unlock starts in the release turn and completion preserves the 
   const unlocked = new Promise(resolve => { finishUnlock = resolve; });
   const anchors = [];
   t.mock.method(WorkerAudioDevice.prototype, "unlock", () => { unlockCalls += 1; return unlocked; });
-  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", (anchor, session) => anchors.push({ anchor, session }));
+  t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", (anchor, session, bracket) => anchors.push({ anchor, session, bracket }));
   const { client, engine } = await startClient();
   try {
     const clicked = client.submitBrowserPointerInput({ ...pointerInput, kind: "release" });
@@ -1197,7 +1280,16 @@ test("scene Play unlock starts in the release turn and completion preserves the 
     assert.equal(result.pointerInputAccepted, true);
     assert.equal(result.sceneControlApplied, true);
     assert.equal(result.playing, true);
-    assert.deepEqual(anchors, [{ anchor, session: 1 }]);
+    assert.equal(anchors.length, 1);
+    assert.equal(anchors[0].anchor, anchor);
+    assert.equal(anchors[0].session, 1);
+    const bracket = anchors[0].bracket;
+    assert.equal(bracket.requestId, completion.requestId,
+      "the spread result must retain the actual scene-control sample, not the original release");
+    assert.equal(bracket.type, "scene_control");
+    assert.equal(bracket.session, 1);
+    assert.ok(bracket.sentMs <= bracket.receivedMs);
+    assert.ok(Object.isFrozen(bracket));
   } finally { client.terminate(); }
 });
 

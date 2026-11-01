@@ -251,81 +251,44 @@ impl WorkerAudioResources {
     }
 }
 
+/// Window readings bracket the sample in the already-correlated worker request.
+/// Their midpoint is a best-effort phase estimate, not a physical clock-error
+/// certificate or an assumption that request/response latency is symmetric.
 #[cfg(any(test, all(target_arch = "wasm32", feature = "renderer")))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum WorkerAudioAnchorError {
-    SessionMismatch { expected: u32, actual: u32 },
-    InvalidAuthoredTime(f64),
-    NonFiniteSample(f64),
-    NonFiniteReceipt(f64),
-    ReceiptBeforeSample { sampled: f64, received: f64 },
-}
-
-#[cfg(any(test, all(target_arch = "wasm32", feature = "renderer")))]
-impl std::fmt::Display for WorkerAudioAnchorError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("stale or invalid worker audio anchor: ")?;
-        match self {
-            Self::SessionMismatch { expected, actual } => write!(
-                formatter,
-                "resource session {expected}, received session {actual}"
-            ),
-            Self::InvalidAuthoredTime(time) => write!(
-                formatter,
-                "authored time must be finite and nonnegative, received {time:?}"
-            ),
-            Self::NonFiniteSample(sampled) => {
-                write!(
-                    formatter,
-                    "sample epoch must be finite, received {sampled:?}"
-                )
-            }
-            Self::NonFiniteReceipt(received) => {
-                write!(
-                    formatter,
-                    "receipt epoch must be finite, received {received:?}"
-                )
-            }
-            Self::ReceiptBeforeSample { sampled, received } => write!(
-                formatter,
-                "receipt epoch {received:?} precedes sample epoch {sampled:?}"
-            ),
-        }
-    }
-}
-
-/// Validate the original host observations without correcting either timestamp.
-/// Projection overflow remains the downstream clip query's responsibility.
-#[cfg(any(test, all(target_arch = "wasm32", feature = "renderer")))]
-fn worker_audio_time_at_receipt(
+fn worker_audio_time_from_window_bracket(
     expected_session: u32,
     session: u32,
     time: f64,
-    sampled_epoch_ms: f64,
-    received_epoch_ms: f64,
-) -> Result<f64, WorkerAudioAnchorError> {
+    sent_ms: f64,
+    received_ms: f64,
+    applied_ms: f64,
+) -> Result<f64, String> {
     if session != expected_session {
-        return Err(WorkerAudioAnchorError::SessionMismatch {
-            expected: expected_session,
-            actual: session,
-        });
+        return Err(format!("stale or invalid worker audio anchor: resource session {expected_session}, received session {session}"));
     }
     if !time.is_finite() || time < 0.0 {
-        return Err(WorkerAudioAnchorError::InvalidAuthoredTime(time));
+        return Err(format!("invalid worker audio authored time: {time:?}"));
     }
-    if !sampled_epoch_ms.is_finite() {
-        return Err(WorkerAudioAnchorError::NonFiniteSample(sampled_epoch_ms));
+    for (name, value) in [
+        ("send", sent_ms),
+        ("receipt", received_ms),
+        ("apply", applied_ms),
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(format!("invalid Window audio {name} reading: {value:?}"));
+        }
     }
-    if !received_epoch_ms.is_finite() {
-        return Err(WorkerAudioAnchorError::NonFiniteReceipt(received_epoch_ms));
+    if sent_ms > received_ms || received_ms > applied_ms {
+        return Err(format!("reversed Window audio bracket: send {sent_ms:?}, receipt {received_ms:?}, apply {applied_ms:?}"));
     }
-    if received_epoch_ms < sampled_epoch_ms {
-        return Err(WorkerAudioAnchorError::ReceiptBeforeSample {
-            sampled: sampled_epoch_ms,
-            received: received_epoch_ms,
-        });
+    // All operands use one Window navigation's monotonic clock. Keeping the
+    // post-receipt delay separate avoids adding large timestamps together.
+    let age_ms = (applied_ms - received_ms) + (received_ms - sent_ms) / 2.0;
+    let projected = time + age_ms / 1000.0;
+    if !projected.is_finite() {
+        return Err("worker audio phase projection overflow".into());
     }
-    Ok(time + (received_epoch_ms - sampled_epoch_ms) / 1000.0)
+    Ok(projected)
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "renderer"))]
@@ -367,21 +330,23 @@ mod wasm {
             self.output.context()
         }
 
-        /// Age an accepted worker clock sample by transport latency, then use
-        /// the shared stateless clip query. Never observe or drive visual time.
+        /// Estimate transport age from one correlated Window request bracket,
+        /// then use the shared stateless clip query. Never drive visual time.
         pub fn start(
             &mut self,
             session: u32,
             time: f64,
-            sampled_epoch_ms: f64,
-            received_epoch_ms: f64,
+            sent_ms: f64,
+            received_ms: f64,
+            applied_ms: f64,
         ) -> Result<(), JsValue> {
-            let time = worker_audio_time_at_receipt(
+            let time = worker_audio_time_from_window_bracket(
                 self.resources.session(),
                 session,
                 time,
-                sampled_epoch_ms,
-                received_epoch_ms,
+                sent_ms,
+                received_ms,
+                applied_ms,
             )
             .map_err(js_error)?;
             self.output
@@ -424,95 +389,72 @@ mod tests {
     use super::*;
 
     #[test]
-    fn worker_anchor_keeps_equal_epochs_and_positive_transport_age_exact() {
-        for (time, sampled, received, expected) in [
-            (2.1, 1_792_956_040_812.0, 1_792_956_040_812.0, 2.1),
-            (2.0, 1_000.0, 1_250.0, 2.25),
-            (2.0, -1_000.0, -750.0, 2.25),
-            (-0.0, 0.0, 0.0, 0.0),
+    fn window_bracket_projects_midpoint_and_post_receipt_delay() {
+        for (sent, received, applied, expected) in [
+            (100.0, 106.0, 110.0, 2.107),
+            (100.0, 100.0, 100.0, 2.1),
+            (100.0, 100.0, 104.0, 2.104),
         ] {
             assert_eq!(
-                worker_audio_time_at_receipt(19, 19, time, sampled, received),
+                worker_audio_time_from_window_bracket(19, 19, 2.1, sent, received, applied),
                 Ok(expected)
             );
         }
     }
 
     #[test]
-    fn worker_anchor_reports_original_session_values_before_other_invalid_fields() {
-        let error = worker_audio_time_at_receipt(19, 20, f64::NAN, f64::NAN, f64::NAN).unwrap_err();
-        assert_eq!(
-            error,
-            WorkerAudioAnchorError::SessionMismatch {
-                expected: 19,
-                actual: 20
-            }
-        );
-        assert_eq!(
-            error.to_string(),
-            "stale or invalid worker audio anchor: resource session 19, received session 20"
-        );
-    }
-
-    #[test]
-    fn worker_anchor_rejects_invalid_authored_time_without_changing_its_bits() {
-        for time in [
+    fn window_bracket_rejects_wrong_session_invalid_readings_and_reversed_order() {
+        assert!(worker_audio_time_from_window_bracket(
+            19,
+            20,
+            f64::NAN,
+            f64::NAN,
+            f64::NAN,
+            f64::NAN
+        )
+        .unwrap_err()
+        .contains("resource session 19, received session 20"));
+        for invalid in [
             -f64::from_bits(1),
             -1.0,
             f64::NAN,
             f64::INFINITY,
             f64::NEG_INFINITY,
         ] {
-            let error = worker_audio_time_at_receipt(19, 19, time, 1_000.0, 1_000.0).unwrap_err();
-            let WorkerAudioAnchorError::InvalidAuthoredTime(actual) = error else {
-                panic!("unexpected anchor error: {error:?}");
-            };
-            assert_eq!(actual.to_bits(), time.to_bits());
-            assert_eq!(error.to_string(), format!(
-                "stale or invalid worker audio anchor: authored time must be finite and nonnegative, received {time:?}"
-            ));
-        }
-    }
-
-    #[test]
-    fn worker_anchor_distinguishes_nonfinite_sample_and_receipt_values() {
-        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let sample_error =
-                worker_audio_time_at_receipt(19, 19, 2.1, value, 1_000.0).unwrap_err();
-            let WorkerAudioAnchorError::NonFiniteSample(actual) = sample_error else {
-                panic!("unexpected anchor error: {sample_error:?}");
-            };
-            assert_eq!(actual.to_bits(), value.to_bits());
-            assert_eq!(sample_error.to_string(), format!(
-                "stale or invalid worker audio anchor: sample epoch must be finite, received {value:?}"
-            ));
-            let receipt_error =
-                worker_audio_time_at_receipt(19, 19, 2.1, 1_000.0, value).unwrap_err();
-            let WorkerAudioAnchorError::NonFiniteReceipt(actual) = receipt_error else {
-                panic!("unexpected anchor error: {receipt_error:?}");
-            };
-            assert_eq!(actual.to_bits(), value.to_bits());
-            assert_eq!(receipt_error.to_string(), format!(
-                "stale or invalid worker audio anchor: receipt epoch must be finite, received {value:?}"
-            ));
-        }
-    }
-
-    #[test]
-    fn worker_anchor_rejects_one_millisecond_and_one_representable_step_backwards() {
-        let sampled = 1_792_956_040_812.0_f64;
-        for received in [sampled - 1.0, f64::from_bits(sampled.to_bits() - 1)] {
-            assert!(received < sampled);
-            let error = worker_audio_time_at_receipt(19, 19, 2.1, sampled, received).unwrap_err();
-            assert_eq!(
-                error,
-                WorkerAudioAnchorError::ReceiptBeforeSample { sampled, received }
+            assert!(
+                worker_audio_time_from_window_bracket(19, 19, invalid, 100.0, 106.0, 110.0)
+                    .is_err()
             );
-            assert_eq!(error.to_string(), format!(
-                "stale or invalid worker audio anchor: receipt epoch {received:?} precedes sample epoch {sampled:?}"
-            ));
+            for readings in [
+                [invalid, 106.0, 110.0],
+                [100.0, invalid, 110.0],
+                [100.0, 106.0, invalid],
+            ] {
+                assert!(worker_audio_time_from_window_bracket(
+                    19,
+                    19,
+                    2.1,
+                    readings[0],
+                    readings[1],
+                    readings[2]
+                )
+                .is_err());
+            }
+        }
+        for (sent, received, applied) in [
+            (100.0, 99.0, 110.0),
+            (100.0, 106.0, 105.0),
+            (100.0, 100.0_f64.next_down(), 110.0),
+            (100.0, 106.0, 106.0_f64.next_down()),
+        ] {
+            assert!(
+                worker_audio_time_from_window_bracket(19, 19, 2.1, sent, received, applied)
+                    .unwrap_err()
+                    .contains("reversed Window audio bracket")
+            );
         }
     }
+
     #[test]
     fn round_trip_keeps_trimmed_loop_phase_fades_and_silent_gaps() {
         let mut scene = noon::Scene::new();
@@ -535,13 +477,10 @@ mod tests {
         let bytes = encode(&session, 19).unwrap();
         let resources = WorkerAudioResources::decode(&bytes).unwrap();
         assert_eq!(resources.session(), 19);
-        // Finite inputs can overflow the unchanged age projection. The helper
-        // must leave that rejection at the existing downstream clip query.
-        for (time, sampled, received) in [(0.0, -f64::MAX, f64::MAX), (f64::MAX, 0.0, f64::MAX)] {
-            let projected = worker_audio_time_at_receipt(19, 19, time, sampled, received).unwrap();
-            assert!(projected.is_infinite());
-            assert!(resources.at_time(projected).is_err());
-        }
+        // A finite bracket must still produce a valid shared clip-query time.
+        assert!(
+            worker_audio_time_from_window_bracket(19, 19, f64::MAX, 0.0, 0.0, f64::MAX).is_err()
+        );
         for time in [0.0, 1.0, 1.25, 1.6, 2.75, 3.75, 4.0, 90.0] {
             let original = session.audio_playback_at(time).unwrap().collect::<Vec<_>>();
             let mirrored = resources.at_time(time).unwrap();
