@@ -672,9 +672,11 @@ fn effective_layout_path<'a>(
     match geometry {
         GeometryRef::External(id) => {
             let resources = execution.geometry_resources();
-            let handle = resources.current_handle(*id).ok_or_else(|| {
-                AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::ExternalGeometry)
-            })?;
+            let handle = resources
+                .current_handle(*id)
+                .ok_or(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::ExternalGeometry,
+                ))?;
             match resources
                 .get(handle)
                 .ok_or(AuthoringError::MissingGeometryResource(handle))?
