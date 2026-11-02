@@ -3223,3 +3223,33 @@ test("silent execution publishes Rust cue metadata and forwards strict section n
     assert.deepEqual(directions, [[false, 0.5], [true, 0.5]], "relative seeks use the Rust clock observation, not stale frame time");
   } finally { endpoint?.stop(); f.close(); }
 });
+
+
+test("shared endpoint continues an oversized initial snapshot only under transport credits", { timeout: 3000 }, async () => {
+  const f = fixture("shared", null, null, { sharedSlotCapacity: 256 });
+  const original = f.player.initialDeltaJson;
+  let expected, reader, applied = 0;
+  f.player.initialDeltaJson = () => {
+    expected = JSON.stringify({ ...JSON.parse(original()), payload: "opaque geometry".repeat(200) });
+    return expected;
+  };
+  let complete;
+  const completed = new Promise(resolve => { complete = resolve; });
+  const apply = json => {
+    assert.equal(json, expected); applied++;
+    f.render.port2.postMessage({ type: "execution_presented", session: 7, sequence: 0 });
+    complete(); return true;
+  };
+  f.render.port2.on("message", message => {
+    if (message.type === "transport_setup") reader = new SharedExecutionDeltaReader(message.mailbox);
+    if ((message.type === "transport_setup" || message.type === "shared_delta") && reader) {
+      if (reader.drain(apply) > 0) f.render.port2.postMessage({ type: "transport_writable" });
+    }
+  });
+  let endpoint;
+  try {
+    endpoint = await f.attach(); await completed;
+    assert.equal(applied, 1);
+    assert.equal(f.stats().initialSnapshots, 1, "credits must never regenerate source output");
+  } finally { endpoint?.stop(); f.close(); }
+});

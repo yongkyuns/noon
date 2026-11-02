@@ -441,6 +441,7 @@ export function createAuthoringRenderController(host) {
   }
 
   function resetTransportState() {
+    sharedReader?.close();
     sharedReader = null;
     transferableReceiver = null;
     bootstrapQueue = [];

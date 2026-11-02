@@ -54,17 +54,28 @@ class ZeroPrepared(Scene):
         self.wait(0)
         target.shift(LEFT)
 `;
-const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "prepared-zero"].map((id, order) => ({
+const largeSource = `from noon import *
+from js import console
+class LargePrepared(Scene):
+    def construct(self):
+        console.log("noon-large-source-invoked")
+        self.add(*[Circle(radius=0.06, fill=BLUE, fill_opacity=1, stroke=None,
+                          position=((i % 100 - 49.5) * 0.14, (i // 100 - 34.5) * 0.10))
+                   for i in range(7000)])
+`;
+const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "prepared-zero", "prepared-large"].map((id, order) => ({
   id, order, title: id, status: "ready", parity_status: "candidate",
   reuse: "manim-compatible-parity-v0.21", category: "qualification",
   path: `python/examples/${id}.py`, thumbnail: "prepared-fixture.svg",
   features: ["prepared-lifecycle"], summary: "Bounded lifecycle qualification fixture",
 }));
 const hash = value => createHash("sha256").update(value).digest("hex");
+const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
-  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
+  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let browser, server;
+const largePixelsByBackend = new Map();
 
 async function installFixture(page) {
   await cache.install(page.context());
@@ -75,7 +86,7 @@ async function installFixture(page) {
   }));
   for (const entry of entries) {
     await page.route(`**/${entry.path}`, route => route.fulfill({ contentType: "text/x-python",
-      body: entry.id === "prepared-zero" ? zeroSource : entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
+      body: entry.id === "prepared-large" ? largeSource : entry.id === "prepared-zero" ? zeroSource : entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
   }
   await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
@@ -144,10 +155,20 @@ async function selectGalleryExample(page, id) {
   await layer.locator(`.example-card[data-example-id="${id}"]`).click();
   await layer.waitFor({ state: "hidden" });
 }
+async function waitForObservation(page, observe) {
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const result = await page.evaluate(observe);
+    if (result) return result;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error("timed out waiting for the gallery observation");
+}
 async function pixels(page, name) {
-  await page.waitForFunction(async () => {
+  await waitForObservation(page, async () => {
     const metrics = (await __noonExampleGallery.executionMetrics())?.metrics;
-    return metrics?.ready && !metrics.needsPresent && metrics.bufferedDeltas === 0;
+    return metrics?.ready && Number.isFinite(metrics.firstPresentedSessionAtMs) &&
+      !metrics.needsPresent && metrics.bufferedDeltas === 0;
   });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const bytes = await page.locator("#scene").screenshot();
@@ -169,9 +190,10 @@ try {
       const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1 });
       page.setDefaultTimeout(180_000);
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
-      let staticInvocations = 0, zeroInvocations = 0;
+      let staticInvocations = 0, zeroInvocations = 0, largeInvocations = 0;
       page.on("console", message => { if (message.text() === "noon-static-source-invoked") staticInvocations++;
-        if (message.text() === "noon-zero-source-invoked") zeroInvocations++; });
+        if (message.text() === "noon-zero-source-invoked") zeroInvocations++;
+        if (message.text() === "noon-large-source-invoked") largeInvocations++; });
       try {
         await installFixture(page);
         await page.goto(`${server.baseUrl}/web/index.html?example=prepared-lifecycle`);
@@ -274,6 +296,33 @@ try {
         assert.equal(zeroInvocations, 2);
         assert.deepEqual(pageErrors, []);
         entry.checks.push("initial-zero-wait-before-open-prefix", "zero-only-final-edits-exact-pixels", "zero-only-restart-and-rerun");
+        await selectGalleryExample(page, "prepared-large");
+        await waitForObservation(page, async () => {
+          const gallery = __noonExampleGallery, run = gallery.runPhaseMetrics;
+          if (run.exampleId === "prepared-large" && document.querySelector("#patch-status")?.dataset.state === "error") {
+            throw new Error(document.querySelector("#authoring-problem")?.textContent || "large snapshot failed");
+          }
+          if (run.exampleId !== "prepared-large" || gallery.selectedExampleId !== "prepared-large" ||
+              gallery.runInFlight || !Number.isFinite(run.sourceRunCompletedAtMs) ||
+              document.querySelector("#patch-status")?.dataset.state !== "applied") return false;
+          const metrics = (await gallery.executionMetrics())?.metrics;
+          return run === gallery.runPhaseMetrics && !gallery.runInFlight &&
+            document.querySelector(".playback-scrubber")?.max === "0" && metrics?.objectCount === 7000;
+        });
+        entry.largeMetrics = (await page.evaluate(() => __noonExampleGallery.executionMetrics())).metrics;
+        const largePixels = await pixels(page, `${backend}-${transport}-large-snapshot`);
+        let painted = 0;
+        for (let i = 0; i < largePixels.length; i += 4) {
+          if (largePixels[i + 1] > largePixels[i] + 20 && largePixels[i + 2] > largePixels[i] + 20) painted++;
+        }
+        entry.largePaintedPixels = painted;
+        assert.ok(painted >= 7000, `large grid must visibly paint its blue objects; got ${painted} pixels`);
+        const reference = largePixelsByBackend.get(backend);
+        if (reference) assert.ok(reference.equals(largePixels), "shared chunks must match the complete transferable snapshot exactly");
+        else largePixelsByBackend.set(backend, largePixels);
+        assert.equal(largeInvocations, 1);
+        assert.deepEqual(pageErrors, []);
+        entry.checks.push("large-static-snapshot-all-7000-objects", "large-snapshot-shared-transferable-exact-pixels");
         entry.status = "passed";
       } catch (error) {
         entry.status = "failed"; entry.error = String(error.stack ?? error);
@@ -297,7 +346,7 @@ try {
   report.status = "failed"; report.error = String(error.stack ?? error); process.exitCode = 1;
 } finally {
   report.resourceCache = cache.stats();
-  await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, reportValue, 2)}\n`);
   await browser?.close(); await server?.close();
 }
-console.log(JSON.stringify(report));
+console.log(JSON.stringify(report, reportValue));
