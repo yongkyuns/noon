@@ -119,7 +119,7 @@ fn animated_audio_anchor_pairs_delayed_observation_with_the_admitted_clock() {
     let cold = observe(&mut f, 900.0);
     assert_eq!(cold["time"], 0.5);
     assert_eq!(cold["playing"], false);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     assert_eq!(observe(&mut f, 1_000.0)["time"], 0.5);
     assert_eq!(f.player.clock.scene_time_at(1_000.0), None);
     f.player.execution_wake(1_000.0).unwrap();
@@ -228,7 +228,7 @@ fn static_deadline_audio_anchor_pairs_delayed_observation_with_the_admitted_cloc
         anchor
     };
 
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     f.player.execution_wake(1_000.0).unwrap();
     f.player.tick_delta_json(1_490.0).unwrap();
     assert_eq!(
@@ -303,7 +303,7 @@ fn audio_resource_bootstrap_and_undelivered_completion_are_silent_and_reader_loc
 fn audio_anchor_uses_the_reader_clock_and_preserves_pause_buffer_seek_and_terminal() {
     let mut f = Fixture::new();
     f.player.initial_delta_json().unwrap();
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     f.player.execution_wake(1000.0).unwrap();
     let playing = f.anchor(1250.0);
     assert_eq!(playing["time"], 0.75);
@@ -313,7 +313,7 @@ fn audio_anchor_uses_the_reader_clock_and_preserves_pause_buffer_seek_and_termin
     let paused = f.anchor(50_000.0);
     assert_eq!(paused["time"], 0.75);
     assert_eq!(paused["playing"], false);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     f.player.execution_wake(100_000.0).unwrap();
     assert_eq!(f.anchor(100_125.0)["time"], 0.875);
     f.player.tick_delta_json(100_300.0).unwrap();

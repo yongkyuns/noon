@@ -237,6 +237,28 @@ mod admission {
             target: &mut (impl BrowserPointerTarget + ?Sized),
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
+            self.note_presented_inner(target, receipt, true)
+        }
+
+        /// Retain the actual displayed mapping while export locks input. This
+        /// updates transport association only; no hover/input observation can
+        /// change a sample awaiting capture. The mapping remains usable after
+        /// cancellation without requiring another timeline sample or repaint.
+        #[cfg(feature = "prepared-prefix")]
+        pub(crate) fn note_presented_without_input(
+            &mut self,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
+            receipt: WorkerPointerReceipt,
+        ) -> Result<bool, String> {
+            self.note_presented_inner(target, receipt, false)
+        }
+
+        fn note_presented_inner(
+            &mut self,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
+            receipt: WorkerPointerReceipt,
+            observe_input: bool,
+        ) -> Result<bool, String> {
             receipt.validate()?;
             let Some(issued) = self.issued.as_ref() else {
                 return Ok(false);
@@ -254,13 +276,14 @@ mod admission {
             // A delayed renderer receipt may still describe the held contact's
             // visible mapping. Refresh hover only if that frame is current;
             // observing an older frame must not retarget the current session.
-            if target
-                .validate_pointer_frame(
-                    &issued.frame,
-                    issued.frame.view(),
-                    crate::browser_pointer_input::PointerFrameValidation::Presentation,
-                )
-                .is_ok()
+            if observe_input
+                && target
+                    .validate_pointer_frame(
+                        &issued.frame,
+                        issued.frame.view(),
+                        crate::browser_pointer_input::PointerFrameValidation::Presentation,
+                    )
+                    .is_ok()
             {
                 target
                     .observe_pointer_frame(&issued.frame)

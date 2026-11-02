@@ -12,7 +12,7 @@ function fixture(mode = "transferable", options = {}) {
   const control = new MessageChannel(), render = new MessageChannel();
   const calls = [], messages = [], deltas = [], replies = [], waiters = new Set();
   let sequence = 0, requestId = 0, endpoint, reader;
-  let time = 0, frontier = 4, end, playing = !options.initiallyPaused, buffering = false;
+  let time = 0, frontier = options.frontier ?? 4, end, playing = !options.initiallyPaused, buffering = false;
   let observation = null, pendingDelta = false, tickDelta = false, tickFailure = null, payloadPadding;
   let audioSequence = 0, tickState = null, needsFrame = false;
   function changed() {
@@ -141,6 +141,10 @@ function fixture(mode = "transferable", options = {}) {
     setTickState(value) { tickState = value; },
     holdFrontier() { needsFrame = true; },
     makeDirty() { pendingDelta = true; },
+    selectExportSample(value) {
+      record("export-sample", value);
+      if (time !== value) { time = value; pendingDelta = true; }
+    },
     deliver(value, terminal = false) {
       frontier = value; if (terminal) end = value; buffering = false;
       endpoint.sourcePrefixDelivered();
@@ -150,6 +154,148 @@ function fixture(mode = "transferable", options = {}) {
       control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close();
     },
   };
+}
+
+for (const mode of ["transferable", "shared"]) {
+  test(`prepared ${mode} export cancellation interrupts an unpresented sample and permits restart`, { timeout: 5000 }, async () => {
+    const f = fixture(mode, { initiallyPaused: true, audio: true, frontier: 1 });
+    let active = false;
+    Object.assign(f.player, {
+      finiteExportActive: () => active,
+      beginFiniteExportJson() { active = true; return JSON.stringify({ audio: true }); },
+      finiteExportStatusJson: () => JSON.stringify({ kind: "needs_sample", target_time: 0.5 }),
+      observeFiniteExportJson() {
+        f.selectExportSample(0.5);
+        return JSON.stringify({ kind: "sample", observation: { requested_time: 0.5, published_time: 0.5 } });
+      },
+      cancelFiniteExport() { active = false; },
+    });
+    try {
+      await f.attach(); f.acknowledge(); await f.present(); f.deliver(1, true);
+      await f.request("begin_finite_export", { frameOptions: {} });
+      const sampling = f.request("sample_finite_export");
+      await f.when(() => f.deltas.length === 2);
+      const queuedSample = f.request("sample_finite_export");
+      const queuedBegin = f.request("begin_finite_export", { frameOptions: {} });
+      const cancelled = await f.request("cancel_finite_export");
+      assert.equal(cancelled.type, "cancel_finite_export");
+      assert.equal(active, false);
+      const interrupted = await sampling;
+      assert.equal(interrupted.type, "error");
+      assert.match(interrupted.message, /cancelled before renderer publication/);
+      for (const result of await Promise.all([queuedSample, queuedBegin])) {
+        assert.equal(result.type, "error");
+        assert.match(result.message, /cancelled before its queued command/);
+      }
+      assert.equal(f.count("export-sample"), 1, "cancelled queued controls cannot sample or begin again");
+      assert.equal(f.count("audio-anchor"), 0);
+      assert.equal(f.count("free"), 0, "the same completed reader remains available");
+      // A late real receipt cannot revive the cancelled capture. Normal
+      // transport acknowledgement still releases its actual retained carrier.
+      f.acknowledge(f.deltas[1]);
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[1].sequence });
+      const restart = f.request("seek", { time: 0 });
+      await f.when(() => f.deltas.length === 3);
+      f.acknowledge(f.deltas[2]);
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: f.deltas[2].sequence });
+      assert.equal((await restart).time, 0);
+      const restarted = await f.request("begin_finite_export", { frameOptions: {} });
+      assert.equal(restarted.type, "begin_finite_export");
+      assert.equal(active, true);
+    } finally { f.close(); }
+  });
+
+  test(`prepared ${mode} history export stays silent and waits for the selected picture`, { timeout: 5000 }, async () => {
+    const f = fixture(mode, { initiallyPaused: true, audio: true, frontier: 1 });
+    let active = false, offered = false, acknowledged = 0, observed = 0;
+    const frameOptions = { frame_rate: { numerator: 16, denominator: 1 }, max_frames: 64 };
+    const observation = () => ({ runtime_identity: "91", requested_time: acknowledged ? 1.5 : 1,
+      published_time: 1, publication: { scene_revision: "4", execution_revision: "8", frame_epoch: "9" } });
+    const status = () => acknowledged === 2 ? { kind: "complete" } : offered
+      ? { kind: "sample", observation: observation(), frame: { held: acknowledged > 0 } }
+      : { kind: "needs_sample", requested_time: acknowledged ? 1.5 : 1, target_time: 1 };
+    Object.assign(f.player, {
+      finiteExportActive: () => active,
+      prepareHistoryExportJson(value) {
+        assert.deepEqual(JSON.parse(value), frameOptions);
+        assert.equal(f.player.preparedPlaying(), false);
+        active = true;
+        return JSON.stringify({ kind: "preparing_history", history_complete: false, source_preparation_limit: 4 });
+      },
+      beginFiniteExportJson(value) {
+        assert.deepEqual(JSON.parse(value), frameOptions);
+        if (f.player.preparedEndTime() === undefined) throw new Error("terminal history has not been adopted");
+        active = true;
+        return JSON.stringify({ audio: true, source: { kind: "completed_history" }, status: status() });
+      },
+      finiteExportStatusJson: () => JSON.stringify(status()),
+      observeFiniteExportJson() {
+        observed += 1;
+        f.selectExportSample(1);
+        offered = true;
+        return JSON.stringify(status());
+      },
+      acknowledgeFiniteExportJson(value) {
+        assert.deepEqual(JSON.parse(value), observation());
+        acknowledged += 1; offered = false;
+        return JSON.stringify(status());
+      },
+      mixFiniteExportAudioBlock(first, count) {
+        assert.equal(first, 7n); assert.equal(count, 2);
+        return Float32Array.of(0.1, 0.1, 0.2, 0.2);
+      },
+      cancelFiniteExport() { active = false; },
+    });
+    try {
+      await f.attach(); f.acknowledge(); await f.present();
+      const wakes = f.count("source-wake");
+      const prepared = await f.request("prepare_history_export", { frameOptions });
+      assert.equal(prepared.finiteExport.kind, "preparing_history");
+      assert.equal(f.count("source-wake"), wakes + 1, "only the existing source driver receives completion demand");
+      assert.equal((await f.request("begin_finite_export", { frameOptions })).type, "error");
+      for (const [type, fields] of [["resume", {}], ["seek", { time: 0 }], ["restart_playback", {}],
+        ["browser_pointer_input", {}], ["browser_pointer_view", {}], ["pointer_fill_selection", {}], ["inspection_scroll", {}]]) {
+        const denied = await f.request(type, fields);
+        assert.equal(denied.type, "error");
+        assert.match(denied.message, /finite export owns paused execution/);
+      }
+      f.deliver(1, true);
+      const plan = await f.request("begin_finite_export", { frameOptions });
+      assert.equal(plan.finiteExport.source.kind, "completed_history");
+      let settled = false;
+      const sampleRequest = f.request("sample_finite_export").then(value => { settled = true; return value; });
+      await f.when(() => f.deltas.length === 2);
+      const delta = f.deltas[1];
+      assert.equal(delta.time, 1);
+      f.acknowledge(delta);
+      await f.request("state");
+      assert.equal(settled, false, "transport consumption alone does not prove display");
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0 });
+      await f.request("state");
+      assert.equal(settled, false, "an older picture cannot satisfy the requested publication");
+      f.rendererMessage({ type: "execution_presented", session: delta.session, sequence: delta.sequence });
+      const sample = await sampleRequest;
+      assert.deepEqual(sample.finiteExport.observation, observation());
+      assert.equal((await f.request("sample_finite_export")).finiteExport.frame.held, false);
+      assert.equal(observed, 1, "pending capture is offered again without another sample drive");
+      await f.request("acknowledge_finite_export", { observation: sample.finiteExport.observation });
+      const held = await f.request("sample_finite_export");
+      assert.equal(held.finiteExport.frame.held, true);
+      assert.equal(f.deltas.length, 2, "a terminal hold reuses the exact retained picture");
+      assert.equal(f.count("seek"), 0, "the host never chooses or seeks a prepared export coordinate");
+      await f.request("acknowledge_finite_export", { observation: held.finiteExport.observation });
+      assert.equal((await f.request("sample_finite_export")).finiteExport.kind, "complete");
+      const pcm = await f.request("finite_export_audio", { firstFrame: 7, frameCount: 2 });
+      assert.deepEqual(pcm.audioBlock, Float32Array.of(0.1, 0.1, 0.2, 0.2));
+      assert.equal(f.count("tick"), 0);
+      assert.equal(f.count("audio-anchor"), 0, "preparation and capture never start browser device audio");
+      assert.equal(f.messages.filter(message => message.type === "audio_state").length, 0);
+      assert.equal(f.player.preparedPlaying(), false);
+      await f.request("cancel_finite_export");
+      assert.equal(active, false);
+      assert.equal((await f.request("pause")).type, "pause");
+    } finally { f.close(); }
+  });
 }
 
 for (const mode of ["transferable", "shared"]) {

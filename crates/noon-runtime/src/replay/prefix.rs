@@ -243,6 +243,13 @@ pub struct PrefixReceiver {
     object_vector_budget_bytes: usize,
 }
 impl PrefixReceiver {
+    /// The delivered terminal endpoint of this exact reader. Producer completion
+    /// alone cannot admit output: its terminal batch must have been adopted.
+    pub fn completed_end_time(&self, runtime: &SceneInstance) -> Result<f64, PrefixError> {
+        self.validate_runtime(runtime)?;
+        self.end_time().ok_or(PrefixError::NotReady)
+    }
+
     /// Saved revision-vector bytes held by this reader, including future history.
     /// Seeking or removing visible membership does not release this charge.
     pub fn retained_history_payload_bytes(&self) -> usize {

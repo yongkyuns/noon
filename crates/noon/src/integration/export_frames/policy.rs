@@ -108,6 +108,13 @@ impl ExportFramePolicy {
         Ok(ExportFramePolicyStatus::NeedsSample(self.requested_time))
     }
 
+    /// Maximum source endpoint for bounded completed-history preparation. This
+    /// uses the same zero-origin rational grid as output sampling, including the
+    /// discarded crop prefix. Reaching this coordinate is not source completion.
+    pub fn source_preparation_limit(&self) -> Result<f64, ExportFramePolicyError> {
+        Ok(self.grid.sample(self.options.max_frames)?.authored_time())
+    }
+
     /// Plan the complete output range for a known immutable finite source.
     ///
     /// Call this only on a fresh policy, before submitting an observation. The

@@ -4,15 +4,15 @@
 //! Shared Rust policy owns every sample, acknowledgement and PCM coordinate.
 
 use super::{PublicationContext, RuntimeIdentity, SemanticExecutionPlayer};
-use noon::integration::{
-    AudioMixFormat, ExportAudioGrid, ExportEndReason, ExportFrameOptions, ExportFramePolicy,
-    ExportFramePolicyStatus, ExportFrameSummary, ExportSample, ExportSampleKind, ExportStop,
-    FrameRate, SampleObservation, MAX_AUDIO_MIX_BLOCK_FRAMES,
+use crate::export_wire::{
+    parse_frame_options, parse_observation, sample_json, sampling_json, source_json,
+    ObservationWire, MAX_SAFE_JS_INTEGER,
 };
-use serde::{Deserialize, Serialize};
+use noon::integration::{
+    AudioMixFormat, ExportAudioGrid, ExportFramePolicy, ExportFramePolicyStatus,
+    ExportFrameSummary, SampleObservation, MAX_AUDIO_MIX_BLOCK_FRAMES,
+};
 use serde_json::{json, Value};
-
-const MAX_SAFE_JS_INTEGER: u64 = (1_u64 << 53) - 1;
 
 pub(super) struct FiniteExport {
     policy: ExportFramePolicy,
@@ -48,7 +48,7 @@ impl FiniteExport {
                     "kind": "needs_sample", "requested_time": requested_time,
                     "target_time": requested_time.min(self.source_end),
                 }),
-                ExportFramePolicyStatus::SampleReady(sample) => sample_json(sample),
+                ExportFramePolicyStatus::SampleReady(sample) => sample_json(sample, self.runtime),
                 ExportFramePolicyStatus::Complete(sampling) => {
                     if sampling != self.planned {
                         return Err(
@@ -60,130 +60,6 @@ impl FiniteExport {
             },
         )
     }
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FrameRateWire {
-    numerator: u32,
-    denominator: u32,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum StopWire {
-    SourceEnd {},
-    FrameCount { frames: u64 },
-    EndTime { time: f64 },
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FrameOptionsWire {
-    frame_rate: FrameRateWire,
-    start_frame: u64,
-    stop: StopWire,
-    max_frames: u64,
-    max_transitions_per_sample: u32,
-    final_hold_seconds: f64,
-}
-
-impl FrameOptionsWire {
-    fn options(self) -> Result<ExportFrameOptions, String> {
-        if self.max_frames > MAX_SAFE_JS_INTEGER
-            || self.start_frame > MAX_SAFE_JS_INTEGER
-            || matches!(self.stop, StopWire::FrameCount { frames } if frames > MAX_SAFE_JS_INTEGER)
-        {
-            return Err("browser export frame indices exceed exact transport integers".into());
-        }
-        Ok(ExportFrameOptions {
-            frame_rate: FrameRate::new(self.frame_rate.numerator, self.frame_rate.denominator)
-                .map_err(|error| error.to_string())?,
-            start_frame: self.start_frame,
-            stop: match self.stop {
-                StopWire::SourceEnd {} => ExportStop::SourceEnd,
-                StopWire::FrameCount { frames } => ExportStop::FrameCount(frames),
-                StopWire::EndTime { time } => ExportStop::EndTime(time),
-            },
-            max_frames: self.max_frames,
-            max_transitions_per_sample: self.max_transitions_per_sample,
-            final_hold_seconds: self.final_hold_seconds,
-        })
-    }
-}
-
-#[derive(Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-struct PublicationWire {
-    scene_revision: String,
-    execution_revision: String,
-    frame_epoch: String,
-}
-
-#[derive(Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-struct ObservationWire {
-    requested_time: f64,
-    published_time: f64,
-    publication: PublicationWire,
-}
-
-impl From<SampleObservation> for ObservationWire {
-    fn from(observation: SampleObservation) -> Self {
-        Self {
-            requested_time: observation.requested_time,
-            published_time: observation.published_time,
-            publication: PublicationWire {
-                scene_revision: observation.publication.scene_revision().get().to_string(),
-                execution_revision: observation
-                    .publication
-                    .execution_revision()
-                    .get()
-                    .to_string(),
-                frame_epoch: observation.publication.frame_epoch().get().to_string(),
-            },
-        }
-    }
-}
-
-fn observation_json(observation: SampleObservation) -> Value {
-    let publication = observation.publication;
-    json!({
-        "requested_time": observation.requested_time,
-        "published_time": observation.published_time,
-        "publication": {
-            "scene_revision": publication.scene_revision().get().to_string(),
-            "execution_revision": publication.execution_revision().get().to_string(),
-            "frame_epoch": publication.frame_epoch().get().to_string(),
-        },
-    })
-}
-
-fn sample_json(sample: ExportSample) -> Value {
-    json!({
-        "kind": "sample",
-        "sample_kind": match sample.kind {
-            ExportSampleKind::Prefix => "prefix", ExportSampleKind::Output => "output",
-            ExportSampleKind::Completion => "completion",
-        },
-        "observation": observation_json(sample.observation),
-        "frame": sample.frame.map(|frame| json!({
-            "pts": frame.pts, "source_index": frame.source_sample.index(), "held": frame.held,
-        })),
-    })
-}
-
-fn sampling_json(sampling: ExportFrameSummary) -> Value {
-    json!({
-        "frames": sampling.frames,
-        "frame_rate": { "numerator": sampling.frame_rate.numerator(),
-            "denominator": sampling.frame_rate.denominator() },
-        "start_time": sampling.start_time, "end_time": sampling.end_time,
-        "source_end": sampling.source_end, "scheduled_duration": sampling.scheduled_duration,
-        "reason": match sampling.reason {
-            ExportEndReason::SourceEnd => "source_end", ExportEndReason::RequestedStop => "requested_stop",
-        },
-    })
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
@@ -208,16 +84,7 @@ impl SemanticExecutionPlayer {
             .session
             .finite_timeline_end_time()
             .ok_or("finite export requires a complete finite immutable timeline (#2263)")?;
-        if options_json.len() > 65_536 {
-            return Err("finite export options exceed their byte budget".into());
-        }
-        let mut wire: FrameOptionsWire = serde_json::from_str(options_json)
-            .map_err(|error| format!("invalid finite export options: {error}"))?;
-        let options = wire.options()?;
-        wire.frame_rate = FrameRateWire {
-            numerator: options.frame_rate.numerator(),
-            denominator: options.frame_rate.denominator(),
-        };
+        let (wire, options) = parse_frame_options(options_json)?;
         let policy = ExportFramePolicy::new(options).map_err(|error| error.to_string())?;
         let planned = policy
             .finite_summary(source_end)
@@ -245,6 +112,7 @@ impl SemanticExecutionPlayer {
             last_observation: None,
         };
         let reply = json!({
+            "source": source_json("immutable", export.runtime, export.publication),
             "source_end": source_end, "audio": audio_grid.is_some(), "frame_options": wire,
             "sampling": sampling_json(planned), "audio_frames": audio_grid.map(|grid| grid.frames()),
             "audio_block_frames": MAX_AUDIO_MIX_BLOCK_FRAMES,
@@ -320,11 +188,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         observation_json: &str,
     ) -> Result<String, String> {
-        if observation_json.len() > 4_096 {
-            return Err("finite export acknowledgement exceeds its byte budget".into());
-        }
-        let observation: ObservationWire = serde_json::from_str(observation_json)
-            .map_err(|error| format!("invalid finite export acknowledgement: {error}"))?;
+        let observation = parse_observation(observation_json)?;
         let export = self
             .finite_export
             .as_ref()
@@ -335,7 +199,7 @@ impl SemanticExecutionPlayer {
         else {
             return Err("finite export has no sample awaiting acknowledgement".into());
         };
-        if observation != ObservationWire::from(sample.observation)
+        if observation != ObservationWire::from_observation(sample.observation, export.runtime)
             || self.session.frame().time != sample.observation.published_time
             || self.session.publication_context() != sample.observation.publication
         {

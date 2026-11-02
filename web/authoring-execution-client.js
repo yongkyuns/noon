@@ -343,6 +343,10 @@ export class AuthoringExecutionClient {
     return this.#withInputPlayer((player) => player.setAudioMuted(muted));
   }
 
+  prepareHistoryExport(frameOptions) {
+    return this.#withInputPlayer(player => player.prepareHistoryExport(frameOptions));
+  }
+
   beginFiniteExport(frameOptions) {
     return this.#withInputPlayer(player => player.beginFiniteExport(frameOptions));
   }

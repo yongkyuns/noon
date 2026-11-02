@@ -12,6 +12,7 @@ on:
       - "crates/noon-runtime/**"
       - "crates/noon-render-wgpu/**"
       - "crates/noon-web/**"
+      - "crates/noon-export/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-playback-controls-smoke.mjs"
       - "scripts/playground-playback-rerun-stress.mjs"
@@ -37,6 +38,10 @@ on:
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/prepared-audio-qualification.mjs"
+      - "scripts/export-python-scene.mjs"
+      - "scripts/prepared-history-export-qualification.mjs"
+      - "scripts/verify-prepared-history-export.py"
+      - "scripts/test_verify_prepared_history_export.py"
       - "scripts/sampled-motion-qualification.mjs"
       - "scripts/sampled-motion-fixture-check.py"
       - "scripts/browser-audio-observation.mjs"
@@ -54,6 +59,7 @@ on:
       - "crates/noon-compile/**"
       - "crates/noon-runtime/**"
       - "crates/noon-web/**"
+      - "crates/noon-export/**"
       - "web/playground-playback-controls*"
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
@@ -84,6 +90,10 @@ on:
       - "scripts/prepared-worker-qualification.mjs"
       - "scripts/prepared-authoring-worker-qualification.mjs"
       - "scripts/prepared-audio-qualification.mjs"
+      - "scripts/export-python-scene.mjs"
+      - "scripts/prepared-history-export-qualification.mjs"
+      - "scripts/verify-prepared-history-export.py"
+      - "scripts/test_verify_prepared_history_export.py"
       - "scripts/sampled-motion-qualification.mjs"
       - "scripts/sampled-motion-fixture-check.py"
       - "scripts/browser-audio-observation.mjs"
@@ -175,6 +185,29 @@ jobs:
           echo "NOON_SAMPLED_MOTION_PYTHON=$noon_sampled_motion_venv/bin/python" >> "$GITHUB_ENV"
       - name: Qualify compact sampled motion and unchanged Fourier semantics
         run: node scripts/sampled-motion-qualification.mjs
+      - name: Install completed-history export media tools
+        run: |
+          bash scripts/ci-install-reference-deps.sh ffmpeg mesa-vulkan-drivers libvulkan1
+          cargo build --locked -p noon-export --no-default-features --features prepared-prefix \
+            --example encode_prepared_capture --example render_prepared_audio_video
+          cargo build --locked -p noon --no-default-features --example render_background_music
+      - name: Qualify typed native and canonical Python completed-history export
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          "$NOON_SAMPLED_MOTION_PYTHON" scripts/test_verify_prepared_history_export.py
+          "$NOON_SAMPLED_MOTION_PYTHON" -O scripts/test_verify_prepared_history_export.py
+          "$NOON_SAMPLED_MOTION_PYTHON" -OO scripts/test_verify_prepared_history_export.py
+          mkdir -p browser-smoke-artifacts/prepared-history-native
+          env -u DISPLAY -u WAYLAND_DISPLAY target/debug/examples/render_prepared_audio_video \
+            browser-smoke-artifacts/prepared-history-native/ordinary-audio.mp4 \
+            | tee browser-smoke-artifacts/prepared-history-native/report.json
+          node scripts/prepared-history-export-qualification.mjs \
+            --output browser-smoke-artifacts/prepared-history-export \
+            --encoder target/debug/examples/encode_prepared_capture \
+            --music-renderer target/debug/examples/render_background_music \
+            --python "$NOON_SAMPLED_MOTION_PYTHON" \
+            --native-video browser-smoke-artifacts/prepared-history-native/ordinary-audio.mp4
       - name: Qualify actual DOM samples and paused click-selection pixels
         run: |
           node scripts/shader-time-qualification.mjs
@@ -242,6 +275,10 @@ jobs:
             browser-smoke-artifacts/playground-playback-dynamic-webgpu
             browser-smoke-artifacts/prepared-audio
             browser-smoke-artifacts/sampled-motion
+            browser-smoke-artifacts/prepared-history-native
+            browser-smoke-artifacts/prepared-history-export
+            !browser-smoke-artifacts/prepared-history-export/**/frames.rgba
+            !browser-smoke-artifacts/prepared-history-export/**/audio.f32le
           if-no-files-found: error
           retention-days: 3
 

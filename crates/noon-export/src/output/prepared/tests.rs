@@ -62,7 +62,7 @@ fn manifest(options: ExportFrameOptions, end: f64, audio: bool) -> PreparedCaptu
                         FrameEpoch::new(epoch),
                     ),
                 };
-                samples.push(sample.into());
+                samples.push(PreparedSample::new(RuntimeIdentity::new(17), sample));
                 previous_time = published_time;
                 policy.observe(sample, requested_time >= end).unwrap();
             }
@@ -74,6 +74,11 @@ fn manifest(options: ExportFrameOptions, end: f64, audio: bool) -> PreparedCaptu
     }
     PreparedCaptureManifest {
         format: PreparedCaptureManifest::FORMAT.into(),
+        source: PreparedCaptureSource {
+            kind: PreparedCaptureSourceKind::Immutable,
+            runtime_identity: "17".into(),
+            admission: samples[0].publication.clone(),
+        },
         width: 4,
         height: 4,
         source_end: end,
@@ -244,6 +249,75 @@ fn immutable_receipts_reject_wrong_grid_endpoint_revisions_and_epoch_reuse() {
 }
 
 #[test]
+fn completed_history_keeps_fixed_admission_owner_and_actual_revision_progress() {
+    let mut config = options();
+    config.final_hold_seconds = 0.12;
+    let mut valid = manifest(config, 0.2, false);
+    valid.source.kind = PreparedCaptureSourceKind::CompletedHistory;
+    valid.source.admission.execution_revision = "10".into();
+    for sample in &mut valid.samples {
+        sample.publication.execution_revision = if sample.published_time < 0.1 {
+            "10"
+        } else {
+            "11"
+        }
+        .into();
+    }
+    let mut revisions = Vec::new();
+    walk_samples(&valid, &CaptureCancellation::default(), |sample| {
+        revisions.push(sample.observation.publication.execution_revision().get());
+        Ok(())
+    })
+    .unwrap();
+    assert!(revisions.contains(&10) && revisions.contains(&11));
+    for mutation in 0..9 {
+        let mut candidate = valid.clone();
+        match mutation {
+            0 => candidate.source.kind = PreparedCaptureSourceKind::Immutable,
+            1 => candidate.samples[1].runtime_identity = "18".into(),
+            2 => candidate.source.runtime_identity = "18".into(),
+            3 => candidate.source.admission.frame_epoch = "0".into(),
+            4 => candidate.samples[1].publication.scene_revision = "1".into(),
+            5 => candidate.samples[1].publication.execution_revision = "9".into(),
+            6 => candidate.samples[1].publication.execution_revision = "12".into(),
+            7 => {
+                candidate
+                    .samples
+                    .last_mut()
+                    .unwrap()
+                    .publication
+                    .execution_revision = "12".into()
+            }
+            8 => candidate.samples[0].publication.execution_revision = "11".into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            walk_samples(&candidate, &CaptureCancellation::default(), |_| Ok(())).is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn capture_v2_requires_source_owner_and_rejects_ambiguous_runtime_identity() {
+    let valid = manifest(options(), 0.2, false);
+    for value in ["", "017", "+17", "17.0", "18446744073709551616"] {
+        let mut candidate = valid.clone();
+        candidate.source.runtime_identity = value.into();
+        for sample in &mut candidate.samples {
+            sample.runtime_identity = value.into();
+        }
+        assert!(walk_samples(&candidate, &CaptureCancellation::default(), |_| Ok(())).is_err());
+    }
+    let mut wire = serde_json::to_value(&valid).unwrap();
+    wire.as_object_mut().unwrap().remove("source");
+    assert!(serde_json::from_value::<PreparedCaptureManifest>(wire).is_err());
+    let mut wire = serde_json::to_value(&valid).unwrap();
+    wire["source"]["kind"] = "unfinished_history".into();
+    assert!(serde_json::from_value::<PreparedCaptureManifest>(wire).is_err());
+}
+
+#[test]
 fn revision_strings_reject_lossy_or_ambiguous_encodings() {
     for value in [
         "",
@@ -290,13 +364,23 @@ fn schema_budgets_and_unknown_fields_fail_before_encoding() {
         assert!(read_manifest(&root.0, limits).is_err());
     }
     let mut wrong_version = valid.clone();
-    wrong_version.format = "noon-prepared-capture-v2".into();
+    wrong_version.format = "noon-prepared-capture-v1".into();
     write_manifest(&root.0, &wrong_version);
     assert!(read_manifest(&root.0, PreparedCaptureLimits::default()).is_err());
-    for location in ["root", "frame_options", "stop", "sample", "publication"] {
+    for location in [
+        "root",
+        "source",
+        "admission",
+        "frame_options",
+        "stop",
+        "sample",
+        "publication",
+    ] {
         let mut value = serde_json::to_value(&valid).unwrap();
         let target = match location {
             "root" => &mut value,
+            "source" => &mut value["source"],
+            "admission" => &mut value["source"]["admission"],
             "frame_options" => &mut value["frame_options"],
             "stop" => &mut value["frame_options"]["stop"],
             "sample" => &mut value["samples"][0],

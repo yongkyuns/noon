@@ -112,7 +112,8 @@ pub fn export_session_file(
                     let captured = capture
                         .capture(session)
                         .map_err(SessionFileExportError::Capture)?;
-                    check_receipt(captured.receipt, sample.observation)?;
+                    check_receipt(captured.receipt, sample.observation)
+                        .map_err(SessionFileExportError::Output)?;
                     sink.write(CapturedFrame {
                         frame,
                         observation: sample.observation,
@@ -127,7 +128,8 @@ pub fn export_session_file(
                     let receipt = capture
                         .render(session)
                         .map_err(SessionFileExportError::Capture)?;
-                    check_receipt(receipt, sample.observation)?;
+                    check_receipt(receipt, sample.observation)
+                        .map_err(SessionFileExportError::Output)?;
                 }
                 policy
                     .acknowledge_sample(sample)
@@ -160,17 +162,17 @@ pub fn export_session_file(
     })
 }
 
-fn check_receipt(
+pub(super) fn check_receipt(
     receipt: CaptureReceipt,
     observation: SampleObservation,
-) -> Result<(), SessionFileExportError> {
+) -> io::Result<()> {
     if receipt.publication != observation.publication
         || receipt.published_time != observation.published_time
     {
-        return Err(SessionFileExportError::Output(io::Error::new(
+        return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "capture publication differs from its admitted sample",
-        )));
+        ));
     }
     Ok(())
 }

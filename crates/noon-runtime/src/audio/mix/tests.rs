@@ -64,6 +64,61 @@ fn render(
     output
 }
 
+#[test]
+fn integral_crop_origin_and_absolute_indices_have_identical_pcm_phase() {
+    let runtime = runtime(vec![(
+        pcm(8000, 1, &[0.25, -0.25]),
+        AudioClipOptions {
+            duration: Some(40.0),
+            looped: true,
+            ..Default::default()
+        },
+    )]);
+    let format = AudioMixFormat::STEREO_48_KHZ;
+    let origin_frame = 1_121_120;
+    let origin = origin_frame as f64 / f64::from(format.sample_rate());
+    let full = render(&runtime, 0.0, origin_frame, format, 4099);
+    let crop = render(&runtime, origin, 0, format, 4099);
+    let mismatch = full
+        .iter()
+        .zip(&crop)
+        .enumerate()
+        .find(|(_, (left, right))| left.to_bits() != right.to_bits())
+        .map(|(sample, (left, right))| (sample, *left, *right));
+    assert_eq!(mismatch, None);
+    for frame in [0, 1, 13, 4098, 542_080] {
+        assert_eq!(
+            format.scene_time_at(origin, frame).unwrap().to_bits(),
+            format
+                .scene_time_at(0.0, origin_frame + frame)
+                .unwrap()
+                .to_bits()
+        );
+    }
+}
+
+#[test]
+fn fractional_origins_and_wide_unaligned_times_keep_their_existing_coordinates() {
+    let format = AudioMixFormat::STEREO_48_KHZ;
+    for origin in [1.0 / 96_000.0, 0.123456789, 1.0e20, f64::MAX] {
+        for frame in [0, 1, 13, 4098] {
+            let expected = origin + frame as f64 / 48_000.0;
+            assert_eq!(
+                format.scene_time_at(origin, frame).unwrap().to_bits(),
+                expected.to_bits()
+            );
+        }
+    }
+    assert!(matches!(
+        format.scene_time_at(-1.0, 0),
+        Err(AudioMixError::InvalidSceneStart(_))
+    ));
+    assert!(matches!(
+        format.scene_time_at(0.0, u64::MAX),
+        Err(AudioMixError::OutputFramePrecisionLoss { .. })
+    ));
+}
+
 fn rejected_without_writes(
     runtime: &SceneInstance,
     scene_start: f64,

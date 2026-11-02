@@ -4,16 +4,20 @@
 //! shell. PNG bundles are lossless diagnostics; MP4 is SDR H.264/YUV420p. No output
 //! is reported successful before EOF, encoder exit and destination publication.
 mod audio;
+#[cfg(feature = "prepared-prefix")]
+mod completed_prefix;
 mod destination;
 mod prepared;
 mod process;
 mod session;
 mod terminal_duration;
 
+#[cfg(feature = "prepared-prefix")]
+pub use completed_prefix::{export_completed_prefix_file, CompletedPrefixFileExportError};
 pub use prepared::{
-    export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest,
-    PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate, PreparedPublication,
-    PreparedSample, PreparedStop,
+    export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest, PreparedCaptureSource,
+    PreparedCaptureSourceKind, PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate,
+    PreparedPublication, PreparedSample, PreparedStop,
 };
 pub use session::{export_session_file, SessionFileExportError};
 

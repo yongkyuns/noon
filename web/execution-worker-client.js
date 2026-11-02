@@ -659,11 +659,19 @@ export class ExecutionWorkerClient {
   setAudioVolume(volume) { this.#audioDevice.setVolume(volume); }
   setAudioMuted(muted) { this.#audioDevice.setMuted(muted); }
 
+  async prepareHistoryExport(frameOptions) {
+    return this.#startExportControl("prepare_history_export", frameOptions);
+  }
+
   async beginFiniteExport(frameOptions) {
+    return this.#startExportControl("begin_finite_export", frameOptions);
+  }
+
+  async #startExportControl(type, frameOptions) {
     this.#audioControlGeneration += 1;
     this.#audioOutputAuthorized = false;
     this.#audioDevice.stop();
-    const result = await this.#requestEngine("begin_finite_export", { frameOptions });
+    const result = await this.#requestEngine(type, { frameOptions });
     this.#rememberPlaying(result);
     return result.finiteExport;
   }

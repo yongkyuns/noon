@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use noon::integration::{
     ExportEndReason, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyStatus,
-    ExportFrameSummary, ExportSample, ExportStop, FrameRate, SampleObservation,
+    ExportFrameSummary, ExportSample, ExportStop, FrameRate, RuntimeIdentity, SampleObservation,
     MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 use noon_core::{ExecutionRevision, FrameEpoch, PublicationContext, SceneRevision};
@@ -40,6 +40,8 @@ const FRAMES_FILENAME: &str = "frames.rgba";
 #[serde(deny_unknown_fields)]
 pub struct PreparedCaptureManifest {
     pub format: String,
+    /// Exact runtime and publication admitted before the first time-zero sample.
+    pub source: PreparedCaptureSource,
     pub width: u32,
     pub height: u32,
     /// Finite endpoint admitted by the original execution owner.
@@ -51,7 +53,25 @@ pub struct PreparedCaptureManifest {
 }
 
 impl PreparedCaptureManifest {
-    pub const FORMAT: &'static str = "noon-prepared-capture-v1";
+    pub const FORMAT: &'static str = "noon-prepared-capture-v2";
+}
+
+/// Explicit execution capability at the external media boundary. The immutable
+/// profile still pins its execution revision. Completed history keeps its frozen
+/// admission owner while actual replay publications may advance that revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedCaptureSourceKind {
+    Immutable,
+    CompletedHistory,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedCaptureSource {
+    pub kind: PreparedCaptureSourceKind,
+    pub runtime_identity: String,
+    pub admission: PreparedPublication,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,38 +152,49 @@ pub struct PreparedPublication {
     pub frame_epoch: String,
 }
 
+impl From<PublicationContext> for PreparedPublication {
+    fn from(publication: PublicationContext) -> Self {
+        Self {
+            scene_revision: publication.scene_revision().get().to_string(),
+            execution_revision: publication.execution_revision().get().to_string(),
+            frame_epoch: publication.frame_epoch().get().to_string(),
+        }
+    }
+}
+
+impl PreparedPublication {
+    fn context(&self) -> io::Result<PublicationContext> {
+        Ok(PublicationContext::new(
+            SceneRevision::new(revision(&self.scene_revision)?),
+            ExecutionRevision::new(revision(&self.execution_revision)?),
+            FrameEpoch::new(revision(&self.frame_epoch)?),
+        ))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedSample {
+    pub runtime_identity: String,
     pub requested_time: f64,
     pub published_time: f64,
     pub publication: PreparedPublication,
 }
 
-impl From<SampleObservation> for PreparedSample {
-    fn from(sample: SampleObservation) -> Self {
+impl PreparedSample {
+    pub fn new(runtime_identity: RuntimeIdentity, sample: SampleObservation) -> Self {
         Self {
+            runtime_identity: runtime_identity.get().to_string(),
             requested_time: sample.requested_time,
             published_time: sample.published_time,
-            publication: PreparedPublication {
-                scene_revision: sample.publication.scene_revision().get().to_string(),
-                execution_revision: sample.publication.execution_revision().get().to_string(),
-                frame_epoch: sample.publication.frame_epoch().get().to_string(),
-            },
+            publication: sample.publication.into(),
         }
     }
-}
-
-impl PreparedSample {
     fn observation(&self) -> io::Result<SampleObservation> {
         Ok(SampleObservation {
             requested_time: self.requested_time,
             published_time: self.published_time,
-            publication: PublicationContext::new(
-                SceneRevision::new(revision(&self.publication.scene_revision)?),
-                ExecutionRevision::new(revision(&self.publication.execution_revision)?),
-                FrameEpoch::new(revision(&self.publication.frame_epoch)?),
-            ),
+            publication: self.publication.context()?,
         })
     }
 }
@@ -243,7 +274,11 @@ pub fn export_prepared_capture(
         .ok_or_else(|| invalid("prepared frame file length overflows"))?;
     let audio_grid = manifest
         .audio
-        .then(|| audio::soundtrack_grid(sampling))
+        .then(|| {
+            audio::soundtrack_grid(sampling)?
+                .truncate_at(manifest.source_end)
+                .map_err(invalid)
+        })
         .transpose()?;
     let audio_frames = audio_grid.map(|grid| grid.frames());
     let pcm_bytes = audio_grid.map_or(0, |grid| grid.byte_len());
@@ -360,6 +395,15 @@ fn walk_samples(
     mut consume: impl FnMut(ExportSample) -> io::Result<()>,
 ) -> io::Result<ExportFrameSummary> {
     let mut policy = ExportFramePolicy::new(manifest.frame_options.try_into()?).map_err(invalid)?;
+    if manifest.source.kind == PreparedCaptureSourceKind::CompletedHistory
+        && manifest.source_end > policy.source_preparation_limit().map_err(invalid)?
+    {
+        return Err(invalid(
+            "completed history exceeds its source preparation limit",
+        ));
+    }
+    let runtime = revision(&manifest.source.runtime_identity)?;
+    let admission = manifest.source.admission.context()?;
     let planned = policy
         .finite_summary(manifest.source_end)
         .map_err(invalid)?;
@@ -369,25 +413,33 @@ fn walk_samples(
         check_publication_cancellation(cancellation)?;
         match policy.status().map_err(invalid)? {
             ExportFramePolicyStatus::NeedsSample(time) => {
-                let sample = samples
+                let receipt = samples
                     .next()
-                    .ok_or_else(|| invalid("prepared capture is missing a required observation"))?
-                    .observation()?;
-                if sample.requested_time != time
+                    .ok_or_else(|| invalid("prepared capture is missing a required observation"))?;
+                let sample = receipt.observation()?;
+                let current = sample.publication;
+                let prior = previous.map_or(admission, |sample| sample.publication);
+                let execution = current.execution_revision().get();
+                let prior_execution = prior.execution_revision().get();
+                let epoch = current.frame_epoch().get();
+                let prior_epoch = prior.frame_epoch().get();
+                if revision(&receipt.runtime_identity)? != runtime
+                    || sample.requested_time != time
                     || sample.published_time != time.min(manifest.source_end)
+                    || current.scene_revision() != admission.scene_revision()
+                    || (previous.is_none() && current != admission)
+                    || execution < prior_execution
+                    || epoch < prior_epoch
+                    || execution - prior_execution > epoch - prior_epoch
+                    || (manifest.source.kind == PreparedCaptureSourceKind::Immutable
+                        && current.execution_revision() != admission.execution_revision())
                     || previous.is_some_and(|previous| {
-                        sample.publication.scene_revision() != previous.publication.scene_revision()
-                            || sample.publication.execution_revision()
-                                != previous.publication.execution_revision()
-                            || sample.publication.frame_epoch().get()
-                                < previous.publication.frame_epoch().get()
-                            || (sample.published_time != previous.published_time
-                                && sample.publication.frame_epoch()
-                                    == previous.publication.frame_epoch())
+                        sample.published_time != previous.published_time
+                            && current.frame_epoch() == previous.publication.frame_epoch()
                     })
                 {
                     return Err(invalid(
-                        "prepared observation disagrees with the immutable source or frame grid",
+                        "prepared observation disagrees with its admitted source owner or frame grid",
                     ));
                 }
                 policy

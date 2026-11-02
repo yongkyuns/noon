@@ -340,7 +340,7 @@ sections and the original score *A Small Discovery*. The gallery's **Play with
 sound**, seek, section, volume and mute controls use shared Rust timing. The
 same source can be exported with H.264 video and AAC audio through the existing
 native MP4 sink; see [audio playback and export](web/README.md#background-audio-and-scene-navigation)
-for the finite authoring profile and command.
+for the finite immutable and completed-history authoring profiles and command.
 
 The browser demo combines:
 
