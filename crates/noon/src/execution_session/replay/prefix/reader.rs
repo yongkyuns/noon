@@ -69,6 +69,35 @@ impl PrefixReader {
     pub fn end_time(&self) -> Option<f64> {
         self.receiver.end_time()
     }
+    /// Validate this reader's adopted terminal history without evaluating it.
+    /// Unfinished, stale or foreign history is not a completed export source.
+    pub fn completed_history_end_time(&self) -> Result<f64, PrefixError> {
+        self.receiver.completed_end_time(&self.session.runtime)
+    }
+
+    pub(crate) fn mix_completed_audio_block(
+        &self,
+        scene_start: f64,
+        first_output_frame: u64,
+        format: noon_runtime::AudioMixFormat,
+        output: &mut [f32],
+    ) -> Result<(), noon_runtime::AudioMixError> {
+        self.session
+            .mix_audio_block(scene_start, first_output_frame, format, output)
+    }
+
+    /// Authored/effective camera, excluding disposable viewer navigation.
+    pub fn camera_2d(
+        &self,
+    ) -> Result<Option<noon_core::Camera2DState>, crate::ExecutionSessionCameraError> {
+        self.session.camera_2d()
+    }
+
+    pub fn inset_2d_views(
+        &self,
+    ) -> Result<Vec<noon_core::Inset2DViewState>, crate::ExecutionSessionInset2DError> {
+        self.session.inset_2d_views()
+    }
     pub fn frame(&self) -> &FrameState {
         self.session.frame()
     }

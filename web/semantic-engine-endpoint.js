@@ -28,7 +28,7 @@ const REPLAY_DEPENDENT_CONTROLS = new Set([
   "resume", "seek", "restart_playback", "set_loop_duration", "seek_section",
 ]);
 const FINITE_EXPORT_CONTROLS = new Set([
-  "begin_finite_export", "sample_finite_export", "acknowledge_finite_export",
+  "prepare_history_export", "begin_finite_export", "sample_finite_export", "acknowledge_finite_export",
   "finite_export_audio", "cancel_finite_export",
 ]);
 const PREPARED_PLAYBACK_CONTROLS = new Set([
@@ -977,20 +977,37 @@ export async function attachSemanticEngine(
           throw new Error("finite export owns paused execution until capture completes");
         }
         switch (message.type) {
+          case "prepare_history_export":
+            latestTick = null;
+            finiteExport = JSON.parse(player.prepareHistoryExportJson(JSON.stringify(message.frameOptions)));
+            preparedAudioDirty = false;
+            preparedAudioNeedsTick = false;
+            observeExecutionWake(performance.now(), true);
+            break;
           case "begin_finite_export":
             latestTick = null;
             finiteExport = JSON.parse(player.beginFiniteExportJson(JSON.stringify(message.frameOptions)));
+            preparedAudioDirty = false;
+            preparedAudioNeedsTick = false;
             observeExecutionWake(performance.now(), true);
             break;
           case "sample_finite_export": {
             latestTick = null;
             finiteExport = JSON.parse(player.finiteExportStatusJson());
             if (finiteExport.kind === "needs_sample") {
-              // A held terminal frame must retain the exact completed epoch.
-              if (finiteExport.target_time !== player.time()) {
-                await advanceToAuthoredTime(finiteExport.target_time);
+              if (prepared !== null) {
+                // Shared Rust selects the sample on this same adopted reader.
+                // Its actual publication uses the ordinary retained transport;
+                // consumption alone never acknowledges renderer completion.
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
+                await awaitPresentation(drainAndSendDelta());
+              } else {
+                // A held terminal frame retains the exact completed epoch.
+                if (finiteExport.target_time !== player.time()) {
+                  await advanceToAuthoredTime(finiteExport.target_time);
+                }
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
               }
-              finiteExport = JSON.parse(player.observeFiniteExportJson());
             }
             await awaitPresentation(null);
             break;
@@ -1163,7 +1180,11 @@ export async function attachSemanticEngine(
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
-        if (prepared !== null && message.type !== "debug_frame") prepared.wakeSource();
+        if (prepared !== null && message.type !== "debug_frame" &&
+            (!FINITE_EXPORT_CONTROLS.has(message.type) ||
+             message.type === "prepare_history_export" || message.type === "cancel_finite_export")) {
+          prepared.wakeSource();
+        }
         if (hasAudio && ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
           // A control changes both outputs at one accepted Rust clock sample.
           // Presentation precedes the new device anchor; no device clock drives
@@ -1205,7 +1226,7 @@ export async function attachSemanticEngine(
         // An opaque callback failure/interruption is terminal in the retained
         // session. Do not emit repeated errors or retry its externally visible
         // side effects while this player is retained for recovery.
-        if (callbackFault === null) {
+        if (callbackFault === null && !player?.finiteExportActive?.()) {
           try {
             if (prepared !== null) {
               // The render timestamp is a wake opportunity only. The prepared
@@ -1421,14 +1442,40 @@ export async function attachSemanticEngine(
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
-        if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type)) {
+        if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type) && !FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error(`prepared playback does not support ${message.type}`);
+        }
+        if (prepared === null && message.type === "prepare_history_export") {
+          throw new Error("history export preparation requires an existing prepared source");
         }
         if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
           throw new Error("finite export owns paused execution until capture completes");
         }
         if (continuation !== null && FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error("finite export requires a completed immutable Python scene");
+        }
+        if (message.type === "cancel_finite_export" && player?.finiteExportActive?.()) {
+          // Cancellation can arrive while a sample awaits a renderer that has
+          // stopped responding. Retire the Rust capability and reject that
+          // consumer barrier without pretending its picture was presented.
+          // A later real receipt remains subject to ordinary sequence ordering.
+          player.cancelFiniteExport();
+          for (let index = 0; index < controls.length;) {
+            const queued = controls[index];
+            if (!FINITE_EXPORT_CONTROLS.has(queued.type)) { index += 1; continue; }
+            controls.splice(index, 1);
+            if (queued.type === "cancel_finite_export") {
+              post({ requestId: queued.requestId, ...state(queued.type) });
+            } else fail(new Error("finite export cancelled before its queued command"), queued.requestId);
+          }
+          rejectPendingPresentation(new Error("finite export cancelled before renderer publication"));
+          latestTick = null;
+          preparedAudioDirty = false;
+          preparedAudioNeedsTick = false;
+          observeExecutionWake(performance.now(), true);
+          if (prepared !== null) prepared.wakeSource();
+          post({ requestId: message.requestId, ...state(message.type) });
+          return;
         }
         if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);

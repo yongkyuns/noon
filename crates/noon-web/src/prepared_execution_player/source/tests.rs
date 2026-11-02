@@ -34,7 +34,7 @@ fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
     }
     .unwrap();
     let mut player = PreparedExecutionPlayer::from_reader(reader, session).unwrap();
-    player.set_prepared_playing(false);
+    player.set_prepared_playing(false).unwrap();
     player
         .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
         .unwrap();
@@ -189,7 +189,7 @@ fn source_delivery_does_not_start_cold_clock_resume_pause_or_reanchor_unexpired_
         let mut player = staged_player(96, false);
         let required = player.pending_source_object_capacity().unwrap();
         player.reserve_prefix_object_capacity(required).unwrap();
-        player.set_prepared_playing(true);
+        player.set_prepared_playing(true).unwrap();
         if mode != "cold" {
             player.execution_wake(1000.0).unwrap();
         }
@@ -226,7 +226,7 @@ fn source_delivery_does_not_start_cold_clock_resume_pause_or_reanchor_unexpired_
 fn rejected_source_delivery_does_not_mutate_an_expired_playback_clock() {
     let mut player = staged_player(97, false);
     let mut foreign = staged_player(98, false);
-    player.set_prepared_playing(true);
+    player.set_prepared_playing(true).unwrap();
     player.execution_wake(1000.0).unwrap();
     let required = player.pending_source_object_capacity().unwrap();
     let frame = player.playback.reader.frame().clone();
@@ -297,7 +297,7 @@ fn synchronous_source_stall_cannot_charge_old_wall_time_to_new_audio_availabilit
     reader.seek(0.5).unwrap();
     let mut player = PreparedExecutionPlayer::from_reader(reader, 99).unwrap();
     player.initial_delta_json().unwrap();
-    player.set_prepared_playing(true);
+    player.set_prepared_playing(true).unwrap();
     player.execution_wake(1000.0).unwrap();
     let before: Value =
         serde_json::from_str(&player.audio_anchor_json(1_001_250.0, 1250.0).unwrap()).unwrap();

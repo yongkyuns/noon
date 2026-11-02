@@ -46,6 +46,19 @@ impl AudioMixFormat {
     pub const fn channels(self) -> u16 {
         self.channels
     }
+
+    /// One coordinate on the shared output PCM grid, without mixing or runtime
+    /// mutation. An origin that exactly round-trips through an integral sample
+    /// index uses that integer origin plus the requested offset before division.
+    /// Cropping such a grid cannot introduce a second floating-point addition
+    /// and change sample phase. Fractional origins preserve their existing phase.
+    /// This validates the point; a mixer block also validates every successor.
+    pub fn scene_time_at(self, scene_start: f64, frame: u64) -> Result<f64, AudioMixError> {
+        Ok(
+            OutputGrid::validate(scene_start, frame, self, 0, MAX_AUDIO_MIX_BLOCK_FRAMES)?
+                .time_at(0),
+        )
+    }
 }
 
 /// Invalid requests and unrepresentable mixes leave the caller's output intact.
@@ -161,6 +174,7 @@ impl std::error::Error for AudioMixError {}
 struct OutputGrid {
     scene_start: f64,
     first_frame: u64,
+    absolute_first_frame: Option<u64>,
     sample_rate: f64,
     frames: usize,
 }
@@ -195,10 +209,27 @@ impl OutputGrid {
         if end > MAX_EXACT_OUTPUT_FRAME {
             return Err(AudioMixError::OutputFramePrecisionLoss { frame: end });
         }
+        let sample_rate = f64::from(format.sample_rate);
+        let origin_frame = scene_start * sample_rate;
+        let absolute_first_frame = if origin_frame <= MAX_EXACT_OUTPUT_FRAME as f64
+            && origin_frame.fract() == 0.0
+            && origin_frame / sample_rate == scene_start
+        {
+            let first = (origin_frame as u64)
+                .checked_add(first_frame)
+                .ok_or(AudioMixError::OutputFrameRangeOverflow)?;
+            first
+                .checked_add(frames as u64)
+                .ok_or(AudioMixError::OutputFrameRangeOverflow)?;
+            Some(first)
+        } else {
+            None
+        };
         let grid = Self {
             scene_start,
             first_frame,
-            sample_rate: f64::from(format.sample_rate),
+            absolute_first_frame,
+            sample_rate,
             frames,
         };
         let mut previous = grid.time_at(0);
@@ -225,7 +256,12 @@ impl OutputGrid {
     }
 
     fn time_at(&self, index: usize) -> f64 {
-        self.scene_start + (self.first_frame + index as u64) as f64 / self.sample_rate
+        match self.absolute_first_frame {
+            // The whole range, including the successor, was checked before
+            // construction. The ordinary precision checks below still apply.
+            Some(first) => (first + index as u64) as f64 / self.sample_rate,
+            None => self.scene_start + (self.first_frame + index as u64) as f64 / self.sample_rate,
+        }
     }
 
     /// Find the first output sample at or after a clip boundary. Searching the
@@ -354,7 +390,8 @@ impl SceneInstance {
 
     /// Mix a bounded block of interleaved PCM without advancing Runtime.
     ///
-    /// Sample `i` is evaluated at `scene_start + (first_output_frame + i) / rate`.
+    /// Sample `i` is evaluated on the shared `AudioMixFormat::scene_time_at` grid,
+    /// mathematically `scene_start + (first_output_frame + i) / rate`.
     /// The origin is an authored scene time; the integer frame index is relative
     /// to that fixed origin, not to `frame().time` or the previous block. Keeping
     /// both arguments on the same sample grid makes output block-size invariant.

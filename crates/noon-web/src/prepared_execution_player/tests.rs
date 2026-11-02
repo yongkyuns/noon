@@ -38,7 +38,7 @@ impl Fixture {
         let (publisher, mut reader) = source.create_prepared_prefix(segment).unwrap();
         reader.seek(0.5).unwrap();
         let mut player = PreparedExecutionPlayer::from_reader(reader, session).unwrap();
-        player.set_prepared_playing(false);
+        player.set_prepared_playing(false).unwrap();
         player
             .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
             .unwrap();
@@ -259,7 +259,7 @@ fn prepared_worker_terminal_adoption_and_source_drop_do_not_replace_display() {
 fn prepared_worker_unavailable_seek_is_atomic_and_buffered_wall_time_is_not_charged() {
     let mut f = Fixture::new(75);
     ready(&mut f.player);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     assert_eq!(
         f.player
             .execution_wake(1_000.0)
@@ -443,7 +443,7 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
 #[test]
 fn prepared_worker_status_observations_never_start_the_presentation_clock() {
     let mut f = Fixture::new(82);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     assert_eq!(f.player.prepared_time(), 0.5);
     assert_eq!(f.player.prepared_frontier(), 1.0);
     assert_eq!(f.player.prepared_end_time(), None);
@@ -470,7 +470,7 @@ fn prepared_worker_status_observations_never_start_the_presentation_clock() {
 fn prepared_worker_static_pause_preserves_elapsed_time_and_resume_excludes_paused_wall_time() {
     let mut f = Fixture::new(83);
     ready(&mut f.player);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     assert_eq!(
         f.player
             .execution_wake(1_000.0)
@@ -492,7 +492,7 @@ fn prepared_worker_static_pause_preserves_elapsed_time_and_resume_excludes_pause
     assert_eq!(f.player.prepared_playback_time_at(90_000.0).unwrap(), 0.75);
     f.player.pause_prepared_at(90_000.0).unwrap();
     assert_eq!(f.player.prepared_time(), 0.75);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     assert_eq!(f.player.prepared_playback_time_at(100_000.0).unwrap(), 0.75);
     assert_eq!(
         f.player
@@ -513,7 +513,7 @@ fn prepared_worker_static_pause_preserves_elapsed_time_and_resume_excludes_pause
 fn prepared_worker_pause_at_open_frontier_buffers_without_selecting_an_epsilon_frame() {
     let mut f = Fixture::new(84);
     ready(&mut f.player);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     f.player.execution_wake(1_000.0).unwrap();
     let frame = f.player.playback.reader.frame().clone();
     let publication = f.player.playback.reader.publication_context();
@@ -534,7 +534,7 @@ fn prepared_worker_pause_at_open_frontier_buffers_without_selecting_an_epsilon_f
     f.deliver(batch);
     assert!(!f.player.prepared_buffering());
     assert!(!f.player.prepared_playing());
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     assert_eq!(f.player.prepared_playback_time_at(100_000.0).unwrap(), 1.0);
     assert_eq!(
         f.player
@@ -556,7 +556,7 @@ fn prepared_worker_static_observation_stops_at_next_revision_before_terminal_tim
     let batch = f.next(true);
     f.deliver(batch);
     ready(&mut f.player);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     f.player.execution_wake(1_000.0).unwrap();
     assert_eq!(f.player.prepared_end_time(), Some(2.0));
     assert_eq!(f.player.prepared_playback_time_at(9_000.0).unwrap(), 1.0);
@@ -571,7 +571,7 @@ fn prepared_worker_static_observation_stops_at_next_revision_before_terminal_tim
         .objects
         .iter()
         .any(|row| row.transform.translation.x == 1.0));
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     f.player.execution_wake(10_000.0).unwrap();
     assert_eq!(f.player.prepared_playback_time_at(20_000.0).unwrap(), 2.0);
     f.player.pause_prepared_at(20_000.0).unwrap();
@@ -584,7 +584,7 @@ fn prepared_worker_static_observation_stops_at_next_revision_before_terminal_tim
 fn prepared_worker_static_time_controls_reject_invalid_wall_time_atomically() {
     let mut f = Fixture::new(86);
     ready(&mut f.player);
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     f.player.execution_wake(1_000.0).unwrap();
     let frame = f.player.playback.reader.frame().clone();
     let publication = f.player.playback.reader.publication_context();
@@ -628,7 +628,7 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
         .unwrap();
     f.deliver(batch);
     f.player.seek_delta_json(1.25).unwrap();
-    f.player.set_prepared_playing(true);
+    f.player.set_prepared_playing(true).unwrap();
     assert_eq!(
         f.player.execution_wake(1_000.0).unwrap().cadence(),
         "animation_frame"

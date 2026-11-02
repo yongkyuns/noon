@@ -37,10 +37,19 @@ pub(super) fn soundtrack_grid(sampling: ExportFrameSummary) -> io::Result<Export
 /// mutable playhead is retained. The full video grid is padded with silence;
 /// an explicit authored stop never leaks later audio into its final video frame.
 pub(super) struct Soundtrack<'a> {
-    session: &'a ExecutionSession,
+    source: MixSource<'a>,
     scene_start: f64,
     pub frames: u64,
     mixed_frames: u64,
+}
+
+enum MixSource<'a> {
+    Session(&'a ExecutionSession),
+    #[cfg(feature = "prepared-prefix")]
+    CompletedPrefix {
+        reader: &'a noon::PrefixReader,
+        export: &'a noon::integration::CompletedPrefixExport,
+    },
 }
 
 impl<'a> Soundtrack<'a> {
@@ -58,9 +67,36 @@ impl<'a> Soundtrack<'a> {
             )
             .map_err(invalid)?;
         Ok(Self {
-            session,
+            source: MixSource::Session(session),
             scene_start: sampling.start_time,
             frames,
+            mixed_frames: grid.mixed_frames(),
+        })
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    pub fn completed_prefix(
+        reader: &'a noon::PrefixReader,
+        export: &'a noon::integration::CompletedPrefixExport,
+    ) -> io::Result<Self> {
+        export
+            .status(reader)
+            .map_err(|error| invalid(error.to_string()))?;
+        let grid = export
+            .audio_grid()
+            .ok_or_else(|| invalid("completed history has no audio"))?;
+        // Keep the native encoder's timing representability preflight unchanged.
+        let output_grid = soundtrack_grid(export.planned())?;
+        if grid.frames() != output_grid.frames() || grid.scene_start() != output_grid.scene_start()
+        {
+            return Err(invalid(
+                "completed history PCM differs from its output grid",
+            ));
+        }
+        Ok(Self {
+            source: MixSource::CompletedPrefix { reader, export },
+            scene_start: grid.scene_start(),
+            frames: grid.frames(),
             mixed_frames: grid.mixed_frames(),
         })
     }
@@ -89,14 +125,21 @@ impl<'a> Soundtrack<'a> {
             let output = &mut samples[..count * CHANNELS];
             output.fill(0.0);
             if mix_count > 0 {
-                self.session
-                    .mix_audio_block(
-                        self.scene_start,
-                        first,
-                        AudioMixFormat::STEREO_48_KHZ,
-                        &mut output[..mix_count * CHANNELS],
-                    )
-                    .map_err(invalid)?;
+                let mixed = &mut output[..mix_count * CHANNELS];
+                match self.source {
+                    MixSource::Session(session) => session
+                        .mix_audio_block(
+                            self.scene_start,
+                            first,
+                            AudioMixFormat::STEREO_48_KHZ,
+                            mixed,
+                        )
+                        .map_err(invalid)?,
+                    #[cfg(feature = "prepared-prefix")]
+                    MixSource::CompletedPrefix { reader, export } => export
+                        .mix_audio_block(reader, first, mixed)
+                        .map_err(|error| invalid(error.to_string()))?,
+                }
             }
             let encoded = &mut bytes[..output.len() * 4];
             for (sample, bytes) in output.iter().zip(encoded.as_chunks_mut::<4>().0) {

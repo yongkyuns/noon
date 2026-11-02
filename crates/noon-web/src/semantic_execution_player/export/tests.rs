@@ -63,6 +63,15 @@ fn policy_retains_every_prefix_and_completion_until_exact_acknowledgement() {
             .unwrap(),
     );
     assert_eq!(plan["source_end"], 1.125);
+    assert_eq!(plan["source"]["kind"], "immutable");
+    assert_eq!(
+        plan["source"]["runtime_identity"],
+        player.session.runtime_identity().get().to_string()
+    );
+    assert_eq!(
+        plan["source"]["admission"]["frame_epoch"],
+        initial_publication.frame_epoch().get().to_string()
+    );
     assert_eq!(plan["sampling"]["frames"], 2);
     assert_eq!(plan["audio_frames"], 6_000);
     assert_eq!(player.session.publication_context(), initial_publication);
@@ -246,6 +255,12 @@ fn wrong_or_stale_acknowledgement_cannot_release_a_pending_publication() {
         .unwrap();
     assert!(player.acknowledge_finite_export_json("{}").is_err());
     let sample = settle(&mut player);
+    let mut foreign = sample["observation"].clone();
+    foreign["runtime_identity"] = "foreign".into();
+    assert!(player
+        .acknowledge_finite_export_json(&foreign.to_string())
+        .is_err());
+    assert_eq!(parse(player.finite_export_status_json().unwrap()), sample);
     let mut wrong = sample["observation"].clone();
     wrong["publication"]["frame_epoch"] = "0001".into();
     assert!(player

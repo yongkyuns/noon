@@ -27,6 +27,106 @@ fn soundtrack(start_time: f64) -> (CanonicalAuthoringScene, Weak<[f32]>) {
 }
 
 #[test]
+fn ordinary_small_discovery_create_wait_prepares_silently_and_exports_same_worker_reader() {
+    // Exact canonical pair of audio_ordinary_play.py, using the same score
+    // resource and ordinary authoring calls as the Python facade.
+    let mut context = CanonicalAuthoringScene::default();
+    let resource = crate::authoring_audio::small_discovery().unwrap();
+    context
+        .audio(
+            &resource,
+            AudioClipOptions {
+                duration: Some(3.0),
+                gain: 0.5,
+                fade_in: 0.5,
+                fade_out: 0.5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    context.allow_prepared_audio_source().unwrap();
+    let circle = context.scene.circle(0.5).unwrap();
+    context
+        .begin_ordinary_mixed_composition(
+            noon_core::SemanticAnimationCompositionKind::Parallel,
+            &[OrdinaryCompositionChild::Create {
+                entering_id: Some(ObjectId::new(0)),
+                target: circle,
+                options: AnimationOptions::new().run_time(1.0),
+            }],
+            AnimationOptions::new(),
+            AnimationOptions::new().run_time(1.0),
+        )
+        .unwrap();
+    context.prepare_live_segment().unwrap();
+    let source_identity = context.active_live_player().unwrap().ownership_identity();
+    let mut player =
+        crate::PreparedExecutionPlayer::from_completed_source(&mut context, 99).unwrap();
+    player.initial_delta_json().unwrap();
+    let options = serde_json::json!({
+        "frame_rate": { "numerator": 30_000, "denominator": 1_001 },
+        "start_frame": 0, "stop": { "kind": "source_end" }, "max_frames": 100,
+        "max_transitions_per_sample": 64, "final_hold_seconds": 0.0,
+    })
+    .to_string();
+    player.prepare_history_export_json(&options).unwrap();
+    context.begin_ordinary_wait(2.0).unwrap();
+    player.prepare_interpreter_segment(&mut context).unwrap();
+    player.deliver_source_prefix(0.0).unwrap();
+    assert_eq!(
+        context.active_live_player().unwrap().ownership_identity(),
+        source_identity
+    );
+    player.finish_interpreter_source(&mut context).unwrap();
+    player.deliver_source_prefix(0.0).unwrap();
+    drop(context);
+    assert_eq!(player.prepared_time(), 0.0);
+    assert_eq!(player.prepared_end_time(), Some(3.0));
+    assert!(!player.prepared_playing());
+    assert!(player.drain_delta_json().unwrap().is_none());
+    let anchor: serde_json::Value =
+        serde_json::from_str(&player.audio_anchor_json(1_000.0, 0.0).unwrap()).unwrap();
+    assert_eq!(anchor["playing"], false);
+    assert_eq!(anchor["time"], 0.0);
+    let plan: serde_json::Value =
+        serde_json::from_str(&player.begin_finite_export_json(&options).unwrap()).unwrap();
+    assert_eq!(plan["sampling"]["frames"], 90);
+    let runtime = plan["source"]["runtime_identity"].clone();
+    let mut frames = 0;
+    loop {
+        let sample: serde_json::Value =
+            serde_json::from_str(&player.observe_finite_export_json().unwrap()).unwrap();
+        assert_eq!(sample["observation"]["runtime_identity"], runtime);
+        frames += usize::from(!sample["frame"].is_null());
+        player.drain_delta_json().unwrap();
+        let next: serde_json::Value = serde_json::from_str(
+            &player
+                .acknowledge_finite_export_json(&sample["observation"].to_string())
+                .unwrap(),
+        )
+        .unwrap();
+        if next["kind"] == "complete" {
+            break;
+        }
+    }
+    assert_eq!(frames, 90);
+    assert_eq!(player.prepared_time(), 3.0);
+    assert!(!player.prepared_playing());
+    assert!(player
+        .mix_finite_export_audio_block(24_000, 512)
+        .unwrap()
+        .iter()
+        .any(|sample| *sample != 0.0));
+    assert!(player
+        .mix_finite_export_audio_block(144_000, 144)
+        .unwrap()
+        .iter()
+        .all(|sample| *sample == 0.0));
+    player.cancel_finite_export();
+    assert!(!player.finite_export_active());
+}
+
+#[test]
 fn canonical_audio_create_wait_prepares_with_independent_bounded_reader() {
     let (mut context, pcm) = soundtrack(0.0);
     context.allow_prepared_audio_source().unwrap();

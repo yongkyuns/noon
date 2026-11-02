@@ -56,6 +56,9 @@ impl PrefixReader {
     pub fn selected_pointer_target(&self) -> Option<SemanticNodeId> {
         self.session.selected_pointer_target()
     }
+    pub fn pointer_gesture_active(&self) -> bool {
+        self.session.pointer_gesture_active()
+    }
     pub fn pointer_selection_highlight(&self) -> Option<PointerSelectionHighlight> {
         self.session.pointer_selection_highlight()
     }

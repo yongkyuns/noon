@@ -107,15 +107,50 @@ An interval shorter than one audio sample can contain no presented audio frames.
 
 PNG sequences are explicitly visual-only and omit authored audio. The existing
 `export_file` live-program MP4 path still rejects audio until live execution is
-qualified. Finite Python scenes can use the browser capture and native media
-import described below. In-process native CPython bindings, live/history audio
-export and narration remain separate work tracked by #1874 and #2263.
+qualified. Completed deterministic history has the separate typed entry point
+below. In-process native CPython bindings, arbitrary callback/live audio export
+and narration remain separate work tracked by #1874 and #2263.
 
-## Finite Python scenes and prepared media import
+## Completed deterministic history
 
-The complete finite Python profile runs the normal Pyodide authoring worker,
-shared Rust execution session and browser retained renderer. The worker owns
-the only runtime. Shared `ExportFramePolicy` selects each source sample; the host
+With the `prepared-prefix` feature, `output::export_completed_prefix_file` borrows
+one terminal-adopted `PrefixReader` through the normal retained native renderer
+and file sink:
+
+```rust
+export_completed_prefix_file(&mut reader, frame_options, capture_options, output_options)
+```
+
+The reader must be at time zero, have adopted its completed source endpoint, and
+have no active input, selection, hover or inspection adjustment. Source producer
+completion alone is insufficient: the receiver must have adopted the terminal
+batch. The source may already have been dropped. Export never resumes it,
+recompiles its scene or clones a runtime. Shared `CompletedPrefixExport` applies
+the same frame policy to the reader's historical evaluator and verifies its
+exact ownership before every operation. Historical membership changes keep their
+real execution revisions and frame epochs. External seeks or input invalidate
+the export instead of silently changing its output.
+
+The original fixed soundtrack is mixed at absolute source time. Terminal audio
+is silent even if a clip was declared past the completed source; a final picture
+hold cannot extend that clip. Prefix, crop, audio-block and output buffers use
+the same limits and native sink as finite immutable export. No Python, WASM,
+browser or serialization is required by this native path.
+
+The native example pairs with the unchanged three-second Python reproducer: the
+same score, gain and fades accompany `Create(Circle(radius=0.5))` for one second,
+followed by a two-second wait. It drops the source before exporting its reader:
+
+```sh
+cargo run --release -p noon-export --no-default-features --features prepared-prefix \
+  --example render_prepared_audio_video -- ordinary-audio.mp4
+```
+
+## Python scenes and prepared media import
+
+Both finite immutable Python scenes and ordinary fixed-audio `play`/`wait`
+scenes run the normal Pyodide authoring worker, shared Rust execution and browser
+retained renderer. The worker owns the only runtime. Shared `ExportFramePolicy` selects each source sample; the host
 waits for that publication's renderer completion before copying its canvas
 pixels and acknowledging it. The shared Rust mixer supplies the soundtrack on
 the same absolute cropped grid. JavaScript copies media and transports receipts;
@@ -140,14 +175,30 @@ exclusive; omitting both uses the finite source end. `--max-frames` defaults to
 `--backend webgl` and `--transport shared` select the existing browser paths.
 Run `--help` for all options.
 
-The source must produce a complete finite immutable `result = Scene()` at time
-zero. Callbacks, live source continuations and retained source history are
-rejected before export. Completion must be retained by a visual/scalar track or
-audio clip. A trailing authored wait beyond those retained endpoints is rejected
-explicitly instead of silently shortening the movie; a general completed
-authoring horizon remains outside this finite profile. The script compares the
-canonical authoring duration with the shared runtime's admitted endpoint without
-overriding either. Scene playback controls cannot mutate an active export.
+The exact final duration must be representable in the MP4 video time base.
+For example, `--fps 30000/1001` represents the Fourier fixture's 34.65-second
+endpoint exactly: 1,039 output frames end at 1,039,500 video ticks, with a
+462-tick final interval. At `30/1`, that endpoint falls between video ticks and
+the existing sink retains the full final grid interval. This changes neither
+the authored source duration nor its soundtrack cutoff.
+
+For ordinary fixed-audio `construct()` sources, the first `play()` or `wait()`
+selects the canonical prepared profile. The command attaches its reader paused
+and asks Rust to prepare that same suspended invocation through terminal adoption.
+Preparation stays silent and the displayed reader stays at time zero. It then
+exports that reader without replaying Python or replacing the execution owner.
+The source endpoint must fit the zero-origin grid at `--max-frames`, including
+discarded crop samples. This bounds the authored frontier, not arbitrary Python
+execution time: cancellation uses worker teardown and the existing cooperative
+source lifecycle. Realtime continuations and arbitrary Python callbacks remain
+unsupported.
+
+For a finite immutable `result = Scene()`, completion must be retained by a
+visual/scalar track or audio clip. A trailing authored wait beyond those retained
+endpoints still fails explicitly. The script compares the canonical authoring
+duration with the runtime endpoint without overriding either. Completed history
+retains its actual final wait and therefore supports that trailing interval.
+Scene playback controls cannot mutate an active preparation or export.
 The browser is the pixel producer; this path makes no claim that native WGPU
 rendered Python's frames or that a native CPython binding exists.
 
@@ -169,13 +220,29 @@ finalization. It does not instantiate an execution session or remix received
 PCM. Both commands require a new MP4 destination unless `--overwrite` is
 explicit. The capture directory must always be new.
 
+`NOON_EXPORT_CHROMIUM` may select a Chromium executable, and `NOON_PYODIDE_ROOT`
+may supply local bytes for the worker's pinned Pyodide release. The report records
+the executable and local resource hashes; the worker URLs and source stay the
+same. These options are useful for reproducible offline qualification.
+
+The additive `scripts/prepared-history-export-qualification.mjs` runs the
+unchanged ordinary-audio fixture and the complete Fourier source with its
+documented audio declaration, plus a crop from source frame 700. Its independent
+Python verifier decodes every video frame, checks exact presentation timestamps,
+tests Fourier pen/trace positions against the frozen source math, and compares
+PCM against the original unmixed score with the authored gain and fades. It also
+checks the paired native Rust movie, a direct typed Rust/WASM export probe,
+cancellation, bounded preparation and destination preservation. The default
+matrix covers WebGL/WebGPU and transferable/shared workers. Run its `--help`
+for the required native binaries, Python/NumPy oracle and output directory.
+
 ### Capture format and timing
 
-A completed `noon-prepared-capture-v1` directory contains:
+A completed `noon-prepared-capture-v2` directory contains:
 
 | File | Contents |
 | --- | --- |
-| `capture.json` | Dimensions, exact rational frame options, admitted finite source end, audio presence and every policy observation. |
+| `capture.json` | Dimensions, exact rational frame options, source capability and owner, admitted source end, audio presence and every policy observation. |
 | `frames.rgba` | Tightly packed, top-down, opaque RGBA8 frames in rebased output PTS order. No header or per-row padding. |
 | `audio.f32le` | When audio is present, interleaved 48 kHz stereo little-endian float32 samples from the shared mixer. |
 
@@ -183,7 +250,14 @@ The JSON shape is explicit and rejects unknown fields:
 
 ```json
 {
-  "format": "noon-prepared-capture-v1",
+  "format": "noon-prepared-capture-v2",
+  "source": {
+    "kind": "immutable",
+    "runtime_identity": "1",
+    "admission": {
+      "scene_revision": "1", "execution_revision": "1", "frame_epoch": "0"
+    }
+  },
   "width": 640,
   "height": 360,
   "source_end": 30.0,
@@ -198,6 +272,7 @@ The JSON shape is explicit and rejects unknown fields:
   "audio": true,
   "samples": [
     {
+      "runtime_identity": "1",
       "requested_time": 0.0,
       "published_time": 0.0,
       "publication": {
@@ -205,6 +280,7 @@ The JSON shape is explicit and rejects unknown fields:
       }
     },
     {
+      "runtime_identity": "1",
       "requested_time": 0.03333333333333333,
       "published_time": 0.03333333333333333,
       "publication": {
@@ -212,6 +288,7 @@ The JSON shape is explicit and rejects unknown fields:
       }
     },
     {
+      "runtime_identity": "1",
       "requested_time": 0.06666666666666667,
       "published_time": 0.06666666666666667,
       "publication": {
@@ -224,7 +301,7 @@ The JSON shape is explicit and rejects unknown fields:
 
 `stop` can instead be `{ "kind": "source_end" }` or
 `{ "kind": "end_time", "time": T }`. Revision and epoch values are canonical
-unsigned decimal strings so all 64 bits survive JavaScript transport. The
+unsigned decimal strings, as is runtime identity, so all 64 bits survive JavaScript transport. The
 values above illustrate the format; producers record the runtime's actual
 publication identities.
 
@@ -233,15 +310,20 @@ Only output observations have RGBA bytes. Thus this two-frame example contains
 three observations, two images and 3,200 stereo audio frames. The importer
 replays the shared policy, requires the exact requested and published times,
 rejects missing or extra receipts, and freezes publication identity during
-terminal holds. Scene and execution revisions stay fixed; a changed published
-time requires a newer frame epoch. Receipt validation checks the media contract,
+terminal holds. The first observation must equal the admitted publication, and
+every observation must keep the same runtime and scene identity. The `immutable`
+source profile pins its execution revision. The `completed_history` profile
+permits ordered execution-revision changes only with their corresponding frame
+epoch advances. A changed published time always requires a newer frame epoch.
+Receipt validation checks the media contract,
 but cannot prove that an arbitrary producer actually rendered those pixels.
 
 For `F` output video frames at rational rate `N/D`, the PCM file contains exactly
 `ceil(F * D * 48000 / N)` audio frames, or eight times that many bytes. Shared
 `ExportAudioGrid` computes this with integer arithmetic. Audio frame `k` samples
 absolute scene time `start_time + k / 48000`; cropping does not restart clips or
-fades. Samples at or after the policy's exclusive end are zero. The native sink
+fades. Samples at or after the policy's exclusive end are zero; completed-history
+PCM is also zero at or after its adopted source endpoint. The native sink
 applies the same natural-end versus explicit-stop/hold timing rules described
 above, including exact final partial video duration and AAC presentation bounds.
 The importer requires finite PCM in `[-1, 1]`, correct silent padding, exact file

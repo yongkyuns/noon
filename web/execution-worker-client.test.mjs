@@ -1214,6 +1214,47 @@ test("pause supersedes an outstanding device unlock without a delayed restart", 
   } finally { client.terminate(); }
 });
 
+for (const [method, command] of [
+  ["prepareHistoryExport", "prepare_history_export"],
+  ["beginFiniteExport", "begin_finite_export"],
+]) {
+  test(`${method} retires sound and supersedes an outstanding playback unlock`, async t => {
+    const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+    let completeUnlock, stops = 0;
+    const applied = [];
+    t.mock.method(WorkerAudioDevice.prototype, "unlock", () => new Promise(resolve => { completeUnlock = resolve; }));
+    t.mock.method(WorkerAudioDevice.prototype, "stop", () => { stops += 1; });
+    t.mock.method(WorkerAudioDevice.prototype, "applyAnchor", anchor => { applied.push(anchor); return true; });
+    const { client, engine, authoring } = await startClient([], { preparedPlayback: true });
+    const endpoint = authoring.attachments[0].controlPort;
+    try {
+      const resumed = client.resume();
+      const superseded = assert.rejects(resumed, error => error.name === "AbortError");
+      const before = stops;
+      const options = { frame_rate: { numerator: 30, denominator: 1 } };
+      const exporting = client[method](options);
+      assert.equal(stops, before + 1, "export retires device output before its worker command");
+      completeUnlock();
+      await superseded;
+      const request = await waitForRequest(engine, command);
+      assert.deepEqual(request.frameOptions, options);
+      const reply = { kind: "preparing_history", history_complete: false };
+      endpoint.postMessage(engineMessage(command, {
+        requestId: request.requestId, playing: false, finiteExport: reply,
+      }));
+      assert.deepEqual(await exporting, reply);
+      endpoint.postMessage(engineMessage("audio_state", {
+        preparedPlayback: true, playing: true,
+        audioAnchor: { session: 1, playing: true, time: 0,
+          sampledEpochMs: performance.timeOrigin + performance.now(), availableUntil: 3, audioSequence: 1 },
+      }));
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(engine.messages.some(message => message.type === "resume"), false);
+      assert.deepEqual(applied, [], "late source anchors cannot authorize sound during export");
+    } finally { client.terminate(); }
+  });
+}
+
 test("prepared frontier reanchors require a current user play and cannot overtake pause or delayed unlock", async t => {
   const { WorkerAudioDevice } = await import("./worker-audio-device.js");
   const applied = [], errors = [];

@@ -35,8 +35,9 @@ no external recordings or samples. The generator remains MIT-licensed source;
 see [the music example](../crates/noon/examples/render_background_music/README.md)
 for provenance and offline rendering instructions.
 
-The audible profiles accept finite, predeclared direct Rust/WASM scenes and
-complete Python scenes returned as `result = Scene()`. The Python gallery lesson
+The audible profiles accept finite, predeclared direct Rust/WASM scenes,
+complete Python scenes returned as `result = Scene()`, and ordinary Python
+fixed-audio scenes through the prepared history reader. The Python gallery lesson
 is [Double the input](python/examples/background_music_lesson.py), paired with
 [`background_music_lesson.rs`](../crates/noon/src/example_scenes/background_music_lesson.rs).
 Open `/?catalog=showcase&example=showcase-background-music`, then choose **Play
@@ -70,10 +71,19 @@ the native encoder produces one MP4 with sound. `--fps 30000/1001`,
 policy as native Rust export. The capture directory must be new; an existing
 movie is replaced only with explicit `--overwrite` after successful encoding.
 
-Live authored mutation, source continuations, retained source history, native
-device playback and scene-authored click controls in the Python worker remain
-gated under [#2263](https://github.com/yongkyuns/noon/issues/2263). Ordinary
-`Scene.play`/`construct` execution retains its existing continuation behavior.
+The same command accepts ordinary fixed-audio `Scene.play`/`construct` sources.
+It prepares the original invocation silently through terminal history adoption,
+with the reader paused at time zero, then exports that reader through the shared
+Rust history evaluator and mixer. Its final authored wait is preserved. The
+source must complete within the shared `--max-frames` frontier; preparation does
+not preempt arbitrary synchronous Python code. Controls are locked during export,
+and cancellation retires the original source and reader through their existing
+lifecycle. Completed-history audio stops at the source endpoint, including when
+the export requests a frozen picture hold.
+
+Arbitrary Python callbacks and realtime source continuations, native device
+playback of retained history, and broader input profiles remain gated under
+[#2263](https://github.com/yongkyuns/noon/issues/2263).
 The headless export command uses browser rendering and native encoding; it is
 not an in-process native Python runtime. Text-to-speech is a later milestone.
 

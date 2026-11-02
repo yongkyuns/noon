@@ -680,6 +680,10 @@ if (process.env.NOON_WASM_PROFILE === "dev"
 // Direct example factories are compiled in development and explicit renderer
 // qualifications. Detect an existing factory too when checking a package built
 // outside this script's environment.
+if (process.env.NOON_RENDERER_SMOKE === "1" || javascript.includes("export function verifyCompletedHistoryExport(")) {
+  expectedJavascriptSurface.push("export function verifyCompletedHistoryExport(");
+  expectedTypeSurface.push("export function verifyCompletedHistoryExport(");
+}
 if (process.env.NOON_WASM_PROFILE === "dev"
     || process.env.NOON_RENDERER_SMOKE === "1"
     || javascript.includes("export function createDirectExecutionSmokeRenderer(")) {
@@ -906,6 +910,21 @@ function classDeclaration(name) {
   if (start < 0) throw new Error(`WASM declarations are missing class ${name}`);
   const next = declarations.indexOf("export class ", start + 1);
   return declarations.slice(start, next < 0 ? undefined : next);
+}
+// Same-named finite methods also exist on the immutable player. Require the
+// completed-history capability on the actual prepared class in both carriers.
+const preparedJavascriptStart = javascript.indexOf("export class PreparedExecutionPlayer {");
+if (preparedJavascriptStart < 0) throw new Error("WASM JavaScript is missing PreparedExecutionPlayer");
+const preparedJavascriptEnd = javascript.indexOf("\nexport ", preparedJavascriptStart + 1);
+const preparedJavascript = javascript.slice(preparedJavascriptStart,
+  preparedJavascriptEnd < 0 ? undefined : preparedJavascriptEnd);
+for (const method of ["prepareHistoryExportJson", "beginFiniteExportJson", "finiteExportActive",
+  "finiteExportStatusJson", "observeFiniteExportJson", "acknowledgeFiniteExportJson",
+  "mixFiniteExportAudioBlock", "cancelFiniteExport"]) {
+  if (!preparedJavascript.includes(`${method}(`) ||
+      !classDeclaration("PreparedExecutionPlayer").includes(`${method}(`)) {
+    throw new Error(`WASM prepared player is missing ${method}`);
+  }
 }
 // The authoring context has a same-named method. Require retirement on the
 // direct renderer itself, where a genuine source disposal must precede free().

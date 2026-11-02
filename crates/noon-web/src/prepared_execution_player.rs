@@ -17,6 +17,7 @@ use noon::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixReader};
 mod source;
 use source::SourceDelivery;
 mod audio;
+mod export;
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct PreparedExecutionPlayer {
@@ -25,6 +26,9 @@ pub struct PreparedExecutionPlayer {
     encoder: RetainedFamilyExecutionDeltaEncoder,
     snapshot_sent: bool,
     last_selection: Option<noon::integration::PointerSelectionPresentation>,
+    // Actual last encoded publication, for metadata-only export samples. This
+    // is a renderer transport receipt, never an alternate timeline cursor.
+    last_sent_publication: Option<noon_core::PublicationContext>,
     pointer: WorkerPointerPresentation,
     binding: Option<BrowserPointerBinding>,
     sequence: u64,
@@ -35,6 +39,8 @@ pub struct PreparedExecutionPlayer {
     // Attained open frontier, held as a transport observation while the reader
     // keeps its last coherent frame. This is not a speculative runtime sample.
     held_frontier: Option<f64>,
+    history_export_preparation: Option<export::HistoryExportPreparation>,
+    finite_export: Option<noon::integration::CompletedPrefixExport>,
 }
 
 impl PreparedExecutionPlayer {
@@ -48,26 +54,32 @@ impl PreparedExecutionPlayer {
             encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
             snapshot_sent: false,
             last_selection: None,
+            last_sent_publication: None,
             pointer: WorkerPointerPresentation::default(),
             binding: None,
             sequence: 0,
             source: None,
             audio_sequence: 0,
             held_frontier: None,
+            history_export_preparation: None,
+            finite_export: None,
         })
     }
 
     pub fn reserve_object_capacity(&mut self, total: usize) -> Result<usize, PrefixError> {
+        self.ensure_export_delivery_available()?;
         self.playback.reader.reserve_object_capacity(total)
     }
 
     /// Borrow before transfer so failed admission cannot lose the host's batch.
     pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        self.ensure_export_delivery_available()?;
         self.playback.reader.preflight_append(batch)
     }
 
     /// Delivery does not issue a render sequence or alter a displayed receipt.
     pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        self.ensure_export_delivery_available()?;
         let was_buffering = self.playback.buffering();
         let stats = self.playback.append(batch)?;
         if was_buffering && !self.playback.buffering() {
@@ -97,7 +109,12 @@ impl PreparedExecutionPlayer {
             &publication,
             camera,
             snapshot || !self.snapshot_sent,
-            refresh || selection != self.last_selection,
+            // Export consumes the actual new epoch even in a static wait.
+            // An unchanged terminal hold retains its existing renderer receipt.
+            (self.finite_export.is_some()
+                && self.last_sent_publication != Some(publication.context()))
+                || refresh
+                || selection != self.last_selection,
         )?
         else {
             return Ok(None);
@@ -110,6 +127,7 @@ impl PreparedExecutionPlayer {
             .issue(delta.retained.session, delta.retained.sequence, frame);
         self.snapshot_sent = true;
         self.last_selection = selection;
+        self.last_sent_publication = Some(delta.retained.publication_context);
         self.encoder.compact_dense_rows(&mut delta);
         Ok(Some(delta))
     }
@@ -144,6 +162,9 @@ impl PreparedExecutionPlayer {
 
     fn tick(&mut self, wall_time_ms: f64) -> Result<(), String> {
         Self::validate_wall_time(wall_time_ms)?;
+        if self.finite_export_active() {
+            return Ok(());
+        }
         if self.prepared_needs_frame() {
             self.playback
                 .advance_clock_sample(self.held_frontier.unwrap())
@@ -320,6 +341,7 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
+        self.ensure_export_control_available()?;
         self.playback
             .seek(time)
             .map_err(|error| error.to_string())?;
@@ -329,10 +351,12 @@ impl PreparedExecutionPlayer {
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPreparedPlaying))]
-    pub fn set_prepared_playing(&mut self, playing: bool) {
+    pub fn set_prepared_playing(&mut self, playing: bool) -> Result<(), String> {
+        self.ensure_export_control_available()?;
         if self.playback.set_playing(playing) {
             self.clock = BrowserExecutionWakeClock::default();
         }
+        Ok(())
     }
 
     /// Last coherent evaluated sample, independent of the producer's frontier.
@@ -402,6 +426,7 @@ impl PreparedExecutionPlayer {
     /// the caller's ordinary ordered drain; this call never acknowledges display.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pausePreparedAt))]
     pub fn pause_prepared_at(&mut self, wall_time_ms: f64) -> Result<(), String> {
+        self.ensure_export_control_available()?;
         let time = self.prepared_playback_time_at(wall_time_ms)?;
         if time > self.prepared_time() {
             self.playback
@@ -412,12 +437,18 @@ impl PreparedExecutionPlayer {
                 self.held_frontier = None;
             }
         }
-        self.set_prepared_playing(false);
+        self.set_prepared_playing(false)?;
         Ok(())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = needsPreparation))]
     pub fn needs_preparation(&self, lookahead_seconds: f64) -> Result<bool, String> {
+        if let Some(preparation) = self.history_export_preparation.as_ref() {
+            return preparation.needs_preparation(&self.playback.reader);
+        }
+        if self.finite_export.is_some() {
+            return Ok(false);
+        }
         self.playback
             .needs_preparation(lookahead_seconds)
             .map_err(str::to_owned)
@@ -425,6 +456,7 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
     pub fn set_pointer_fill_selection(&mut self, tolerance: Option<f32>) -> Result<(), String> {
+        self.ensure_export_control_available()?;
         match tolerance {
             Some(tolerance) => self
                 .playback
@@ -437,6 +469,7 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setBrowserPointerViewJson))]
     pub fn set_browser_pointer_view_json(&mut self, json: &str) -> Result<(), String> {
+        self.ensure_export_control_available()?;
         let view =
             serde_json::from_str(json).map_err(|error| format!("invalid pointer view: {error}"))?;
         self.pointer.set_view(
@@ -449,14 +482,23 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = notePointerPresentationJson))]
     pub fn note_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        // The renderer's retained publication receipt still gates capture in
+        // the endpoint. Pointer receipt refresh must not synthesize hover while
+        // an export owns this paused reader.
         let receipt = serde_json::from_str(json)
             .map_err(|error| format!("invalid pointer receipt: {error}"))?;
+        if self.finite_export_active() {
+            return self
+                .pointer
+                .note_presented_without_input(&mut self.playback.reader, receipt);
+        }
         self.pointer
             .note_presented(&mut self.playback.reader, receipt)
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = invalidatePointerPresentationJson))]
     pub fn invalidate_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        self.ensure_export_control_available()?;
         let receipt = serde_json::from_str(json)
             .map_err(|error| format!("invalid pointer receipt: {error}"))?;
         self.pointer.invalidate(
@@ -469,6 +511,7 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
+        self.ensure_export_control_available()?;
         let envelope: WorkerPointerInput = serde_json::from_str(json)
             .map_err(|error| format!("invalid browser pointer input: {error}"))?;
         self.pointer.submit(
@@ -482,6 +525,7 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = scrollInspectionViewJson))]
     pub fn scroll_inspection_view_json(&mut self, json: &str) -> Result<Option<bool>, String> {
+        self.ensure_export_control_available()?;
         let input = serde_json::from_str(json)
             .map_err(|error| format!("invalid inspection scroll: {error}"))?;
         self.pointer

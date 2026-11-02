@@ -29,6 +29,8 @@ impl PreparedExecutionPlayer {
     }
 
     fn validate_source(&mut self, context: &mut CanonicalAuthoringScene) -> Result<(), String> {
+        self.ensure_export_delivery_available()
+            .map_err(|e| e.to_string())?;
         let source = self
             .source
             .as_ref()
@@ -56,6 +58,7 @@ impl PreparedExecutionPlayer {
         // for another attempt. The historical reader remains independent. This
         // does not catch a panic, recover a WASM trap, or retry user statements.
         let mut source = self.source.take().expect("validated source delivery");
+        let preparation = self.history_export_preparation.take();
         let endpoint = context.prepare_live_segment().map_err(|e| e.to_string())?;
         if endpoint > source.publisher.frontier() {
             source.pending = Some(
@@ -69,6 +72,7 @@ impl PreparedExecutionPlayer {
         // A zero-duration segment may complete without a new readable interval.
         // Its same-time edits remain in ordinary source history for a later suffix.
         self.source = Some(source);
+        self.history_export_preparation = preparation;
         Ok(())
     }
 
@@ -80,6 +84,7 @@ impl PreparedExecutionPlayer {
     ) -> Result<(), String> {
         self.validate_source(context)?;
         let mut source = self.source.take().expect("validated source delivery");
+        let preparation = self.history_export_preparation.take();
         context.seal_prepared_source().map_err(|e| e.to_string())?;
         source.pending = Some(
             context
@@ -87,6 +92,7 @@ impl PreparedExecutionPlayer {
                 .map_err(|e| e.to_string())?,
         );
         self.source = Some(source);
+        self.history_export_preparation = preparation;
         Ok(())
     }
 }
@@ -131,6 +137,8 @@ impl PreparedExecutionPlayer {
     /// Returns false when a completed zero-duration segment produced no suffix.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = deliverSourcePrefix))]
     pub fn deliver_source_prefix(&mut self, wall_time_ms: f64) -> Result<bool, String> {
+        self.ensure_export_delivery_available()
+            .map_err(|e| e.to_string())?;
         Self::validate_wall_time(wall_time_ms)?;
         let source = self
             .source
@@ -153,6 +161,7 @@ impl PreparedExecutionPlayer {
             // The same-owner preflight above admits all fallible validation. Do
             // not permit source retries if that internal invariant ever changes.
             self.source = None;
+            self.history_export_preparation = None;
             return Err(error.to_string());
         }
         if terminal {
@@ -166,6 +175,7 @@ impl PreparedExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = stopSourcePreparation))]
     pub fn stop_source_preparation(&mut self) {
         self.source = None;
+        self.history_export_preparation = None;
     }
 }
 

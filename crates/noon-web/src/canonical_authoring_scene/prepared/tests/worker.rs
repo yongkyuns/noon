@@ -6,7 +6,7 @@ fn start() -> (CanonicalAuthoringScene, Mobject, PreparedExecutionPlayer) {
     context.begin_ordinary_wait(1.0).unwrap();
     context.prepare_live_segment().unwrap();
     let mut player = PreparedExecutionPlayer::from_completed_source(&mut context, 901).unwrap();
-    player.set_prepared_playing(false);
+    player.set_prepared_playing(false).unwrap();
     player.seek_delta_json(0.5).unwrap();
     assert!(player.drain_delta_json().unwrap().is_none());
     (context, target, player)
@@ -199,8 +199,17 @@ fn interpreter_worker_cancellation_releases_pending_only_and_never_seals_history
 #[test]
 fn interpreter_worker_failed_completion_cannot_retry_but_retains_playback() {
     let (mut context, _, mut player) = start();
+    player.seek_delta_json(0.0).unwrap();
+    player
+        .prepare_history_export_json(&history_export_options().to_string())
+        .unwrap();
+    assert!(player.finite_export_active());
     // The actual source receipt is already complete; it cannot be driven twice.
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
+    assert!(
+        !player.finite_export_active(),
+        "failed source completion releases its export preparation lock"
+    );
     context.begin_ordinary_wait(0.25).unwrap();
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
     assert!(context
@@ -224,4 +233,102 @@ fn interpreter_worker_raw_reader_has_no_implicit_source_authority() {
         .unwrap()
         .has_pending_live_segment());
     assert!(player.finish_interpreter_source(&mut context).is_err());
+}
+
+// Native execution of the exact WASM adapter methods used by the worker.
+fn preparing_player() -> (CanonicalAuthoringScene, PreparedExecutionPlayer) {
+    let mut source = CanonicalAuthoringScene::default();
+    source.select_prepared_source().unwrap();
+    source.begin_ordinary_wait(1.0).unwrap();
+    source.prepare_live_segment().unwrap();
+    let mut player = PreparedExecutionPlayer::from_completed_source(&mut source, 98).unwrap();
+    player.set_prepared_playing(false).unwrap();
+    player.initial_delta_json().unwrap();
+    (source, player)
+}
+
+fn history_export_options() -> serde_json::Value {
+    serde_json::json!({
+        "frame_rate": { "numerator": 16, "denominator": 1 },
+        "start_frame": 0, "stop": { "kind": "source_end" },
+        "max_frames": 64, "max_transitions_per_sample": 64, "final_hold_seconds": 0.125,
+    })
+}
+
+fn parse_export(json: String) -> serde_json::Value {
+    serde_json::from_str(&json).unwrap()
+}
+
+#[test]
+fn history_export_preparation_waits_for_terminal_adoption_at_the_exact_shared_cap() {
+    let (mut source, mut player) = preparing_player();
+    let mut options = history_export_options();
+    options["max_frames"] = 16.into();
+    options["final_hold_seconds"] = 0.0.into();
+    let before = player.debug_frame_json();
+    let requested = parse_export(
+        player
+            .prepare_history_export_json(&options.to_string())
+            .unwrap(),
+    );
+    assert_eq!(requested["source_preparation_limit"], 1.0);
+    assert!(
+        player.needs_preparation(0.001).unwrap(),
+        "exact cap still permits terminal continuation"
+    );
+    assert!(player.finite_export_active());
+    assert!(player.set_prepared_playing(true).is_err());
+    assert!(player
+        .begin_finite_export_json(&options.to_string())
+        .is_err());
+    player.finish_interpreter_source(&mut source).unwrap();
+    drop(source);
+    assert!(
+        player
+            .begin_finite_export_json(&options.to_string())
+            .is_err(),
+        "undelivered completion is not terminal history"
+    );
+    player.deliver_source_prefix(0.0).unwrap();
+    assert!(!player.needs_preparation(0.001).unwrap());
+    assert_eq!(player.prepared_time(), 0.0);
+    assert_eq!(player.debug_frame_json(), before);
+    assert!(player.drain_delta_json().unwrap().is_none());
+    let mut changed_options = options.clone();
+    changed_options["start_frame"] = 1.into();
+    assert!(player
+        .begin_finite_export_json(&changed_options.to_string())
+        .is_err());
+    assert!(player.finite_export_active());
+    player
+        .begin_finite_export_json(&options.to_string())
+        .unwrap();
+    player.cancel_finite_export();
+    assert!(!player.finite_export_active());
+}
+
+#[test]
+fn history_export_preparation_rejects_overshoot_and_source_stop_releases_control_lock() {
+    let (mut source, mut player) = preparing_player();
+    let mut options = history_export_options();
+    options["max_frames"] = 16.into();
+    options["final_hold_seconds"] = 0.0.into();
+    player
+        .prepare_history_export_json(&options.to_string())
+        .unwrap();
+    source.begin_ordinary_wait(0.25).unwrap();
+    player.prepare_interpreter_segment(&mut source).unwrap();
+    player.deliver_source_prefix(0.0).unwrap();
+    assert!(player
+        .needs_preparation(0.001)
+        .unwrap_err()
+        .contains("max_frames"));
+    assert_eq!(player.prepared_time(), 0.0);
+    player.stop_source_preparation();
+    assert!(!player.finite_export_active());
+    player.seek_delta_json(0.5).unwrap();
+    player.set_prepared_playing(true).unwrap();
+    assert!(player
+        .begin_finite_export_json(&options.to_string())
+        .is_err());
 }

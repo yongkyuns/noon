@@ -193,6 +193,12 @@ mod signal_trains_smoke;
 mod webgl_context_lifecycle;
 mod worker_pointer_presentation;
 pub use worker_pointer_presentation::PointerPresentationView;
+#[cfg(all(
+    feature = "prepared-prefix",
+    any(test, all(feature = "renderer-smoke", target_arch = "wasm32"))
+))]
+mod completed_history_export_smoke;
+mod export_wire;
 mod semantic_execution_player;
 #[cfg(target_arch = "wasm32")]
 mod text_colors;

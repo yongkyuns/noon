@@ -21,12 +21,16 @@
 //! rather than overwriting its publication revision or treating old frames as new.
 //!
 
+#[cfg(feature = "prepared-prefix")]
+mod completed_prefix_export;
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
 mod path_edits;
 mod pixel_readback;
 
+#[cfg(feature = "prepared-prefix")]
+pub use completed_prefix_export::{CompletedPrefixExport, CompletedPrefixExportError};
 pub use export_frames::{
     ExportAudioGrid, ExportAudioGridError, ExportEndReason, ExportFrame, ExportFrameOptions,
     ExportFramePolicy, ExportFramePolicyError, ExportFramePolicyStatus, ExportFrameSummary,
