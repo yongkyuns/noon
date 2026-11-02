@@ -303,11 +303,13 @@ export class PythonAuthoringClient {
         const result = parseAuthoringResult(message.resultJson);
         const registered = pending.continuationDescriptor;
         const matchingPreparedSource = registered === undefined
-          ? result.duration === 0 && result.semanticExecution.continuationGeneration == null
-          : result.semanticExecution.contextId === registered.contextId &&
+          ? result.semanticExecution.continuationGeneration == null &&
+            (result.semanticExecution.preparedPlayback === false ||
+              (result.semanticExecution.preparedPlayback === true && result.duration === 0))
+          : result.semanticExecution.preparedPlayback === true &&
+            result.semanticExecution.contextId === registered.contextId &&
             result.semanticExecution.continuationGeneration === registered.continuationGeneration;
-        if (pending.preparedPlayback &&
-            (result.semanticExecution.preparedPlayback !== true || !matchingPreparedSource)) {
+        if (pending.preparedPlayback && !matchingPreparedSource) {
           throw new Error("prepared source result does not match its registered continuation");
         }
         if (message.workerRunTiming !== undefined && message.workerRunTiming !== null) {
@@ -533,7 +535,7 @@ export function validateSemanticExecutionDescriptor(descriptor) {
     contextId: descriptor.context_id,
     ...(callbackSessionId == null ? {} : { callbackSessionId }),
     ...(continuationGeneration == null ? {} : { continuationGeneration }),
-    ...(preparedPlayback === true ? { preparedPlayback: true } : {}),
+    ...(preparedPlayback === undefined ? {} : { preparedPlayback }),
   });
 }
 

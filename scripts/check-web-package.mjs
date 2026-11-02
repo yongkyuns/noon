@@ -676,6 +676,8 @@ const expectedTypeSurface = [
 // Prepared-prefix exports are optional. Require the complete handoff ABI when
 // either binding surface advertises it, without changing the normal package.
 if (javascript.includes("export class PreparedExecutionPlayer") || declarations.includes("export class PreparedExecutionPlayer")) {
+  expectedJavascriptSurface.push("prepareFinishedSource(");
+  expectedTypeSurface.push("prepareFinishedSource(): boolean");
   expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(");
   expectedTypeSurface.push("export class PreparedExecutionPlayer",
     "resetReceiver(transport_session: number): void",
