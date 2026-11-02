@@ -251,6 +251,7 @@ mod tests {
             tracks: Vec::new(),
             camera_motion_payloads: 0,
             path_motion_commands: 0,
+            geometry_payload_bytes: 0,
         }
     }
 

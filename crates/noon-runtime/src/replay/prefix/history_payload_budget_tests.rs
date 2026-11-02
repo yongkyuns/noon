@@ -1,4 +1,4 @@
-//! Byte admission for saved revision vectors, not total history/heap accounting.
+//! Saved vectors and inline geometry admission, not total history/heap accounting.
 use super::*;
 use noon_compile::{CompiledScene, ExecutionPatch};
 use noon_core::{Style, Transform2D};
@@ -373,5 +373,84 @@ fn history_payload_receiver_accumulates_bootstrap_and_suffix_bytes() {
             initial + additional
         );
         assert_eq!(retained_bytes(&runtime), initial + additional);
+    }
+}
+
+#[test]
+fn morph_geometry_is_charged_before_extraction_and_charge_survives_exchange() {
+    use noon_core::{
+        CompositionTimeMap, Property, RateFunction, TrackDefinition, TrackId, TrackTiming,
+        TrackValues, Vec2, VectorPath,
+    };
+    let mut source = source();
+    let (mut publisher, mut runtime, mut receiver) = source.create_prefix_projection().unwrap();
+    let path = VectorPath::new()
+        .move_to(Vec2::ZERO)
+        .line_to(Vec2::new(1.0, 0.0))
+        .with_morph_target(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(1.0, 1.0)),
+        );
+    let path_bytes = path.retained_bytes();
+    source
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(0),
+            object: ObjectId::new(0),
+            property: Property::Morph,
+            values: TrackValues::PreparedMorph {
+                from: 0.0,
+                to: 1.0,
+                geometry: GeometryRef::VectorPath(Arc::new(path)),
+                render_frame: None,
+                source_transform: Transform2D::IDENTITY,
+            },
+            timing: TrackTiming::new(1.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }))
+        .unwrap();
+    source.advance_to(2.0).unwrap();
+    let charge = source.replay_history.as_ref().unwrap().revisions[0]
+        .inverse
+        .as_ref()
+        .unwrap()
+        .prefix_clone_payload_bytes()
+        .unwrap();
+    assert!(
+        charge > 2 * path_bytes,
+        "values and prepared geometry both retain path payloads"
+    );
+    publisher.history_payload_budget = HistoryPayloadBudget::new(charge - 1);
+    let frame = runtime.frame().clone();
+    let publication = runtime.publication_context();
+    for _ in 0..2 {
+        assert_eq!(
+            source.prepare_prefix_update(&mut publisher).unwrap_err(),
+            PrefixError::HistoryPayloadBudgetExceeded {
+                retained_bytes: 0,
+                additional_bytes: charge,
+                limit_bytes: charge - 1,
+            }
+        );
+        assert_eq!(publisher.frontier(), 1.0);
+        assert_eq!(publisher.next_revision, 0);
+        assert_eq!(publisher.extracted_history_payload_bytes(), 0);
+        assert_eq!(runtime.frame(), &frame);
+        assert_eq!(runtime.publication_context(), publication);
+    }
+    publisher.history_payload_budget = HistoryPayloadBudget::new(charge);
+    let batch = source.prepare_prefix_update(&mut publisher).unwrap();
+    assert_eq!(batch.history_payload_bytes(), charge);
+    adopt(&mut receiver, &mut runtime, batch);
+    drop(source);
+    for time in [1.5, 0.5, 1.75, 0.5] {
+        receiver.prepare_seek(&mut runtime, time).unwrap();
+        runtime.seek(time).unwrap();
+        assert_eq!(receiver.retained_history_payload_bytes(), charge);
+        assert_eq!(
+            retained_bytes(&runtime),
+            charge,
+            "replay cannot grow the admitted storage charge"
+        );
     }
 }

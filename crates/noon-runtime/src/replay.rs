@@ -261,6 +261,19 @@ impl SceneInstance {
     pub(crate) fn retain_replay_change(&mut self, change: Option<CompiledReplayRevision>) {
         match change {
             Some(change) => {
+                #[cfg(feature = "prepared-prefix")]
+                let change = {
+                    let mut change = change;
+                    if self
+                        .compiled
+                        .charge_prefix_revision_geometry(&mut change)
+                        .is_none()
+                    {
+                        self.invalidate_replay(ReplayError::RetentionLimit);
+                        return;
+                    }
+                    change
+                };
                 let cost = change.retention_cost();
                 self.retain_supported_replay_change(Some(change), cost);
             }

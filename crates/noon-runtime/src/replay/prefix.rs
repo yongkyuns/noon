@@ -65,8 +65,8 @@ pub enum PrefixError {
         bytes_per_revision: usize,
         limit_bytes: usize,
     },
-    /// Saved row/channel/track vector capacity exceeds the stream ceiling.
-    /// This excludes indirect payloads, the revision index and allocator peaks.
+    /// Saved vectors and both-side logical inline geometry exceed the stream ceiling.
+    /// Other indirect payloads, the revision index and allocator peaks are excluded.
     HistoryPayloadBudgetExceeded {
         retained_bytes: usize,
         additional_bytes: usize,
@@ -137,7 +137,7 @@ pub struct PrefixPublisher {
 }
 
 impl PrefixPublisher {
-    /// Saved revision-vector bytes extracted, including undelivered batches.
+    /// Saved vectors and logical inline geometry extracted, including pending batches.
     /// Not total history/heap memory; see the compiler-owned accounting contract.
     pub fn extracted_history_payload_bytes(&self) -> usize {
         self.history_payload_budget.bytes()
@@ -177,7 +177,7 @@ pub struct PrefixBatch {
     history_payload_bytes: usize,
 }
 impl PrefixBatch {
-    /// Actual row/channel/track vector backing bytes moved into the reader.
+    /// Saved vector backing and both-side logical inline geometry charged to the reader.
     pub fn history_payload_bytes(&self) -> usize {
         self.history_payload_bytes
     }
@@ -237,7 +237,7 @@ pub struct PrefixReceiver {
     object_vector_budget_bytes: usize,
 }
 impl PrefixReceiver {
-    /// Saved revision-vector bytes held by this reader, including future history.
+    /// Saved vectors and logical inline geometry held, including future history.
     /// Seeking or removing visible membership does not release this charge.
     pub fn retained_history_payload_bytes(&self) -> usize {
         self.history_payload_budget.bytes()
@@ -512,8 +512,8 @@ impl SceneInstance {
     /// source history, object storage, allocator overhead and GPU residency.
     pub const MAX_PREFIX_HISTORY_INDEX_BYTES: usize = 64 * 1024 * 1024;
 
-    /// Provisional aggregate ceiling for saved row/channel/track Vec storage.
-    /// Separate from the index cap; excludes pointed-to/shared payloads, source
+    /// Provisional ceiling for saved vectors and both-side logical inline paths.
+    /// Shared paths are charged per reference. Excludes other shared payloads, source
     /// allocations, active object/track storage, allocator overhead and GPU state.
     pub const MAX_PREFIX_HISTORY_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
 
