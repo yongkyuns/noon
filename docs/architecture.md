@@ -744,8 +744,13 @@ call invokes at most one continuation and completes its actual admitted segment
 headlessly using the shared evaluator/completion path. One pending reader/batch
 applies backpressure; no further source invocation occurs until it is taken.
 Retention admits the producer publication, not a displayed-frame receipt.
-Callback, effective-display and unretained signal/input requirements instead yield
-`ExecutionRequired` before headless advancement. A one-use typed transfer retains
+Callback, effective-display, unretained signal/input, unsupported suffix and
+invalid retained-history requirements instead yield `ExecutionRequired` before
+headless advancement. Publication-time profile indices make preflight constant
+time, including repeated zero-duration yields; this does not clone history or
+guarantee later byte/capacity admission. The inset-history flag also catches
+same-call add/remove. Staged external resources retain their original program
+and rendering-host publication handshake. A one-use typed transfer retains
 the original program, runtime and actual pending segment, releasing only its open
 source-history scope; already-delivered readers stay valid. It invokes no source
 or callback and acknowledges no display. This does not admit callback replay or

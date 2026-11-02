@@ -1,6 +1,7 @@
 //! Experimental sparse lifecycle/content prefix transfer. Uses the existing compiler
 //! revision representation; no second scene, evaluator, or resource registry.
 use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
+use crate::CompiledObject;
 use noon_core::{Property, TrackId};
 use std::collections::BTreeMap;
 
@@ -32,13 +33,31 @@ fn local_property(property: Property) -> bool {
     )
 }
 
-fn local_track(track: &Option<CompiledTrack>) -> bool {
-    track.as_ref().is_none_or(|track| {
+fn local_track(track: Option<&CompiledTrack>) -> bool {
+    track.is_none_or(|track| {
         local_property(track.property) && super::path_motion_command_count(&track.values) == 0
     })
 }
 
+fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
+    object.live
+        && object.id == physical.id
+        && object.spatial.is_none()
+        && object
+            .effects
+            .as_ref()
+            .is_none_or(|stack| stack.len() == 1 && stack.definitions()[0].as_glow().is_some())
+}
+
 impl CompiledReplayRevision {
+    fn local_prefix_metadata(&self) -> bool {
+        self.inset_2d_view.is_none()
+            && self.camera_motion_payloads == 0
+            && self.path_motion_commands == 0
+            && self.channels.iter().all(|key| local_property(key.property))
+            && self.rows.iter().filter(|row| row.order.is_some()).count() <= 1
+    }
+
     /// Inset relations are retained by ordinary replay, but not yet presented
     /// by prepared readers. Bootstrap must inspect saved history as well as the
     /// current projection so a removed relation cannot disappear from admission.
@@ -49,6 +68,28 @@ impl CompiledReplayRevision {
 }
 
 impl CompiledScene {
+    /// Necessary suffix-profile checks before advancing the canonical producer.
+    /// Visits only saved payloads and their current counterparts, without cloning
+    /// rows/tracks or reconstructing ordering. Complete extraction remains fallible.
+    pub fn supports_prefix_revision(&self, old: &CompiledReplayRevision) -> bool {
+        if !old.local_prefix_metadata() {
+            return false;
+        }
+        for saved in &old.rows {
+            let Some(physical) = self.objects.get(saved.index as usize) else {
+                return false;
+            };
+            for object in saved.object.iter().chain(physical.live.then_some(physical)) {
+                if !local_object(object, physical) {
+                    return false;
+                }
+            }
+        }
+        old.tracks
+            .iter()
+            .all(|(id, before)| local_track(before.as_ref()) && local_track(self.track(*id)))
+    }
+
     /// Recover the forward sides of a NEW suffix of inverse revisions without
     /// rewinding the producer or cloning its compiled scene/history.
     ///
@@ -79,16 +120,7 @@ impl CompiledScene {
         for old in inverse.iter().rev() {
             // Empty revisions denote append-only glyph plans. Their immutable
             // table suffix is delivered separately; mapped starts gate activity.
-            if old.inset_2d_view.is_some()
-                || old.camera_motion_payloads != 0
-                || old.path_motion_commands != 0
-                || old.channels.iter().any(|key| !local_property(key.property))
-            {
-                return None;
-            }
-            // Current compiler structural patches each own a single order row.
-            // Do not silently invent atomic multi-row exchange semantics.
-            if old.rows.iter().filter(|row| row.order.is_some()).count() > 1 {
+            if !old.local_prefix_metadata() {
                 return None;
             }
             let mut rows = Vec::with_capacity(old.rows.len());
@@ -98,13 +130,7 @@ impl CompiledScene {
                     .entry(saved.index)
                     .or_insert_with(|| physical.live.then(|| physical.clone()));
                 for object in saved.object.iter().chain(current.iter()) {
-                    if !object.live
-                        || object.id != physical.id
-                        || object.spatial.is_some()
-                        || object.effects.as_ref().is_some_and(|stack| {
-                            stack.len() != 1 || stack.definitions()[0].as_glow().is_none()
-                        })
-                    {
+                    if !local_object(object, physical) {
                         return None;
                     }
                 }
@@ -132,7 +158,7 @@ impl CompiledScene {
                 let after = track_overlay
                     .entry(*id)
                     .or_insert_with(|| self.track(*id).cloned());
-                if !local_track(before) || !local_track(after) {
+                if !local_track(before.as_ref()) || !local_track(after.as_ref()) {
                     return None;
                 }
                 tracks.push((*id, after.clone()));

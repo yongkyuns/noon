@@ -30,8 +30,6 @@ pub enum PreparedSourceError<E> {
     Replay(ReplayError),
     Prefix(PrefixError),
     Program(LiveProgramError<E>),
-    /// A headless prefix cannot admit externally prepared GPU resources.
-    ResourcePreparationUnavailable,
     /// Invalid demand is rejected before invoking source code or changing state.
     InvalidPreparationTarget(f64),
 }
@@ -43,9 +41,6 @@ impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
             Self::Prefix(e) => e.fmt(f),
             Self::Program(e) => e.fmt(f),
             Self::InvalidPreparationTarget(time) => write!(f, "invalid preparation target {time}"),
-            Self::ResourcePreparationUnavailable => {
-                f.write_str("external shader preparation requires a rendering host")
-            }
         }
     }
 }
@@ -258,25 +253,26 @@ impl<C: LiveContinuation> PreparedSource<C> {
             .program
             .as_mut()
             .expect("ready source owns its live program");
-        if let Some(requirement) = program.session().source_execution_requirement() {
+        if let Some(requirement) = program
+            .session()
+            .preflight_prepared_source(self.publisher.as_ref())
+            .map_err(PreparedSourceError::Prefix)?
+        {
             self.phase = PreparedSourceStatus::ExecutionRequired(requirement);
             return Ok(());
         }
-        program
-            .session()
-            .validate_prepared_source_domain()
-            .map_err(PreparedSourceError::Prefix)?;
         let status = program.resume().map_err(PreparedSourceError::Program)?;
-        if let Some(requirement) = program.session().source_execution_requirement() {
+        let requirement = if status == LiveProgramStatus::PreparingResources {
+            Some(SourceExecutionRequirement::ExternalResources)
+        } else {
+            program
+                .session()
+                .preflight_prepared_source(self.publisher.as_ref())
+                .map_err(PreparedSourceError::Prefix)?
+        };
+        if let Some(requirement) = requirement {
             self.phase = PreparedSourceStatus::ExecutionRequired(requirement);
             return Ok(());
-        }
-        program
-            .session()
-            .validate_prepared_source_domain()
-            .map_err(PreparedSourceError::Prefix)?;
-        if status == LiveProgramStatus::PreparingResources {
-            return Err(PreparedSourceError::ResourcePreparationUnavailable);
         }
         if status == LiveProgramStatus::Finished {
             if self.publisher.is_none()
