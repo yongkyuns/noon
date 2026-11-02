@@ -454,22 +454,16 @@ try {
   assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 
-  // Rerunning the same valid source can fail on a later invocation. Its opaque
-  // builtins mutation requires observed execution under the viewer default.
-  // The explicit live comparison retains the prior active-replay regression.
+  // Opaque builtins work runs on the original source stack. Its completed
+  // retained journal can replay without invoking that work again, in either mode.
+  // A later explicit source invocation fails while that replay is active.
   phase = "explicit-rerun-baseline";
   await setEditorSource(page, SOURCES.explicitRerun);
   diagnostics.snapshots.rerunBaseline = await runEditedSource(page, {
     expectedState: "applied", expectedObjectCount: 1,
   });
   const acceptedGeneration = await page.locator("#patch-status").getAttribute("data-run-generation");
-  if (liveComparison) await startReplayForExplicitRerun(page);
-  else {
-    assert.equal(await page.locator(".playback-restart").isEnabled(), false,
-      "opaque source effects must not acquire invented replay history");
-    assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "false");
-    assert.match(await page.locator(".playback-live-status").textContent(), /Replay unavailable/);
-  }
+  await startReplayForExplicitRerun(page);
   diagnostics.snapshots.rerunReady = await snapshot(page);
   assert.equal(await page.locator("#patch-status").getAttribute("data-run-generation"), acceptedGeneration,
     "replaying the timeline must not rerun Python");
@@ -491,8 +485,8 @@ try {
   phase = "explicit-rerun-error";
   await page.locator("#replace-scene").click();
   diagnostics.rerunClick = await page.evaluate(() => window.__noonPreviewRerunClick);
-  assert.deepEqual(diagnostics.rerunClick, { playing: liveComparison, busy: false, runGeneration: acceptedGeneration },
-    "the rerun must preserve its profile's verified playback precondition");
+  assert.deepEqual(diagnostics.rerunClick, { playing: true, busy: false, runGeneration: acceptedGeneration },
+    "the rerun must begin while the retained replay is actively playing");
   diagnostics.snapshots.rerunError = await waitForRunResult(page, { expectedState: "error" });
   assert.equal(diagnostics.snapshots.rerunError.problemTitle, "Python raised ValueError");
   await assertStoppedPreview(page, diagnostics.snapshots.rerunError);
