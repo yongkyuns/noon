@@ -29,7 +29,7 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false, staticAdmission = true } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
@@ -55,6 +55,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     free() { alive(); freed = true; counters.freed++; events.push("free"); },
   };
   const context = {
+    prepareFinishedSource() { events.push("finished-admission"); return staticAdmission; },
     beginObservedPreparedSource() { return observed; },
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
     createFinishedPreparedExecutionPlayer(session) {
@@ -75,10 +76,11 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
       assert.equal(args[1], null, "completed static source has no live continuation protocol");
       assert.equal(prepared, false, "original canonical runtime owns input");
     }
-    if (!observed) {
+    if (!observed && staticAdmission) {
       assert.deepEqual(args.slice(0, 5), [null, null, null, null, null]);
       assert.equal(args[5].player, player);
     }
+    if (!staticAdmission) assert.equal(prepared, false, "completed declarations retain the original execution path");
     let stopped = false;
     endpoint = {
       completed: args[1]?.completed === true,
@@ -557,6 +559,27 @@ function staticResult(h) {
   return JSON.stringify({ kind: "semantic_scene", duration: 0,
     semantic_execution: { context_id: h.registerSemanticExecution(h.context), callback_session_id: null } });
 }
+
+for (const duration of [0, 30]) test(`completed declarations use Rust's original execution admission (authored duration ${duration})`, async () => {
+  const h = host({ staticAdmission: false }); let invocations = 0;
+  await h.start(async () => {
+    invocations++;
+    const result = JSON.parse(staticResult(h)); result.duration = duration;
+    h.events.push("cleanup"); return JSON.stringify(result);
+  });
+  assert.deepEqual(h.errors, []);
+  const result = JSON.parse(h.posts.find(post => post.type === "result").resultJson);
+  assert.equal(result.semantic_execution.prepared_playback, false);
+  assert.equal(result.duration, duration);
+  assert.equal(invocations, 1);
+  assert.ok(h.events.indexOf("cleanup") < h.events.indexOf("finished-admission"));
+  await h.attachFinished();
+  assert.deepEqual(h.errors, []);
+  assert.equal(h.events.includes("static-reader"), false);
+  assert.equal(h.counters.initial + h.counters.segments + h.counters.terminal, 0);
+  await h.releaseFinished();
+  assert.equal(h.contexts.size, 0);
+});
 
 for (const zeroWait of [false, true]) {
   test(`completed native-input source keeps original owner after ${zeroWait ? "zero wait" : "no wait"}`, async () => {

@@ -879,7 +879,11 @@ cannot revive a cancelled invocation. Terminal adoption keeps that same reader,
 rather than reconciling it into the source's latest-state player. This bounded
 profile rejects causal input, host callbacks and looping. An unfinished source
 requires an initial readable interval; completed static sources use that same
-reader with the exact zero endpoint after interpreter cleanup succeeds. A receiver
+reader with the exact zero endpoint after interpreter cleanup succeeds.
+A source that finishes without suspension is classified after cleanup by Rust.
+Static profiles keep their exact-zero history/input path; declared future work,
+media and playback controls retain the original canonical runtime and ordinary
+finite-source admission, without another source invocation. A receiver
 restart retains the same reader, original source and delivery cursor in a newer
 receiver namespace. The replacement must actually present before its clock or
 source handoff is admitted. Failed renderer setup preserves the reader for retry;
