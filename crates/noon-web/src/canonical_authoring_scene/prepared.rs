@@ -71,9 +71,12 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.create_prepared_prefix()
     }
 
-    /// Completed static source uses the same historical reader at `[0, 0]`.
+    /// Completed static source uses history at `[0, 0]` when admitted. None
+    /// retains its original canonical runtime for observed native input.
     /// Called only after the interpreter has finished its source and cleanup.
-    pub fn create_finished_static_reader(&mut self) -> Result<PrefixReader, AuthoringFailure> {
+    pub fn create_finished_static_reader(
+        &mut self,
+    ) -> Result<Option<PrefixReader>, AuthoringFailure> {
         if !self.player_ownership.is_unstarted() {
             return self.active_live_player()?.create_finished_static_reader();
         }
@@ -85,12 +88,25 @@ impl CanonicalAuthoringScene {
             ));
         }
         let mut session = self.lower_execution()?;
-        if session.finite_playback_end_time() != Some(0.0) {
+        if session.finite_timeline_end_time() != Some(0.0)
+            || session.has_audio()
+            || session.has_playback_controls()
+        {
             return Err(AuthoringFailure::new(
                 "unsupported_domain",
                 "prepared.static_source",
                 "completed static preparation cannot discard future authored work",
             ));
+        }
+        if !self.translation_drag_targets.is_empty()
+            || session.source_execution_requirement().is_some()
+        {
+            // Lower once and keep that exact runtime. Drag is an existing host
+            // declaration applied by the ordinary player constructor.
+            self.player_ownership = super::player_ownership::PlayerOwnership::Active(
+                self.build_live_player_with_session(session, 1.0, 0)?,
+            );
+            return self.active_live_player()?.create_finished_static_reader();
         }
         session
             .begin_replay_retention(noon_runtime::ReplayLimits::default())
@@ -100,6 +116,7 @@ impl CanonicalAuthoringScene {
             .map_err(|e| AuthoringFailure::unclassified("prepared.static_source", &e))?;
         session
             .create_finished_prepared_reader()
+            .map(Some)
             .map_err(|e| AuthoringFailure::unclassified("prepared.static_source", &e))
     }
 

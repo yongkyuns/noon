@@ -29,7 +29,7 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
@@ -55,7 +55,11 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const context = {
     beginObservedPreparedSource() { return observed; },
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
-    createFinishedPreparedExecutionPlayer(session) { assert.equal(session, 3); events.push("static-reader"); return player; },
+    createFinishedPreparedExecutionPlayer(session) {
+      assert.equal(session, 3); events.push("static-reader");
+      if (staticNative) { observed = true; return undefined; }
+      return player;
+    },
     retireExecutionSource() { events.push("retire-source"); },
     prepareInitialSourceSegment() { counters.initial++; events.push("initial"); trap("initial"); if (completeError) throw completeError; return initialIntervals.shift() ?? true; },
     createPreparedExecutionPlayer(session) { trap("reader"); assert.equal(session, 3); events.push("reader"); return player; },
@@ -64,6 +68,11 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const attachSemanticEngine = async (_context, _request, onStop, ...args) => {
     assert.equal(_context, context);
     const prepared = args[5] !== undefined;
+    if (staticNative && observed) {
+      assert.equal(_request.completedStaticSource, true);
+      assert.equal(args[1], null, "completed static source has no live continuation protocol");
+      assert.equal(prepared, false, "original canonical runtime owns input");
+    }
     if (!observed) {
       assert.deepEqual(args.slice(0, 5), [null, null, null, null, null]);
       assert.equal(args[5].player, player);
@@ -473,6 +482,58 @@ for (const trapAt of ["initial", "reader", "segment", "terminal", "reserve", "ad
 function staticResult(h) {
   return JSON.stringify({ kind: "semantic_scene", duration: 0,
     semantic_execution: { context_id: h.registerSemanticExecution(h.context), callback_session_id: null } });
+}
+
+for (const zeroWait of [false, true]) {
+  test(`completed native-input source keeps original owner after ${zeroWait ? "zero wait" : "no wait"}`, async () => {
+    const h = host({ staticNative: true, initialIntervals: [false] }); let invocations = 0;
+    const done = h.start(async api => {
+      invocations++;
+      if (zeroWait) await api.awaitSemanticContinuation(h.context);
+      const result = JSON.parse(zeroWait ? h.result() : staticResult(h));
+      result.duration = 0; return JSON.stringify(result);
+    });
+    if (zeroWait) {
+      await microtasks(); const attaching = h.attach();
+      await h.tick(); await attaching;
+    } else {
+      await done; await h.attachFinished();
+    }
+    await done;
+    assert.deepEqual(h.errors, []);
+    assert.equal(invocations, 1);
+    assert.equal(h.counters.initial, Number(zeroWait));
+    assert.equal(h.counters.segments + h.counters.terminal + h.counters.adopted, 0);
+    assert.equal(h.events.filter(event => event === "static-reader").length, 1);
+    h.endpoint().stop();
+    assert.equal(h.counters.freed, 0, "no history reader was allocated");
+    assert.equal(h.contexts.size, 0);
+    assert.equal(h.events.filter(event => event === "retire-source").length, 1);
+  });
+
+  test(`completed native-input ${zeroWait ? "cancellation" : "release"} during renderer attachment cannot revive owner`, async () => {
+    const gate = deferred(), h = host({ staticNative: true, initialIntervals: [false], attachGate: gate });
+    const done = h.start(async api => {
+      if (zeroWait) await api.awaitSemanticContinuation(h.context);
+      const result = JSON.parse(zeroWait ? h.result() : staticResult(h));
+      result.duration = 0; return JSON.stringify(result);
+    });
+    let attaching;
+    if (zeroWait) {
+      await microtasks(); attaching = h.attach();
+      await h.tick(); await microtasks();
+      await h.cancel();
+    } else {
+      await done; attaching = h.attachFinished();
+      await microtasks(); await h.releaseFinished();
+    }
+    assert.equal(h.contexts.size, 1, "attachment reserves owner until its async setup settles");
+    gate.resolve(); await attaching; await done;
+    assert.equal(h.contexts.size, 0);
+    assert.equal(h.counters.freed, 0);
+    assert.equal(h.posts.some(post => post.type === "semantic_execution_attached"), false);
+    assert.equal(h.events.filter(event => event === "retire-source").length, 1);
+  });
 }
 
 test("completed static source attaches the same prepared player once without segment work", async () => {
