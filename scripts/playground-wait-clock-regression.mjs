@@ -11,6 +11,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const out = path.resolve(root, process.env.NOON_WAIT_ARTIFACTS ?? "browser-smoke-artifacts/playground-wait-clock");
 const backend = process.env.NOON_WAIT_BACKEND ?? "webgl";
 assert.ok(["webgl", "webgpu"].includes(backend));
+const profile = process.env.NOON_WAIT_PROFILE ?? "default";
+assert.ok(["default", "live"].includes(profile));
+const firstPassControllable = profile === "default" ? "true" : "false";
 const source = `from noon import *
 class WaitClock(Scene):
     def construct(self):
@@ -21,7 +24,7 @@ class WaitClock(Scene):
         self.wait(3)
         self.play(dot.animate.shift(LEFT), run_time=0.4)
 `;
-const report = { backend, errors: [], samples: {}, controls: {} };
+const report = { backend, profile, errors: [], samples: {}, controls: {} };
 await mkdir(out, { recursive: true });
 const server = await serveRepository(root, Number(process.env.NOON_WAIT_PORT ?? 4197));
 let browser;
@@ -55,6 +58,9 @@ try {
   browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8")).install(context);
+  if (profile === "live") await context.addInitScript(() => {
+    window.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: false }) };
+  });
   page = await context.newPage();
   page.setDefaultTimeout(60_000);
   page.on("pageerror", error => report.errors.push(error.stack ?? String(error)));
@@ -69,11 +75,11 @@ try {
     editor.value = source;
     editor.dispatchEvent(new Event("input", { bubbles: true }));
   }, source);
-  await page.waitForFunction(() => {
+  await page.waitForFunction(expected => {
     const controls = document.querySelector(".playback-controls");
     const time = Number(controls?.dataset.elapsedSeconds);
-    return controls?.dataset.controllable === "false" && time > 0.1 && time < 1.5;
-  });
+    return controls?.dataset.controllable === expected && time > 0.1 && time < 1.5;
+  }, firstPassControllable);
   async function sample(label) {
     const samples = await page.evaluate(async () => {
       const samples = [];
@@ -90,21 +96,31 @@ try {
     checkClock(samples, label, 0.28); // Includes the existing 100 ms UI polling cadence.
     return samples;
   }
-  const live = await sample("initial-wait");
-  assert.ok(live.every(s => s.controllable === "false" && s.time < 3), "must sample inside the first source-owned wait");
+  const initial = await sample("initial-wait");
+  assert.ok(initial.every(s => s.controllable === firstPassControllable && s.time < 3),
+    "must sample inside the first wait with its admitted playback capability");
   await page.screenshot({ path: path.join(out, "initial-wait.png") });
   assert.equal(await page.locator("#status").getAttribute("data-renderer-backend"),
     backend === "webgl" ? "WebGL2" : "WebGPU");
-  await page.waitForFunction(() => {
+  await page.waitForFunction(expected => {
     const controls = document.querySelector(".playback-controls");
     const time = Number(controls?.dataset.elapsedSeconds);
-    return controls?.dataset.controllable === "false" && time > 3.55 && time < 4.9;
-  });
+    return controls?.dataset.controllable === expected && time > 3.55 && time < 4.9;
+  }, firstPassControllable);
   const later = await sample("wait-after-animation");
-  assert.ok(later.every(s => s.controllable === "false" && s.time > 3.4 && s.time < 6.4),
+  assert.ok(later.every(s => s.controllable === firstPassControllable && s.time > 3.4 && s.time < 6.4),
     "must also tick during the wait following an active animation");
   await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" &&
     window.__noonExampleGallery?.runInFlight === false);
+  // Preparation can finish before presentation. Wait for the Rust reader's
+  // actual terminal range and logical endpoint, independently of play intent.
+  await page.waitForFunction(() => {
+    const controls = document.querySelector(".playback-controls")?.dataset;
+    const end = Number(document.querySelector(".playback-scrubber")?.max);
+    return controls?.durationKnown === "true" && controls.buffering === "false" &&
+      controls.busy === "false" && Math.abs(end - 6.8) < 1e-9 &&
+      Math.abs(Number(controls.elapsedSeconds) - end) < 1e-7;
+  });
   const duration = await page.locator(".playback-scrubber").getAttribute("max");
   assert.ok(Math.abs(Number(duration) - 6.8) < 1e-9, "both waits must contribute to replay duration");
   await page.waitForFunction(() => {
