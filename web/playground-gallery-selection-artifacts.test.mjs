@@ -287,32 +287,34 @@ test("default routing preserves desktop Chromium mouse input and 960 by 540 canv
   assert.equal(report.captureViewport.deviceScaleFactor, 1);
 });
 
-test("mobile profile uses DPR2 portrait geometry, touch input, and a viewport-fitting canvas", async () => {
-  const result = await runSmoke({ env: { NOON_PLAYGROUND_BROWSER: "webkit", NOON_PLAYGROUND_PROFILE: "mobile-dpr2" } });
+for (const browser of ["chromium", "webkit"]) test(`${browser} mobile profile uses DPR2 touch input and a viewport-fitting canvas`, async () => {
+  const result = await runSmoke({ env: { NOON_PLAYGROUND_BROWSER: browser, NOON_PLAYGROUND_PROFILE: "mobile-dpr2" } });
   assert.equal(result.error, undefined);
-  assert.deepEqual(result.launchOptions, { browser: "webkit", headless: true });
+  assert.deepEqual(result.launchOptions, { browser, headless: true });
   assert.deepEqual(JSON.parse(JSON.stringify(result.contextOptions)), {
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
   });
   assert.ok(result.events.some((event) => event.startsWith("touch:")));
   assert.ok(!result.events.some((event) => event.startsWith("mouse:")));
   const report = JSON.parse(result.writes.get("result.json"));
-  assert.equal(report.wheelInput, "DOM wheel (mobile WebKit automation limitation)");
+  assert.equal(report.wheelInput, "DOM wheel (touch profile)");
   assert.equal(result.events.filter(event => event === "DOM:wheel").length, 2);
   assert.deepEqual(report.captureViewport.bitmap, { width: 716, height: 402 });
   assert.equal(report.captureViewport.deviceScaleFactor, 2);
-  assert.equal(result.layoutSizes.length, 3, "legacy, authored, and native-drag canvases must use the mobile capture layout");
+  assert.equal(result.layoutSizes.length, browser === "webkit" ? 3 : 2);
   assert.deepEqual(report.browserErrors, []);
-  assert.equal(report.nativeInputDrag.capability, "nonreplayable-native-input");
-  assert.equal(report.nativeInputDrag.backend, "WebGL2");
-  assert.equal(report.nativeInputDrag.deviceScaleFactor, 2);
-  assert.ok(report.nativeInputDrag.pointerSamples.some(sample => sample.type === "pointercancel" && sample.pointerType === "touch"));
-  assert.ok(report.nativeInputDrag.releasedDragChangedPixels > 500);
-  assert.ok(report.nativeInputDrag.cancelledDragTransientPixels > 500);
-  assert.equal(report.nativeInputDrag.cancelledDragRestoresReleasedPixels, true);
-  assert.equal(report.nativeInputDrag.runRestoresExactBaseline, true);
-  assert.ok(result.events.includes("public:run"));
-  assertRetained(result, ["nativeDragBaseline", "nativeDragReleased", "nativeDragCancelTransient", "nativeDragCancelled", "nativeDragRunReset"]);
+  if (browser === "webkit") {
+    assert.equal(report.nativeInputDrag.capability, "nonreplayable-native-input");
+    assert.equal(report.nativeInputDrag.backend, "WebGL2");
+    assert.equal(report.nativeInputDrag.deviceScaleFactor, 2);
+    assert.ok(report.nativeInputDrag.pointerSamples.some(sample => sample.type === "pointercancel" && sample.pointerType === "touch"));
+    assert.ok(report.nativeInputDrag.releasedDragChangedPixels > 500);
+    assert.ok(report.nativeInputDrag.cancelledDragTransientPixels > 500);
+    assert.equal(report.nativeInputDrag.cancelledDragRestoresReleasedPixels, true);
+    assert.equal(report.nativeInputDrag.runRestoresExactBaseline, true);
+    assert.ok(result.events.includes("public:run"));
+    assertRetained(result, ["nativeDragBaseline", "nativeDragReleased", "nativeDragCancelTransient", "nativeDragCancelled", "nativeDragRunReset"]);
+  }
   for (const size of result.layoutSizes) {
     assert.ok(size.width <= 390 && size.height <= 844, "mobile capture canvas must fit the portrait viewport");
   }

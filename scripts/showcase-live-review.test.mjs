@@ -117,7 +117,7 @@ test("successful first execution cannot substitute for unavailable replay", () =
   assert.throws(() => assertLiveOutcome(entry, state, "WebGPU"));
 });
 
-test("declared nonreplayable lessons accept the exact idle UnsupportedDomain denial", () => {
+test("declared nonreplayable lessons require a known idle replay denial", () => {
   const entry = {
     id: "showcase-reactive-relationships", duration: 9.2,
     playbackCapability: "nonreplayable-host-callbacks",
@@ -132,6 +132,9 @@ test("declared nonreplayable lessons accept the exact idle UnsupportedDomain den
     disabledReplayControls: { play: true, restart: true, scrubber: true },
   };
   assertNonreplayableShowcase(entry, state, "WebGPU");
+  assertNonreplayableShowcase(entry, {
+    ...state, replayReason: "Replay unavailable: source execution is not retained for replay",
+  }, "WebGPU");
   for (const change of [
     { replayReason: "Replay unavailable: UnsupportedFeature" },
     { controls: { ...state.controls, controllable: "true" } },

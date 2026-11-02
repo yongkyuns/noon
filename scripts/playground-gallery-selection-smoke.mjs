@@ -307,12 +307,12 @@ try {
   assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
   assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
   // Exercise the actual gallery opt-in, not a manually constructed client.
-  const domWheel = browserName === "webkit" && profile.hasTouch;
-  report.wheelInput = domWheel ? "DOM wheel (mobile WebKit automation limitation)" : "browser mouse wheel";
+  const domWheel = profile.hasTouch;
+  report.wheelInput = domWheel ? "DOM wheel (touch profile)" : "browser mouse wheel";
   const dispatchWheel = async delta => {
     if (domWheel) {
-      // Playwright cannot drive a wheel in mobile WebKit. Keep the same DOM
-      // collector and real touch picking, without claiming native wheel input.
+      // Touch emulation does not provide portable native wheel injection. Keep
+      // the same DOM collector and real touch picking; label this input explicitly.
       await authoredCanvas.evaluate((canvas, deltaY) => {
         const rect = canvas.getBoundingClientRect();
         const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaMode: 0, deltaY,

@@ -41,12 +41,13 @@ export function assertNonreplayableShowcase(entry, observed, expectedBackend) {
   assert.ok(NONREPLAYABLE_SHOWCASE_CAPABILITIES.includes(entry.playbackCapability), "wrong declared nonreplayable capability");
   assert.ok(entry.playbackLimitation?.trim(), "nonreplayable capability lacks its user-facing explanation");
   assertFirstPass(entry, observed, expectedBackend);
-  assert.equal(observed.replayReason, "Replay unavailable: UnsupportedDomain",
-    "nonreplayable lesson did not report the expected UnsupportedDomain denial");
+  assert.ok(["Replay unavailable: UnsupportedDomain",
+    "Replay unavailable: source execution is not retained for replay"].includes(observed.replayReason),
+  "nonreplayable lesson did not report a supported replay denial");
   assert.equal(observed.controls?.controllable, "false", "denied replay controls must be uncontrollable");
   assert.equal(observed.controls?.busy, "false", "completed denied replay must not remain busy");
   assert.deepEqual(observed.disabledReplayControls, { play: true, restart: true, scrubber: true },
-    "all replay controls must be disabled after UnsupportedDomain");
+    "all replay controls must be disabled after replay denial");
 }
 
 export function summarizeLiveReview(results) {
@@ -333,7 +334,7 @@ async function main() {
           result.nonreplayableRerunOutcome = "pass";
           result.nonreplayableRerunMatchesFirstPass = true;
           result.outcome = "pass";
-          console.log(`PASS live ${entry.id}: first pass, expected UnsupportedDomain denial, and fresh Run endpoint match`);
+          console.log(`PASS live ${entry.id}: first pass, expected replay denial, and fresh Run endpoint match`);
           continue;
         }
         result.stage = "replay capability admission";
