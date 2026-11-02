@@ -52,6 +52,7 @@ fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
         publisher,
         pending: Some(batch),
         required: None,
+        finished: false,
     });
     player
 }

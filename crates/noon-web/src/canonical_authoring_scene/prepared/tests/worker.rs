@@ -294,6 +294,50 @@ fn interpreter_worker_raw_reader_has_no_implicit_source_authority() {
 }
 
 #[test]
+fn interpreter_worker_terminal_drag_handoff_keeps_completed_source_and_waits_for_demand() {
+    let (mut context, target, mut player) = start();
+    context.set_translation_drag_targets(vec![target]).unwrap();
+    let identity = context.active_live_player().unwrap().ownership_identity();
+    let frame = context.active_live_player().unwrap().debug_frame_json();
+    assert!(!player.finish_interpreter_source(&mut context).unwrap());
+    assert!(!player.source_execution_ready());
+    assert!(player.begin_source_execution(&mut context).is_err());
+    assert!(player.finish_interpreter_source(&mut context).is_err());
+    assert!(player.prepare_interpreter_segment(&mut context).is_err());
+    assert!(player.seek_delta_json(0.75).is_ok());
+    assert_eq!(player.prepared_end_time(), None);
+    player.set_prepared_playing(true);
+    player.tick_delta_json(0.0).unwrap();
+    player.tick_delta_json(2000.0).unwrap();
+    assert!(player.source_execution_ready());
+    assert!(
+        !player.begin_source_execution(&mut context).unwrap(),
+        "finished source cannot resume its authored clock"
+    );
+    let original = context.take_execution_player(1.0, 0).unwrap();
+    assert_eq!(original.ownership_identity(), identity);
+    assert_eq!(original.debug_frame_json(), frame);
+    assert!(!original.has_pending_live_segment());
+    assert!(!original.is_playing());
+}
+
+#[test]
+fn interpreter_worker_terminal_admission_rejects_a_pending_source_segment() {
+    let (mut context, target, mut player) = start();
+    context.set_translation_drag_targets(vec![target]).unwrap();
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert!(player.finish_interpreter_source(&mut context).is_err());
+    assert!(context
+        .active_live_player()
+        .unwrap()
+        .has_pending_live_segment());
+    assert!(
+        !player.prepare_interpreter_segment(&mut context).unwrap(),
+        "rejected finish cannot consume the rightful pending source"
+    );
+}
+
+#[test]
 fn interpreter_worker_retains_single_glow_edits_between_prefixes() {
     use noon::effects::{EffectUpdate, Pixels};
     use noon::Color;

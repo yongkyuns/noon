@@ -11,7 +11,11 @@ impl SemanticExecutionPlayer {
     pub(crate) fn prefix_source_requirement(
         &self,
         publisher: &PrefixPublisher,
+        finished: bool,
     ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        if finished {
+            self.completed_prepared_boundary()?;
+        }
         self.session
             .preflight_prepared_source(Some(publisher))
             .map_err(prefix_error)
@@ -22,8 +26,13 @@ impl SemanticExecutionPlayer {
         publisher: &PrefixPublisher,
         reader: &PrefixReader,
         playing: bool,
+        finished: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.live_segment()?;
+        if finished {
+            self.completed_prepared_boundary()?;
+        } else {
+            self.live_segment()?;
+        }
         if self
             .session
             .begin_observed_prefix_source(publisher, reader)
@@ -32,7 +41,7 @@ impl SemanticExecutionPlayer {
         {
             return Err("source does not require observed execution".into());
         }
-        if playing {
+        if playing && !finished {
             self.resume();
         } else {
             self.pause();
