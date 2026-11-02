@@ -47,6 +47,31 @@ test("completed replay observes exact time and playing state without an interpol
   assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play");
 });
 
+test("an observed source can pause and resume without enabling replay or inventing a duration", async () => {
+  const f = fixture();
+  const state = { time: 0.5, playing: true, sourcePlaybackControllable: true };
+  f.player.pause = async () => { f.calls.push("pause"); return { ...state, playing: false }; };
+  f.player.resume = async () => { f.calls.push("resume"); return state; };
+  f.controls.setControllable(false);
+  f.controls.observe(state);
+  f.controls.setUnavailable("source execution is not retained for replay");
+  const button = f.preview.querySelector(".playback-toggle");
+  assert.equal(button.disabled, false);
+  assert.equal(f.range.hidden, true);
+  assert.equal(f.preview.querySelector(".playback-restart").disabled, true);
+  assert.equal(f.output.value, "0.50 / — s");
+  button.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, ["pause"]);
+  assert.equal(button.getAttribute("aria-label"), "Play animation");
+  button.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, ["pause", "resume"]);
+  f.controls.observe({ ...state, playing: false, sourcePlaybackControllable: false });
+  assert.equal(button.disabled, true);
+  button.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, ["pause", "resume"]);
+  assert.deepEqual(f.errors, []);
+});
+
 test("Undo drag is a separate visible command enabled only by the semantic receipt", async () => {
   const f = fixture(true);
   let calls = 0;

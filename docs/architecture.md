@@ -884,8 +884,14 @@ leases the same canonical player to the existing continuation endpoint. Required
 callback events return to the original suspended Python stack; neither admission
 nor source completion reruns its body. The endpoint reports observed execution
 and unavailable replay, rather than claiming historical readiness. New suffixes
-also use the shared source preflight before headless advancement. This initial
-admission does not qualify late reader-to-source handoff, observed pause/seek,
+also use the shared source preflight before headless advancement. Observed source
+samples and returned leases preserve play/pause intent in the same Rust player
+clock. Manual authored-time samples remain paused. Pause commits elapsed interior
+wait time; resume reanchors the existing source wall conversion without charging
+paused time or restarting the interpreter. Source controls expose pause/resume
+without a seek range or invented duration. Paused transient input keeps its
+independent interaction timing within existing input/callback admission gates.
+This initial admission does not qualify late reader-to-source handoff or seeking,
 post-source interaction/recovery, staged resource preparation or default cutover;
 those remain under #2211.
 

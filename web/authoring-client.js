@@ -140,9 +140,6 @@ export class PythonAuthoringClient {
       ? null
       : this.#matchingContinuation(contextId, continuationGeneration);
     const preparedPlayback = continuation?.preparedPlayback === true;
-    if (initiallyPaused && continuationGeneration !== null && !preparedPlayback) {
-      throw new Error("source-owned semantic continuations cannot start paused");
-    }
     if (this.#continuations.get(contextId)?.preparedPlayback &&
         (continuation === null || replaceExistingEndpoint)) {
       throw new Error("prepared playback cannot reattach or replace its endpoint");

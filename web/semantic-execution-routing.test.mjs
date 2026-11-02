@@ -99,19 +99,21 @@ test("semantic startup uses context-owned ports without constructing an engine w
   client.terminate();
 });
 
-test("initially paused startup rejects a source-owned continuation before attachment", async () => {
+test("initially paused startup reaches the same source-owned continuation", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
   const client = new AuthoringExecutionClient(new FakeCanvas());
-  await assert.rejects(
-    client.startSemanticExecution(
+  const render = await prepare(client);
+  const starting = client.startSemanticExecution(
       { contextId: "semantic-continuation", continuationGeneration: 7 },
       { authoringClient: authoring, initiallyPaused: true },
-    ),
-    /source-owned semantic continuations cannot start paused/,
   );
-  assert.equal(authoring.attachments.length, 0);
-  assert.deepEqual(FakeWorker.instances, []);
+  await Promise.resolve();
+  replyRender(render, "start_engine", "engine_started", { mode: "legacy" });
+  const ready = await starting;
+  assert.equal(authoring.attachments.length, 1);
+  assert.equal(authoring.attachments[0].options.initiallyPaused, true);
+  assert.equal(ready.session, 1);
   client.terminate();
 });
 
