@@ -153,7 +153,8 @@ for (const mode of ["transferable", "shared"]) {
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(f.count("tick"), ticks);
       assert.equal(f.count("free"), 0, "old picture remains owned until replacement retires its endpoint");
-      f.endpoint.stop();
+      f.post("stop");
+      await f.when(() => f.count("free") === 1);
       assert.equal(f.count("free"), 1);
       assert.equal(f.count("stop-source"), 1);
       assert.equal(f.count("cancel-source"), 1);

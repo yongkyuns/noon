@@ -1378,7 +1378,7 @@ export async function attachSemanticEngine(
       throw new Error("semantic execution requires retained resource bundle support");
     }
     controlPort.addEventListener("message", ({ data: message }) => {
-      if (stopped) return;
+      if (stopped && message?.type !== "stop") return;
       try {
         if (message?.channel !== "noon.engine" || message.protocolVersion !== 1) throw new Error("invalid semantic engine protocol");
         if (message.type === "stop") { stop(); return; }
