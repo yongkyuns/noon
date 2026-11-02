@@ -10,6 +10,7 @@ use noon_render_wgpu::{
 };
 #[cfg(feature = "wgsl-effects")]
 mod native_hdr_corpus;
+mod playback;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 fn scene() -> (Scene, noon::Mobject, noon::Mobject) {
     let mut scene = Scene::new();
@@ -653,7 +654,7 @@ fn bloom_program() -> noon::LiveProgram<BloomAnimation> {
 fn native_surface_smoke_presents_authored_camera_bloom() {
     use winit::platform::x11::EventLoopBuilderExtX11;
     let source =
-        crate::LiveProgramExecutionSource::new(bloom_program(), noon::RustHostCallbackTable::new())
+        crate::PlaybackExecutionSource::new(bloom_program(), noon::RustHostCallbackTable::new())
             .unwrap();
     let mut builder = winit::event_loop::EventLoop::builder();
     builder.with_any_thread(true);

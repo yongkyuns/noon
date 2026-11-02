@@ -91,7 +91,7 @@ fn invalid_native_seek_preserves_committed_frame_and_publication() {
 }
 
 #[test]
-fn native_transport_does_not_adopt_finished_source_continuations() {
+fn native_transport_adopts_a_completed_static_source_at_the_exact_zero_range() {
     struct Finished;
     impl LiveContinuation for Finished {
         type Error = LiveSessionError;
@@ -99,18 +99,17 @@ fn native_transport_does_not_adopt_finished_source_continuations() {
             Ok(ContinuationStep::Finished)
         }
     }
-    let mut source = LiveProgramExecutionSource::new(
+    let mut source = PlaybackExecutionSource::new(
         Scene::new().into_live_program(Finished).unwrap(),
         RustHostCallbackTable::new(),
     )
     .unwrap();
     assert!(!source.source_active());
     assert_eq!(source.session().finite_timeline_end_time(), Some(0.0));
-    assert_eq!(source.finite_transport_end(), None);
-    assert!(matches!(
-        source.seek_to(0.0),
-        Err(NativeHostError::PlaybackControlsUnavailable)
-    ));
+    assert_eq!(source.finite_transport_end(), Some(0.0));
+    source.seek_to(0.0).unwrap();
+    assert_eq!(source.frame_time(), 0.0);
+    assert!(!source.can_seek_to(0.001));
 }
 
 #[test]

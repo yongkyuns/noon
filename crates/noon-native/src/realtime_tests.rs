@@ -42,6 +42,9 @@ fn moving_app(waits_left: usize) -> NativeApp {
     scene.add(&marker).unwrap();
     let mut target = marker.target_editor().unwrap();
     target.set_translation(4.0, 0.0).unwrap();
+    // An actual host callback requires observed source execution. These tests
+    // qualify its clock debt and renderer barriers, rather than prepared loading.
+    let callbacks = observed_callbacks(&scene, &marker);
     let program = scene
         .into_live_program(WaitThenMove {
             marker,
@@ -50,7 +53,7 @@ fn moving_app(waits_left: usize) -> NativeApp {
             moving: false,
         })
         .unwrap();
-    let source = LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+    let source = PlaybackExecutionSource::new(program, callbacks).unwrap();
     let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
     // This CPU fixture consumes only the initial publication. It never admits
     // an animated endpoint without the explicit renderer boundary below.
@@ -205,6 +208,7 @@ fn late_native_surface_retains_all_endpoints_but_presents_only_the_caught_up_fra
         })
         .collect();
     let resumes = Rc::new(Cell::new(0));
+    let callbacks = observed_callbacks(&scene, &marker);
     let program = scene
         .into_live_program(ShortAnimatedSequence {
             marker,
@@ -213,7 +217,7 @@ fn late_native_surface_retains_all_endpoints_but_presents_only_the_caught_up_fra
             resumes: Rc::clone(&resumes),
         })
         .unwrap();
-    let source = LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+    let source = PlaybackExecutionSource::new(program, callbacks).unwrap();
     let mut app = NativeApp::from_source(
         Box::new(source),
         NativeViewportConfig {

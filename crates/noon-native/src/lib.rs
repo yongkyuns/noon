@@ -14,9 +14,30 @@ mod selection_overlay;
 #[cfg(test)]
 mod view_output;
 
+#[cfg(test)]
+fn observed_callbacks(scene: &noon::Scene, target: &noon::Mobject) -> RustHostCallbackTable {
+    let id = noon_core::HostCallbackId::new(719);
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks
+        .insert(id, |_| Ok::<(), std::io::Error>(()))
+        .unwrap();
+    callbacks
+        .add_updater(
+            &mut scene.integration_store().borrow_mut(),
+            target.node_id(),
+            id,
+            0.0,
+            None,
+        )
+        .unwrap();
+    callbacks
+}
+
 #[cfg(feature = "audio")]
 mod audio_output;
 
+#[cfg(test)]
+mod incremental_playback_tests;
 #[cfg(test)]
 mod realtime_tests;
 
@@ -71,7 +92,7 @@ fn test_scene_from_root(
 }
 use winit::window::{Window, WindowId};
 
-use execution_source::{LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource};
+use execution_source::{NativeExecutionSource, PlaybackExecutionSource, StaticExecutionSource};
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.0,
@@ -225,6 +246,9 @@ pub fn run_with_callbacks_and_config(
 }
 
 /// Run one resumable Rust authoring continuation through the native viewport.
+/// The shared player prepares bounded history ahead where admitted and retains
+/// the original observed source for callbacks or causal input. No source rerun
+/// is used for seeking; an observed source has no replay range.
 pub fn run_live_program<C>(program: LiveProgram<C>) -> Result<(), NativeHostError>
 where
     C: LiveContinuation + 'static,
@@ -267,7 +291,7 @@ where
     C: LiveContinuation + 'static,
     C::Error: std::fmt::Display,
 {
-    let source = LiveProgramExecutionSource::new(program, callbacks)?;
+    let source = PlaybackExecutionSource::new(program, callbacks)?;
     run_source(Box::new(source), config)
 }
 
@@ -284,7 +308,7 @@ fn run_source(
         audio_output::admit_profile(source.as_ref())?;
     }
     if (config.playback_controls || source.session().has_playback_controls())
-        && source.finite_transport_end().is_none()
+        && !source.playback_controls_available()
     {
         return Err(NativeHostError::PlaybackControlsUnavailable);
     }
@@ -383,6 +407,27 @@ struct NativeApp {
     last_bloom_passes: [usize; 5],
 }
 
+// A deliberate runtime-incarnation handoff starts a new publication ordering
+// domain. Retire disposable renderer state; never renumber source frame epochs.
+fn reset_renderer_source(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    size: [u32; 2],
+    preparer: &mut RetainedFramePreparer,
+    renderer: &mut GpuRenderer,
+    text: &mut RetainedTextGpuState,
+) {
+    let camera = renderer.camera();
+    let mut replacement = GpuRenderer::new(device, queue, format);
+    replacement.copy_effect_program_cache_from(device, renderer);
+    replacement.set_viewport(device, queue, size[0], size[1]);
+    replacement.set_camera(queue, camera);
+    *text = replacement.create_retained_text_state(device, queue);
+    *renderer = replacement;
+    *preparer = RetainedFramePreparer::new();
+}
+
 impl NativeApp {
     #[cfg(test)]
     fn new(session: SceneExecution, config: NativeViewportConfig) -> Self {
@@ -408,14 +453,13 @@ impl NativeApp {
     }
 
     fn from_source(source: Box<dyn NativeExecutionSource>, config: NativeViewportConfig) -> Self {
-        let finite_transport_end =
-            if config.playback_controls || source.session().has_playback_controls() {
-                source.finite_transport_end()
-            } else if source.session().has_audio() {
-                source.session().finite_timeline_end_time()
-            } else {
-                None
-            };
+        let finite_transport_end = source.finite_transport_end().or_else(|| {
+            source
+                .session()
+                .has_audio()
+                .then(|| source.session().finite_timeline_end_time())
+                .flatten()
+        });
         Self {
             execution: source,
             config,
@@ -542,7 +586,11 @@ impl NativeApp {
         timeline: TimelineWakeState,
         now: Instant,
     ) -> Option<RealtimeClock> {
-        if self.playback_paused || self.playback_picture_pending {
+        if self.playback_paused
+            || self.playback_picture_pending
+            || !self.execution.presentation_ready()
+            || self.execution.buffering()
+        {
             return None;
         }
         if matches!(timeline, TimelineWakeState::Quiescent) {
@@ -569,7 +617,22 @@ impl NativeApp {
     }
 
     fn resume_ready_preserving_clock(&mut self, now: Instant) -> Result<bool, NativeHostError> {
-        let resumed = self.execution.resume_ready()?;
+        let identity = self.execution.session().runtime_identity();
+        let was_buffering = self.execution.buffering();
+        let demand = if self.playback_paused
+            || self.playback_picture_pending
+            || self.execution.buffering()
+        {
+            self.execution.frame_time()
+        } else {
+            self.realtime_clock
+                .map_or(self.execution.frame_time(), |clock| {
+                    clock.scene_time_at(now)
+                })
+                .max(self.execution.frame_time())
+        };
+        let resumed = self.execution.prepare_until(demand + 1.0)?;
+        self.sync_playback_presentation(identity, now)?;
         if let Some(programs) = self.execution.pending_effect_programs().map(<[_]>::to_vec) {
             if let Some(gpu) = self.gpu.as_mut() {
                 let request = gpu
@@ -584,8 +647,65 @@ impl NativeApp {
                 gpu.prepared_effect_modules = Some(prepared);
             }
         }
+        self.finite_transport_end = self.execution.finite_transport_end().or_else(|| {
+            self.execution
+                .session()
+                .has_audio()
+                .then(|| self.execution.session().finite_timeline_end_time())
+                .flatten()
+        });
         let _ = self.realtime_clock_for_timeline(self.execution.timeline(), now);
+        if resumed || was_buffering != self.execution.buffering() {
+            self.update_playback_title();
+        }
         Ok(resumed)
+    }
+
+    fn sync_playback_presentation(
+        &mut self,
+        previous: noon::integration::RuntimeIdentity,
+        now: Instant,
+    ) -> Result<(), NativeHostError> {
+        if self.execution.session().runtime_identity() != previous {
+            // Retire the collector's old contact and physical receipt. Never
+            // retag a historical pointer edge for the causal source incarnation.
+            self.pointer_source_changed()?;
+            if let Some(gpu) = &mut self.gpu {
+                if gpu.preparer.last_applied_publication().is_some() {
+                    let format = if gpu.working_profile == noon_core::ViewColorProfile::LinearHdr {
+                        wgpu::TextureFormat::Rgba16Float
+                    } else {
+                        gpu.config.format
+                    };
+                    reset_renderer_source(
+                        &gpu.device,
+                        &gpu.queue,
+                        format,
+                        [gpu.config.width, gpu.config.height],
+                        &mut gpu.preparer,
+                        &mut gpu.renderer,
+                        &mut gpu.text_state,
+                    );
+                    gpu.prepared_effect_modules = None;
+                }
+            }
+            self.last_selection_presentation = None;
+            self.force_full_redraw = true;
+        }
+        if self.execution.take_clock_reanchor() {
+            self.realtime_clock = if self.playback_paused || self.playback_picture_pending {
+                None
+            } else {
+                Some(RealtimeClock::new(
+                    now.max(Instant::now()),
+                    self.execution.frame_time(),
+                ))
+            };
+        }
+        if self.execution.buffering() || !self.execution.presentation_ready() {
+            self.realtime_clock = None;
+        }
+        Ok(())
     }
 
     fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
@@ -601,9 +721,9 @@ impl NativeApp {
         let requested = self
             .finite_transport_end
             .map_or(requested, |end| requested.min(end));
-        let was_finished = self
-            .finite_transport_end
-            .is_some_and(|end| self.execution.frame_time() >= end);
+        let was_finished = self.execution.playback_finished();
+        let was_buffering = self.execution.buffering();
+        let identity = self.execution.session().runtime_identity();
         match timeline {
             TimelineWakeState::Continuous => self.execution.advance_to(requested)?,
             TimelineWakeState::Deadline(scene_time) => {
@@ -618,14 +738,13 @@ impl NativeApp {
                 unreachable!("quiescent timeline has no realtime clock")
             }
         }
+        self.sync_playback_presentation(identity, now)?;
         // Neither required callbacks nor ordinary source continuations are an
         // intentional pause. Their wall time stays in this epoch and is sampled
         // on the next available wake; it is never subtracted from playback.
         let _ = self.realtime_clock_for_timeline(self.execution.timeline(), now);
-        if !was_finished
-            && self
-                .finite_transport_end
-                .is_some_and(|end| self.execution.frame_time() >= end)
+        if (!was_finished && self.execution.playback_finished())
+            || was_buffering != self.execution.buffering()
         {
             self.update_playback_title();
         }
@@ -641,8 +760,12 @@ impl NativeApp {
         }
 
         self.resume_ready_preserving_clock(Instant::now())?;
+        if !self.execution.presentation_ready() {
+            return Ok(());
+        }
         if !self.publication_pending()
             && (self.playback_paused
+                || self.execution.buffering()
                 || matches!(self.execution.timeline(), TimelineWakeState::Quiescent))
             && !self.execution.session().interactions_active()
         {
@@ -669,6 +792,9 @@ impl NativeApp {
         // AFTER it succeeds, not the old timestamp from before that wait.
         let now = Instant::now();
         self.advance_realtime_timeline(now)?;
+        // Reaching a frontier may transfer an already-staged publication to the
+        // observed owner. Complete its device handshake before drawing that head.
+        self.resume_ready_preserving_clock(now)?;
         self.execution.advance_interactions(
             now.saturating_duration_since(self.interaction_wall_origin)
                 .as_secs_f64(),
@@ -1561,7 +1687,7 @@ mod tests {
     }
 
     #[test]
-    fn live_wait_resumes_at_its_runtime_deadline_without_a_renderer_publication() {
+    fn prepared_wait_finishes_source_ahead_without_advancing_the_display() {
         let mut scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         scene.add(&circle).unwrap();
@@ -1572,8 +1698,7 @@ mod tests {
                 waiting: false,
             })
             .unwrap();
-        let source =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let source = PlaybackExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
         let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
         app.execution.take_renderer_publication();
         assert!(!app.publication_pending());
@@ -1583,7 +1708,12 @@ mod tests {
         app.advance_realtime_timeline(origin).unwrap();
         app.advance_realtime_timeline(origin + Duration::from_millis(500))
             .unwrap();
-        assert_eq!(resumes.get(), 1);
+        assert_eq!(
+            resumes.get(),
+            2,
+            "prepare one source call ahead of the wait deadline"
+        );
+        assert_eq!(app.execution.frame_time(), 0.0);
         assert!(!app.publication_pending());
 
         app.advance_realtime_timeline(origin + Duration::from_secs(1))
@@ -1635,8 +1765,7 @@ mod tests {
                 step: 0,
             })
             .unwrap();
-        let source =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let source = PlaybackExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
         let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
         app.execution.take_renderer_publication();
 
@@ -1663,9 +1792,10 @@ mod tests {
             app.session().frame().objects[0].transform.translation.x,
             2.0
         );
-        // The source's endpoint admission is internal waiting, not user idle.
-        assert!(app.execution.pending_endpoint().is_some());
-        assert_eq!(app.realtime_clock.unwrap().wall_origin, origin);
+        assert!(app.execution.pending_endpoint().is_none());
+        assert_eq!(app.execution.finite_transport_end(), Some(2.0));
+        assert!(!app.execution.source_active());
+        assert!(app.realtime_clock.is_none());
     }
 
     struct NativeAnimatedContinuation {
@@ -1705,6 +1835,7 @@ mod tests {
         let mut target = source.target_editor().unwrap();
         target.set_translation(2.0, 0.0).unwrap();
         let resumes = Rc::new(Cell::new(0));
+        let callbacks = observed_callbacks(&scene, &source);
         let program = scene
             .into_live_program(NativeAnimatedContinuation {
                 source,
@@ -1713,8 +1844,7 @@ mod tests {
                 started: false,
             })
             .unwrap();
-        let mut execution =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let mut execution = PlaybackExecutionSource::new(program, callbacks).unwrap();
         let initial = execution.take_renderer_publication().context();
         execution.advance_to(1.0).unwrap();
         assert_eq!(resumes.get(), 1);
@@ -2229,8 +2359,7 @@ mod tests {
     #[ignore = "requires an X11 display and a working native wgpu adapter"]
     fn native_surface_smoke_presents_affine_continuation_endpoint() {
         let program = noon::example_scenes::ordinary_affine_continuation_program().unwrap();
-        let source =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let source = PlaybackExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
         let app = present_continuation_endpoint(Box::new(source), 4.0);
         assert_eq!(
             app.session().frame().render_transform(0).translation,
@@ -2245,7 +2374,7 @@ mod tests {
     fn native_surface_smoke_presents_callback_continuation_endpoint() {
         let (program, callbacks) =
             noon::example_scenes::ordinary_callback_continuation_program().unwrap();
-        let source = LiveProgramExecutionSource::new(program, callbacks).unwrap();
+        let source = PlaybackExecutionSource::new(program, callbacks).unwrap();
         let app = present_continuation_endpoint(Box::new(source), 1.0);
         assert_eq!(
             app.session().frame().render_transform(0).translation,

@@ -163,11 +163,17 @@ jobs:
           xvfb-run -a -s "-screen 0 1280x720x24" \
             cargo test -p noon-native native_surface_smoke_presents_typed_semantic_frame \
               -- --ignored --nocapture --test-threads=1
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_incremental_first_picture_precedes_source_completion \
+              -- --ignored --nocapture --test-threads=1
 
       - name: Qualify native HDR pixels, capture equivalence and recovery
         env:
           NOON_NATIVE_HDR_ARTIFACTS: ${{ github.workspace }}/native-hdr-proof
-        run: cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture
+          NOON_PLAYBACK_EVIDENCE_DIR: ${{ github.workspace }}/native-hdr-proof/playback
+        run: |
+          cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture
+          cargo test -p noon-native --features wgsl-effects --lib native_incremental_handoff_pixels_match_original_observed_source -- --ignored --nocapture
       - name: Present authored camera Bloom through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \

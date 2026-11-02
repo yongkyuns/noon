@@ -328,19 +328,20 @@ impl LiveContinuation for IndicateOnce {
 
 #[test]
 fn live_indicate_and_endpoint_presentation_survive_independent_native_zoom() {
-    use crate::execution_source::LiveProgramExecutionSource;
+    use crate::execution_source::PlaybackExecutionSource;
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.5).unwrap();
     circle.set_fill(0.0, 0.5, 1.0, 1.0).unwrap();
     scene.add(&circle).unwrap();
+    let opacity = scene.control_signal("opacity", 1.0).unwrap();
+    scene.bind_opacity(&circle, &opacity).unwrap();
     let program = scene
         .into_live_program(IndicateOnce {
             object: circle,
             started: false,
         })
         .unwrap();
-    let source =
-        LiveProgramExecutionSource::new(program, noon::RustHostCallbackTable::new()).unwrap();
+    let source = PlaybackExecutionSource::new(program, noon::RustHostCallbackTable::new()).unwrap();
     let mut app = NativeApp::from_source(
         Box::new(source),
         NativeViewportConfig {

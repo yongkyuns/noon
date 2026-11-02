@@ -323,6 +323,11 @@ impl PrefixReceiver {
         Ok(())
     }
 
+    /// Read-only readiness over the same admission used by seek and advance.
+    pub fn contains_time(&self, time: f64) -> bool {
+        self.validate_time(time).is_ok()
+    }
+
     fn validate_time(&self, time: f64) -> Result<(), PrefixError> {
         if !time.is_finite()
             || time < self.start

@@ -64,7 +64,7 @@ enum Pending {
 /// immutable-resource operation can be expensive. Hosts must yield between calls;
 /// one segment per call is a work-count bound, not a wall-time guarantee.
 pub struct PreparedSource<C> {
-    program: Option<LiveProgram<C>>,
+    pub(super) program: Option<LiveProgram<C>>,
     publisher: Option<PrefixPublisher>,
     boundary: Option<ExecutionSegment>,
     published_until: f64,
@@ -80,9 +80,24 @@ impl Scene {
         continuation: C,
         limits: ReplayLimits,
     ) -> Result<PreparedSource<C>, PreparedSourceError<C::Error>> {
-        let mut program = self
-            .into_live_program(continuation)
-            .map_err(PreparedSourceError::Lowering)?;
+        self.into_live_program(continuation)
+            .map_err(PreparedSourceError::Lowering)?
+            .into_prepared_source(limits)
+    }
+}
+
+impl<C: LiveContinuation> LiveProgram<C> {
+    /// Consume an unresumed continuation owner without reconstructing its scene.
+    pub fn into_prepared_source(
+        mut self,
+        limits: ReplayLimits,
+    ) -> Result<PreparedSource<C>, PreparedSourceError<C::Error>> {
+        if self.status() != LiveProgramStatus::ReadyToResume {
+            return Err(PreparedSourceError::Program(
+                self.invalid_state("prepare source"),
+            ));
+        }
+        let program = &mut self;
         let phase = if let Some(requirement) = program.session().source_execution_requirement() {
             PreparedSourceStatus::ExecutionRequired(requirement)
         } else {
@@ -99,7 +114,7 @@ impl Scene {
         };
         let published_until = program.session().frame().time;
         Ok(PreparedSource {
-            program: Some(program),
+            program: Some(self),
             publisher: None,
             boundary: None,
             published_until,
