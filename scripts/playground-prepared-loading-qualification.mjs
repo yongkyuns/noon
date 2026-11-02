@@ -50,6 +50,7 @@ const report = { status: "running", scope: "loading observations on unchanged ca
     usefulTiming: "upper bound at completion of the first positive canvas capture; native first-any-frame time is separate",
     memoryWindow: "navigation/reload through first visible observation plus the recorded post-observation window and optional seek; aggregate sampled process-tree RSS",
     progress: "sampled renderer publications and UI observations; short buffering episodes can fall between samples",
+    runPromise: "inFlight is the page run promise, including continuation and handoff waits; it does not measure source CPU activity or prove parallel preparation",
     wasmCapacity: "optional probe changes worker entrypoints and HTTP caching; instrumented timings are diagnostic only. Linear memory capacity is not live allocation, RSS, GPU or total memory." },
   host: { platform: os.platform(), release: os.release(), arch: os.arch(), cpu: os.cpus()[0]?.model,
     logicalCpus: os.cpus().length, totalMemoryBytes: os.totalmem() }, packages: {}, cases: [] };
@@ -205,7 +206,7 @@ async function measure(page, workers, example, arm, phase, trial, warmup) {
             navigationToUsefulObservationUpperMs: after.epochMs - last.originMs,
             captureAndObservationMs: performance.now() - captureStarted,
             observationRoundTripMs: captureStarted - started, sceneInkPixels: ink,
-            sourceStillRunningAtUsefulObservation: after.inFlight,
+            runPromisePendingAtUsefulObservation: after.inFlight,
             usefulObservation: after, presentedBeforeCapture: metrics });
           assert.equal(metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
           await writeFile(path.join(output, `${example}-${trial}-${arm}-${phase}.png`), bytes);

@@ -679,6 +679,7 @@ if (javascript.includes("export class PreparedExecutionPlayer") || declarations.
   expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(");
   expectedTypeSurface.push("export class PreparedExecutionPlayer",
     "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
+    "finishSourcePreparation(context: CanonicalAuthoringSceneContext): boolean",
     "beginSourceExecution(context: CanonicalAuthoringSceneContext): boolean", "sourceExecutionReady(): boolean");
 }
 

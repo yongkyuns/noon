@@ -881,7 +881,17 @@ function createPreparedSourceDriver(run) {
       }
       // runAuthoringSource includes the existing construct/finally/tear_down and
       // per-run globals cleanup. Seal only after that entire operation succeeds.
-      invokePreparedEngine(() => continuation.preparedPlayer.finishSourcePreparation(continuation.context));
+      if (invokePreparedEngine(() => continuation.preparedPlayer.finishSourcePreparation(continuation.context)) === false) {
+        // Source and cleanup have returned. Retain their completed canonical
+        // player until actual reader demand reaches its final native state.
+        continuation.preparedSourceFinished = true;
+        const handedOff = awaitContinuationEvent(continuation);
+        continuation.endpoint.sourceExecutionRequired();
+        await handedOff;
+        requirePreparedContinuation(run, continuation.context, signal);
+        continuation.terminal = true;
+        return;
+      }
       if (!deliverPreparedSourcePrefix(continuation)) {
         throw new Error("prepared source did not deliver its explicit final endpoint");
       }
@@ -1375,6 +1385,9 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
       endpoint = await attachObservedSemanticExecution({ ...request, initiallyPaused: !playing,
         loopDurationSeconds: Math.max(1, entry.context.liveHandoffDuration()) }, entry, continuation, true, pyodide);
       requirePreparedContinuation(run, entry.context);
+      // This finishes only the host's join: the original source stack and its
+      // last logical segment already completed. No renderer receipt is forged.
+      if (continuation.preparedSourceFinished) completeContinuation(continuation, continuation.generation);
       return endpoint;
     } catch (error) {
       entry.released = true;
@@ -1452,6 +1465,7 @@ async function attachObservedSemanticExecution(request, entry, continuation, con
     runRequiredCallbackPhase,
     continuationOnly ? {
       generation: continuation.generation,
+      completed: continuation.preparedSourceFinished === true && continuation.observedExecution === true,
       onComplete: (generation) => completeContinuation(continuation, generation),
       onError: (_generation, error) => {
         entry.released = true;

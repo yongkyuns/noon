@@ -9,6 +9,7 @@ pub(super) struct SourceDelivery {
     publisher: PrefixPublisher,
     pending: Option<PrefixBatch>,
     required: Option<noon::SourceExecutionRequirement>,
+    finished: bool,
 }
 
 impl PreparedExecutionPlayer {
@@ -26,6 +27,7 @@ impl PreparedExecutionPlayer {
             publisher,
             pending: None,
             required: None,
+            finished: false,
         });
         Ok(player)
     }
@@ -55,8 +57,11 @@ impl PreparedExecutionPlayer {
     ) -> Result<bool, String> {
         self.validate_source(context)?;
         let source = self.source.as_mut().expect("validated source delivery");
+        if source.finished {
+            return Err("prepared source already finished".into());
+        }
         source.required = context
-            .prefix_source_requirement(&source.publisher)
+            .prefix_source_requirement(&source.publisher, false)
             .map_err(|e| e.to_string())?;
         if source.required.is_some() {
             return Ok(false);
@@ -93,20 +98,38 @@ impl PreparedExecutionPlayer {
         }
         let playing = self.playback.playing();
         let source = self.source.as_ref().expect("validated source delivery");
+        let finished = source.finished;
         context
-            .begin_observed_prefix_source(&source.publisher, &self.playback.reader, playing)
+            .begin_observed_prefix_source(
+                &source.publisher,
+                &self.playback.reader,
+                playing,
+                source.finished,
+            )
             .map_err(|e| e.to_string())?;
         self.source = None;
-        Ok(playing)
+        Ok(playing && !finished)
     }
 
-    /// Explicit interpreter completion retains a terminal suffix; only adoption
-    /// makes the endpoint readable. The caller must have finished source cleanup.
+    /// After source cleanup, stage admitted terminal history. False retains the
+    /// completed original source for observed execution at actual reader demand;
+    /// it does not advertise a final replay range.
     pub fn finish_interpreter_source(
         &mut self,
         context: &mut CanonicalAuthoringScene,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.validate_source(context)?;
+        let source = self.source.as_mut().expect("validated source delivery");
+        if source.finished {
+            return Err("prepared source already finished".into());
+        }
+        source.required = context
+            .prefix_source_requirement(&source.publisher, true)
+            .map_err(|e| e.to_string())?;
+        source.finished = true;
+        if source.required.is_some() {
+            return Ok(false);
+        }
         let mut source = self.source.take().expect("validated source delivery");
         context.seal_prepared_source().map_err(|e| e.to_string())?;
         source.pending = Some(
@@ -115,7 +138,7 @@ impl PreparedExecutionPlayer {
                 .map_err(|e| e.to_string())?,
         );
         self.source = Some(source);
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -247,7 +270,7 @@ mod wasm {
         pub fn finish_source_preparation(
             &mut self,
             context: &mut CanonicalAuthoringSceneContext,
-        ) -> Result<(), JsValue> {
+        ) -> Result<bool, JsValue> {
             self.finish_interpreter_source(&mut context.inner)
                 .map_err(|e| JsValue::from_str(&e))
         }

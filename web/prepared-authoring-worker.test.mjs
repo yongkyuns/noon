@@ -29,7 +29,7 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
@@ -44,6 +44,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     beginSourceExecution(value) { alive(); assert.equal(value, context); observed = true; events.push("handoff"); return false; },
     finishSourcePreparation(value) {
       alive(); trap("terminal"); assert.equal(value, context); counters.terminal++; pending = 4; events.push("terminal");
+      if (terminalNative) { pending = undefined; return false; }
     },
     reserveSourcePrefixCapacity() { alive(); trap("reserve"); if (pending === undefined) return false; assert.equal(pending, 4); counters.reserved++; return true; },
     deliverSourcePrefix() { alive(); trap("adopt"); assert.equal(pending, 4); pending = undefined; counters.adopted++; return true; },
@@ -69,6 +70,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     }
     let stopped = false;
     endpoint = {
+      completed: args[1]?.completed === true,
       startContinuation(generation) { events.push("observe-segment"); assert.equal(generation, args[1].generation); },
       async publishContinuationResult(generation) { assert.equal(generation, args[1].generation); events.push("final-publication"); },
       sourcePrefixDelivered() { assert.equal(stopped, false); counters.delivered++; args[5].wakeSource(); },
@@ -80,7 +82,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
         if (prepared) { player.stopSourcePreparation(); player.free(); }
       },
     };
-    if (attachGate && (!late || !prepared)) await attachGate.promise;
+    if (attachGate && (!(late || terminalNative) || !prepared)) await attachGate.promise;
     return endpoint;
   };
   api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
@@ -331,6 +333,39 @@ for (const cancelDuringAttach of [false, true]) test(`late source handoff retain
   assert.equal(invocations, 1);
   assert.equal(h.counters.freed, 1);
   assert.equal(h.counters.terminal, 0);
+  assert.equal(h.counters.adopted, 0);
+});
+
+for (const cancelDuringAttach of [false, true]) test(`terminal native state transfers the completed source (cancel=${cancelDuringAttach})`, async () => {
+  const gate = cancelDuringAttach ? deferred() : null;
+  const h = host({ terminalNative: true, demand: true, attachGate: gate });
+  let cleanup = 0;
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    cleanup++;
+    return h.result();
+  });
+  await microtasks(); const initial = h.tick(); await h.attach(); await initial; await microtasks();
+  const previous = h.endpoint(), continuation = h.run().continuation;
+  assert.equal(cleanup, 1); assert.equal(continuation.preparedSourceFinished, true);
+  assert.equal(continuation.pending !== null, true);
+  assert.equal(h.counters.adopted, 0);
+  const attachment = h.attach({ sourceHandoff: true });
+  if (cancelDuringAttach) {
+    await microtasks(); await h.cancel(); await done;
+    assert.equal(h.contexts.size, 1);
+    gate.resolve(); await attachment;
+    assert.equal(h.contexts.size, 0);
+  } else {
+    await attachment; await done; previous.stop();
+    assert.equal(h.endpoint().completed, true);
+    assert.equal(continuation.terminal, true);
+    assert.equal(h.errors.length, 0);
+    assert.equal(h.events.includes("final-publication"), false, "completed source is attached directly, never returned or driven again");
+  }
+  assert.equal(cleanup, 1);
+  assert.equal(h.counters.freed, 1);
+  assert.equal(h.counters.terminal, 1);
   assert.equal(h.counters.adopted, 0);
 });
 

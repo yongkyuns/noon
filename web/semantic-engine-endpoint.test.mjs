@@ -2251,6 +2251,30 @@ for (const stage of ["initial", "intermediate", "endpoint"]) {
 }
 
 
+test("completed source attachment publishes once without starting its old callback protocol", async () => {
+  const f = fixture("transferable", () => assert.fail("completed source callback cannot restart"), {
+    generation: 27, completed: true,
+    onComplete: () => assert.fail("source is already complete"), onError: (_generation, error) => { throw error; },
+  });
+  f.player.initialCallbackPhaseJson = () => assert.fail("completed source cannot bootstrap another callback phase");
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(); await ready;
+    present(f.render.port2, await initial);
+    const state = await request(f.control.port2, "state", 1);
+    assert.equal(state.sourceExecution, "observed");
+    assert.equal(state.sourcePlaybackControllable, false);
+    assert.equal(state.replaySupported, false);
+    assert.equal(state.playing, false);
+    assert.equal((await request(f.control.port2, "resume", 2)).playing, false);
+    assert.equal(f.stats().completedSegments, 0);
+    assert.equal(f.stats().initialSnapshots, 1);
+    assert.equal(f.stats().continuationDriveTimes.length, 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("source result waits for final edits without another segment or callback drive", async () => {
   let finishSegment;
   const finished = new Promise((resolve) => { finishSegment = resolve; });
