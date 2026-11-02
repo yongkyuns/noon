@@ -480,3 +480,162 @@ fn pointer_driven_prefix_effect_pixels_restore_after_terminal_delivery_and_sourc
         eprintln!("PREFIX_POINTER_RASTER: {changed} changed midpoint pixels; exact restoration after terminal adoption, source drop, final advance and renderer recreation");
     });
 }
+
+fn single_glow_prefix_history() -> (ExecutionSession, PrefixReader) {
+    use noon::effects::{EffectUpdate, Pixels};
+    use noon::Color;
+    let mut scene = Scene::new();
+    let mut anchor = scene.circle(0.5).unwrap();
+    anchor.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    anchor.disable_stroke().unwrap();
+    scene.add(&anchor).unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits {
+            revisions: 32,
+            payloads: 256,
+        })
+        .unwrap();
+    let boundary = source.wait_segment(1.0).unwrap();
+    source.advance_to(1.0).unwrap();
+    let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+    reader.seek(0.5).unwrap();
+    let baseline = reader.frame().clone();
+    scene
+        .live(&mut source)
+        .set_glow(
+            &anchor,
+            EffectUpdate::default()
+                .color(Color::RED)
+                .radius(Pixels(3.0))
+                .intensity(0.6),
+        )
+        .unwrap();
+    let boundary = source.wait_segment(1.0).unwrap();
+    source.advance_to(2.0).unwrap();
+    let batch = source
+        .publish_prepared_prefix(boundary, &mut publisher)
+        .unwrap();
+    assert_eq!(
+        batch.stats().resource_payloads,
+        0,
+        "Glow has no external resource closure"
+    );
+    reader.append(batch).unwrap();
+    assert_eq!(
+        reader.frame(),
+        &baseline,
+        "adopting a future Glow cannot change the current picture"
+    );
+
+    scene
+        .live(&mut source)
+        .set_glow(
+            &anchor,
+            EffectUpdate::default()
+                .color(Color::BLUE)
+                .radius(Pixels(6.0)),
+        )
+        .unwrap();
+    let boundary = source.wait_segment(1.0).unwrap();
+    source.advance_to(boundary.end_time()).unwrap();
+    scene.live(&mut source).remove_glow(&anchor).unwrap();
+    let boundary = source.wait_segment(1.0).unwrap();
+    source.advance_to(boundary.end_time()).unwrap();
+    scene
+        .live(&mut source)
+        .set_glow(
+            &anchor,
+            EffectUpdate::default()
+                .color(Color::GREEN)
+                .radius(Pixels(2.0))
+                .intensity(1.2),
+        )
+        .unwrap();
+    let boundary = source.wait_segment(1.0).unwrap();
+    source.advance_to(boundary.end_time()).unwrap();
+    // One suffix contains several different historical values for the same row.
+    reader
+        .append(
+            source
+                .publish_prepared_prefix(boundary, &mut publisher)
+                .unwrap(),
+        )
+        .unwrap();
+    source.seal_replay().unwrap();
+    reader
+        .append(
+            source
+                .finish_prepared_prefix(boundary, &mut publisher)
+                .unwrap(),
+        )
+        .unwrap();
+    (source, reader)
+}
+
+#[test]
+fn single_glow_edits_retain_exact_prefix_history_after_source_drop() {
+    let (mut source, mut reader) = single_glow_prefix_history();
+    let mut frames = Vec::new();
+    for time in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] {
+        source.seek(time).unwrap();
+        reader.seek(time).unwrap();
+        assert_eq!(
+            reader.frame(),
+            source.frame(),
+            "full historical frame at {time}"
+        );
+        frames.push((time, source.frame().clone()));
+    }
+    drop(source);
+    for (time, expected) in frames.iter().rev() {
+        reader.seek(*time).unwrap();
+        assert_eq!(
+            reader.frame(),
+            expected,
+            "reader owns the effect history after source destruction"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a native GPU; explicitly invoked by focused qualification"]
+fn single_glow_prefix_pixels_match_live_history_after_source_drop() {
+    pollster::block_on(async {
+        let (mut source, mut reader) = single_glow_prefix_history();
+        let mut raster = raster_support::Raster::with_primary_dimensions(128, 128).await;
+        let mut expected = Vec::new();
+        for time in [0.5, 1.5, 2.5, 3.5, 4.5, 5.0] {
+            source.seek(time).unwrap();
+            expected.push((
+                time,
+                raster.capture_effects(&source.take_renderer_publication()),
+            ));
+        }
+        assert!(
+            expected[0].1 != expected[1].1,
+            "red Glow must change visible pixels"
+        );
+        assert!(
+            expected[1].1 != expected[2].1,
+            "blue parameter edit must be visible"
+        );
+        assert!(
+            expected[0].1 == expected[3].1,
+            "removal must restore the plain source"
+        );
+        assert!(
+            expected[2].1 != expected[4].1,
+            "reattached green Glow must be visible"
+        );
+        drop(source);
+        let mut historical = raster_support::Raster::with_primary_dimensions(128, 128).await;
+        for (time, pixels) in expected.iter().rev() {
+            reader.seek(*time).unwrap();
+            assert!(
+                &historical.capture_effects(&reader.take_renderer_publication()) == pixels,
+                "prepared Glow pixels at {time} after source destruction"
+            );
+        }
+    });
+}

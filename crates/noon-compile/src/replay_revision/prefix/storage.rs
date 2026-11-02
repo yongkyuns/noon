@@ -189,55 +189,56 @@ mod tests {
     }
 
     #[test]
-    fn ordered_effect_rows_remain_outside_prefix_suffix_admission() {
+    fn unqualified_effect_rows_remain_outside_prefix_suffix_admission() {
         use crate::{CompiledEffect, CompiledEffectStack, CompiledObject, ExecutionPatch};
         use noon_core::{
-            Color, EffectDefinition, GeometryRef, Glow, ObjectId, SemanticNodeId, Style,
+            Blur, Color, EffectDefinition, GeometryRef, Glow, ObjectId, SemanticNodeId, Style,
             Transform2D,
         };
-        let id = ObjectId::new(0);
-        let effects = std::sync::Arc::new(
-            CompiledEffectStack::new([
-                CompiledEffect {
-                    attachment: SemanticNodeId::new(7, 1),
-                    definition: EffectDefinition::Glow(Glow::default()),
-                },
-                CompiledEffect {
-                    attachment: SemanticNodeId::new(8, 2),
-                    definition: EffectDefinition::Glow(Glow::default()),
-                },
-            ])
-            .unwrap(),
-        );
-        let mut row = CompiledObject::new(
-            id,
-            GeometryRef::circle(0.5),
-            Transform2D::IDENTITY,
-            Style::default(),
-        );
-        row.effects = Some(effects.clone());
-        let mut scene = CompiledScene::compile_objects(vec![row], &[]).unwrap();
-        let patch = ExecutionPatch::SetStyle {
-            object: id,
-            style: Style {
-                fill: Some(Color::RED),
-                ..Style::default()
-            },
-            fill_paint: None,
-        };
-        let inverse = scene.prepare_replay_revision(&patch).unwrap();
-        scene.apply_execution_patch(&patch).unwrap();
-        let rows = scene.objects().to_vec();
-        for _ in 0..2 {
-            assert!(
-                scene.forward_prefix_revisions(&[&inverse]).is_none(),
-                "effect stacks must not enter unqualified prefix suffixes"
+        for definitions in [
+            vec![EffectDefinition::Glow(Glow::default()); 2],
+            vec![EffectDefinition::Blur(Blur::default())],
+        ] {
+            let id = ObjectId::new(0);
+            let effects = std::sync::Arc::new(
+                CompiledEffectStack::new(definitions.into_iter().enumerate().map(
+                    |(i, definition)| CompiledEffect {
+                        attachment: SemanticNodeId::new(i as u32 + 7, 1),
+                        definition,
+                    },
+                ))
+                .unwrap(),
             );
-            assert_eq!(scene.objects(), rows.as_slice());
-            assert!(std::sync::Arc::ptr_eq(
-                scene.objects()[0].effects.as_ref().unwrap(),
-                &effects
-            ));
+            let mut row = CompiledObject::new(
+                id,
+                GeometryRef::circle(0.5),
+                Transform2D::IDENTITY,
+                Style::default(),
+            );
+            row.effects = Some(effects.clone());
+            let mut scene = CompiledScene::compile_objects(vec![row], &[]).unwrap();
+            let patch = ExecutionPatch::SetStyle {
+                object: id,
+                style: Style {
+                    fill: Some(Color::RED),
+                    ..Style::default()
+                },
+                fill_paint: None,
+            };
+            let inverse = scene.prepare_replay_revision(&patch).unwrap();
+            scene.apply_execution_patch(&patch).unwrap();
+            let rows = scene.objects().to_vec();
+            for _ in 0..2 {
+                assert!(
+                    scene.forward_prefix_revisions(&[&inverse]).is_none(),
+                    "effect stacks must not enter unqualified prefix suffixes"
+                );
+                assert_eq!(scene.objects(), rows.as_slice());
+                assert!(std::sync::Arc::ptr_eq(
+                    scene.objects()[0].effects.as_ref().unwrap(),
+                    &effects
+                ));
+            }
         }
     }
 }

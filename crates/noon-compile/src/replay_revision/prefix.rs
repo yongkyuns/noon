@@ -54,7 +54,9 @@ impl CompiledScene {
     /// write into earlier timestamps when a row is changed more than once.
     ///
     /// Ordinary 2D lifecycle, content and property tracks are admitted. Family,
-    /// path-motion, spatial and glow plans still require separate qualification.
+    /// path-motion, spatial and effect-animation plans require separate qualification.
+    /// Rows may carry one resource-free glow attachment; ordered stacks and
+    /// other effect definitions remain outside this suffix profile.
     /// Ordering reconstruction visits only affected rows and their neighbours;
     /// it never clones/scans the full painter/family order.
     /// The caller must pass the complete, ordered suffix ending at this scene's
@@ -93,7 +95,9 @@ impl CompiledScene {
                     if !object.live
                         || object.id != physical.id
                         || object.spatial.is_some()
-                        || object.effects.is_some()
+                        || object.effects.as_ref().is_some_and(|stack| {
+                            stack.len() != 1 || stack.definitions()[0].as_glow().is_none()
+                        })
                     {
                         return None;
                     }
