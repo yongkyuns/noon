@@ -246,7 +246,7 @@ fn exact_history_samples_survive_source_drop_and_cannot_skip_acknowledgement() {
         weak.upgrade().is_none(),
         "export metadata must not retain the reader's PCM"
     );
-    drop(export);
+    assert_eq!(export.owner(), owner);
 }
 
 #[test]
