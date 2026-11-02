@@ -41,7 +41,9 @@ impl NativeApp {
         // A sleeping static interval still has elapsed authored time. Observe it
         // through the existing runtime before dropping the common wall anchor.
         if self.execution.presentation_ready() {
+            let identity = self.execution.session().runtime_identity();
             self.execution.advance_to(target)?;
+            self.sync_playback_presentation(identity, now)?;
         }
         self.playback_paused = true;
         self.realtime_clock = None;

@@ -129,6 +129,11 @@ impl LiveContinuation for LateDrag {
 }
 #[test]
 fn late_drag_requires_a_new_presented_frame_and_a_fresh_contact_after_handoff() {
+    late_drag_handoff(false);
+    late_drag_handoff(true);
+}
+
+fn late_drag_handoff(pause_at_frontier: bool) {
     let mut scene = Scene::new();
     let mut target = scene.circle(0.5).unwrap();
     target.set_fill(0.0, 0.4, 1.0, 1.0).unwrap();
@@ -166,8 +171,16 @@ fn late_drag_requires_a_new_presented_frame_and_a_fresh_contact_after_handoff() 
     let old_identity = app.session().runtime_identity();
     let origin = Instant::now();
     app.advance_realtime_timeline(origin).unwrap();
-    app.advance_realtime_timeline(origin + Duration::from_millis(1250))
+    app.advance_realtime_timeline(origin + Duration::from_millis(500))
         .unwrap();
+    if pause_at_frontier {
+        app.pause_playback(origin + Duration::from_millis(1250))
+            .unwrap();
+        assert!(app.playback_paused);
+    } else {
+        app.advance_realtime_timeline(origin + Duration::from_millis(1250))
+            .unwrap();
+    }
     assert_ne!(app.session().runtime_identity(), old_identity);
     assert!(app.pointer.presented.is_none());
     assert!(app.publication_pending());
