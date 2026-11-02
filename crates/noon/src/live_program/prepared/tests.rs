@@ -287,7 +287,7 @@ fn cooperative_source_retention_failure_does_not_publish_a_false_final_range() {
     assert_eq!(reader.end_time(), None);
 }
 #[test]
-fn cooperative_source_rejects_reactive_input_before_invoking_source() {
+fn cooperative_source_retains_initial_reactive_execution_without_invoking_source() {
     let mut scene = Scene::new();
     let target = scene.circle(0.5).unwrap();
     scene.add(&target).unwrap();
@@ -306,9 +306,17 @@ fn cooperative_source_rejects_reactive_input_before_invoking_source() {
         },
         ReplayLimits::default(),
     );
-    assert!(matches!(result, Err(PreparedSourceError::Prefix(_))));
+    let mut source = result.unwrap();
+    assert_eq!(
+        source.status(),
+        PreparedSourceStatus::ExecutionRequired(SourceExecutionRequirement::NativeInput)
+    );
+    assert_eq!(source.prepare_next().unwrap(), source.status());
     assert_eq!(calls.get(), 0);
+    assert_eq!(drops.get(), 0);
+    source.cancel();
     assert_eq!(drops.get(), 1);
+    assert!(source.take_execution_program().is_none());
 }
 #[test]
 fn cooperative_source_cancel_before_start_does_not_call_user_code() {
@@ -525,3 +533,5 @@ fn zero_only_source_yields_then_retains_final_edits_at_exact_endpoint() {
     );
     assert!(reader.seek(f64::EPSILON).is_err());
 }
+
+mod handoff;

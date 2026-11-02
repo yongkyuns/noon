@@ -6,19 +6,54 @@ use noon_runtime::{PrefixBatch, PrefixError, PrefixPublisher};
 mod reader;
 pub use reader::PrefixReader;
 
+/// Shared engine reasons why the current source needs observed execution.
+/// These are capability metadata, not permission to speculate callback/input work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceExecutionRequirement {
+    HostCallbacks,
+    EffectiveDisplay,
+    NativeInput,
+    Signals,
+}
+
 impl ExecutionSession {
-    /// Reject source-only behavior before a cooperative producer drives time.
-    /// This deliberately permits an unfinished ordinary segment, but not a
-    /// callback/causal route that would need sampled source execution.
+    /// Classify before any headless advance. The original source/continuation
+    /// must keep executing through its ordinary callback/input protocol; a host
+    /// may not reconstruct it or treat an endpoint-only callback sample as history.
+    pub fn source_execution_requirement(&self) -> Option<SourceExecutionRequirement> {
+        if !self.callback_schedule.is_empty() {
+            Some(SourceExecutionRequirement::HostCallbacks)
+        } else if self.derived_display_plan.is_some() {
+            Some(SourceExecutionRequirement::EffectiveDisplay)
+        } else if self.translation_drag.has_targets()
+            || !self.interaction_bindings.is_empty()
+            || self.reactive_projection.has_native_input_routes()
+        {
+            Some(SourceExecutionRequirement::NativeInput)
+        } else if !self.signal_timeline.is_empty() || !self.reactive_projection.is_empty() {
+            Some(SourceExecutionRequirement::Signals)
+        } else {
+            None
+        }
+    }
+
+    /// Preparation keeps the canonical runtime at its unsealed authored
+    /// frontier. Releasing this scope must not reset input/selection state,
+    /// rebuild the spatial index or select a historical frame during handoff.
+    pub(crate) fn release_prepared_source_history(&mut self) {
+        assert!(
+            !self.runtime.replay_is_sealed(),
+            "prepared source cannot transfer sealed history"
+        );
+        self.runtime.discard_replay_retention();
+        self.release_replay_slots();
+    }
+
+    /// Pure completed-prefix admission remains separate from observed execution.
     pub fn validate_prepared_source_domain(&self) -> Result<(), PrefixError> {
-        if !self.callback_schedule.is_empty()
-            || self.derived_display_plan.is_some()
-            || self.translation_drag.has_targets()
+        if self.source_execution_requirement().is_some()
             || self.runtime.inset_2d_views().next().is_some()
             || self.has_audio()
-            || !self.interaction_bindings.is_empty()
-            || !self.signal_timeline.is_empty()
-            || !self.reactive_projection.is_empty()
         {
             return Err(noon_runtime::ReplayError::UnsupportedDomain.into());
         }

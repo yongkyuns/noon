@@ -165,6 +165,6 @@ impl ExecutionSession {
 mod prefix;
 
 #[cfg(feature = "prepared-prefix")]
-pub use prefix::PrefixReader;
+pub use prefix::{PrefixReader, SourceExecutionRequirement};
 #[cfg(test)]
 mod playback_tests;
