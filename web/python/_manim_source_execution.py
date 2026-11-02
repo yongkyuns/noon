@@ -130,6 +130,9 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource()
         self.scopes = [bindings.names | {"context", "__name__"} | _SOURCE_BUILTINS]
         self.members = _SOURCE_MEMBERS | frozenset().union(*_SOURCE_MODULES.values())
+        # Constructor aliases and wildcard exports are proven only for direct
+        # module declarations, never imports hidden in a conditional suite.
+        self.module_imports = {node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))}
         self.code_constructors = {"Code"} | {
             alias.asname or alias.name for node in tree.body
             if isinstance(node, ast.ImportFrom) and node.module in {"noon", "manim"}
@@ -166,11 +169,11 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.visit(node.value)
 
     def visit_Import(self, node):
-        if len(self.scopes) != 1 or any(alias.name not in _SOURCE_MODULES for alias in node.names):
+        if node not in self.module_imports or len(self.scopes) != 1 or any(alias.name not in _SOURCE_MODULES for alias in node.names):
             raise _OpaqueSource()
 
     def visit_ImportFrom(self, node):
-        if len(self.scopes) != 1 or node.level:
+        if node not in self.module_imports or len(self.scopes) != 1 or node.level:
             raise _OpaqueSource()
         noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
         allowed = noon_names if node.module in {"noon", "manim"} else _SOURCE_MODULES.get(node.module, ())

@@ -67,6 +67,15 @@ class SourceEffectsTests(unittest.TestCase):
         self.assertTrue(source_is_scene_only('from noon import Code as Display\n'
             'display = Display(code_string="print(1)", language="python")\n'))
 
+    def test_compound_suite_imports_keep_observed_execution(self):
+        for statement in ('from noon import Code as Display', 'import math'):
+            with self.subTest(statement=statement):
+                expression = 'Display(code_file="input.py")' if statement.startswith('from') else 'math.sin(1)'
+                self.assertFalse(source_is_scene_only('from noon import Scene\n'
+                    'if True:\n    ' + statement + '\n'
+                    'class Example(Scene):\n    def construct(self):\n'
+                    '        self.wait(1)\n        ' + expression + '\n'))
+
     def test_later_special_namespace_binding_cannot_admit_the_original_builtins(self):
         self.assertFalse(source_is_scene_only(dedent('''
             from noon import *
