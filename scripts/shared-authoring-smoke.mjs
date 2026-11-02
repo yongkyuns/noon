@@ -3514,7 +3514,14 @@ result = scene
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
       await reusedExecution.pause();
-      await reusedExecution.seek(0.5);
+      // These later native edits are not historical input. A fresh export token
+      // preserves the same Scene/player; it must not invent replay admission.
+      const beforeDeniedSeek = await reusedExecution.state();
+      const seekError = await reusedExecution.seek(0.5).then(
+        () => null,
+        error => String(error.message ?? error),
+      );
+      const afterDeniedSeek = await reusedExecution.state();
       harness.execution = reusedExecution;
       return {
         firstContextId: firstResult.semanticExecution.contextId,
@@ -3522,6 +3529,7 @@ result = scene
         firstMetrics: firstMetrics.metrics,
         metrics: metrics?.metrics ?? null,
         backend: ready.render.backend,
+        beforeDeniedSeek, afterDeniedSeek, seekError,
       };
     },
     { persistedSceneSource, reusePersistedSceneSource },
@@ -3530,6 +3538,15 @@ result = scene
   assert.equal(persisted.firstMetrics.objectCount, 1);
   assert.equal(persisted.metrics?.objectCount, 1);
   assert.ok(persisted.metrics?.drawCalls > 0);
+  assert.equal(persisted.beforeDeniedSeek.replaySupported, false);
+  assert.equal(persisted.beforeDeniedSeek.replayUnavailable, "UnrecordedInput");
+  assert.match(persisted.seekError, /Replay unavailable: UnrecordedInput/);
+  assert.equal(persisted.beforeDeniedSeek.time, persisted.firstMetrics.time);
+  assert.equal(persisted.afterDeniedSeek.time, persisted.beforeDeniedSeek.time);
+  assert.equal(persisted.beforeDeniedSeek.playing, false);
+  assert.equal(persisted.afterDeniedSeek.playing, false);
+  assert.equal(persisted.afterDeniedSeek.replaySupported, false);
+  assert.equal(persisted.afterDeniedSeek.replayUnavailable, "UnrecordedInput");
   const persistedPixels = visiblePixelStats(
     await page.locator("#scene-persisted-reuse").screenshot(),
   );

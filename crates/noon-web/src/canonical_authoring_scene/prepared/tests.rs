@@ -46,6 +46,83 @@ fn interpreter_host_effect_admission_retains_a_quiet_original_source_at_its_actu
 }
 
 #[test]
+fn completed_observed_source_keeps_original_history_for_replay() {
+    let (mut context, target) = fixture();
+    context
+        .scene
+        .next_section_at("Start", noon::SectionType::Normal, 0.0)
+        .unwrap();
+    context.begin_ordinary_wait(0.5).unwrap();
+    let initial = context.active_live_player().unwrap().debug_frame_json();
+    let identity = context.active_live_player().unwrap().ownership_identity();
+    assert!(context
+        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+        .unwrap());
+    let mut player = context.take_execution_player(1.0, 0).unwrap();
+    player.live_advance_segment_to(0.5).unwrap();
+    player.live_complete_segment().unwrap();
+    context.return_execution_player(player).unwrap();
+    context
+        .scene
+        .next_section_at("Middle", noon::SectionType::Normal, 0.5)
+        .unwrap();
+    context
+        .active_live_player()
+        .unwrap()
+        .live_set_translation(&target, 2.0, 0.0)
+        .unwrap();
+    context.begin_ordinary_wait(0.5).unwrap();
+    let mut player = context.resume_execution_player().unwrap();
+    player.live_advance_segment_to(1.0).unwrap();
+    player.live_complete_segment().unwrap();
+    context.return_execution_player(player).unwrap();
+    let mut player = context.complete_source_playback().unwrap();
+    player.seal_replay().unwrap();
+    let sections: serde_json::Value = serde_json::from_str(&player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().len(), 2);
+    assert_eq!(sections[1]["name"], "Middle");
+    assert_eq!(sections[1]["time"], 0.5);
+    assert_eq!(player.ownership_identity(), identity);
+    assert_eq!(target.center().unwrap(), (2.0, 0.0));
+    player.seek_delta_json(0.0).unwrap();
+    let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
+    let rewound: serde_json::Value = serde_json::from_str(&player.debug_frame_json()).unwrap();
+    assert_eq!(rewound["objects"], initial["objects"]);
+    player.resume();
+    player.tick_delta_json(1_000.0).unwrap();
+    player.tick_delta_json(1_100.0).unwrap();
+    assert!(player.time() > 0.0 && player.time() < 0.5);
+    player.seek_delta_json(1.0).unwrap();
+    assert_eq!(player.time(), 1.0);
+}
+
+#[test]
+fn completed_observed_zero_wait_keeps_exact_zero_during_replay() {
+    let (mut context, _) = fixture();
+    context.begin_ordinary_wait(0.0).unwrap();
+    assert!(context
+        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+        .unwrap());
+    let mut player = context.take_execution_player(4.0, 0).unwrap();
+    player.live_advance_segment_to(0.0).unwrap();
+    player.live_complete_segment().unwrap();
+    context.return_execution_player(player).unwrap();
+    let mut player = context.complete_source_playback().unwrap();
+    player.seal_replay().unwrap();
+    assert!(!player.is_playing());
+    player.resume();
+    assert!(!player.is_playing());
+    player.tick_delta_json(1_000.0).unwrap();
+    player.tick_delta_json(1_100.0).unwrap();
+    assert_eq!(player.time(), 0.0);
+    player.seek_delta_json(0.0).unwrap();
+    player.resume();
+    assert!(!player.is_playing());
+    player.tick_callback_phase_json(1_200.0).unwrap();
+    assert_eq!(player.time(), 0.0);
+}
+
+#[test]
 fn interpreter_prefix_uses_actual_completed_wait_without_transferring_source() {
     let (mut context, _) = fixture();
     assert!(context.prepare_live_segment().is_err());
@@ -289,6 +366,43 @@ fn completed_static_scene_reader_has_no_fabricated_duration_or_source_lease() {
     reader.seek(0.0).unwrap();
     assert_eq!(reader.frame(), &expected);
     assert!(reader.seek(f64::EPSILON).is_err());
+}
+
+#[test]
+fn finished_source_admission_preserves_declared_work_and_static_history() {
+    for future in [false, true] {
+        let (mut context, _) = fixture();
+        if future {
+            let tracker = context.scene.value_tracker(0.0).unwrap();
+            context
+                .scene
+                .play_value(&tracker, 2.0)
+                .run_time(1.0)
+                .unwrap();
+        }
+        assert_eq!(context.prepare_finished_source().unwrap(), !future);
+        if future {
+            let mut player = context.take_execution_player(1.0, 7).unwrap();
+            player.pause();
+            assert_eq!(player.fresh_finite_source_duration(), Some(1.0));
+        } else {
+            let reader = context.create_finished_static_reader().unwrap().unwrap();
+            assert_eq!(reader.end_time(), Some(0.0));
+            assert_eq!(reader.frame().objects.len(), 1);
+        }
+    }
+    let (mut context, _) = fixture();
+    let source = crate::authoring_audio::pcm_resource(vec![0.25; 8_000], 8_000, 1).unwrap();
+    context
+        .audio(&source, noon::AudioClipOptions::default())
+        .unwrap();
+    assert_eq!(context.scene.time(), 0.0);
+    assert!(!context.prepare_finished_source().unwrap());
+    let player = context.take_execution_player(1.0, 7).unwrap();
+    assert!(
+        player.has_audio_wasm(),
+        "zero authored time cannot discard audio"
+    );
 }
 
 #[test]

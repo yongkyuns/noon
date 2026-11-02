@@ -100,6 +100,10 @@ impl ExecutionSession {
     pub fn replay_is_sealed(&self) -> bool {
         self.runtime.replay_is_sealed()
     }
+    /// The original journal's endpoint, available only after successful sealing.
+    pub fn replay_end_time(&self) -> Option<f64> {
+        self.runtime.replay_end_time()
+    }
     pub fn replay_stats(&self) -> ReplayStats {
         self.runtime.replay_stats()
     }

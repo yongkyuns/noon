@@ -84,7 +84,8 @@ function controlsFixture() {
   }
   const onError = () => {};
   const api = new Function("PlaygroundPlaybackControls", "status", "pane", "showPlaybackError", `
-    let playbackControls = null, busyDepth = 0;
+    let playbackControls = null, busyDepth = 0, preparedPlaybackPlayer = null;
+    const isPreparedPlayback = player => preparedPlaybackPlayer === player;
     const playbackDurationSeconds = 12345;
     const document = { querySelector(selector) {
       if (selector !== ".preview-pane") throw new Error("unexpected controls container");
@@ -111,7 +112,7 @@ for (const existing of [false, true]) {
       const state = Object.freeze({ time: 1.25, playing: false, durationSeconds: 99,
         canUndoTranslationDrag: true, ...(explicitProfile ? { preparedPlayback: false } : {}) });
       f.update({ supported: false, player: f.owner, durationSeconds: 7, playbackState: state });
-      const expected = existing ? [["duration", 7]]
+      const expected = existing ? (explicitProfile ? [] : [["duration", 7]])
         : [["create", f.owner, f.pane, { durationSeconds: 7, onError: f.onError }]];
       expected.push(["controllable", false], ["busy", true], ["sync", { ...state, durationSeconds: 7, hasAudio: false }]);
       assert.deepEqual(f.calls, expected);

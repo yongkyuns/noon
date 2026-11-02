@@ -4321,6 +4321,7 @@ impl CanonicalAuthoringScene {
         player
             .finish_source_playback()
             .map_err(|error| error.to_string())?;
+        player.set_section_navigation(self.scene.section_navigation());
         self.player_ownership.transfer()
     }
 

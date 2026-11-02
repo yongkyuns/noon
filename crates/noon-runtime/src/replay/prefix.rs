@@ -834,6 +834,15 @@ impl SceneInstance {
         Ok(())
     }
 
+    /// Retire prefix publication while preserving the original bounded journal
+    /// for ordinary replay admission after observed source execution completes.
+    #[doc(hidden)]
+    pub fn retire_prefix_publication(&mut self) {
+        if let Some(history) = self.replay_history.as_mut() {
+            history.scope = Arc::new(());
+        }
+    }
+
     /// Constant-time source admission before a headless drive. Publication-time
     /// profile indices qualify only the publisher's new suffix; bootstrap admits
     /// ordinary retained history. This

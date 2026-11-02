@@ -17,7 +17,7 @@ assert.match(source, /diagnosticRequestId = Number\.MAX_SAFE_INTEGER/);
 assert.match(source, /run_time=\$\{measurement\.windowEndSeconds\}/);
 assert.match(source, /sha256: createHash\("sha256"\)\.update\(authoredSource\)/);
 assert.match(source, /async function synchronizeFinalFrame\(page, seconds\)/);
-assert.match(source, /async function waitForRenderedEndpoint\(page, seconds\)/);
+assert.match(source, /async function waitForRenderedEndpoint\(page, seconds,/);
 assert.match(source, /Math\.abs\(rendered\.time - seconds\) <= 0\.001/);
 assert.match(source, /rendered\?\.ready === true/);
 assert.match(source, /rendered\.needsPresent === false/);

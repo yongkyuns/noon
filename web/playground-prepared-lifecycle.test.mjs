@@ -67,7 +67,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     setControllable(value) { this.controllable = value; }
     setBusy(value) { this.busy = value; }
     sync(value) {
-      if (this.state?.preparedPlayback && value.sourceExecution !== "observed") assert.equal(value.preparedPlayback, true, "do not strip prepared metadata");
+      if (this.state?.preparedPlayback && value.sourceExecution !== "observed" && value.preparedPlayback !== false) assert.equal(value.preparedPlayback, true, "do not strip prepared metadata");
       this.state = value;
     }
     observe(value) { if (!this.commandPending) this.sync(value); }
@@ -104,6 +104,10 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
           sourceExecution: "observed", time: 0, playing: true, replaySupported: false,
           replayUnavailable: "source execution is not retained for replay", durationSeconds: null,
         };
+        if (env.completedStatic) {
+          Object.assign(this.status, { time: 0, playing: false, durationSeconds: 0 });
+          if (this.status.preparedPlayback) this.status.preparedFrontier = 0;
+        }
         return { engine: { preparedPlayback: this.status.preparedPlayback }, render: { backend: "WebGL2" } };
       },
       async state() {
@@ -113,14 +117,20 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
       },
       async metrics() { return { metrics: { objectCount: 1 }, engineMetrics: { host: {} } }; },
       async pause() { calls.push(["pause"]); this.status.playing = false; return { ...this.status }; },
+      async setLoopDurationSeconds(duration) { calls.push(["set-loop", duration]); return { ...this.status }; },
       async reconcileSemanticExecution(descriptor) {
         calls.push(["reconcile", descriptor]);
-        assert.notEqual(this.status.preparedPlayback, true, "cannot reconcile a prepared reader");
-        return { ...this.status, playing: false, time: 2 };
+        assert.notEqual(this.status?.preparedPlayback, true, "cannot reconcile an unretired prepared reader");
+        this.status = descriptor.preparedPlayback ? {
+          preparedPlayback: env.initialPrepared, time: 0.25, playing: false,
+          preparedFrontier: 1, durationSeconds: null, buffering: false,
+          canUndoTranslationDrag: false, replaySupported: true,
+        } : { time: 0, playing: true, replaySupported: true };
+        return { ...this.status };
       },
       async retireExecutionSource() {
         calls.push(["retire-source", this]);
-        this.status.playing = false;
+        this.status = null;
       },
       async restart() {
         calls.push(["restart"]);
@@ -201,6 +211,23 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
   };
 }
 
+for (const duration of [0, 4]) test(`completed observed replay replaces old prefix controls with exact duration ${duration}`, async () => {
+  const f = fixture(), { promise } = await f.start();
+  await f.register();
+  const player = f.inspect().player, controls = f.inspect().playbackControls;
+  player.status = { preparedPlayback: false, replaySupported: true,
+    sourcePlaybackControllable: false, time: duration, playing: false };
+  f.finish(undefined, duration);
+  const completed = await promise;
+  assert.equal(completed.error, undefined);
+  assert.equal(f.inspect().player, player);
+  assert.equal(f.inspect().playbackControls, controls);
+  assert.equal(controls.state.preparedPlayback, false);
+  assert.equal(controls.state.durationSeconds, duration);
+  assert.deepEqual(f.calls.filter(call => call[0] === "set-loop"), duration > 0 ? [["set-loop", duration]] : []);
+  assert.equal(f.count("reconcile"), 0);
+});
+
 test("prepared startup releases only its UI busy ticket while the source remains suspended", async () => {
   const f = fixture(), { promise, job } = await f.start();
   await f.register();
@@ -270,6 +297,19 @@ for (const rejected of [false, true]) {
   });
 }
 
+for (const observed of [false, true]) test(`completed static ${observed ? "observed" : "prepared"} source applies gallery inspection once`, async () => {
+  const f = fixture(); f.env.completedStatic = true; f.env.observedExecution = observed;
+  const { promise, job } = await f.start();
+  job.resolve({ semanticExecution: { contextId: "static", preparedPlayback: true }, duration: 0 });
+  const completed = await promise;
+  assert.equal(completed.error, undefined);
+  assert.equal(f.inspect().player.status.time, 0);
+  if (!observed) assert.equal(f.inspect().playbackControls.state.durationSeconds, 0);
+  assert.equal(f.count("inspection"), 1);
+  assert.equal(f.count("reconcile"), 0); assert.equal(f.jobs.length, 1);
+  assert.deepEqual(f.errors, []);
+});
+
 test("terminal adoption keeps the reader, pause, playhead and inspection without reconciliation", async () => {
   const f = fixture(), { promise } = await f.start(); await f.register();
   const before = f.inspect().player, control = f.inspect().playbackControls;
@@ -296,6 +336,7 @@ test("Rust-admitted initial observed execution finishes on its original endpoint
   assert.equal(f.inspect().player, player);
   assert.equal(f.count("reconcile"), 0); assert.equal(f.count("terminate-runtime"), 0);
   assert.equal(f.inspect().playbackControls.controllable, false);
+  assert.equal(f.count("inspection"), 1);
   assert.deepEqual(f.errors, []);
 });
 
@@ -339,7 +380,8 @@ test("ordinary source errors retain open history and the next Run uses the same 
   assert.equal(f.inspect().playbackControls.controllable, true);
   assert.equal(f.count("terminate-runtime"), 0); assert.deepEqual(f.errors, [error]);
   const next = await f.start(); await f.register();
-  assert.notEqual(f.inspect().player, owner); assert.equal(owner.terminated, true);
+  assert.equal(f.inspect().player, owner); assert.equal(owner.terminated, false);
+  assert.equal(f.count("retire-source"), 1, "the failed source history must be released before reusing its renderer");
   assert.equal(f.count("terminate-authoring"), 0); assert.equal(f.count("restart"), 0);
   f.finish(); await next.promise;
 });
@@ -370,11 +412,12 @@ test("a genuine rerun retires completed prepared history instead of attempting r
   assert.equal(f.count("reconcile"), 0); assert.equal(f.count("restart"), 0);
 });
 
-test("editing completed prepared history retires it immediately without killing the warm interpreter", async () => {
+test("editing completed prepared history pauses its preview and keeps the renderer and warm interpreter", async () => {
   const f = fixture(), first = await f.start(); await f.register(); f.finish(); await first.promise;
+  const owner = f.inspect().player;
   await f.stopForSourceEdit();
-  assert.equal(f.inspect().player, null); assert.equal(f.inspect().preparedPlaybackPlayer, null);
-  assert.equal(f.count("terminate-authoring"), 0); assert.equal(f.count("terminate-runtime"), 1);
+  assert.equal(f.inspect().player, owner); assert.equal(owner.status.playing, false);
+  assert.equal(f.count("terminate-authoring"), 0); assert.equal(f.count("terminate-runtime"), 0);
 });
 
 test("editing a demand-paused source cancels its original context and suppresses stale source errors", async () => {
@@ -424,14 +467,25 @@ test("terminal metadata must match the actual adopted endpoint before gallery co
   assert.equal(f.inspect().player, null);
 });
 
-test("normal runs retain their existing source-owned controls and completed replay transition", async () => {
-  const f = fixture(undefined); delete f.env.hooks.authoringRunOptions;
+test("an explicit live comparison retains source-owned controls and completed replay", async () => {
+  const f = fixture({ preparedPlayback: false });
   const { promise, job } = await f.start(); await f.register();
   assert.equal(job.options.preparedPlayback, false);
   assert.equal(f.inspect().busyDepth, 1); assert.equal(f.inspect().playbackControls.controllable, false);
   f.finish(); const completed = await promise;
   assert.equal(completed.error, undefined); assert.equal(f.count("reconcile"), 1);
   assert.equal(f.inspect().busyDepth, 0); assert.equal(f.inspect().playbackControls.controllable, true);
+});
+
+test("a viewer Run without qualification hooks unlocks incremental playback before source completion", async () => {
+  const f = fixture(); delete f.env.hooks.authoringRunOptions;
+  const { promise, job } = await f.start(); await f.register();
+  assert.equal(job.options.preparedPlayback, true);
+  assert.equal(job.options.preparationLookaheadSeconds, 1);
+  assert.equal(f.inspect().runInFlight, true); assert.equal(f.inspect().busyDepth, 0);
+  assert.equal(f.inspect().playbackControls.controllable, true);
+  assert.equal(f.inspect().playbackControls.state.durationSeconds, null);
+  f.finish(); assert.equal((await promise).error, undefined);
 });
 
 test("observed pause beyond the initial segment does not claim the unfinished source is finished", () => {
@@ -473,12 +527,14 @@ test("qualification can cross normal/prepared boundaries only through a fresh pr
   const normal = f.inspect().player;
   f.env.hooks.authoringRunOptions = () => ({ preparedPlayback: true });
   const second = await f.start(); await f.register();
-  assert.equal(normal.terminated, true); assert.equal(f.inspect().playbackControls.state.preparedPlayback, true);
+  assert.equal(normal.terminated, false); assert.equal(f.inspect().playbackControls.state.preparedPlayback, true);
   const prepared = f.inspect().player;
   f.finish(); await second.promise;
   f.env.hooks.authoringRunOptions = () => ({ preparedPlayback: false });
   const third = await f.start(); await f.register(); f.finish(); await third.promise;
-  assert.equal(prepared.terminated, true);
+  assert.equal(prepared.terminated, false);
+  assert.equal(f.inspect().player, normal, "profile changes reuse the renderer after retiring the prior source");
+  assert.equal(f.count("retire-source"), 2);
   assert.equal(f.inspect().preparedPlaybackPlayer, null);
   assert.notEqual(f.inspect().playbackControls.state.preparedPlayback, true);
   assert.equal(f.count("terminate-authoring"), 0);

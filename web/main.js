@@ -581,7 +581,9 @@ function createRuntimeClient() {
 }
 
 function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
-  if (playbackState?.sourceExecution === "observed" && isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
+  if (playbackState?.preparedPlayback === true) preparedPlaybackPlayer = nextPlayer;
+  else if ((playbackState?.sourceExecution === "observed" || playbackState?.preparedPlayback === false) &&
+      isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
   if (playbackState?.hasAudio === true) durationSeconds = playbackState.durationSeconds;
   status.dataset.playbackControls = supported ? "available" : "unavailable";
   if (playbackControls === null) {
@@ -590,7 +592,7 @@ function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds
       document.querySelector(".preview-pane"),
       { durationSeconds, onError: showPlaybackError },
     );
-  } else if (playbackState?.preparedPlayback !== true && playbackState?.sourceExecution !== "observed") {
+  } else if (playbackState?.preparedPlayback === undefined && playbackState?.sourceExecution !== "observed") {
     playbackControls.setDuration(durationSeconds);
   }
   playbackControls.setControllable(supported);
@@ -689,7 +691,9 @@ async function ensureRuntimeReady({
       }
       if ((initialState.preparedPlayback === true && semanticExecution.preparedPlayback !== true) ||
           (semanticExecution.preparedPlayback === true && initialState.preparedPlayback !== true &&
-           initialState.sourceExecution !== "observed")) {
+           initialState.sourceExecution !== "observed" &&
+           !(initialState.preparedPlayback === false && initialState.replaySupported === true &&
+             initialState.sourcePlaybackControllable === false))) {
         throw new Error("runtime playback profile does not match its source registration");
       }
 
@@ -1004,8 +1008,7 @@ function stopForSourceEdit() {
   const client = authoringClient;
   const continuation = activeSourceContinuation;
   let cancellation = continuation === null ? null : supersedeActiveSourceContinuation();
-  if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart &&
-      !isPreparedPlayback()) {
+  if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart) {
     // A completed source run can keep its renderer, canvas and warm VM. The
     // existing semantic transition replaces the execution endpoint atomically.
     // Active/stuck source continuations still use bounded cancellation below.
@@ -1098,16 +1101,16 @@ async function runScene() {
   const releaseBusy = beginBusy();
   const task = (async () => {
     let earlyContinuation = null;
+    let interactionConfigured = false;
     let authoringFailed = false;
     try {
       diagnosticPanel.beginRun(authoringSourceDocument({ playground: {
         selection_generation: runToken.selectionGeneration,
         run_generation: runToken.runGeneration,
       } }), source);
-      // Exercise the existing worker option through the normal gallery lifecycle.
-      // This qualification hook is not a user mode switch. #2211 owns removal
-      // of the temporary gate and old branch after the default-cutover gates pass.
-      const { preparedPlayback = false, preparationLookaheadSeconds = 1 } =
+      // Rust admits incremental playback or preserves the original source path.
+      // The hook keeps live/prepared comparisons on this same viewer lifecycle.
+      const { preparedPlayback = true, preparationLookaheadSeconds = 1 } =
         await runPlaygroundTestHook("authoringRunOptions", {
           exampleId: example.id, runGeneration: runToken.runGeneration,
         }) ?? {};
@@ -1127,8 +1130,13 @@ async function runScene() {
         stopMetricsPolling();
         await retainedPlayer.retireExecutionSource();
         if (!isCurrentRun(runToken)) return recordStale(runToken, "after-source-retirement");
-        if (isPreparedPlayback() || preparedPlayback) {
-          discardEarlyContinuationRuntime(retainedPlayer);
+        if (playerNeedsRestart) discardEarlyContinuationRuntime(retainedPlayer);
+        else if (isPreparedPlayback() || preparedPlayback) {
+          // The old reader has been released. Keep the renderer and canvas for
+          // the next endpoint, but retire controls bound to its old readiness.
+          playbackControls?.destroy();
+          playbackControls = null;
+          preparedPlaybackPlayer = null;
         }
         playerNeedsRestart = false;
         updatePreviewRecoveryControl();
@@ -1163,7 +1171,7 @@ async function runScene() {
             }
             const loopDurationSeconds = registration.duration > 0
               ? registration.duration
-              : playbackDurationSeconds;
+              : Math.max(1, playbackDurationSeconds);
             let result;
             if (player === null) {
               result = await ensureRuntimeReady({
@@ -1205,7 +1213,10 @@ async function runScene() {
             if (result.preparedPlayback === true || result.sourcePlaybackControllable === true) {
               // Only startup owns this busy ticket. Source demand can remain
               // suspended indefinitely while controls and gallery stay usable.
-              if (result.preparedPlayback === true) await applyExampleInteraction(example, attachedPlayer);
+              if (result.preparedPlayback === true) {
+                await applyExampleInteraction(example, attachedPlayer);
+                interactionConfigured = true;
+              }
               if (!isCurrentRun(runToken)) {
                 throw new Error("prepared source was superseded during interaction setup");
               }
@@ -1247,7 +1258,7 @@ async function runScene() {
         throw new Error("Python scene source must return shared semantic execution");
       }
 
-      const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
+      const loopDurationSeconds = authored.duration > 0 ? authored.duration : Math.max(1, playbackDurationSeconds);
 
       await runPlaygroundTestHook("beforeReconcile", {
         exampleId: example.id,
@@ -1278,8 +1289,14 @@ async function runScene() {
             throw new Error("prepared source completion has no matching adopted terminal history");
           }
           if (result.preparedPlayback !== true &&
-              (result.sourceExecution !== "observed" || result.time !== authored.duration)) {
+              (result.time !== authored.duration ||
+               (result.sourceExecution !== "observed" && result.replaySupported !== true))) {
             throw new Error("source completion does not match its original observed endpoint");
+          }
+          if (result.preparedPlayback === false && result.replaySupported === true && authored.duration > 0) {
+            // Replace the bootstrap seek bound with the completed authored range.
+            // The existing Rust control validates it on this same retained player.
+            result = await player.setLoopDurationSeconds(authored.duration);
           }
           // Preserve the selected reader or original observed endpoint and input.
           // The final source result is not another presentation authority.
@@ -1327,15 +1344,13 @@ async function runScene() {
       updatePlaybackControls({
         supported: result.replaySupported !== false,
         player,
-        durationSeconds: loopDurationSeconds,
+        durationSeconds: authored.duration,
         playbackState: result,
       });
-      if (authored.duration > 0) {
-        playbackDurationSeconds = authored.duration;
-      }
+      playbackDurationSeconds = authored.duration;
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
-      if (result.preparedPlayback !== true && result.sourceExecution !== "observed") await applyExampleInteraction(example);
+      if (!interactionConfigured) await applyExampleInteraction(example);
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-interaction-config");
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;

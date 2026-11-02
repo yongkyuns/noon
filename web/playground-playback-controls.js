@@ -263,7 +263,11 @@ export class PlaygroundPlaybackControls {
       throw new TypeError("sourcePlaybackControllable must be boolean when provided");
     }
     const observed = state.sourceExecution === "observed";
-    const prepared = !observed && (state.preparedPlayback === true || this.#preparedFrontier !== null);
+    if (state.preparedPlayback === false && state.preparedFrontier !== undefined) {
+      throw new TypeError("completed playback state cannot contain a prepared frontier");
+    }
+    const prepared = !observed && state.preparedPlayback !== false &&
+      (state.preparedPlayback === true || this.#preparedFrontier !== null);
     let duration = this.#durationSeconds;
     if (prepared) {
       // Validate the entire observation before changing controls. It is a reader
@@ -272,15 +276,15 @@ export class PlaygroundPlaybackControls {
       duration = durationSeconds;
     } else if (observed) {
       duration = null;
-    } else if (this.#controllable && durationSeconds !== undefined) {
+    } else if (durationSeconds !== undefined) {
       duration = validateDuration(durationSeconds);
     }
     this.#durationSeconds = duration;
     this.#forwardPlayback = state.sourcePlaybackControllable === true;
-    if (observed) {
+    if (observed || state.preparedPlayback === false) {
       this.#preparedFrontier = null;
       this.#buffering = false;
-      if (this.#controllable) this.setControllable(false);
+      if (observed && this.#controllable) this.setControllable(false);
     }
     if (prepared) {
       this.#preparedFrontier = state.preparedFrontier;
@@ -535,7 +539,10 @@ export class PlaygroundPlaybackControls {
     const status = this.#unavailableReason !== null ? "Replay unavailable" : open
       ? this.#seekNotice ?? `${this.#buffering ? "Buffering · " : ""}Prepared before ${this.#preparedFrontier} s · total unknown`
       : "Duration pending";
-    if (this.#liveStatus.textContent !== status) this.#liveStatus.textContent = status;
+    if (this.#liveStatus.textContent !== status) {
+      this.#liveStatus.textContent = status;
+      this.#liveStatus.title = status;
+    }
     this.#scrubber.max = String(this.#durationSeconds ?? 1);
     this.#undoDragButton.hidden = !this.#undoDragSupported || this.#preparedFrontier !== null;
     this.#root.dataset.undoSupport = String(!this.#undoDragButton.hidden);
@@ -565,7 +572,7 @@ export class PlaygroundPlaybackControls {
           marker.className = "playback-section-marker";
           marker.title = label;
           marker.setAttribute("aria-label", `Jump to ${label}`);
-          marker.style.left = `${100 * section.time / this.#durationSeconds}%`;
+          marker.style.left = `${this.#durationSeconds > 0 ? 100 * section.time / this.#durationSeconds : 0}%`;
           marker.addEventListener("click", () => this.#jumpToSection(section));
           this.#sectionMarkers.append(marker);
         }
@@ -733,8 +740,11 @@ function installStyles() {
       outline-offset: 2px;
     }
     .playback-timeline {
-      display: block;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
       min-width: 0;
+      min-height: 2.5rem;
     }
     .playback-scrubber {
       width: 100%;
@@ -774,10 +784,6 @@ function installStyles() {
       font-size: 0.68rem;
       white-space: nowrap;
       text-overflow: ellipsis;
-    }
-    .playback-controls[data-duration-known="false"] .playback-live-status {
-      white-space: normal;
-      overflow-wrap: anywhere;
     }
     .playback-controls [hidden] { display: none !important; }
     .playback-section-controls,
@@ -882,8 +888,8 @@ function validatePreparedState(state) {
 }
 
 function validateDuration(durationSeconds) {
-  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    throw new TypeError("playback duration must be positive and finite");
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 0) {
+    throw new TypeError("playback duration must be non-negative and finite");
   }
   return durationSeconds;
 }

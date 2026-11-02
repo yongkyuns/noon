@@ -7,7 +7,10 @@ const END_TOLERANCE_SECONDS = 0.001;
 // Explicit workloads, using the same source and window on both packages. These
 // are test protocols, not an alternative runtime clock or benchmark registry.
 export function productMeasurement(exampleId) {
-  const common = { version: 5, clock: "renderer-sampled", sampler: "renderer-only",
+  // Version 8 requires pixel-aligned capture with identical unscaled backing
+  // pixels across alignment, even if the same frame is presented again.
+  const common = { version: 8, clock: "renderer-sampled", sampler: "renderer-only",
+    maxEndDelaySeconds: 0.1,
     preparation: "completed-cold-pass" };
   switch (exampleId) {
     case "parity-square-and-circle":
@@ -113,7 +116,7 @@ function productObservations(samples) {
   let latestMetricAt = -Infinity;
   for (const sample of samples) {
     const owned = sample.phase === "endpoint" || (sample.phase === "source" &&
-      sample.runInFlight && sample.playbackControls === "unavailable");
+      (sample.runInFlight || sample.playbackControls === "available"));
     if (!owned ||
       !Number.isFinite(sample.metricAt) || !Number.isFinite(sample.frames) ||
       !Number.isFinite(sample.time) || sample.metricAt <= latestMetricAt) continue;
@@ -154,6 +157,7 @@ function presentationEpochs(observations) {
 // renderer's sampling clock. Retain raw observations, including idle duplicates.
 export function sampleRendererFps(frameSamples, authoredSeconds, {
   minMeasurementMs = 1_000, warmupSeconds = 0, maxStartDelaySeconds = 0.5,
+  maxEndDelaySeconds = 0.1,
 } = {}) {
   assert.ok(Number.isFinite(authoredSeconds) && authoredSeconds > 0,
     "authored product measurement duration must be finite and positive");
@@ -163,6 +167,8 @@ export function sampleRendererFps(frameSamples, authoredSeconds, {
     "warmupSeconds must be finite, nonnegative, and before the endpoint");
   assert.ok(Number.isFinite(maxStartDelaySeconds) && maxStartDelaySeconds >= 0,
     "maxStartDelaySeconds must be finite and nonnegative");
+  assert.ok(Number.isFinite(maxEndDelaySeconds) && maxEndDelaySeconds >= 0,
+    "maxEndDelaySeconds must be finite and nonnegative");
   const observations = productObservations(frameSamples);
   assert.ok(observations.length >= 10,
     "product run did not expose enough renderer observations");
@@ -171,18 +177,25 @@ export function sampleRendererFps(frameSamples, authoredSeconds, {
     const settled = epoch.filter((sample) => sample.ready === true &&
       sample.needsPresent === false && sample.bufferedDeltas === 0 && sample.frames > 0 &&
       sample.time + TIME_EPSILON_SECONDS >= warmupSeconds &&
-      sample.time <= authoredSeconds + END_TOLERANCE_SECONDS);
+      sample.time <= authoredSeconds + maxEndDelaySeconds + END_TOLERANCE_SECONDS);
     // Keep the earliest settled observation for each counter/time pair. A later
     // idle endpoint reply cannot extend the measured animation interval.
-    return settled.filter((sample, index) => index === 0 ||
+    const distinct = settled.filter((sample, index) => index === 0 ||
       sample.frames !== settled[index - 1].frames ||
       Math.abs(sample.time - settled[index - 1].time) > TIME_EPSILON_SECONDS);
+    // RAF does not promise an exact authored endpoint. Use the earliest real
+    // observed crossing, bounded to 50 ms polling plus 50 ms delivery/frame
+    // headroom. Preserve actual times; later idle replies cannot extend it.
+    const crossing = distinct.findIndex(sample => sample.time + END_TOLERANCE_SECONDS >= authoredSeconds);
+    return crossing < 0 ? distinct : distinct.slice(0, crossing + 1);
   }).filter((epoch) => {
     const start = epoch[0];
     const end = epoch.at(-1);
     return epoch.length >= 10 && start !== undefined && end !== undefined &&
       start.time <= warmupSeconds + maxStartDelaySeconds + TIME_EPSILON_SECONDS &&
-      Math.abs(end.time - authoredSeconds) <= END_TOLERANCE_SECONDS && end.frames > start.frames;
+      end.time + END_TOLERANCE_SECONDS >= authoredSeconds &&
+      end.time <= authoredSeconds + maxEndDelaySeconds + END_TOLERANCE_SECONDS &&
+      end.frames > start.frames;
   });
   assert.ok(eligible.length > 0,
     `no settled renderer epoch covered the authored pass through ${authoredSeconds.toFixed(3)} s; ` +
@@ -191,7 +204,7 @@ export function sampleRendererFps(frameSamples, authoredSeconds, {
       start: { frames: epoch[0].frames, time: epoch[0].time },
       end: { frames: epoch.at(-1).frames, time: epoch.at(-1).time },
     })))}`);
-  const epoch = eligible.at(-1);
+  const epoch = eligible[0];
   const start = epoch[0];
   const end = epoch.at(-1);
   assert.ok(epoch.every((sample, index) => index === 0 ||
@@ -210,6 +223,8 @@ export function sampleRendererFps(frameSamples, authoredSeconds, {
     endFrames: end.frames,
     startTime: start.time,
     endTime: end.time,
+    endDelaySeconds: end.time - authoredSeconds,
+    maxEndDelaySeconds,
     sampleCount: epoch.length,
     observationCount: observations.length,
     epochCount: epochs.length,

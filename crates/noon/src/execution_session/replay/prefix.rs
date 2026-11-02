@@ -118,20 +118,22 @@ impl ExecutionSession {
     }
 
     /// Preparation keeps the canonical runtime at its unsealed authored
-    /// frontier. Releasing this scope must not reset input/selection state,
+    /// frontier. Retiring prefix publication must not reset input/selection state,
     /// rebuild the spatial index or select a historical frame during handoff.
-    pub(crate) fn release_prepared_source_history(&mut self) {
+    pub(crate) fn retire_prepared_source_publication(&mut self) {
         assert!(
             !self.runtime.replay_is_sealed(),
             "prepared source cannot transfer sealed history"
         );
-        self.runtime.discard_replay_retention();
-        self.release_replay_slots();
+        self.runtime.retire_prefix_publication();
+        if !self.runtime.replay_retention_valid() {
+            self.release_replay_slots();
+        }
     }
 
     /// Before creating any reader, retain this same source for observed execution
     /// when preparation needs callbacks, input or another unsupported domain.
-    /// This releases only open history; it never samples, completes or resets input.
+    /// Retain ordinary bounded history; never sample, complete or reset input.
     pub fn begin_observed_prepared_source(
         &mut self,
         effects: crate::ContinuationEffects,
@@ -144,7 +146,7 @@ impl ExecutionSession {
             None => self.preflight_prepared_source(None)?,
         };
         if requirement.is_some() {
-            self.release_prepared_source_history();
+            self.retire_prepared_source_publication();
         }
         Ok(requirement)
     }
@@ -167,7 +169,7 @@ impl ExecutionSession {
         let requirement = self.preflight_prepared_source(Some(publisher))?;
         if requirement.is_some() {
             self.inherit_prepared_inspection(reader.session());
-            self.release_prepared_source_history();
+            self.retire_prepared_source_publication();
         }
         Ok(requirement)
     }

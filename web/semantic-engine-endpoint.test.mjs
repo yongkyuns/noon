@@ -2285,6 +2285,7 @@ test("completed source attachment publishes once without starting its old callba
     onComplete: () => assert.fail("source is already complete"), onError: (_generation, error) => { throw error; },
   });
   f.player.initialCallbackPhaseJson = () => assert.fail("completed source cannot bootstrap another callback phase");
+  f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2296,19 +2297,21 @@ test("completed source attachment publishes once without starting its old callba
     assert.equal(state.sourcePlaybackControllable, false);
     assert.equal(state.replaySupported, false);
     assert.equal(state.playing, false);
-    assert.equal((await request(f.control.port2, "resume", 2)).playing, false);
+    assert.equal((await request(f.control.port2, "resume", 2)).type, "error");
+    assert.equal(f.player.isPlaying(), false);
     assert.equal(f.stats().completedSegments, 0);
     assert.equal(f.stats().initialSnapshots, 1);
     assert.equal(f.stats().continuationDriveTimes.length, 0);
   } finally { endpoint?.stop(); f.close(); }
 });
 
-test("source result waits for final edits without another segment or callback drive", async () => {
+for (const replaySupported of [true, false]) test(`source result waits for final edits before replay admission (${replaySupported})`, async () => {
   let finishSegment;
   const finished = new Promise((resolve) => { finishSegment = resolve; });
   const f = fixture("transferable", null, {
     generation: 27, onComplete: finishSegment, onError: (_generation, error) => { throw error; },
   });
+  if (!replaySupported) f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2321,6 +2324,8 @@ test("source result waits for final edits without another segment or callback dr
     f.render.port2.postMessage({ type: "tick", timestamp: 1 });
     await finished;
     assert.equal(f.stats().returned, 1);
+    f.player.sectionsJson = () => '[{"name":"Tail","time":1}]';
+    f.player.sectionStateJson = () => '{}';
     let dirty = true;
     f.player.drainDeltaJson = () => {
       if (!dirty) return null;
@@ -2340,11 +2345,19 @@ test("source result waits for final edits without another segment or callback dr
     f.render.port2.postMessage({ type: "execution_presented", session: finalDelta.session, sequence: finalDelta.sequence });
     await result;
     assert.equal(f.stats().completedSources, 1);
+    const state = await request(f.control.port2, "state", 899);
+    assert.equal(state.replaySupported, replaySupported);
+    assert.equal(state.sections[0].name, "Tail");
     const afterCompletion = await request(f.control.port2, "resume", 900);
-    assert.equal(afterCompletion.type, "resume");
-    assert.equal(afterCompletion.sourcePlaybackControllable, false);
-    assert.equal(afterCompletion.playing, false);
-    assert.equal(f.player.isPlaying(), false, "a late resume cannot revive completed source intent");
+    assert.equal(afterCompletion.type, replaySupported ? "resume" : "error");
+    if (replaySupported) {
+      assert.equal(afterCompletion.sourcePlaybackControllable, false);
+      assert.equal(afterCompletion.playing, true);
+      assert.equal((await request(f.control.port2, "seek", 901, { time: 0 })).time, 0);
+    } else {
+      assert.match(afterCompletion.message, /UnsupportedDomain/);
+      assert.equal(f.player.isPlaying(), false);
+    }
     assert.equal(f.stats().completedSegments, 1);
     assert.equal(f.stats().continuationDriveTimes.length, 1);
     assert.equal(f.stats().returned, 1);

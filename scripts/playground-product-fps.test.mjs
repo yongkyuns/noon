@@ -57,6 +57,26 @@ test("product FPS rejects a session that never completes the authored pass", () 
     /no settled renderer epoch covered/);
 });
 
+test("prepared playback remains measurable after source preparation completes", () => {
+  const live = observations();
+  const prepared = live.map(sample => ({ ...sample,
+    runInFlight: false, playbackControls: "available" }));
+  assert.deepEqual(sampleRendererFps(prepared, 3), sampleRendererFps(live, 3));
+  assert.throws(() => sampleRendererFps(prepared.map(sample => ({ ...sample,
+    playbackControls: "unavailable" })), 3), /not expose enough/);
+});
+
+test("FPS uses the earliest observed bounded crossing without clamping its timestamp", () => {
+  const samples = observations({ endTime: 3.02, endAt: 5_020 });
+  const crossing = samples.at(-1);
+  const later = { ...crossing, metricAt: 1_000, rendererAt: 8_000 };
+  const fps = sampleRendererFps([...samples, later], 3);
+  assert.equal(fps.endTime, 3.02);
+  assert.equal(fps.endRendererAt, 5_020);
+  assert.ok(Math.abs(fps.endDelaySeconds - 0.02) < 1e-10);
+  assert.throws(() => sampleRendererFps(observations({ endTime: 3.2 }), 3), /no settled renderer epoch/);
+});
+
 test("product FPS discards stale and unsettled metric replies", () => {
   const samples = [
     sample({ now: 0, metricAt: 1, rendererAt: 1_000, frames: 1, time: 0, ready: false }),

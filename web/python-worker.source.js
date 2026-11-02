@@ -140,7 +140,7 @@ async function initializePyodide() {
     try {
       const continuation = activeAuthoringRun?.continuation;
       if (!continuation || continuation.context !== context || continuation.terminal ||
-          continuation.preparedPlayback || continuation.endpoint === null) {
+          (continuation.preparedPlayback && !continuation.observedExecution) || continuation.endpoint === null) {
         throw new Error("shader resource preparation requires the active render endpoint");
       }
       if (staged.startsSegment === true) {
@@ -628,6 +628,7 @@ function registerSemanticExecution(context) {
   if (continuation?.context === context) return continuation.contextId;
   if (run?.preparedPlayback &&
       (run.completedPreparedContextId !== null ||
+       typeof context.prepareFinishedSource !== "function" ||
        typeof context.createFinishedPreparedExecutionPlayer !== "function")) {
     throw new Error("prepared source requires one original context and a prepared-prefix enabled engine");
   }
@@ -723,7 +724,10 @@ function awaitSemanticContinuation(context, start = null) {
     if (continuation.terminal) {
       throw new Error("semantic continuation is terminal");
     }
-    if (continuation.preparedPlayback) return continuation.preparedDriver.awaitSegment(context);
+    if (continuation.preparedPlayback) {
+      if (start !== null && continuation.observedExecution) return awaitObservedContinuation(continuation, start);
+      return continuation.preparedDriver.awaitSegment(context);
+    }
   } catch (error) {
     return Promise.reject(error);
   }
@@ -846,14 +850,22 @@ function createPreparedSourceDriver(run) {
         signal.throwIfAborted();
         const result = JSON.parse(resultJson), descriptor = result?.semantic_execution;
         const entry = semanticContexts.get(run.completedPreparedContextId);
-        if (activeAuthoringRun !== run || !entry || entry.released || result.duration !== 0 ||
+        if (activeAuthoringRun !== run || !entry || entry.released ||
+            !Number.isFinite(result.duration) || result.duration < 0 ||
             descriptor?.context_id !== run.completedPreparedContextId ||
-            descriptor.continuation_generation != null || descriptor.callback_session_id != null) {
+            descriptor.continuation_generation != null) {
           throw new Error("prepared source produced no readable play or wait interval or completed static scene");
         }
         // Completion includes construct/finally/tear_down and per-run cleanup.
-        // Rust validates the exact zero-duration domain when the reader attaches.
-        entry.preparedSourceFinished = true;
+        // Rust retains the one lowered runtime and chooses its static reader or
+        // ordinary execution path, including fully declared finite audio.
+        const staticSource = invokePreparedEngine(() => entry.context.prepareFinishedSource());
+        if (typeof staticSource !== "boolean") throw new TypeError("invalid completed-source admission");
+        if (staticSource && descriptor.callback_session_id != null) {
+          throw new Error("historical static playback cannot discard Python callbacks");
+        }
+        entry.preparedPlayback = staticSource;
+        entry.preparedSourceFinished = staticSource;
         return;
       }
       const continuation = requirePreparedContinuation(run, run.continuation?.context, signal);
@@ -1295,7 +1307,8 @@ async function handleRequest(request) {
         const workerRunCompletedAtMs = performance.now();
         if (run.preparedPlayback) {
           const result = JSON.parse(resultJson);
-          result.semantic_execution.prepared_playback = true;
+          result.semantic_execution.prepared_playback = run.continuation !== null ||
+            semanticContexts.get(run.completedPreparedContextId)?.preparedPlayback === true;
           resultJson = JSON.stringify(result);
         } else if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);

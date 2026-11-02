@@ -24,7 +24,7 @@ impl CanonicalAuthoringScene {
             .begin_observed_prefix_source(publisher, reader, playing, finished)
     }
     /// Initial admission only: keep the original pending segment and player for
-    /// observed execution, releasing open history before any reader is created.
+    /// observed execution, retaining bounded history for completed replay admission.
     pub fn begin_observed_prepared_source(
         &mut self,
         effects: noon::ContinuationEffects,
@@ -69,6 +69,22 @@ impl CanonicalAuthoringScene {
         &mut self,
     ) -> Result<(PrefixPublisher, PrefixReader), AuthoringFailure> {
         self.active_live_player()?.create_prepared_prefix()
+    }
+
+    /// After source cleanup, keep one lowered canonical runtime and let Rust
+    /// choose static history or its ordinary execution path. Declared future
+    /// work, media and playback controls must not be discarded as a zero frame.
+    pub fn prepare_finished_source(&mut self) -> Result<bool, String> {
+        if self.player_ownership.is_unstarted() {
+            let session = self.lower_execution()?;
+            self.player_ownership = super::player_ownership::PlayerOwnership::Active(
+                self.build_live_player_with_session(session, 1.0, 0)?,
+            );
+        }
+        Ok(self.scene.time() == 0.0
+            && self
+                .active_live_player()?
+                .has_finished_static_source_profile())
     }
 
     /// Completed static source uses history at `[0, 0]` when admitted. None

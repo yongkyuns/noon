@@ -47,6 +47,18 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("completed observed replay retires open-prefix controls without inventing a frontier", () => {
+  const f = fixture();
+  f.controls.sync({ preparedPlayback: false, replaySupported: true,
+    time: 2, durationSeconds: 2, playing: false });
+  assert.equal(f.controls.durationSeconds, 2);
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.range.disabled, false);
+  assert.equal(f.input.hidden, true);
+  assert.equal(f.controls.element.dataset.buffering, "false");
+  assert.deepEqual(f.errors, []);
+});
+
 test("open history permits controls without inventing a final duration or a percentage", async () => {
   const f = fixture(prepared({ time: 3, preparedFrontier: 4 }));
   assert.equal(f.controls.durationSeconds, null);
@@ -58,6 +70,7 @@ test("open history permits controls without inventing a final duration or a perc
   assert.equal(f.input.type, "number");
   assert.equal(f.input.max, "4");
   assert.match(f.status.textContent, /Prepared before 4 s · total unknown/);
+  assert.equal(f.status.title, f.status.textContent);
   assert.equal(f.controls.element.dataset.durationKnown, "false");
   assert.equal(f.toggle.textContent, "Play");
   f.seek(2.5); await flush();
@@ -309,8 +322,10 @@ test("admitting prepared history clears a previous scene's audio controls", () =
   assert.deepEqual(f.calls, []);
 });
 
-test("completed static reader exposes exact zero without an invented playback range", async () => {
+for (const preparedPlayback of [false, true]) test(`completed static ${preparedPlayback ? "reader" : "observed replay"} exposes exact zero`, async () => {
   const f = fixture(prepared({ time: 0, preparedFrontier: 0, durationSeconds: 0 }));
+  if (!preparedPlayback) f.setState({ preparedPlayback: false, replaySupported: true,
+    time: 0, durationSeconds: 0, playing: false });
   assert.equal(f.controls.durationSeconds, 0);
   assert.equal(f.controls.element.dataset.durationKnown, "true");
   assert.equal(f.output.value, "0.00 / 0.00 s");

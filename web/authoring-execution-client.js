@@ -224,6 +224,7 @@ export class AuthoringExecutionClient {
         continuationGeneration: semantic.continuationGeneration,
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
+      this.#preparedPlayback = ready.engine.preparedPlayback === true;
       this.#rendererBackend = ready.render.backend;
       const state = await this.#player.state();
       return {
@@ -276,6 +277,7 @@ export class AuthoringExecutionClient {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();
     await this.#runTransition(() => this.#player.retireExecutionSource());
+    this.#preparedPlayback = false;
   }
 
   async resume() {

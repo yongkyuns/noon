@@ -822,20 +822,20 @@ test("terminating the client rejects pending work", async () => {
   await assert.rejects(resultPromise, /terminated/);
 });
 
-for (const duration of [0, 1]) test(`prepared result without a continuation requires completed static duration (${duration})`, async () => {
+for (const [duration, prepared, accepted] of [[0, true, true], [1, true, false], [0, false, true], [30, false, true]]) test(`completed result keeps its admitted mode (${duration}, prepared=${prepared})`, async () => {
   const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready")); await client.ready();
   const running = client.run("static source", {}, { preparedPlayback: true, onSemanticContinuation() {} });
   await Promise.resolve();
   worker.emit("message", workerMessage("result", { requestId: 0,
     resultJson: JSON.stringify({ kind: "semantic_scene", duration,
-      semantic_execution: { context_id: "static", prepared_playback: true } }),
+      semantic_execution: { context_id: "static", prepared_playback: prepared } }),
   }));
   try {
-    if (duration === 0) {
+    if (accepted) {
       const result = await running;
-      assert.equal(result.duration, 0);
-      assert.deepEqual(result.semanticExecution, { contextId: "static", preparedPlayback: true });
+      assert.equal(result.duration, duration);
+      assert.deepEqual(result.semanticExecution, { contextId: "static", preparedPlayback: prepared });
     } else await assert.rejects(running, /registered continuation/);
   } finally { client.terminate(); }
 });

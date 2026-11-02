@@ -210,10 +210,9 @@ try {
           await native.observe('gallery-shell-ready');
           trace.setPhase('gallery-authored-execution', { exampleId: entry.id, noJspi });
           let completed = false;
-          // Longer authored examples can run materially slower than real time in Firefox CI.
-          // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
-          const deadline = Date.now() + 105000;
-          while (Date.now() < deadline) {
+          // The existing whole-case deadline bounds startup and natural playback.
+          // A second, shorter timer can reject a lesson that is still progressing.
+          while (true) {
             const { workerMessages, ...state } = await page.evaluate(profilePublicationStages => {
               const gallery = window.__noonExampleGallery;
               if (!window.__galleryMetricsPending) {
@@ -226,6 +225,7 @@ try {
                 transportMode: gallery.transportMode,
                 crossOriginIsolated: window.crossOriginIsolated,
                 patch: { ...document.querySelector('#patch-status')?.dataset },
+                playback: { ...document.querySelector('.playback-controls')?.dataset },
                 text: document.querySelector('#patch-status')?.value,
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
                 rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
@@ -252,7 +252,13 @@ try {
                 intervalSamples: metric.presentationIntervalSamples,
               } : {}),
             });
-            if (state.patch.state === 'applied' && !state.inFlight) { completed = true; break; }
+            if (state.patch.state === 'applied' && !state.inFlight) {
+              const authored = parseAuthoringResult(await page.evaluate(() => window.__galleryAuthoringResults.at(-1)));
+              if (authored.semanticExecution?.preparedPlayback !== true ||
+                  Math.abs(Number(state.playback.elapsedSeconds) - authored.duration) < 1e-7) {
+                completed = true; break;
+              }
+            }
             await page.waitForTimeout(100);
           }
           assert.ok(completed, `${entry.id}: initial autoplay did not finish`);

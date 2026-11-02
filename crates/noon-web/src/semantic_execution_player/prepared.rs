@@ -122,6 +122,13 @@ impl SemanticExecutionPlayer {
             .map_err(prefix_error)
     }
 
+    pub(crate) fn has_finished_static_source_profile(&self) -> bool {
+        self.session.frame().time == 0.0
+            && self.session.finite_timeline_end_time() == Some(0.0)
+            && !self.session.has_audio()
+            && !self.session.has_playback_controls()
+    }
+
     pub(crate) fn create_finished_static_reader(
         &mut self,
     ) -> Result<Option<PrefixReader>, AuthoringFailure> {
@@ -129,11 +136,7 @@ impl SemanticExecutionPlayer {
         if self.live_segment.is_some() {
             self.completed_prepared_boundary()?;
         }
-        if self.session.frame().time != 0.0
-            || self.session.finite_timeline_end_time() != Some(0.0)
-            || self.session.has_audio()
-            || self.session.has_playback_controls()
-        {
+        if !self.has_finished_static_source_profile() {
             return Err(prefix_error(noon::PrefixError::NotReady));
         }
         if self.session.source_execution_requirement().is_some() {

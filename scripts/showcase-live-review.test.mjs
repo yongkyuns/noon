@@ -117,7 +117,7 @@ test("successful first execution cannot substitute for unavailable replay", () =
   assert.throws(() => assertLiveOutcome(entry, state, "WebGPU"));
 });
 
-test("declared nonreplayable lessons accept the exact idle UnsupportedDomain denial", () => {
+test("declared nonreplayable lessons require a known idle replay denial", () => {
   const entry = {
     id: "showcase-reactive-relationships", duration: 9.2,
     playbackCapability: "nonreplayable-host-callbacks",
@@ -132,6 +132,9 @@ test("declared nonreplayable lessons accept the exact idle UnsupportedDomain den
     disabledReplayControls: { play: true, restart: true, scrubber: true },
   };
   assertNonreplayableShowcase(entry, state, "WebGPU");
+  assertNonreplayableShowcase(entry, {
+    ...state, replayReason: "Replay unavailable: source execution is not retained for replay",
+  }, "WebGPU");
   for (const change of [
     { replayReason: "Replay unavailable: UnsupportedFeature" },
     { controls: { ...state.controls, controllable: "true" } },
@@ -201,6 +204,7 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       }
       assert.equal(selector, ".playback-controls");
       return { dataset: { controllable: "true", busy: "false", playing: "false",
+        durationKnown: "true", buffering: "false",
         elapsedSeconds: String(current.elapsed), ...current.controls } };
     } },
   };
@@ -295,6 +299,24 @@ test("ordinary Scene.construct completion does not add Play or change its first 
   });
   assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
   assert.deepEqual(calls, ["run"]);
+});
+
+test("prepared non-audio completion waits for natural playback without another Play", async () => {
+  const { page, calls, ready } = preparedAudioPage({
+    run: { stale: false, result: {
+      hasAudio: false, preparedPlayback: true, time: 7, playing: true, durationSeconds: 8,
+    } },
+    observations: [
+      { elapsed: 7, publishedTime: 7, controls: { playing: "true" } },
+      { elapsed: 8, publishedTime: 8, controls: { playing: "true", durationKnown: "false" } },
+      { elapsed: 8, publishedTime: 8, controls: { playing: "true", buffering: "true" } },
+      { elapsed: 8, publishedTime: 7.999, controls: { playing: "true" } },
+      { elapsed: 8, publishedTime: 8, controls: { playing: "true" } },
+    ],
+  });
+  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.deepEqual(calls, ["run", "published endpoint"]);
+  assert.deepEqual(ready, [false, false, false, true, true]);
 });
 
 test("finite audio preparation must be current, paused at zero, and have a real duration", async () => {

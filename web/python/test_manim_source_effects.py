@@ -6,6 +6,18 @@ from _manim_source_execution import source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_lesson_navigation_retains_observed_source_until_completed_replay(self):
+        # Prefix transport does not carry navigation metadata; ordinary source
+        # execution still compiles its barriers and retains completed replay.
+        self.assertFalse(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    self.wait(1)
+                    self.next_section("Detail")
+                    self.wait(1)
+        ''')))
+
     def test_closed_noon_operations_and_owned_helper_alias_remain_admissible(self):
         self.assertTrue(source_is_scene_only(dedent('''
             from noon import *

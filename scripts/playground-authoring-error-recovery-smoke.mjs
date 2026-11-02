@@ -8,6 +8,9 @@ import playwright from "playwright";
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PORT ?? "4185");
 const baseUrl = `http://127.0.0.1:${port}`;
+const presentationProfile = process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PROFILE ?? "default";
+assert.ok(["default", "live"].includes(presentationProfile));
+const liveComparison = presentationProfile === "live";
 const artifactDir = path.resolve(
   process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_ARTIFACTS ??
     "browser-smoke-artifacts/playground-authoring-recovery",
@@ -170,8 +173,16 @@ async function previewPixels(page, frozen = false) {
 
 async function pauseAndRecordPreview(page) {
   const toggle = page.locator(".playback-toggle");
-  if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
-  // Observe the compositor's placeholder update after the acknowledged pause.
+  const duration = Number(await page.locator(".playback-scrubber").getAttribute("max"));
+  if (duration === 0) {
+    assert.equal(await toggle.isDisabled(), true, "an exact-zero scene has no play interval");
+    assert.equal(await page.locator(".playback-scrubber").isDisabled(), true);
+    assert.equal(Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds")), 0);
+  } else {
+    assert.equal(await toggle.isEnabled(), true, "a positive replay interval must remain controllable");
+    if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
+  }
+  // Observe the compositor after pause or exact-zero completion.
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const pixels = await previewPixels(page);
   assert.ok(pixels.different > 50, "the successful scene must have visible nonuniform pixels");
@@ -302,6 +313,7 @@ async function waitForObjectCount(page, count) {
 }
 
 const diagnostics = {
+  presentationProfile,
   browser: null,
   viewport: { width: 1280, height: 820 },
   devicePixelRatio: 1,
@@ -337,6 +349,9 @@ try {
     deviceScaleFactor: diagnostics.devicePixelRatio,
   });
   page = await context.newPage();
+  if (liveComparison) await page.addInitScript(() => {
+    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: false }) };
+  });
   page.on("pageerror", (error) => diagnostics.pageErrors.push(String(error)));
   page.on("requestfailed", request => diagnostics.failedRequests.push({
     phase, url: request.url(), error: request.failure()?.errorText ?? "request failed",
@@ -447,8 +462,9 @@ try {
   assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 
-  // Rerunning the same valid source can fail on a later invocation. No edit
-  // event pauses the previous replay here: Run itself must stop it first.
+  // Opaque builtins work runs on the original source stack. Its completed
+  // retained journal can replay without invoking that work again, in either mode.
+  // A later explicit source invocation fails while that replay is active.
   phase = "explicit-rerun-baseline";
   await setEditorSource(page, SOURCES.explicitRerun);
   diagnostics.snapshots.rerunBaseline = await runEditedSource(page, {
@@ -456,7 +472,7 @@ try {
   });
   const acceptedGeneration = await page.locator("#patch-status").getAttribute("data-run-generation");
   await startReplayForExplicitRerun(page);
-  diagnostics.snapshots.rerunPlaying = await snapshot(page);
+  diagnostics.snapshots.rerunReady = await snapshot(page);
   assert.equal(await page.locator("#patch-status").getAttribute("data-run-generation"), acceptedGeneration,
     "replaying the timeline must not rerun Python");
   // CodeMirror exposes the source through a main-world textarea getter.
@@ -478,7 +494,7 @@ try {
   await page.locator("#replace-scene").click();
   diagnostics.rerunClick = await page.evaluate(() => window.__noonPreviewRerunClick);
   assert.deepEqual(diagnostics.rerunClick, { playing: true, busy: false, runGeneration: acceptedGeneration },
-    "the rerun failure must start from active replay, not an already-finished timeline");
+    "the rerun must begin while the retained replay is actively playing");
   diagnostics.snapshots.rerunError = await waitForRunResult(page, { expectedState: "error" });
   assert.equal(diagnostics.snapshots.rerunError.problemTitle, "Python raised ValueError");
   await assertStoppedPreview(page, diagnostics.snapshots.rerunError);

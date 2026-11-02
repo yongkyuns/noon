@@ -41,9 +41,13 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
       }
       await page.waitForFunction(() => {
         const state = document.querySelector("#patch-status")?.dataset.state;
+        const controls = document.querySelector(".playback-controls");
         return state === "error" || (state === "applied" &&
           window.__noonExampleGallery?.selectedExampleId === "showcase-gpu-glow" &&
-          !window.__noonExampleGallery.runInFlight);
+          !window.__noonExampleGallery.runInFlight &&
+          controls?.dataset.busy === "false" && controls.dataset.durationKnown === "true" &&
+          controls.dataset.buffering === "false" &&
+          Math.abs(Number(controls.dataset.elapsedSeconds) - 12) < 1e-7);
       }, null, { timeout: 120000 });
       result.state = await page.evaluate(() => {
         const canvas = document.querySelector("#scene");

@@ -8,6 +8,7 @@ import { collectWebKitCrashReports, playgroundLaunchOptions } from "./playground
 import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from "./playground-browser-failure-evidence.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
+import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -275,8 +276,14 @@ async function runShowcaseFromPublicUi(page, exampleId) {
     `FPS must be visible below the canvas: ${JSON.stringify(visibility)}`);
   await page.screenshot({ path: path.join(artifactDir, "fps-running.png"), fullPage: true });
   await waitForAppliedScene(page, exampleId, 180_000);
+  await page.waitForFunction(duration => {
+    const controls = document.querySelector(".playback-controls")?.dataset;
+    return controls?.busy === "false" &&
+      Math.abs(Number(controls.elapsedSeconds) - duration) < 1e-7;
+  }, denseShowcase.duration, { timeout: 180_000 });
   const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-  return { runtime: await runtimeSnapshot(page), metrics, sourceFps };
+  const authoredTime = Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"));
+  return { runtime: await runtimeSnapshot(page), metrics, sourceFps, authoredTime };
 }
 
 async function completeShowcasePlayback(page, replayLoops) {
@@ -630,8 +637,8 @@ try {
     trace.setPhase("showcase-completed", { exampleId: denseShowcase.id });
     lastCompletedRuntime = { phase: "showcase-completed", exampleId: denseShowcase.id, runtime: showcaseSourcePass.runtime };
     assert.equal(showcaseSourcePass.runtime.patchState, "applied", "showcase source pass failed");
-    assert.ok(Math.abs(Number(showcaseSourcePass.metrics?.metrics?.time) - denseShowcase.duration) < 1e-7,
-      `showcase source pass stopped at ${showcaseSourcePass.metrics?.metrics?.time}s instead of ${denseShowcase.duration}s`);
+    assertNaturalFirstPassPublication(denseShowcase, showcaseSourcePass.authoredTime,
+      Number(showcaseSourcePass.metrics?.metrics?.time));
     console.log(`→ ${browserName}/${profileName}: showcase source completed; checking replay`);
     const replayLoops = browserName === "webkit" ? 3 : 1;
     trace.setPhase("showcase-replay", { exampleId: denseShowcase.id });

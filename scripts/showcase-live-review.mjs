@@ -41,12 +41,13 @@ export function assertNonreplayableShowcase(entry, observed, expectedBackend) {
   assert.ok(NONREPLAYABLE_SHOWCASE_CAPABILITIES.includes(entry.playbackCapability), "wrong declared nonreplayable capability");
   assert.ok(entry.playbackLimitation?.trim(), "nonreplayable capability lacks its user-facing explanation");
   assertFirstPass(entry, observed, expectedBackend);
-  assert.equal(observed.replayReason, "Replay unavailable: UnsupportedDomain",
-    "nonreplayable lesson did not report the expected UnsupportedDomain denial");
+  assert.ok(["Replay unavailable: UnsupportedDomain",
+    "Replay unavailable: source execution is not retained for replay"].includes(observed.replayReason),
+  "nonreplayable lesson did not report a supported replay denial");
   assert.equal(observed.controls?.controllable, "false", "denied replay controls must be uncontrollable");
   assert.equal(observed.controls?.busy, "false", "completed denied replay must not remain busy");
   assert.deepEqual(observed.disabledReplayControls, { play: true, restart: true, scrubber: true },
-    "all replay controls must be disabled after UnsupportedDomain");
+    "all replay controls must be disabled after replay denial");
 }
 
 export function summarizeLiveReview(results) {
@@ -83,34 +84,42 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
     await Promise.race([
       (async () => {
         const run = await page.evaluate(() => window.__noonExampleGallery.run());
-        if (run?.result?.hasAudio !== true) return;
+        const audio = run?.result?.hasAudio === true;
+        if (!audio && run?.result?.preparedPlayback !== true) return;
         // Complete finite audio authoring intentionally prepares a silent,
         // paused scene. Exercise the same trusted Play gesture as a viewer;
         // seeking would invalidate the independent first-pass pixel oracle.
-        assert.equal(run.stale, false, "finite audio Run was superseded");
-        assert.equal(run.result.time, 0, "finite audio Run did not prepare at time zero");
-        assert.equal(run.result.playing, false, "finite audio Run must prepare paused");
+        assert.equal(run.stale, false, "gallery Run was superseded");
+        if (audio) {
+          assert.equal(run.result.time, 0, "finite audio Run did not prepare at time zero");
+          assert.equal(run.result.playing, false, "finite audio Run must prepare paused");
+        }
         const duration = run.result.durationSeconds;
-        assert.ok(Number.isFinite(duration) && duration > 0, "finite audio Run has no authored duration");
-        const publicationEntry = entry ?? { id: "finite audio", duration, still_intervals: [] };
+        assert.ok(Number.isFinite(duration) && (audio ? duration > 0 : duration >= 0),
+          `${audio ? "finite audio" : "prepared playback"} Run has no authored duration`);
+        if (duration === 0) return;
+        const publicationEntry = entry ?? { id: "finite playback", duration, still_intervals: [] };
         validateCaptureIntervals(publicationEntry);
-        await page.getByRole("button", { name: "Play animation", exact: true }).click();
+        // Preparation completion can precede the natural playback endpoint.
+        // Non-audio prepared Runs already autoplay; preserve that first pass.
+        if (audio) await page.getByRole("button", { name: "Play animation", exact: true }).click();
         while (true) {
           if (performance.now() - started >= deadlineMs) {
             throw new Error("ordinary gallery Run exceeded its review deadline");
           }
-          await waitForBrowserObservation(page, (duration) => {
+          await waitForBrowserObservation(page, ({ duration, requireStopped }) => {
             const patch = document.querySelector("#patch-status");
             if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
             const gallery = window.__noonExampleGallery;
             const controls = document.querySelector(".playback-controls");
             if (!gallery || gallery.runInFlight || patch?.dataset.state !== "applied" ||
-                controls?.dataset.controllable !== "true" || controls.dataset.busy !== "false" ||
-                controls.dataset.playing !== "false") return false;
+                controls?.dataset.controllable !== "true" || controls.dataset.busy !== "false") return false;
+            if (requireStopped ? controls.dataset.playing !== "false" :
+                controls.dataset.durationKnown !== "true" || controls.dataset.buffering !== "false") return false;
             const tolerance = 8 * Number.EPSILON * Math.max(1, duration);
             const elapsed = Number(controls.dataset.elapsedSeconds);
             return Number.isFinite(elapsed) && Math.abs(elapsed - duration) <= tolerance;
-          }, duration, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
+          }, { duration, requireStopped: audio }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
           const report = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
           try {
             // Rust's playhead still ends exactly at the authored duration. A
@@ -333,7 +342,7 @@ async function main() {
           result.nonreplayableRerunOutcome = "pass";
           result.nonreplayableRerunMatchesFirstPass = true;
           result.outcome = "pass";
-          console.log(`PASS live ${entry.id}: first pass, expected UnsupportedDomain denial, and fresh Run endpoint match`);
+          console.log(`PASS live ${entry.id}: first pass, expected replay denial, and fresh Run endpoint match`);
           continue;
         }
         result.stage = "replay capability admission";
