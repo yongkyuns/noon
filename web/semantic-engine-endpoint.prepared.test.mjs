@@ -141,6 +141,7 @@ for (const mode of ["transferable", "shared"]) {
     const f = fixture(mode, { sourceExecutionRequired: true });
     try {
       await f.attach();
+      f.acknowledge(); await f.present();
       f.endpoint.sourceExecutionRequired();
       assert.equal(f.replies.some(message => message.type === "source_handoff_required"), false);
       f.buffer();
@@ -367,16 +368,42 @@ test("prepared progression error retires the source once instead of retrying a t
   } finally { f.close(); }
 });
 
-test("prepared render failure cancels a suspended source and retires its endpoint once", { timeout: 3000 }, async () => {
+test("prepared render failure freezes its reader until explicit retirement", { timeout: 3000 }, async () => {
   const f = fixture(undefined, { initiallyPaused: true });
   try {
     await f.attach();
     f.rendererMessage({ type: "render_error", message: "prepared render device lost" });
     await f.when(() => f.replies.some(value => value.type === "error"));
     assert.match(f.replies.find(value => value.type === "error").message, /device lost/);
-    assert.deepEqual(f.calls.slice(-3).map(call => call[0]), ["cancel-source", "stop-source", "free"]);
+    assert.equal(f.count("free"), 0);
+    assert.equal(f.count("stop-source"), 0);
+    f.endpoint.sourcePrefixDelivered();
+    const rejected = await f.request("seek", { time: 0.5 });
+    assert.equal(rejected.type, "error");
+    assert.equal(f.count("seek"), 0);
+    f.endpoint.stop();
+    assert.equal(f.count("free"), 1);
     assert.equal(f.count("cancel-source"), 1);
-    assert.throws(() => f.endpoint.sourcePrefixDelivered(), /stopped/);
+  } finally { f.close(); }
+});
+
+test("prepared render failure commits observed static-wait time without losing playback intent", { timeout: 3000 }, async () => {
+  const f = fixture();
+  try {
+    await f.attach(); f.acknowledge(); await f.present();
+    f.observe(0.75);
+    assert.equal((await f.request("state")).time, 0.75);
+    assert.equal(f.player.preparedTime(), 0, "observation alone does not evaluate a frame");
+    const sourceWakes = f.count("source-wake"), deltas = f.deltas.length;
+    f.rendererMessage({ type: "render_error", message: "device lost during static wait" });
+    await f.when(() => f.replies.some(value => value.type === "error"));
+    assert.equal(f.player.preparedTime(), 0.75, "receiver reset must not lose previously observed elapsed time");
+    assert.equal(f.player.preparedPlaying(), true);
+    f.observe(10);
+    assert.equal((await f.request("state")).time, 0.75, "failed receiver time stays frozen during downtime");
+    assert.equal(f.count("source-wake"), sourceWakes);
+    assert.equal(f.deltas.length, deltas);
+    assert.equal(f.count("free"), 0);
   } finally { f.close(); }
 });
 
