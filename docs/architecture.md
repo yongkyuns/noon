@@ -807,8 +807,12 @@ Source identity/scope and pending-output admission are checked before completing
 or sealing the source. Completion extracts at most one suffix; adoption is a
 separate typed Rust operation. Capacity rejection keeps the same suffix for
 explicit reservation and retry, never repeating Python or completion. Zero-duration
-completion invents no readable range. Only adopting an explicitly finished suffix
-exposes the exact endpoint. Cancellation drops unpublished delivery state without
+completion invents no readable range. Before reader bootstrap, the interpreter
+may continue one zero-duration barrier per worker turn until Rust reports a
+readable interval or source cleanup finishes. Early registration keeps that
+loading phase cancellable. A zero-only source seals its final same-time edits
+into the same completed reader; only explicit completion exposes its endpoint.
+Cancellation drops unpublished delivery state without
 revoking earlier history; the caller still cancels/releases the interpreter.
 A failure after source completion begins closes that delivery binding rather than
 automatically retrying partially completed work. None of these operations is a

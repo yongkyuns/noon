@@ -230,10 +230,10 @@ fn interpreter_prefix_foreign_publisher_rejection_preserves_valid_delivery() {
 fn interpreter_prefix_zero_wait_does_not_invent_a_readable_range() {
     let mut context = CanonicalAuthoringScene::default();
     context.begin_ordinary_wait(0.0).unwrap();
-    assert_eq!(context.prepare_live_segment().unwrap(), 0.0);
+    assert!(!context.prepare_initial_source_segment().unwrap());
     assert!(context.create_prepared_prefix().is_err());
     context.begin_ordinary_wait(0.25).unwrap();
-    context.prepare_live_segment().unwrap();
+    assert!(context.prepare_initial_source_segment().unwrap());
     assert_eq!(context.create_prepared_prefix().unwrap().1.frontier(), 0.25);
 }
 
@@ -258,5 +258,34 @@ fn completed_static_scene_reader_has_no_fabricated_duration_or_source_lease() {
     drop(context);
     reader.seek(0.0).unwrap();
     assert_eq!(reader.frame(), &expected);
+    assert!(reader.seek(f64::EPSILON).is_err());
+}
+
+#[test]
+fn completed_zero_barriers_keep_final_same_time_edits_and_reject_pending_work() {
+    let (mut context, target) = fixture();
+    context.begin_ordinary_wait(0.0).unwrap();
+    assert!(context.create_finished_static_reader().is_err());
+    assert!(!context.prepare_initial_source_segment().unwrap());
+    context
+        .active_live_player()
+        .unwrap()
+        .live_set_translation(&target, 3.0, 0.0)
+        .unwrap();
+    context.begin_ordinary_wait(0.0).unwrap();
+    assert!(!context.prepare_initial_source_segment().unwrap());
+    let mut reader = context.create_finished_static_reader().unwrap();
+    assert_eq!(reader.end_time(), Some(0.0));
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(3.0, 0.0)
+    );
+    drop(context);
+    drop(target);
+    reader.seek(0.0).unwrap();
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(3.0, 0.0)
+    );
     assert!(reader.seek(f64::EPSILON).is_err());
 }

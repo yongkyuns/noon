@@ -28,7 +28,7 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true] } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
@@ -53,7 +53,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
     createFinishedPreparedExecutionPlayer(session) { assert.equal(session, 3); events.push("static-reader"); return player; },
     retireExecutionSource() { events.push("retire-source"); },
-    livePrepareSegment() { counters.initial++; events.push("initial"); trap("initial"); if (completeError) throw completeError; },
+    prepareInitialSourceSegment() { counters.initial++; events.push("initial"); trap("initial"); if (completeError) throw completeError; return initialIntervals.shift() ?? true; },
     createPreparedExecutionPlayer(session) { trap("reader"); assert.equal(session, 3); events.push("reader"); return player; },
   };
   let endpoint;
@@ -313,6 +313,7 @@ for (const trapAt of ["initial", "reader", "segment", "terminal", "capacity", "r
     assert.ok(h.errors[0].error instanceof WebAssembly.RuntimeError);
     assert.equal(h.counters.stopped, 0, "trap cannot call source stop in the unusable engine");
     assert.equal(h.counters.freed, 0, "trap cannot run WASM destructors");
+    assert.equal(h.events.includes("retire-source"), false, "trap cannot re-enter Rust source retirement");
     assert.equal(h.posts.some(post => post.type === "result"), false);
   });
 }
@@ -389,4 +390,70 @@ test("fatal source failure after static registration never calls back into trapp
   assert.equal(h.events.includes("retire-source"), false);
   assert.equal(h.posts.some(post => post.type === "result"), false);
   assert.deepEqual(h.errors.map(item => item.requestId), [null]);
+});
+
+
+test("initial zero barriers yield separately before attaching the first readable prefix", async () => {
+  const h = host({ initialIntervals: [false, false, true] }); let statements = 0;
+  const done = h.start(async api => {
+    for (let i = 0; i < 3; i++) { await api.awaitSemanticContinuation(h.context); statements++; }
+    return h.result();
+  });
+  await microtasks(); const attaching = h.attach();
+  for (let i = 1; i <= 2; i++) {
+    await h.tick(); await microtasks();
+    assert.equal(statements, i); assert.equal(h.counters.initial, i);
+    assert.equal(h.events.includes("reader"), false); assert.equal(h.tasks.size, 1);
+  }
+  const third = h.tick(); await attaching; await third;
+  assert.equal(h.counters.initial, 3); assert.equal(statements, 2);
+  assert.equal(h.events.filter(event => event === "reader").length, 1);
+  h.demand(true); await h.tick(); await done;
+  assert.equal(statements, 3); assert.deepEqual(h.errors, []);
+  h.endpoint().stop();
+});
+
+test("zero-only source attaches a finished reader after cleanup without publishing a suffix", async () => {
+  const h = host({ initialIntervals: [false, false] });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    await api.awaitSemanticContinuation(h.context);
+    h.events.push("cleanup");
+    const result = JSON.parse(h.result()); result.duration = 0; return JSON.stringify(result);
+  });
+  await microtasks(); const attaching = h.attach();
+  await h.tick(); await microtasks(); await h.tick();
+  await attaching; await done;
+  assert.ok(h.events.indexOf("cleanup") < h.events.indexOf("static-reader"));
+  assert.equal(h.counters.initial, 2); assert.equal(h.counters.terminal + h.counters.adopted, 0);
+  assert.deepEqual(h.errors, []); h.endpoint().stop();
+});
+
+test("cancellation while initial zero barriers are loading cannot revive an attachment", async () => {
+  const h = host({ initialIntervals: [false] }); let statements = 0;
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context); statements++;
+    await api.awaitSemanticContinuation(h.context); statements++;
+    return h.result();
+  });
+  await microtasks(); const attaching = h.attach();
+  await h.tick(); await microtasks(); await h.cancel(); await attaching; await done;
+  assert.equal(statements, 1); assert.equal(h.counters.initial, 1);
+  assert.equal(h.events.includes("reader"), false); assert.equal(h.contexts.size, 0);
+  assert.equal(h.tasks.size, 0);
+});
+
+
+test("zero-only source cleanup failure rejects pending attachment without a finished reader", async () => {
+  const h = host({ initialIntervals: [false] });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    throw new Error("zero-only cleanup failed");
+  });
+  await microtasks(); const attaching = h.attach();
+  await h.tick(); await attaching; await done;
+  assert.equal(h.events.includes("static-reader"), false);
+  assert.equal(h.posts.some(post => post.type === "result"), false);
+  assert.equal(h.contexts.size, 0);
+  assert.equal(h.counters.initial, 1);
 });

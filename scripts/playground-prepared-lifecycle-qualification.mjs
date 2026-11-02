@@ -21,6 +21,7 @@ class PreparedGallery(Scene):
         events.append("start")
         target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
         self.add(target)
+        self.wait(0)
         self.wait(30)
         assert events == ["start"]
         events.append("first")
@@ -41,7 +42,19 @@ class StaticPrepared(Scene):
         console.log("noon-static-source-invoked")
         self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0))
 `;
-const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static"].map((id, order) => ({
+const zeroSource = `from noon import *
+from js import console
+class ZeroPrepared(Scene):
+    def construct(self):
+        console.log("noon-zero-source-invoked")
+        target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
+        target.shift(RIGHT)
+        self.add(target)
+        self.wait(0)
+        self.wait(0)
+        target.shift(LEFT)
+`;
+const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "prepared-zero"].map((id, order) => ({
   id, order, title: id, status: "ready", parity_status: "candidate",
   reuse: "manim-compatible-parity-v0.21", category: "qualification",
   path: `python/examples/${id}.py`, thumbnail: "prepared-fixture.svg",
@@ -49,7 +62,7 @@ const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static"].ma
 }));
 const hash = value => createHash("sha256").update(value).digest("hex");
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
-  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
+  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let browser, server;
 
@@ -62,7 +75,7 @@ async function installFixture(page) {
   }));
   for (const entry of entries) {
     await page.route(`**/${entry.path}`, route => route.fulfill({ contentType: "text/x-python",
-      body: entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
+      body: entry.id === "prepared-zero" ? zeroSource : entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
   }
   await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
@@ -156,8 +169,9 @@ try {
       const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1 });
       page.setDefaultTimeout(180_000);
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
-      let staticInvocations = 0;
-      page.on("console", message => { if (message.text() === "noon-static-source-invoked") staticInvocations++; });
+      let staticInvocations = 0, zeroInvocations = 0;
+      page.on("console", message => { if (message.text() === "noon-static-source-invoked") staticInvocations++;
+        if (message.text() === "noon-zero-source-invoked") zeroInvocations++; });
       try {
         await installFixture(page);
         await page.goto(`${server.baseUrl}/web/index.html?example=prepared-lifecycle`);
@@ -241,6 +255,25 @@ try {
         assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
         assert.deepEqual(pageErrors, []);
         entry.checks.push("completed-static-reader-exact-zero-pixels", "static-restart-never-reruns-source", "static-rerun-retains-warm-interpreter");
+        await selectGalleryExample(page, "prepared-zero");
+        await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
+          document.querySelector(".playback-controls")?.dataset.durationKnown === "true" &&
+          document.querySelector(".playback-scrubber")?.max === "0");
+        assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
+        const zeroPixels = await pixels(page, `${backend}-${transport}-zero-only`);
+        assert.ok(baseline.equals(zeroPixels), "zero-only reader must include final same-time source edits");
+        await page.locator(".playback-restart").click();
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+        assert.ok(zeroPixels.equals(await pixels(page, `${backend}-${transport}-zero-restart`)));
+        assert.equal(zeroInvocations, 1);
+        const zeroGeneration = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+        await page.locator("#replace-scene").click();
+        await page.waitForFunction(previous => !__noonExampleGallery.runInFlight &&
+          __noonExampleGallery.runPhaseMetrics.runGeneration > previous &&
+          document.querySelector("#patch-status")?.dataset.state === "applied", zeroGeneration);
+        assert.equal(zeroInvocations, 2);
+        assert.deepEqual(pageErrors, []);
+        entry.checks.push("initial-zero-wait-before-open-prefix", "zero-only-final-edits-exact-pixels", "zero-only-restart-and-rerun");
         entry.status = "passed";
       } catch (error) {
         entry.status = "failed"; entry.error = String(error.stack ?? error);

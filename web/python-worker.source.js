@@ -653,7 +653,7 @@ function registerContinuationContext(context) {
     throw new Error("prepared source invocation is retired");
   }
   if (activeAuthoringRun.preparedPlayback &&
-      (typeof context.livePrepareSegment !== "function" ||
+      (typeof context.prepareInitialSourceSegment !== "function" ||
        typeof context.createPreparedExecutionPlayer !== "function")) {
     throw new Error("prepared playback requires a prepared-prefix enabled engine build");
   }
@@ -696,6 +696,8 @@ function registerContinuationContext(context) {
     preparedPlayer: null,
     preparedAttachmentStarted: false,
     preparedBootstrapObserved: false,
+    initialSourceReady: preparedPlayback ? preparedEndpointReady() : null,
+    preparedSourceFinished: false,
     preparedReady: preparedPlayback ? preparedEndpointReady() : null,
   };
   semanticContexts.set(contextId, entry);
@@ -800,6 +802,13 @@ function createPreparedSourceDriver(run) {
     async prepareSegment(context, signal) {
       const continuation = requirePreparedContinuation(run, context, signal);
       if (!continuation.preparedBootstrapObserved) {
+        // The interpreter has suspended before this queued worker turn. A zero
+        // barrier releases once; source resumes on another turn, never in a loop.
+        let readable;
+        try { readable = invokePreparedEngine(() => context.prepareInitialSourceSegment()); }
+        catch (error) { continuation.initialSourceReady.reject(error); throw error; }
+        if (!readable) return;
+        continuation.initialSourceReady.resolve();
         await continuation.preparedReady.promise;
         requirePreparedContinuation(run, context, signal);
         continuation.preparedBootstrapObserved = true;
@@ -810,10 +819,10 @@ function createPreparedSourceDriver(run) {
     },
     needsPreparation() {
       const continuation = requirePreparedContinuation(run, run.continuation?.context);
-      if (!continuation.preparedPlayer) throw new Error("prepared source has no attached reader");
+      if (!continuation.preparedPlayer) return true; // Continue initial zero barriers cooperatively.
       return invokePreparedEngine(() => continuation.preparedPlayer.needsPreparation(run.preparationLookaheadSeconds));
     },
-    finishSource(resultJson, signal) {
+    async finishSource(resultJson, signal) {
       if (run.continuation === null) {
         signal.throwIfAborted();
         const result = JSON.parse(resultJson), descriptor = result?.semantic_execution;
@@ -835,8 +844,16 @@ function createPreparedSourceDriver(run) {
           descriptor.callback_session_id != null) {
         throw new Error("prepared source must return its original context without Python callbacks");
       }
-      if (!continuation.preparedBootstrapObserved || !continuation.preparedPlayer) {
-        throw new Error("prepared source produced no readable play or wait interval");
+      if (!continuation.preparedBootstrapObserved) {
+        // All actual barriers were zero-duration. Only successful source cleanup
+        // authorizes Rust to seal the final same-time edits at the exact endpoint.
+        if (JSON.parse(resultJson).duration !== 0) throw new Error("prepared source produced no readable interval");
+        continuation.preparedSourceFinished = true;
+        continuation.initialSourceReady.resolve();
+        await continuation.preparedReady.promise;
+        requirePreparedContinuation(run, continuation.context, signal);
+        continuation.terminal = true;
+        return;
       }
       // runAuthoringSource includes the existing construct/finally/tear_down and
       // per-run globals cleanup. Seal only after that entire operation succeeds.
@@ -1121,6 +1138,7 @@ function failContinuation(continuation, error) {
   continuation.terminal = true;
   if (continuation.preparedPlayback) {
     continuation.preparedDriver.cancel(error);
+    continuation.initialSourceReady.reject(error);
     continuation.preparedReady.reject(error);
     if (!fatalAuthoringFailure) invokePreparedEngine(() => continuation.preparedPlayer?.stopSourcePreparation());
   }
@@ -1407,10 +1425,11 @@ async function attachPreparedSemanticExecution(request, entry, continuation) {
   let endpoint;
   try {
     requirePreparedContinuation(run, entry.context);
-    // Complete the actual first source receipt once. This keeps the canonical
-    // context's source player; only its separate reader goes to the endpoint.
-    invokePreparedEngine(() => entry.context.livePrepareSegment());
-    continuation.preparedPlayer = invokePreparedEngine(() => entry.context.createPreparedExecutionPlayer(request.session));
+    await continuation.initialSourceReady.promise;
+    requirePreparedContinuation(run, entry.context);
+    continuation.preparedPlayer = invokePreparedEngine(() => continuation.preparedSourceFinished
+      ? entry.context.createFinishedPreparedExecutionPlayer(request.session)
+      : entry.context.createPreparedExecutionPlayer(request.session));
     endpoint = await attachSemanticEngine(entry.context, request, () => {
       // This reader is single-use. A control-port stop owns retirement even if
       // a concurrent explicit release arrived while the source was still active.
@@ -1437,7 +1456,7 @@ async function attachPreparedSemanticExecution(request, entry, continuation) {
       invokePreparedEngine(() => continuation.preparedPlayer.free());
       continuation.preparedPlayer = null;
     }
-    retireSemanticContext(request.contextId, entry);
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
     throw error;
   }
 }

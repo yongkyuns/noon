@@ -19,6 +19,12 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?.live_prepare_segment()
     }
 
+    /// Complete one original initial barrier and ask Rust whether its retained
+    /// history has a readable interval. Zero waits do not invent a range.
+    pub fn prepare_initial_source_segment(&mut self) -> Result<bool, AuthoringFailure> {
+        self.active_live_player()?.prepare_initial_source_segment()
+    }
+
     /// Bootstrap independent history after completion. This does not transfer
     /// the authoring player; the next source statement still queries its frontier.
     /// Publisher/reader are ordinary typed Rust values, not frontend snapshots.
@@ -30,8 +36,11 @@ impl CanonicalAuthoringScene {
 
     /// Completed static source uses the same historical reader at `[0, 0]`.
     /// Called only after the interpreter has finished its source and cleanup.
-    pub fn create_finished_static_reader(&self) -> Result<PrefixReader, AuthoringFailure> {
-        if !self.player_ownership.is_unstarted() || self.scene.time() != 0.0 {
+    pub fn create_finished_static_reader(&mut self) -> Result<PrefixReader, AuthoringFailure> {
+        if !self.player_ownership.is_unstarted() {
+            return self.active_live_player()?.create_finished_static_reader();
+        }
+        if self.scene.time() != 0.0 {
             return Err(AuthoringFailure::new(
                 "unsupported_domain",
                 "prepared.static_source",

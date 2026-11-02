@@ -176,7 +176,7 @@ mod wasm {
         /// Completed static source uses the same reader/worker presentation path.
         #[wasm_bindgen(js_name = createFinishedPreparedExecutionPlayer)]
         pub fn create_finished_prepared_execution_player(
-            &self,
+            &mut self,
             transport_session: u32,
         ) -> Result<PreparedExecutionPlayer, JsValue> {
             let reader = self
