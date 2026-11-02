@@ -163,11 +163,35 @@ impl PreparedExecutionPlayer {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl PreparedExecutionPlayer {
+    /// Rebuild disposable delivery state for a fresh renderer without seeking,
+    /// cloning history or invoking source. Old receipts require a new transport
+    /// session; its first snapshot carries only the selected resource closure.
+    /// Reset the wake epoch so the host can resume on the new receiver's first
+    /// presentation, excluding downtime while preserving playback intent/history.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resetReceiver))]
+    pub fn reset_receiver(&mut self, transport_session: u32) -> Result<(), String> {
+        if !self.snapshot_sent || transport_session <= self.encoder.session() {
+            return Err(
+                "prepared receiver reset requires a started stream and a newer transport session"
+                    .into(),
+            );
+        }
+        self.pointer.reset_receiver(
+            &mut self.playback.reader,
+            &mut self.binding,
+            &mut self.sequence,
+        )?;
+        self.encoder = RetainedFamilyExecutionDeltaEncoder::new(transport_session);
+        self.snapshot_sent = false;
+        self.last_selection = None;
+        self.clock = BrowserExecutionWakeClock::default();
+        Ok(())
+    }
+
     /// Valid empty bootstrap bundle: selected resources accompany the initial
     /// ordinary delta. Future resources are not scanned or sent at bootstrap.
-    /// This host is one delivery stream, not a worker-restart checkpoint. Once
-    /// a delta is drained the caller must retain/retry that exact output; a new
-    /// receiver cannot be initialized with an incomplete resource inventory.
+    /// Each receiver bootstraps once. Retry a drained delta exactly as issued;
+    /// replacing the receiver instead requires an explicit new-session reset.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resourceBundleBytes))]
     pub fn resource_bundle_bytes(&self) -> Result<Vec<u8>, String> {
         if self.snapshot_sent {

@@ -8,6 +8,9 @@ export async function createPythonSource(wasm, modules, pyodideUrl) {
   globalThis.noonCreateCanonicalAuthoringSceneContext = () => store.createSceneContext();
   globalThis.noonCreateAuthoringValueTrackerHandle = value => store.createValueTracker(value);
   globalThis.noonAuthoringGeometryOptions = wasm.WasmManimGeometryOptions;
+  globalThis.noonAuthoringImageOptions = wasm.WasmImageMobjectOptions;
+  globalThis.noonCreateAuthoringImageHandle = options => store.createImage(options);
+  globalThis.noonLoadImageUrl = null; // This qualification uses in-memory pixels.
   globalThis.noonAuthoringVectorPath = () => new wasm.WasmAuthoringVectorPath();
   globalThis.noonCreateAuthoringGeometryHandle = options => store.createManimGeometry(options);
   globalThis.noonAuthoringMembershipBatch = kind => new wasm.WasmSceneMembershipBatch(kind);
@@ -23,10 +26,12 @@ export async function createPythonSource(wasm, modules, pyodideUrl) {
   await pyodide.runPythonAsync(`
 import sys
 sys.path.insert(0, "/tmp")
-from noon import Scene, Circle, Indicate, BLUE, RIGHT
+from noon import Scene, Circle, Indicate, ImageMobject, BLUE, RIGHT, LEFT
 scene = Scene()
 target = Circle(radius=0.8, color=BLUE, fill_opacity=1.0, stroke_width=0.0)
 scene.add(target)
+scene.add(ImageMobject([[[240, 40, 20, 255], [20, 220, 80, 255]],
+                       [[20, 80, 240, 255], [240, 220, 20, 255]]], height=1).shift(4 * LEFT))
 scene.on_click(target, Indicate(target, run_time=0.5))
 endpoint = target.copy().shift(RIGHT * 2)
 animation = scene.declare_live_transform_to(target, endpoint, run_time=1.0, rate_func="linear")
