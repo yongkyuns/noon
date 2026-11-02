@@ -1,9 +1,11 @@
 // Browser qualification helpers, not a player or source-execution implementation.
 // Each exported function is self-contained for Playwright page.evaluate().
-export async function startCallbackProof({ source, canvasId, pacing, sampleTime = null }) {
+export async function startCallbackProof({ source, canvasId, pacing, sampleTime = null,
+  transportMode = "transferable" }) {
   const harness = window.sharedAuthoringSmoke;
   if (harness.callbackProof) throw new Error("previous callback proof is still active");
   if (!["external_samples", "realtime"].includes(pacing) ||
+      !["transferable", "shared"].includes(transportMode) ||
       (pacing === "external_samples" && (!Number.isFinite(sampleTime) || sampleTime <= 0)) ||
       (pacing === "realtime" && sampleTime !== null)) {
     throw new TypeError("invalid callback proof pacing/sample");
@@ -65,7 +67,7 @@ export async function startCallbackProof({ source, canvasId, pacing, sampleTime 
         await proof.execution.startSemanticExecution(registration.semanticExecution, {
           authoringClient: harness.authoring,
           loopDurationSeconds: Math.max(1, registration.duration),
-          transportMode: "transferable", pacing,
+          transportMode, pacing,
         });
         if (proof.closed) throw new Error(`${canvasId}: attachment completed after disposal`);
         resolveAttached();

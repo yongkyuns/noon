@@ -37,11 +37,11 @@ pub use selection::{
 mod publication;
 mod replay;
 pub use callback::{
-    CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
-    CallbackReadValue, CallbackRegionAdvance, CallbackRendererDirtyClassification,
-    CallbackRendererObservationOutcome, CallbackSequence, CallbackTermination,
-    CallbackTerminationKind, CommittedCallbackRendererObservation, EffectivePropertyBatch,
-    EffectiveSemanticPropertyWrite, ExecutionSessionCallbackError,
+    CallbackAdvance, CallbackContent, CallbackPhaseOverlay, CallbackPhaseToken,
+    CallbackReadRequest, CallbackReadValue, CallbackRegionAdvance,
+    CallbackRendererDirtyClassification, CallbackRendererObservationOutcome, CallbackSequence,
+    CallbackTermination, CallbackTerminationKind, CommittedCallbackRendererObservation,
+    EffectivePropertyBatch, EffectiveSemanticPropertyWrite, ExecutionSessionCallbackError,
     ExecutionSessionCallbackReadError, RequiredCallbackInvocation,
 };
 pub use completion::ExecutionSegmentCompletionError;
@@ -892,6 +892,9 @@ pub struct ExecutionSession {
     /// Exact runtime leases acquired by callback-produced effective content.
     /// An unrelated producer cannot be adopted by a later callback result.
     callback_content_leases: BTreeMap<SemanticNodeId, noon_runtime::EffectiveContentLease>,
+    /// Producer-only scratch for callback paths. Prepared runtime values retain
+    /// immutable resources; no scratch slot remains live across publication.
+    callback_geometry_sources: noon_core::GeometryResourceArena,
     callback_termination: Option<CallbackTermination>,
     next_segment_sequence: Option<u64>,
     pending_segment_completion: Option<PendingSegmentCompletion>,
@@ -949,6 +952,7 @@ impl Clone for ExecutionSession {
             next_callback_sequence: Some(0),
             pending_callback: None,
             callback_content_leases,
+            callback_geometry_sources: noon_core::GeometryResourceArena::new(),
             callback_termination,
             next_segment_sequence: self.next_segment_sequence,
             pending_segment_completion: None,
@@ -1164,6 +1168,7 @@ impl ExecutionSession {
             next_callback_sequence: Some(0),
             pending_callback: None,
             callback_content_leases: BTreeMap::new(),
+            callback_geometry_sources: noon_core::GeometryResourceArena::new(),
             callback_termination: None,
             next_segment_sequence: Some(0),
             pending_segment_completion: None,

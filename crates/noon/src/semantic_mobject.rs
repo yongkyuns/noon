@@ -21,7 +21,7 @@ use bounds::transform_layout_xy;
 pub(crate) use bounds::transformed_rect_layout_bounds;
 pub(crate) use bounds::{
     boundary_center, boundary_depth_for_leaves, boundary_for_content, depth_for_content,
-    layout_for_content, transformed_path_layout_bounds,
+    depth_for_path, geometry_layout_bounds, layout_for_content, transformed_path_layout_bounds,
 };
 pub(crate) use style::{
     edit_background_stroke_color, edit_background_stroke_opacity, edit_background_stroke_width,
@@ -1002,27 +1002,6 @@ impl Mobject {
                 .as_planar()
                 .ok_or(AuthoringError::NonFiniteObjectState)?,
         )
-    }
-
-    /// Resolve authored content through an effective renderer-independent
-    /// transform. Live layout queries use this one-object semantic calculation
-    /// rather than renderer visibility bounds, which include stroke expansion.
-    pub(crate) fn layout_bounds_at(
-        &self,
-        transform: Transform2D,
-    ) -> Result<Option<Bounds2D64>, AuthoringError> {
-        let store = self.store.borrow();
-        let state = store
-            .semantic_object_state_checked(self.id)
-            .map_err(AuthoringError::from)?;
-        let semantic_transform = semantic_transform_with_effective_affine(
-            state
-                .transform
-                .as_planar()
-                .ok_or(AuthoringError::NonFiniteObjectState)?,
-            transform,
-        );
-        layout_for_content(&store, state.content, semantic_transform)
     }
 
     pub(crate) fn has_members(&self) -> Result<bool, AuthoringError> {

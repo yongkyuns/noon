@@ -1,15 +1,16 @@
 //! Direct Rust host callables over the canonical callback publication barrier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 use crate::execution_session::{
-    CallbackAdvance, CallbackPhaseOverlay, CallbackReadRequest, CallbackReadValue,
+    CallbackAdvance, CallbackContent, CallbackPhaseOverlay, CallbackReadRequest, CallbackReadValue,
     CallbackRegionAdvance,
 };
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSession,
-    ExecutionSessionCallbackError, SemanticNodeId, Style, Transform2D, Vec2,
+    ExecutionSessionCallbackError, GeometryRef, SemanticNodeId, Style, Transform2D, Vec2,
+    VectorPath,
 };
 use noon_core::{
     HostCallbackId, SemanticMutationTransaction, SemanticMutationTransactionError,
@@ -70,9 +71,25 @@ pub struct RustHostCallbackContext<'a> {
     target: SemanticNodeId,
     overlay: &'a mut CallbackPhaseOverlay,
     session: &'a ExecutionSession,
+    contents: &'a mut CallbackContentWrites,
+}
+
+/// Returned values for one required callback phase, never retained scene state.
+#[derive(Default)]
+struct CallbackContentWrites {
+    replacements: Vec<(SemanticNodeId, CallbackContent<'static>)>,
+    targets: BTreeSet<SemanticNodeId>,
 }
 
 impl RustHostCallbackContext<'_> {
+    fn require_property_writes_open(&self) -> Result<(), ExecutionSessionCallbackError> {
+        if self.contents.replacements.is_empty() {
+            Ok(())
+        } else {
+            Err(ExecutionSessionCallbackError::ContentRequiresFinalWrite)
+        }
+    }
+
     pub const fn callback_id(&self) -> HostCallbackId {
         self.callback_id
     }
@@ -145,6 +162,7 @@ impl RustHostCallbackContext<'_> {
         &mut self,
         transform: Transform2D,
     ) -> Result<(), ExecutionSessionCallbackError> {
+        self.require_property_writes_open()?;
         self.overlay.set_transform(self.target, transform)
     }
 
@@ -153,6 +171,7 @@ impl RustHostCallbackContext<'_> {
         object: SemanticNodeId,
         transform: Transform2D,
     ) -> Result<(), ExecutionSessionCallbackError> {
+        self.require_property_writes_open()?;
         self.overlay.set_transform(object, transform)
     }
 
@@ -229,6 +248,8 @@ impl RustHostCallbackContext<'_> {
         family: &crate::MobjectFamily,
         operation: crate::FamilyPaint,
     ) -> Result<(), crate::FamilyCallbackPaintError> {
+        self.require_property_writes_open()
+            .map_err(crate::FamilyCallbackPaintError::Callback)?;
         let token = self.overlay.token();
         let rows = self.session.required_callback_family_read(
             &family.integration_store().borrow(),
@@ -265,6 +286,8 @@ impl RustHostCallbackContext<'_> {
         x: f64,
         y: f64,
     ) -> Result<(), crate::FamilyCallbackTranslationError> {
+        self.require_property_writes_open()
+            .map_err(crate::FamilyCallbackPaintError::Callback)?;
         let token = self.overlay.token();
         let rows: BTreeMap<_, _> = self
             .session
@@ -308,6 +331,7 @@ impl RustHostCallbackContext<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
     ) -> Result<(), crate::CallbackLayoutError> {
+        self.require_property_writes_open()?;
         let token = self.overlay.token();
         let revision = token.publication().scene_revision();
         self.session
@@ -350,6 +374,7 @@ impl RustHostCallbackContext<'_> {
     }
 
     pub fn set_target_style(&mut self, style: Style) -> Result<(), ExecutionSessionCallbackError> {
+        self.require_property_writes_open()?;
         self.overlay.set_style(self.target, style)
     }
 
@@ -358,7 +383,76 @@ impl RustHostCallbackContext<'_> {
         object: SemanticNodeId,
         style: Style,
     ) -> Result<(), ExecutionSessionCallbackError> {
+        self.require_property_writes_open()?;
         self.overlay.set_style(object, style)
+    }
+
+    /// Stage analytic geometry for this callback's stable target. Content results
+    /// must follow property writes in the final host region. All targets publish
+    /// together only after every callback and shared resource preflight succeeds.
+    pub fn set_target_geometry(
+        &mut self,
+        geometry: GeometryRef,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        self.set_geometry(self.target, geometry)
+    }
+
+    /// Stage geometry for another live target in this same ordered phase.
+    pub fn set_geometry(
+        &mut self,
+        object: SemanticNodeId,
+        geometry: GeometryRef,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        self.stage_content(
+            object,
+            CallbackContent::Inline(noon_core::ObjectContentRef::Geometry(geometry)),
+        )
+    }
+
+    /// Stage a retained path without creating an authored object or revision.
+    /// The shared session admits its immutable resource at the atomic barrier;
+    /// a value-equal result reuses the target's current callback-owned resource.
+    pub fn set_target_path(
+        &mut self,
+        path: VectorPath,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        self.set_path(self.target, path)
+    }
+
+    /// Stage a retained path for another live target in this same phase.
+    pub fn set_path(
+        &mut self,
+        object: SemanticNodeId,
+        path: VectorPath,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        self.stage_content(object, CallbackContent::Path(path))
+    }
+
+    fn stage_content(
+        &mut self,
+        object: SemanticNodeId,
+        content: CallbackContent<'static>,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        self.session.require_terminal_callback_content_region(
+            self.overlay.token(),
+            self.overlay.region(),
+        )?;
+        let execution_object = self
+            .session
+            .execution_object_id(object)
+            .ok_or(ExecutionSessionCallbackError::UnknownObject(object))?;
+        if self.contents.targets.contains(&object) {
+            return Err(ExecutionSessionCallbackError::Content(
+                noon_runtime::EffectiveContentError::DuplicateTarget(execution_object),
+            ));
+        }
+        self.read_object(object)?;
+        // A new path's bounds become readable after coherent publication. Never
+        // expose the old content's bounds as if they described this staged value.
+        self.overlay.invalidate_content_bounds(object)?;
+        self.contents.targets.insert(object);
+        self.contents.replacements.push((object, content));
+        Ok(())
     }
 }
 
@@ -626,6 +720,7 @@ impl RustHostCallbackTable {
                     overlay,
                 } => {
                     let token = overlay.token();
+                    let mut contents = CallbackContentWrites::default();
                     let mut region = CallbackRegionAdvance::HostRequired {
                         invocations,
                         overlay,
@@ -653,6 +748,7 @@ impl RustHostCallbackTable {
                                         target: invocation.target(),
                                         overlay: &mut overlay,
                                         session,
+                                        contents: &mut contents,
                                     };
                                     if let Err(source) = callback(&mut context) {
                                         session.fail_required_callback_phase(token)?;
@@ -674,7 +770,17 @@ impl RustHostCallbackTable {
                                 };
                             }
                             CallbackRegionAdvance::Complete(batch) => {
-                                if let Err(error) = session.commit_required_callback_phase(batch) {
+                                let committed = if contents.replacements.is_empty() {
+                                    session.commit_required_callback_phase(batch).map(|_| ())
+                                } else {
+                                    session
+                                        .commit_required_callback_phase_with_owned_contents(
+                                            batch,
+                                            contents.replacements,
+                                        )
+                                        .map(|_| ())
+                                };
+                                if let Err(error) = committed {
                                     session.fail_required_callback_phase(token)?;
                                     return Err(RustHostCallbackError::Session(error));
                                 }
@@ -784,6 +890,128 @@ mod tests {
     const SET_Y: HostCallbackId = HostCallbackId::new(1);
     const SET_OPACITY: HostCallbackId = HostCallbackId::new(2);
     const ACCUMULATE_DT: HostCallbackId = HostCallbackId::new(3);
+
+    #[test]
+    fn native_content_staging_preserves_terminal_order_and_invalidates_old_bounds() {
+        let mut scene = Scene::new();
+        let object = scene.circle(0.25).unwrap();
+        scene.add(&object).unwrap();
+        let target = object.node_id();
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(SET_Y, |context| {
+                let mut transform = context.target_state().transform;
+                transform.translation.y = 2.0;
+                context.set_target_transform(transform)?;
+                assert!(context.target_state().bounds.is_some());
+                context.set_target_geometry(GeometryRef::Circle { radius: 0.5 })?;
+                assert!(context.target_state().bounds.is_none());
+                assert!(context.read_object(context.target())?.bounds.is_none());
+                assert!(matches!(
+                    context.set_target_style(Style::default()),
+                    Err(ExecutionSessionCallbackError::ContentRequiresFinalWrite)
+                ));
+                assert!(matches!(
+                    context.set_target_geometry(GeometryRef::Circle { radius: 0.75 }),
+                    Err(ExecutionSessionCallbackError::Content(
+                        noon_runtime::EffectiveContentError::DuplicateTarget(_)
+                    ))
+                ));
+                Ok::<_, ExecutionSessionCallbackError>(())
+            })
+            .unwrap();
+        callbacks
+            .add_updater(
+                &mut scene.integration_store().borrow_mut(),
+                target,
+                SET_Y,
+                0.0,
+                None,
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let before = session.publication_context();
+        callbacks.advance_to(&mut session, 0.0).unwrap();
+        assert_eq!(session.frame().objects[0].transform.translation.y, 2.0);
+        assert_eq!(
+            session.frame().objects[0].geometry(),
+            Some(&GeometryRef::Circle { radius: 0.5 })
+        );
+        assert_eq!(
+            session.publication_context().scene_revision(),
+            before.scene_revision()
+        );
+        assert_eq!(
+            session.publication_context().execution_revision(),
+            before.execution_revision()
+        );
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            before.frame_epoch().checked_next().unwrap()
+        );
+    }
+
+    #[test]
+    fn native_callback_failure_discards_paths_and_preceding_properties_together() {
+        for invalid_content in [false, true] {
+            let mut scene = Scene::new();
+            let first = scene.circle(0.25).unwrap();
+            let second = scene.circle(0.25).unwrap();
+            scene.add(&first).unwrap();
+            scene.add(&second).unwrap();
+            let mut callbacks = RustHostCallbackTable::new();
+            callbacks
+                .insert(SET_Y, |context| {
+                    let mut transform = context.target_state().transform;
+                    transform.translation.y = 3.0;
+                    context.set_target_transform(transform)?;
+                    context.set_target_path(
+                        VectorPath::new()
+                            .move_to(Vec2::new(-0.5, -0.5))
+                            .line_to(Vec2::new(0.5, -0.5))
+                            .line_to(Vec2::new(0.0, 0.5))
+                            .close(),
+                    )
+                })
+                .unwrap();
+            callbacks
+                .insert(SET_OPACITY, move |context| {
+                    if invalid_content {
+                        context
+                            .set_target_geometry(GeometryRef::Circle { radius: f32::NAN })
+                            .map_err(std::io::Error::other)
+                    } else {
+                        Err(std::io::Error::other("later host callback failed"))
+                    }
+                })
+                .unwrap();
+            for (target, callback) in [(first.node_id(), SET_Y), (second.node_id(), SET_OPACITY)] {
+                callbacks
+                    .add_updater(
+                        &mut scene.integration_store().borrow_mut(),
+                        target,
+                        callback,
+                        0.0,
+                        None,
+                    )
+                    .unwrap();
+            }
+            let mut session = scene.execution_session().unwrap();
+            let before = session.publication_context();
+            let before_frame = session.frame().clone();
+            let error = callbacks.advance_to(&mut session, 0.0).unwrap_err();
+            assert_eq!(
+                matches!(error, RustHostCallbackError::Session(_)),
+                invalid_content
+            );
+            assert_eq!(session.publication_context(), before);
+            assert_eq!(session.frame().objects, before_frame.objects);
+            assert!(!callbacks.last_advance_completed_callback_phase());
+            // Callable side effects are not replayed to recover from failure.
+            assert!(callbacks.advance_to(&mut session, 0.25).is_err());
+            assert_eq!(session.publication_context(), before);
+        }
+    }
 
     #[test]
     fn rust_wrapper_runs_native_host_native_host_before_one_publication() {

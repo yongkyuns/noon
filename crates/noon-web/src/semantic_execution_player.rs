@@ -3,6 +3,8 @@
 mod audio;
 #[cfg(target_arch = "wasm32")]
 mod brace;
+#[cfg(test)]
+mod callback_content_batch_tests;
 #[cfg(any(target_arch = "wasm32", test))]
 mod camera_profile;
 #[cfg(target_arch = "wasm32")]
@@ -51,9 +53,8 @@ use noon_core::{
     NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
 };
 use noon_core::{
-    ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceArena, GeometryResourceLookup,
-    ObjectContentRef, PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D,
-    Vec2, VectorPath,
+    ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceLookup, ObjectContentRef,
+    PublicationContext, Rect, SceneRevision, SemanticNodeId, Style, Transform2D, Vec2, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -153,9 +154,6 @@ impl WasmExecutionWake {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct SemanticExecutionPlayer {
     session: ExecutionSession,
-    /// Producer scratch for callback paths. Reusing its slot increments the bare
-    /// geometry ID generation, so two live callback leases cannot alias ID 0.
-    callback_geometry_sources: GeometryResourceArena,
     clock: PlaybackClock,
     /// Admission-time endpoint of the finite audio profile, derived from the
     /// existing runtime/scalar schedules. It is never advanced by device time.
@@ -338,48 +336,8 @@ impl SemanticExecutionPlayer {
         content: CallbackContentResult,
     ) -> Result<(), AuthoringFailure> {
         match content {
-            CallbackContentResult::Path(path) => {
-                let mut handle = self.callback_geometry_sources.insert_path(path);
-                // GeometryRef carries a bare ID, not the producer namespace. A
-                // newly constructed producer can otherwise claim the same ID as
-                // an authored path or another live callback target. Recycle the
-                // scratch slot to advance its generation until the ID is free.
-                while noon_core::GeometryResourceLookup::current_handle(
-                    self.session.geometry_resources(),
-                    handle.id,
-                )
-                .is_some()
-                {
-                    let resource = self
-                        .callback_geometry_sources
-                        .remove(handle.id)
-                        .expect("fresh callback geometry remains in its producer arena");
-                    handle = self.callback_geometry_sources.insert(resource);
-                }
-                let result = self
-                    .session
-                    .commit_required_callback_phase_with_owned_geometry(
-                        batch,
-                        target,
-                        handle,
-                        &self.callback_geometry_sources,
-                    );
-                // The published lease owns an immutable copy of the resource.
-                // Reclaim the producer slot on both success and failure, while
-                // preserving its incremented generation for the next callback.
-                self.callback_geometry_sources
-                    .remove(handle.id)
-                    .expect("fresh callback geometry remains in its producer arena");
-                result.map_err(AuthoringFailure::from)?;
-            }
-            CallbackContentResult::Geometry(geometry) => {
-                self.session
-                    .commit_required_callback_phase_with_owned_content(
-                        batch,
-                        target,
-                        ObjectContentRef::Geometry(geometry),
-                    )
-                    .map_err(AuthoringFailure::from)?;
+            content @ (CallbackContentResult::Path(_) | CallbackContentResult::Geometry(_)) => {
+                self.commit_callback_geometry_contents(batch, vec![(target, content)])?
             }
             CallbackContentResult::TextSource(source) => {
                 #[cfg(any(target_arch = "wasm32", test))]
@@ -397,6 +355,44 @@ impl SemanticExecutionPlayer {
                 .into());
             }
         }
+        Ok(())
+    }
+
+    /// Decode the genuine worker payload into the shared typed callback result.
+    /// The session owns resource admission, identity and reuse for both native
+    /// and Python callbacks; this adapter does not allocate retained geometry.
+    fn commit_callback_geometry_contents(
+        &mut self,
+        batch: EffectivePropertyBatch,
+        contents: Vec<(SemanticNodeId, CallbackContentResult)>,
+    ) -> Result<(), AuthoringFailure> {
+        let replacements = contents
+            .into_iter()
+            .map(|(target, content)| {
+                let content = match content {
+                    CallbackContentResult::Geometry(geometry) => {
+                        noon::integration::CallbackContent::Inline(ObjectContentRef::Geometry(geometry))
+                    }
+                    CallbackContentResult::Path(path) => {
+                        noon::integration::CallbackContent::Path(path)
+                    }
+                    CallbackContentResult::TextSource(_) => {
+                        return Err(AuthoringFailure::from(
+                            "multi-target callback content supports retained paths and inline geometry; text replacement remains supported for one target",
+                        ));
+                    }
+                    CallbackContentResult::Provisional(_) => {
+                        return Err(AuthoringFailure::from(
+                            "callback provisional content must be resolved before publication",
+                        ));
+                    }
+                };
+                Ok((target, content))
+            })
+            .collect::<Result<Vec<_>, AuthoringFailure>>()?;
+        self.session
+            .commit_required_callback_phase_with_owned_contents(batch, replacements)
+            .map_err(AuthoringFailure::from)?;
         Ok(())
     }
 
@@ -598,7 +594,6 @@ impl SemanticExecutionPlayer {
             finite_export: None,
             section_navigation: Default::default(),
             session,
-            callback_geometry_sources: GeometryResourceArena::new(),
             clock,
             encoder,
             resource_bundle,
@@ -5026,69 +5021,46 @@ impl SemanticExecutionPlayer {
             })
             .collect::<Result<Vec<_>, _>>()?;
         if content.len() > 1
-            && content.iter().any(|(_, content)| {
-                !matches!(
-                    content,
-                    CallbackContentResult::Provisional(_) | CallbackContentResult::Geometry(_)
-                )
-            })
+            && content
+                .iter()
+                .any(|(_, content)| matches!(content, CallbackContentResult::TextSource(_)))
         {
             return Err(
-                "multi-target callback content currently supports inline geometry only".into(),
+                "multi-target callback content supports retained paths and inline geometry; text replacement remains supported for one target".into(),
             );
         }
         #[cfg(any(target_arch = "wasm32", test))]
-        let (batch, content, provisional_effective) = match content {
-            contents
-                if !contents.is_empty()
-                    && contents.iter().all(|(_, content)| {
-                        matches!(
-                            content,
-                            CallbackContentResult::Provisional(_)
-                                | CallbackContentResult::Geometry(_)
-                        )
-                    }) =>
-            {
-                let mut writes = batch.writes().to_vec();
-                let mut resolved = Vec::with_capacity(contents.len());
-                let mut has_provisional = false;
-                for (target, content) in contents {
-                    match content {
-                        CallbackContentResult::Provisional(key) => {
-                            has_provisional = true;
-                            let (transform, style, result) =
-                                self.callback_provisional_visual(token, &key)?;
-                            writes.push(EffectiveSemanticPropertyWrite::Transform {
-                                object: target,
-                                transform,
-                            });
-                            writes.push(EffectiveSemanticPropertyWrite::Style {
-                                object: target,
-                                style,
-                            });
-                            resolved.push((target, result));
-                        }
-                        CallbackContentResult::Geometry(geometry) => {
-                            resolved.push((target, CallbackContentResult::Geometry(geometry)))
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                (
-                    EffectivePropertyBatch::new(token, writes).with_region(batch.region()),
-                    resolved,
-                    has_provisional,
-                )
-            }
-            other => (batch, other, false),
-        };
-        if content.len() > 1
-            && content
-                .iter()
-                .any(|(_, content)| matches!(content, CallbackContentResult::Path(_)))
+        let (batch, content, provisional_effective) = if content
+            .iter()
+            .any(|(_, content)| matches!(content, CallbackContentResult::Provisional(_)))
         {
-            return Err("multi-target callback content currently requires inline geometry; retained paths remain supported for one target".into());
-        }
+            let mut writes = batch.writes().to_vec();
+            let mut resolved = Vec::with_capacity(content.len());
+            for (target, content) in content {
+                if let CallbackContentResult::Provisional(key) = content {
+                    let (transform, style, content) =
+                        self.callback_provisional_visual(token, &key)?;
+                    writes.push(EffectiveSemanticPropertyWrite::Transform {
+                        object: target,
+                        transform,
+                    });
+                    writes.push(EffectiveSemanticPropertyWrite::Style {
+                        object: target,
+                        style,
+                    });
+                    resolved.push((target, content));
+                } else {
+                    resolved.push((target, content));
+                }
+            }
+            (
+                EffectivePropertyBatch::new(token, writes).with_region(batch.region()),
+                resolved,
+                true,
+            )
+        } else {
+            (batch, content, false)
+        };
         if !content.is_empty() {
             #[cfg(any(target_arch = "wasm32", test))]
             if self.callback_membership_transaction.is_some() && !provisional_effective {
@@ -5144,20 +5116,7 @@ impl SemanticExecutionPlayer {
         #[cfg(any(target_arch = "wasm32", test))]
         {
             if content.len() > 1 {
-                let replacements = content
-                    .into_iter()
-                    .map(|(target, content)| match content {
-                        CallbackContentResult::Geometry(geometry) => {
-                            Ok((target, ObjectContentRef::Geometry(geometry)))
-                        }
-                        _ => Err(AuthoringFailure::from(
-                            "multi-target callback content requires inline geometry",
-                        )),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.session
-                    .commit_required_callback_phase_with_owned_contents(batch, replacements)
-                    .map_err(AuthoringFailure::from)?;
+                self.commit_callback_geometry_contents(batch, content)?;
                 self.callback_membership_transaction = None;
             } else if provisional_effective {
                 if content.len() == 1 {
@@ -5263,7 +5222,9 @@ impl SemanticExecutionPlayer {
             }
         }
         #[cfg(not(any(target_arch = "wasm32", test)))]
-        if let Some((target, content)) = content.into_iter().next() {
+        if content.len() > 1 {
+            self.commit_callback_geometry_contents(batch, content)?;
+        } else if let Some((target, content)) = content.into_iter().next() {
             self.commit_callback_content(batch, target, content)?;
         } else {
             self.session

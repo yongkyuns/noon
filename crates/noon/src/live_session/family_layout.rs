@@ -35,20 +35,13 @@ impl LiveSession<'_> {
             let leaves = store
                 .ordered_leaf_nodes(root)
                 .map_err(crate::AuthoringError::from)?;
-            // The planar runtime has no independent depth driver. Validate the
-            // current content publication before reading its canonical Z data.
-            for &leaf in &leaves {
-                if self.session.semantic_object_is_reachable(leaf) {
-                    let observed = self.session.effective_semantic_object(&store, leaf)?;
-                    if !observed.authored_content_layout_applicable() {
-                        return Err(crate::AuthoringError::Unsupported(
-                            crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
-                        ).into());
-                    }
-                }
-            }
-            return crate::dimension_fit::depth_length_for_leaves(&store, &leaves)
-                .map_err(LiveSessionError::from);
+            let depth = crate::family_layout::effective_depth_for_leaves(
+                &store,
+                self.session,
+                &leaves,
+                true,
+            )?;
+            return Ok(depth.map_or(0.0, |(min, max)| max - min));
         }
         let (_, bounds) = self.anchor_layout_members(source)?;
         Ok(dimension.length(bounds))

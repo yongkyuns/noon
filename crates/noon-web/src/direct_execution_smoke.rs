@@ -1122,6 +1122,18 @@ pub async fn create_direct_ordinary_callback_sparse_reads_smoke_renderer(
         .await
 }
 
+/// Ordered retained-path and analytic callback results through the same native
+/// Rust continuation/table and retained renderer, without an in-process codec.
+#[wasm_bindgen(js_name = createDirectEffectiveMixedContentSmokeRenderer)]
+pub async fn create_direct_effective_mixed_content_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let (program, callbacks) =
+        noon::example_scenes::effective_mixed_content::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
+        .await
+}
+
 /// Browser proof that flat Parallel/Sequence composition uses the same typed
 /// target-neutral session as the native Rust example.
 #[wasm_bindgen(js_name = createDirectOrdinaryCompositionPlaySmokeRenderer)]

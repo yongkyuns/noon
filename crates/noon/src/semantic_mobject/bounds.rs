@@ -45,7 +45,17 @@ pub(crate) fn depth_for_content(
             .map(|_| (transform.translation.z, transform.translation.z)));
     }
     let path = crate::path_queries::content_path(store, content)?;
-    let points = crate::PathQuery::prepare(&path, transform)?.points_3d()?;
+    depth_for_path(&path, transform, include_handles)
+}
+
+/// The same depth reduction for an already-resolved immutable path, including
+/// retained effective content that has no authored semantic resource handle.
+pub(crate) fn depth_for_path(
+    path: &VectorPath,
+    transform: SemanticTransform2_5D,
+    include_handles: bool,
+) -> Result<Option<(f64, f64)>, AuthoringError> {
+    let points = crate::PathQuery::prepare(path, transform)?.points_3d()?;
     let indices: Box<dyn Iterator<Item = usize>> = if include_handles {
         Box::new(0..points.len())
     } else {
@@ -240,7 +250,7 @@ pub(crate) fn transformed_path_layout_bounds(
     }
     Ok(bounds)
 }
-fn geometry_layout_bounds(
+pub(crate) fn geometry_layout_bounds(
     geometry: &GeometryRef,
     transform: SemanticTransform2_5D,
     include_handles: bool,

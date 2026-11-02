@@ -550,9 +550,9 @@ pub(crate) fn union_bounds(total: &mut Option<Bounds2D64>, next: Option<Bounds2D
 
 /// Observe one semantic family's effective layout from an existing coherent execution.
 ///
-/// Reachable leaves use Runtime's current affine. Detached leaves preserve their exact
-/// authored layout. Render-content overrides remain explicit failures because authored
-/// geometry bounds no longer describe the visible result in that state.
+/// Reachable leaves use Runtime's current content and affine. Detached leaves
+/// preserve their exact authored layout. Reveal/morph render overrides remain
+/// explicit failures rather than falling back to authored geometry.
 pub(crate) fn effective_family_layout(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
@@ -606,18 +606,146 @@ pub(crate) fn effective_family_member_measure(
     let observed = execution
         .effective_semantic_object(&store_ref, object.node_id())
         .map_err(AuthoringError::from)?;
-    if !observed.authored_content_layout_applicable() {
+    if !observed.retained_content_layout_applicable() {
         return Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
         ));
     }
-    let transform = observed.object.transform;
-    drop(store_ref);
-    if boundary {
-        object.boundary_bounds_at(transform)
-    } else {
-        object.layout_bounds_at(transform)
+    effective_object_layout_measure(&store_ref, execution, object.node_id(), &observed, boundary)
+}
+
+/// Measure only the addressed row at its coherent publication. Unchanged
+/// authored content keeps semantic precision; effective content resolves its
+/// retained resource through the existing Runtime lookup. Both paths use the
+/// same control-point dimensions and anchor-only boundary rules.
+pub(crate) fn effective_object_layout_measure(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    node: SemanticNodeId,
+    observed: &crate::execution_session::EffectiveSemanticObject<'_>,
+    boundary: bool,
+) -> Result<Option<Bounds2D64>, AuthoringError> {
+    use crate::semantic_mobject::{
+        boundary_for_content, geometry_layout_bounds, layout_for_content,
+        semantic_transform_with_effective_affine, transformed_path_layout_bounds,
+    };
+    use noon_core::GeometryRef;
+
+    let unsupported = || {
+        AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+        )
+    };
+    if !observed.retained_content_layout_applicable() {
+        return Err(unsupported());
     }
+    let state = store.semantic_object_state_checked(node)?;
+    let transform = semantic_transform_with_effective_affine(
+        state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?,
+        observed.object.transform,
+    );
+    if observed.authored_content_layout_applicable() {
+        return if boundary {
+            boundary_for_content(store, state.content, transform)
+        } else {
+            layout_for_content(store, state.content, transform)
+        };
+    }
+    let geometry = observed.object.geometry().ok_or_else(unsupported)?;
+    if matches!(geometry, GeometryRef::External(_)) {
+        let path = effective_layout_path(execution, geometry)?;
+        return transformed_path_layout_bounds(&path, transform, !boundary);
+    }
+    geometry_layout_bounds(geometry, transform, !boundary)
+}
+
+fn effective_layout_path<'a>(
+    execution: &'a ExecutionSession,
+    geometry: &'a noon_core::GeometryRef,
+) -> Result<std::borrow::Cow<'a, noon_core::VectorPath>, AuthoringError> {
+    use noon_core::{GeometryRef, GeometryResource, GeometryResourceLookup};
+    use std::borrow::Cow;
+
+    match geometry {
+        GeometryRef::External(id) => {
+            let resources = execution.geometry_resources();
+            let handle = resources
+                .current_handle(*id)
+                .ok_or(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::ExternalGeometry,
+                ))?;
+            match resources
+                .get(handle)
+                .ok_or(AuthoringError::MissingGeometryResource(handle))?
+            {
+                GeometryResource::VectorPath(path) => Ok(Cow::Borrowed(path)),
+                GeometryResource::Mesh(_) => Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::SpatialMeshBounds2D,
+                )),
+            }
+        }
+        GeometryRef::VectorPath(path) => Ok(Cow::Borrowed(path)),
+        _ => noon_geometry::canonical_outline_path(geometry)
+            .map(Cow::Owned)
+            .ok_or(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::PathQueryContent,
+            )),
+    }
+}
+
+/// Observe Z from the same content version used by planar dimensions and
+/// critical points. Only the caller's addressed unique leaves are visited.
+pub(crate) fn effective_depth_for_leaves(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    leaves: &[SemanticNodeId],
+    include_handles: bool,
+) -> Result<Option<(f64, f64)>, AuthoringError> {
+    use crate::semantic_mobject::{
+        depth_for_content, depth_for_path, semantic_transform_with_effective_affine,
+    };
+
+    let mut bounds: Option<(f64, f64)> = None;
+    for &leaf in leaves {
+        let state = store.semantic_object_state_checked(leaf)?;
+        let authored = state
+            .transform
+            .as_planar()
+            .ok_or(AuthoringError::NonFiniteObjectState)?;
+        let depth = if execution.semantic_object_is_reachable(leaf) {
+            let observed = execution.effective_semantic_object(store, leaf)?;
+            if !observed.retained_content_layout_applicable() {
+                return Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
+                ));
+            }
+            let transform =
+                semantic_transform_with_effective_affine(authored, observed.object.transform);
+            if observed.authored_content_layout_applicable() {
+                depth_for_content(store, state.content, transform, include_handles)?
+            } else {
+                let geometry = observed
+                    .object
+                    .geometry()
+                    .ok_or(AuthoringError::Unsupported(
+                        crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+                    ))?;
+                let path = effective_layout_path(execution, geometry)?;
+                depth_for_path(&path, transform, include_handles)?
+            }
+        } else {
+            depth_for_content(store, state.content, authored, include_handles)?
+        };
+        if let Some((min, max)) = depth {
+            bounds = Some(bounds.map_or((min, max), |(old_min, old_max)| {
+                (old_min.min(min), old_max.max(max))
+            }));
+        }
+    }
+    Ok(bounds)
 }
 
 pub(crate) fn effective_anchor_layout_measure(
@@ -708,7 +836,7 @@ fn effective_member_center(
     let observed = execution
         .effective_semantic_object(&store_ref, object.node_id())
         .map_err(AuthoringError::from)?;
-    if !observed.authored_content_layout_applicable() {
+    if !observed.retained_content_layout_applicable() {
         return Err(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
         ));

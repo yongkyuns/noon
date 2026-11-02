@@ -179,11 +179,19 @@ pub struct EffectiveSemanticObject<'a> {
 
 impl EffectiveSemanticObject<'_> {
     /// Whether authored content plus the effective affine transform exactly
-    /// describes this frame's layout. Morph/reveal render overrides require a
-    /// dedicated effective-content layout path and are rejected by the first
-    /// ordinary live-query subset.
+    /// describes this frame's layout. Effective content leases and morph/reveal
+    /// render overrides require their own retained-content observation path.
     pub const fn authored_content_layout_applicable(&self) -> bool {
         self.authored_content_layout_applicable
+    }
+
+    /// Whether the current retained row describes the complete visible content
+    /// without a reveal, morph, or derived render transform.
+    pub(crate) fn retained_content_layout_applicable(&self) -> bool {
+        self.render_geometry.is_none()
+            && self.render_transform.is_none()
+            && self.reveal == 1.0
+            && self.morph == 0.0
     }
 }
 
@@ -993,7 +1001,11 @@ impl ExecutionSession {
         let authored_content_layout_applicable = frame.render_geometries[object_index].is_none()
             && frame.render_transforms[object_index].is_none()
             && frame.reveals[object_index] == 1.0
-            && frame.morphs[object_index] == 0.0;
+            && frame.morphs[object_index] == 0.0
+            && self
+                .runtime
+                .effective_content_lease(execution_object)
+                .is_none();
         Ok(EffectiveSemanticObject {
             object,
             publication: self.publication_context(),

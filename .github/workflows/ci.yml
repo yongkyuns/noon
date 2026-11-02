@@ -26,6 +26,7 @@ on:
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
       - "scripts/callback-continuation-proof*.mjs"
+      - "scripts/effective-content-qualification.mjs"
       - "scripts/paired-authoring-qualification.mjs"
       - "scripts/table-*"
       - "scripts/manim-table-*"
@@ -541,6 +542,17 @@ jobs:
         run: node --test scripts/callback-continuation-proof.test.mjs
       - name: Test shared semantic authoring and runtime
         run: node scripts/shared-authoring-smoke.mjs
+      - name: Retain mixed callback content qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: effective-content-callback-qualification
+          path: |
+            browser-smoke-artifacts/effective-content/report.json
+            web/ci-artifact.json
+            web/runtime-build-identity.json
+          if-no-files-found: warn
+          retention-days: 3
       - name: Test native browser input signals
         run: node scripts/native-input-smoke.mjs
       - name: Test direct background audio and scene controls

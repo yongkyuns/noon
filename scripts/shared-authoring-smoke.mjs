@@ -2846,6 +2846,23 @@ class GlowPulseEndpoint(Scene):
     }
   }
 
+  // Separate path/analytic updaters share one terminal content publication.
+  // Two ordinary waits guarantee both replacement and unchanged endpoint samples.
+  const mixedContentSource = await readFile(
+    path.join(repoRoot, "web/python/examples/ordinary_effective_mixed_content_updaters.py"), "utf8",
+  );
+  assert.equal(mixedContentSource.split("async def construct(self):").length, 2);
+  assert.equal(mixedContentSource.split("await self.wait(0.125)").length, 3);
+  const mixedContentSync = mixedContentSource
+    .replace("async def construct(self):", "def construct(self):")
+    .replaceAll("await self.wait(0.125)", "self.wait(0.125)");
+  for (const [mode, source] of [["async", mixedContentSource], ["sync", mixedContentSync]]) {
+    const result = await runCallbackMembershipContinuation(page, source, `scene-mixed-content-${mode}`);
+    assert.equal(result.duration, 0.25);
+    assert.equal(result.metrics.objectCount, 4);
+    assert.ok(result.metrics.drawCalls > 0);
+  }
+
   // A normal def construct uses the canonical JSPI continuation when its first
   // supported play reaches the shared Rust segment barrier. Its source promise
   // stays pending while the one endpoint owns the player and presents a frame.
@@ -3704,3 +3721,7 @@ class LateFailure(Scene):
   });
   await import("./object-membership-qualification.mjs");
 }
+
+// The same mixed callback outputs reach both renderers and both worker transports,
+// with a typed direct Rust/WASM reference and the ordinary synchronous source path.
+await import("./effective-content-qualification.mjs");

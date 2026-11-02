@@ -107,6 +107,20 @@ test("exact samples follow completed attachment and preserve a suspended source"
   f.stop();
 });
 
+test("the selected callback transport reaches the ordinary execution attachment", async () => {
+  const f = fixture();
+  await f.start({ transportMode: "shared" });
+  assert.equal(f.calls.find(x => Array.isArray(x) && x[0] === "start")[1].transportMode, "shared");
+  f.stop();
+});
+
+test("unknown callback transport rejects before creating a source or renderer", async () => {
+  const f = fixture();
+  await assert.rejects(f.start({ transportMode: "unknown" }), /invalid callback proof/);
+  assert.equal(runCount(f), 0);
+  assert.equal(f.calls.includes("construct"), false);
+});
+
 test("arbitrarily delayed attachment consumes no midpoint polling attempts", async () => {
   const f = fixture({ delayStart: true });
   const value = f.start();

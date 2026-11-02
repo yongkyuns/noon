@@ -7,8 +7,8 @@ use noon_compile::{
     SemanticOrderedUpdater,
 };
 use noon_core::{
-    HostCallbackId, ObjectContentRef, PreparedSemanticMutationTransaction, Property,
-    PublicationContext, ReactiveValue, Rect, SemanticMutation, SemanticNodeId,
+    GeometryResourceLookup, HostCallbackId, ObjectContentRef, PreparedSemanticMutationTransaction,
+    Property, PublicationContext, ReactiveValue, Rect, SemanticMutation, SemanticNodeId,
     SemanticObjectProperty, SemanticObjectRole, SemanticOrientation, SemanticSignalValue,
     SemanticVec3, Style, Transform2D,
 };
@@ -48,6 +48,23 @@ pub enum CallbackRendererDirtyClassification {
     Updated,
     Removed,
     Unchanged,
+}
+
+/// One callback-produced effective content value. Retained geometry borrows
+/// its producer's immutable resource only for preparation; a successful
+/// publication retains it in the existing runtime content lease.
+///
+/// Multiple targets may mix inline geometry and retained vector paths. Mesh,
+/// text and image content retain their existing single-target publication paths.
+pub enum CallbackContent<'a> {
+    Inline(ObjectContentRef),
+    /// A value-produced path. Equal output reuses the target's exact current
+    /// callback-owned resource; a changed path prepares a new immutable version.
+    Path(noon_core::VectorPath),
+    Geometry {
+        handle: noon_core::GeometryResourceHandle,
+        source: &'a noon_core::GeometryResourceArena,
+    },
 }
 
 /// One small committed runtime observation pinned to an exact callback phase.
@@ -704,6 +721,20 @@ impl CallbackPhaseOverlay {
         self.objects.get(&object)
     }
 
+    /// Content publication is terminal within the supported callback overlay.
+    /// Do not let later reads observe cached bounds from the old geometry.
+    pub(crate) fn invalidate_content_bounds(
+        &mut self,
+        object: SemanticNodeId,
+    ) -> Result<(), ExecutionSessionCallbackError> {
+        let row = self
+            .objects
+            .get_mut(&object)
+            .ok_or(ExecutionSessionCallbackError::UnknownObject(object))?;
+        row.set_transform_and_bounds(row.transform, None);
+        Ok(())
+    }
+
     pub fn objects(
         &self,
     ) -> impl Iterator<Item = (SemanticNodeId, &EffectiveObjectProperties)> + '_ {
@@ -829,6 +860,7 @@ pub enum ExecutionSessionCallbackError {
     },
     IncompleteRegion,
     ContentRequiresFinalRegion,
+    ContentRequiresFinalWrite,
     SequenceExhausted,
     NonMonotonicAdvance {
         current: f64,
@@ -877,6 +909,8 @@ impl std::fmt::Display for ExecutionSessionCallbackError {
             }
             Self::ContentRequiresFinalRegion => formatter
                 .write_str("effective content replacement requires the final host callback region"),
+            Self::ContentRequiresFinalWrite => formatter
+                .write_str("callback property writes must precede effective content replacement"),
             Self::SequenceExhausted => formatter.write_str("callback sequence space exhausted"),
             Self::NonMonotonicAdvance { current, requested } => write!(
                 formatter,
@@ -999,7 +1033,16 @@ impl ExecutionSession {
                 actual: token,
             });
         }
-        if region != pending.region {
+        // Content preparation happens after a terminal region's property batch
+        // has been accepted. A failed resource/target validation leaves that
+        // exact accepted region retryable; submit_required_callback_region
+        // separately requires its original property writes to match exactly.
+        let accepted_terminal_region = pending.completed
+            && pending
+                .last_region_batch
+                .as_ref()
+                .is_some_and(|batch| batch.region == region);
+        if region != pending.region && !accepted_terminal_region {
             return Err(ExecutionSessionCallbackError::StaleRegion {
                 expected: pending.region,
                 actual: region,
@@ -1946,17 +1989,25 @@ impl ExecutionSession {
         Ok(lease)
     }
 
-    /// Commit a small set of producer-owned inline content rows with one
+    /// Commit a small set of producer-owned content rows with one
     /// callback property batch and one publication. Every target is prepared
-    /// and lease-checked before the pending phase is consumed.
+    /// and lease-checked, including resource conflicts between candidates,
+    /// before the pending phase is consumed. Leases retain input order.
     pub fn commit_required_callback_phase_with_owned_contents(
         &mut self,
         batch: EffectivePropertyBatch,
-        replacements: Vec<(SemanticNodeId, ObjectContentRef)>,
+        replacements: Vec<(SemanticNodeId, CallbackContent<'_>)>,
     ) -> Result<Vec<EffectiveContentLease>, ExecutionSessionCallbackError> {
         let batch = self.complete_callback_batch_for_commit(batch)?;
         let (effective, receipt_domains) = self.prepare_callback_writes(batch)?;
         let mut seen = BTreeSet::new();
+        let mut reserved_geometry_ids = replacements
+            .iter()
+            .filter_map(|(_, content)| match content {
+                CallbackContent::Geometry { handle, .. } => Some(handle.id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         let mut prepared = Vec::with_capacity(replacements.len());
         let mut targets = Vec::with_capacity(replacements.len());
         for (target, content) in replacements {
@@ -1974,11 +2025,22 @@ impl ExecutionSession {
                 .execution_object_id(target)
                 .ok_or(ExecutionSessionCallbackError::UnknownObject(target))?;
             let lease = self.callback_content_lease(target, object)?;
-            prepared.push(
-                self.runtime
-                    .prepare_effective_content_replacement(object, content, None, lease)
-                    .map_err(ExecutionSessionCallbackError::Content)?,
-            );
+            let replacement = match content {
+                CallbackContent::Inline(content) => self
+                    .runtime
+                    .prepare_effective_content_replacement(object, content, None, lease),
+                CallbackContent::Path(path) => self.prepare_callback_path_content(
+                    object,
+                    path,
+                    lease,
+                    &mut reserved_geometry_ids,
+                ),
+                CallbackContent::Geometry { handle, source } => self
+                    .runtime
+                    .prepare_effective_geometry_replacement(object, handle, source, lease),
+            }
+            .map_err(ExecutionSessionCallbackError::Content)?;
+            prepared.push(replacement);
             targets.push(target);
         }
         let pending = self
@@ -2002,6 +2064,66 @@ impl ExecutionSession {
         }
         self.finish_callback_publication(completion, receipt_domains);
         Ok(leases)
+    }
+
+    fn prepare_callback_path_content(
+        &mut self,
+        object: noon_core::ObjectId,
+        path: noon_core::VectorPath,
+        lease: Option<EffectiveContentLease>,
+        reserved_geometry_ids: &mut BTreeSet<noon_core::GeometryId>,
+    ) -> Result<noon_runtime::PreparedEffectiveContentReplacement, EffectiveContentError> {
+        // Compare only the affected, already owned target. This retains exact
+        // resource identity for equal callback output without a frontend cache
+        // or a scan of other held content producers.
+        if lease.is_some() {
+            if let Some(index) = self.runtime.frame_index_for_object(object) {
+                if let ObjectContentRef::Geometry(noon_core::GeometryRef::External(id)) =
+                    self.runtime.frame().objects[index].content
+                {
+                    let resources = self.runtime.geometry_resources();
+                    if let Some(handle) = resources.current_handle(id) {
+                        if let Some(noon_core::GeometryResource::VectorPath(current)) =
+                            resources.get(handle)
+                        {
+                            if current.as_ref() == &path {
+                                return self.runtime.prepare_effective_geometry_replacement(
+                                    object, handle, resources, lease,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut handle = self.callback_geometry_sources.insert_path(path);
+        // GeometryRef uses a bare ID. Recycle the one temporary slot until its
+        // generation cannot alias a published or same-batch explicit resource.
+        while self
+            .runtime
+            .geometry_resources()
+            .current_handle(handle.id)
+            .is_some()
+            || reserved_geometry_ids.contains(&handle.id)
+        {
+            let resource = self
+                .callback_geometry_sources
+                .remove(handle.id)
+                .expect("new callback path remains in its producer arena");
+            handle = self.callback_geometry_sources.insert(resource);
+        }
+        let result = self.runtime.prepare_effective_geometry_replacement(
+            object,
+            handle,
+            &self.callback_geometry_sources,
+            lease,
+        );
+        self.callback_geometry_sources
+            .remove(handle.id)
+            .expect("new callback path remains in its producer arena");
+        reserved_geometry_ids.insert(handle.id);
+        result
     }
 
     /// Commit callback-produced external geometry through the same session-owned
@@ -2293,6 +2415,8 @@ impl ExecutionSession {
     }
 }
 
+#[cfg(test)]
+mod content_tests;
 #[cfg(test)]
 mod tests;
 

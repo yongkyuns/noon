@@ -1,9 +1,9 @@
 use super::*;
 use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
 use noon_core::{
-    AnimationOptions, GeometryResourceLookup, HostCallbackId, NativeInputModifiers,
-    NativePointerId, NativePointerInput, NativePointerInputKind, NativePointerPosition,
-    RateFunction, SemanticClickIndicate, SemanticMutationTransaction,
+    AnimationOptions, GeometryResourceArena, GeometryResourceLookup, HostCallbackId,
+    NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
+    NativePointerPosition, RateFunction, SemanticClickIndicate, SemanticMutationTransaction,
     SemanticMutationTransactionError, SemanticObjectProperty, SemanticObjectState, SemanticStore,
     SemanticVec3, StoredGeometry, TextResourceLookup, TrackTiming,
 };
@@ -1183,8 +1183,6 @@ fn callback_paths_on_two_targets_keep_distinct_live_geometry_ids() {
         let handle = noon_core::GeometryResourceLookup::current_handle(resources, id).unwrap();
         assert!(noon_core::GeometryResourceLookup::get(resources, handle).is_some());
     }
-    assert_eq!(player.callback_geometry_sources.slot_capacity(), 1);
-    assert_eq!(player.callback_geometry_sources.stats().live_resources, 0);
 }
 
 #[test]
@@ -2786,7 +2784,6 @@ fn callback_provisional_retained_path_replaces_one_target_without_resource_growt
                     .stats(),
                 before_resources
             );
-            assert_eq!(player.callback_geometry_sources.stats().live_resources, 0);
             rejected_oversized_path = true;
         }
         let width = 0.5 + step as f32 * 0.05;
@@ -2847,7 +2844,6 @@ fn callback_provisional_retained_path_replaces_one_target_without_resource_growt
                 .stats(),
             before_resources
         );
-        assert_eq!(player.callback_geometry_sources.stats().live_resources, 0);
         assert_eq!(player.session.take_frame_changes().object_indices(), &[0]);
         assert_eq!(player.session.last_spatial_update_stats().full_rebuilds, 0);
         assert!(player.callback_membership_transaction.is_none());
