@@ -17,7 +17,7 @@ pub enum UnsupportedAuthoringOperation {
     PointMatchContent,
     /// Persistent point editing requires retained vector geometry.
     PathEditContent,
-    /// Effective family layout requires authored content without overrides.
+    /// Effective family layout requires authored content or retained planar geometry.
     EffectiveFamilyLayoutRenderOverride,
     /// move_to cannot compose with an active effective affine driver.
     PlacementEffectiveAffineDriver,
@@ -31,7 +31,7 @@ pub enum UnsupportedAuthoringOperation {
     EffectiveStateUnavailable,
     /// Text and external content do not expose a vector path.
     PathQueryContent,
-    /// effective layout queries currently support affine and style drivers only.
+    /// Effective layout requires queryable content without reveal/morph overrides.
     EffectiveLayoutRenderOverride,
     /// object state capture cannot represent a non-unit effective appearance.
     CaptureNonUnitAppearance,
@@ -85,7 +85,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::PlacementEffectiveAffineDriver => "move_to cannot compose with an active effective affine driver",
             Self::PlacementRenderOverride => "move_to cannot use an effective layout with render-content overrides",
             Self::EffectiveLineRenderOverride => "effective Line endpoint queries currently support affine and style drivers only",
-            Self::EffectiveLayoutRenderOverride => "effective layout queries currently support affine and style drivers only",
+            Self::EffectiveLayoutRenderOverride => "effective layout requires authored content or retained planar geometry without render overrides",
             Self::CaptureNonUnitAppearance => "object state capture cannot represent a non-unit effective appearance",
             Self::CaptureRenderOverride => "object state capture requires effective authored content without reveal or morph overrides",
             Self::CaptureReactiveBinding => "cannot capture a reactive binding into object state",

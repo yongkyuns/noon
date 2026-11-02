@@ -1250,7 +1250,11 @@ through the existing lease lifetime. Temporary producer storage is reclaimed on
 success and failure. These are effective results, so they allocate no semantic
 objects and create no authored revision. Content remains terminal within the final
 host region; bounds invalidated by a staged content result become available after
-coherent publication. Multi-target text/image results, authored membership mixed
+coherent publication. Subsequent source layout reads resolve the current retained
+geometry through the shared control-point dimension and anchor-boundary rules,
+including depth; releasing the lease restores authored-content reads. Operations
+that require authored geometry retain their explicit gate while a lease is held.
+Multi-target text/image results, authored membership mixed
 with effective content, and arbitrary callback replay retain their explicit gates.
 
 The initial runtime content lease publishes a validated replacement into one effective row without relowering the compiled scene. Initial acquisition pins the exact publication; later versions require the lease and matching authored/execution revisions, while unrelated effective frame advances may continue during preparation. The lease version rejects results after another content version commits; a producer whose output depends on authored time or other effective inputs must also reject obsolete source samples. Release reveals the latest authored content. Acquisition excludes numeric text, Graph-owned rows, and targets with Morph, Transform or family-animation tracks. If one of those authored owners is installed later, that publication retires the lease. Existing compiled text/image handles and inline geometry can be referenced. A producer-owned image arena may supply a new immutable image to a prepared lease result; runtime lookup and renderer publication see it only after commit, and the last referring lease retires it on replacement or release. Retained path producers use the same explicit immutable resource admission. Broader new text and dependent content still need separately qualified resource admission. Held leases do not enter the ordinary forward-frame loop, and a full seek may revisit them as part of its deliberate whole-scene rebuild.

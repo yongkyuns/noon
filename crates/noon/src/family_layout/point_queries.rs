@@ -34,10 +34,18 @@ pub(crate) fn effective_layout_critical_point_3d(
     }
     let (leaves, boundary) = effective_anchor_layout_measure(store, execution, source, true)?;
     let (x, y) = bounds_critical_point(boundary, direction.x, direction.y);
-    // The planar runtime has no independent Z driver. The coherent layout read
-    // above validates content/affine overrides before canonical depth.
-    let z =
-        crate::semantic_mobject::boundary_depth_for_leaves(&store.borrow(), &leaves, direction.z)?;
+    // The planar runtime has no independent Z driver, but a content lease can
+    // replace the path's stored coordinates. Read the current retained version.
+    let depth = effective_depth_for_leaves(&store.borrow(), execution, &leaves, false)?;
+    let z = depth.map_or(0.0, |(min, max)| {
+        if direction.z < 0.0 {
+            min
+        } else if direction.z > 0.0 {
+            max
+        } else {
+            (min + max) * 0.5
+        }
+    });
     Ok(SemanticVec3::new(x, y, z))
 }
 

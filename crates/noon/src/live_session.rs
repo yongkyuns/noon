@@ -9,6 +9,8 @@
 mod arrow;
 mod brace;
 mod camera_motion;
+#[cfg(test)]
+mod content_layout_tests;
 mod coordinates;
 mod family_layout;
 mod image;
@@ -1631,15 +1633,26 @@ impl<'a> LiveSession<'a> {
         let observed = self
             .session
             .effective_semantic_object(&store, mobject.node_id())?;
-        if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
-            )));
-        }
-        let transform = observed.object.transform;
-        let publication = observed.publication;
-        drop(store);
-        self.layout_at_transform(mobject, transform, publication)
+        let bounds = crate::family_layout::effective_object_layout_measure(
+            &store,
+            self.session,
+            mobject.node_id(),
+            &observed,
+            false,
+        )?;
+        let boundary = crate::family_layout::effective_object_layout_measure(
+            &store,
+            self.session,
+            mobject.node_id(),
+            &observed,
+            true,
+        )?;
+        Ok(EffectiveMobjectLayout {
+            center: crate::semantic_mobject::boundary_center(boundary, (0.0, 0.0)),
+            width: bounds.map_or(0.0, Bounds2D64::width),
+            height: bounds.map_or(0.0, Bounds2D64::height),
+            publication: observed.publication,
+        })
     }
 
     fn validate_manim_rotation_pivot(
@@ -1771,23 +1784,6 @@ impl<'a> LiveSession<'a> {
         Ok(crate::semantic_mobject::manim_color_from_effective(
             &effective.style,
         ))
-    }
-
-    fn layout_at_transform(
-        &self,
-        mobject: &Mobject,
-        transform: Transform2D,
-        publication: PublicationContext,
-    ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
-        let bounds = mobject.layout_bounds_at(transform)?;
-        let boundary = mobject.boundary_bounds_at(transform)?;
-        let center = crate::semantic_mobject::boundary_center(boundary, (0.0, 0.0));
-        Ok(EffectiveMobjectLayout {
-            center,
-            width: bounds.map_or(0.0, Bounds2D64::width),
-            height: bounds.map_or(0.0, Bounds2D64::height),
-            publication,
-        })
     }
 
     /// Activate one predeclared animation in this session.
