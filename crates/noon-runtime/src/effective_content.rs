@@ -71,7 +71,7 @@ pub enum EffectiveContentError {
     },
     StaleLease(ObjectId),
     DuplicateTarget(ObjectId),
-    BatchRequiresInlineGeometry(ObjectId),
+    BatchRequiresPlanarGeometry(ObjectId),
     SequenceExhausted,
     FrameEpochExhausted,
     ExecutionRevisionExhausted(ExecutionRevision),
@@ -150,9 +150,9 @@ impl std::fmt::Display for EffectiveContentError {
                 "effective content batch targets object {} more than once",
                 object.get()
             ),
-            Self::BatchRequiresInlineGeometry(object) => write!(
+            Self::BatchRequiresPlanarGeometry(object) => write!(
                 formatter,
-                "multi-target callback content for object {} requires inline geometry",
+                "multi-target callback content for object {} requires inline geometry or retained vector paths; mesh, text, and image batches are not supported",
                 object.get()
             ),
             Self::SequenceExhausted => {
@@ -257,7 +257,7 @@ impl SceneInstance {
         &self,
         object: ObjectId,
         handle: GeometryResourceHandle,
-        source: &GeometryResourceArena,
+        source: &(impl GeometryResourceLookup + ?Sized),
         lease: Option<EffectiveContentLease>,
     ) -> Result<PreparedEffectiveContentReplacement, EffectiveContentError> {
         let mut additions = CompiledResources::default();
@@ -592,6 +592,7 @@ impl SceneInstance {
             ));
         }
         let mut seen = std::collections::BTreeSet::new();
+        let mut geometries = std::collections::BTreeMap::new();
         let new_lease_count = u64::try_from(
             contents
                 .iter()
@@ -613,15 +614,47 @@ impl SceneInstance {
                 ));
             }
             let candidate = content;
+            let planar_geometry = match &candidate.content {
+                ObjectContentRef::Geometry(GeometryRef::External(id)) => {
+                    let resources = self.geometry_resources();
+                    candidate
+                        .geometry_resource
+                        .as_ref()
+                        .map(|(_, _, resource)| resource)
+                        .or_else(|| {
+                            resources
+                                .current_handle(*id)
+                                .and_then(|handle| resources.get(handle))
+                        })
+                        .is_some_and(|resource| matches!(resource, GeometryResource::VectorPath(_)))
+                }
+                ObjectContentRef::Geometry(_) => true,
+                _ => false,
+            };
             if contents.len() > 1
-                && (!matches!(&candidate.content, ObjectContentRef::Geometry(geometry) if !matches!(geometry, GeometryRef::External(_)))
-                    || candidate.geometry_resource.is_some()
+                && (!planar_geometry
                     || candidate.image_resource.is_some()
                     || candidate.text_resource_additions.is_some())
             {
                 return Err(PreparedFrameContentCommitError::Content(
-                    EffectiveContentError::BatchRequiresInlineGeometry(candidate.lease.object),
+                    EffectiveContentError::BatchRequiresPlanarGeometry(candidate.lease.object),
                 ));
+            }
+            // Each candidate was prepared against the same live lookup. Two
+            // different producer arenas may nevertheless propose the same bare
+            // GeometryId. Validate the complete incoming set before a release
+            // or row update can publish either resource. Identical handles may
+            // be shared; their prepared Arc snapshots survive any old owner's
+            // retirement during the synchronous commit suffix.
+            if let Some((id, handle, _)) = candidate.geometry_resource.as_ref() {
+                if geometries
+                    .insert(*id, *handle)
+                    .is_some_and(|prior| prior != *handle)
+                {
+                    return Err(PreparedFrameContentCommitError::Content(
+                        EffectiveContentError::GeometryResourceConflict(*id),
+                    ));
+                }
             }
             self.validate_content_prepared(candidate)
                 .map_err(PreparedFrameContentCommitError::Content)?;
@@ -1852,6 +1885,284 @@ mod tests {
         instance.release_effective_content(second_lease).unwrap();
         assert!(instance.geometry_resources().get(handle).is_none());
         assert!(!instance.effective_geometries.contains_key(&handle.id));
+    }
+
+    #[test]
+    fn retained_batch_rejects_conflicting_producer_ids_before_any_publication() {
+        let mut first_source = GeometryResourceArena::new();
+        let first_handle = first_source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let mut second_source = GeometryResourceArena::new();
+        let second_handle =
+            second_source.insert_path(VectorPath::new().move_to(Vec2::new(2.0, 3.0)));
+        assert_eq!(first_handle.id, second_handle.id);
+        assert_ne!(first_handle, second_handle);
+
+        for reverse in [false, true] {
+            let mut instance = scene(2, false);
+            instance.take_frame_changes();
+            let first = instance
+                .prepare_effective_geometry_replacement(
+                    ObjectId::new(0),
+                    first_handle,
+                    &first_source,
+                    None,
+                )
+                .unwrap();
+            let second = instance
+                .prepare_effective_geometry_replacement(
+                    ObjectId::new(1),
+                    second_handle,
+                    &second_source,
+                    None,
+                )
+                .unwrap();
+            let mut contents = vec![first, second];
+            if reverse {
+                contents.reverse();
+            }
+            let frame = instance.prepare_advance_to(1.0).unwrap();
+            let writes = instance
+                .prepare_effective_property_batch(&[EffectivePropertyWrite::Translation {
+                    object: ObjectId::new(0),
+                    translation: Vec2::new(4.0, 0.0),
+                }])
+                .unwrap();
+            let publication = instance.publication_context();
+            let sequence = instance.next_effective_content_sequence;
+            assert!(matches!(
+                instance.commit_prepared_frame_with_contents(frame, writes, contents),
+                Err(PreparedFrameContentCommitError::Content(
+                    EffectiveContentError::GeometryResourceConflict(id)
+                )) if id == first_handle.id
+            ));
+            assert_eq!(instance.publication_context(), publication);
+            assert_eq!(instance.next_effective_content_sequence, sequence);
+            assert_eq!(instance.frame().time, 0.0);
+            assert_eq!(
+                instance.frame().objects[0].transform.translation,
+                Vec2::ZERO
+            );
+            assert!(instance.effective_geometries.is_empty());
+            assert!(instance.effective_content_drivers.is_empty());
+            assert!(instance.take_frame_changes().object_indices().is_empty());
+        }
+    }
+
+    #[test]
+    fn retained_mesh_stays_single_target_and_rejects_a_mixed_batch_atomically() {
+        let mut instance = scene(2, false);
+        let mut source = GeometryResourceArena::new();
+        let path = source.insert_path(
+            VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 1.0)),
+        );
+        let mesh = source.insert_mesh(
+            noon_core::MeshResource::new(
+                vec![
+                    noon_core::SemanticVec3::new(0.0, 0.0, 0.0),
+                    noon_core::SemanticVec3::new(1.0, 0.0, 0.0),
+                    noon_core::SemanticVec3::new(0.0, 1.0, 0.0),
+                ],
+                None,
+                vec![0, 1, 2],
+            )
+            .unwrap(),
+        );
+        let path_content = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(0), path, &source, None)
+            .unwrap();
+        let mesh_content = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(1), mesh, &source, None)
+            .unwrap();
+        let frame = instance.prepare_advance_to(1.0).unwrap();
+        let writes = instance
+            .prepare_effective_property_batch(&[EffectivePropertyWrite::Translation {
+                object: ObjectId::new(0),
+                translation: Vec2::new(3.0, 0.0),
+            }])
+            .unwrap();
+        let before = instance.publication_context();
+        let sequence = instance.next_effective_content_sequence;
+        instance.take_frame_changes();
+        assert!(matches!(instance.commit_prepared_frame_with_contents(
+            frame, writes, vec![path_content, mesh_content],
+        ), Err(PreparedFrameContentCommitError::Content(
+            EffectiveContentError::BatchRequiresPlanarGeometry(object)
+        )) if object == ObjectId::new(1)));
+        assert_eq!(instance.publication_context(), before);
+        assert_eq!(instance.next_effective_content_sequence, sequence);
+        assert_eq!(instance.frame().time, 0.0);
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::ZERO
+        );
+        assert!(instance.effective_geometries.is_empty());
+        assert!(instance.effective_content_drivers.is_empty());
+        assert!(instance.take_frame_changes().object_indices().is_empty());
+
+        let mesh_content = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(1), mesh, &source, None)
+            .unwrap();
+        let frame = instance.prepare_advance_to(1.0).unwrap();
+        let writes = instance.prepare_effective_property_batch(&[]).unwrap();
+        instance
+            .commit_prepared_frame_with_content(frame, writes, mesh_content)
+            .unwrap();
+        assert!(instance.geometry_resources().get(mesh).is_some());
+        assert!(instance.geometry_resources().get(path).is_none());
+    }
+
+    #[test]
+    fn retained_batch_transfers_a_released_resource_and_shares_it_in_either_order() {
+        for release_first in [false, true] {
+            let mut instance = scene(3, false);
+            let mut source = GeometryResourceArena::new();
+            let handle = source.insert_path(
+                VectorPath::new()
+                    .move_to(Vec2::ZERO)
+                    .line_to(Vec2::new(2.0, 1.0)),
+            );
+            let initial = instance
+                .prepare_effective_geometry_replacement(ObjectId::new(0), handle, &source, None)
+                .unwrap();
+            let old_lease = instance
+                .commit_effective_content_replacement(initial)
+                .unwrap();
+            let released = instance
+                .prepare_effective_content_replacement(
+                    ObjectId::new(0),
+                    ObjectContentRef::Geometry(GeometryRef::circle(2.0)),
+                    None,
+                    Some(old_lease),
+                )
+                .unwrap();
+            let first = instance
+                .prepare_effective_geometry_replacement(ObjectId::new(1), handle, &source, None)
+                .unwrap();
+            let second = instance
+                .prepare_effective_geometry_replacement(ObjectId::new(2), handle, &source, None)
+                .unwrap();
+            // The prepared values alone retain the immutable resource. If the
+            // old owner commits first, its release must not lose the later copy.
+            drop(source);
+            let contents = if release_first {
+                vec![released, first, second]
+            } else {
+                vec![first, second, released]
+            };
+            let frame = instance.prepare_advance_to(1.0).unwrap();
+            let writes = instance.prepare_effective_property_batch(&[]).unwrap();
+            let publication = instance.publication_context();
+            let leases = instance
+                .commit_prepared_frame_with_contents(frame, writes, contents)
+                .unwrap();
+            assert_eq!(leases.len(), 3);
+            assert_eq!(
+                instance.publication_context().frame_epoch().get(),
+                publication.frame_epoch().get() + 1
+            );
+            assert_eq!(
+                instance.publication_context().scene_revision(),
+                publication.scene_revision()
+            );
+            assert_eq!(instance.effective_geometries.get(&handle.id).unwrap().2, 2);
+            assert!(instance.geometry_resources().get(handle).is_some());
+            for object in [ObjectId::new(1), ObjectId::new(2)] {
+                let lease = instance.effective_content_lease(object).unwrap();
+                assert_eq!(
+                    leases
+                        .iter()
+                        .filter(|candidate| **candidate == lease)
+                        .count(),
+                    1
+                );
+                instance.release_effective_content(lease).unwrap();
+            }
+            assert!(instance.geometry_resources().get(handle).is_none());
+            assert!(instance.effective_geometries.is_empty());
+            assert_eq!(
+                instance.effective_content_lease(ObjectId::new(0)),
+                Some(old_lease)
+            );
+        }
+    }
+
+    #[test]
+    fn stale_later_retained_candidate_does_not_publish_earlier_resources_or_properties() {
+        let mut instance = scene(2, false);
+        let mut source = GeometryResourceArena::new();
+        let first_handle = source.insert_path(VectorPath::new().move_to(Vec2::ZERO));
+        let second_handle = source.insert_path(VectorPath::new().move_to(Vec2::new(2.0, 0.0)));
+        let initial = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(1),
+                ObjectContentRef::Geometry(GeometryRef::circle(1.5)),
+                None,
+                None,
+            )
+            .unwrap();
+        let lease = instance
+            .commit_effective_content_replacement(initial)
+            .unwrap();
+        let first = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(0), first_handle, &source, None)
+            .unwrap();
+        let stale = instance
+            .prepare_effective_geometry_replacement(
+                ObjectId::new(1),
+                second_handle,
+                &source,
+                Some(lease),
+            )
+            .unwrap();
+        let update = instance
+            .prepare_effective_content_replacement(
+                ObjectId::new(1),
+                ObjectContentRef::Geometry(GeometryRef::circle(1.75)),
+                None,
+                Some(lease),
+            )
+            .unwrap();
+        instance
+            .commit_effective_content_replacement(update)
+            .unwrap();
+        // Reprepare the first candidate after the unrelated publication. Its
+        // initial acquisition is valid; the later held lease alone is stale.
+        drop(first);
+        let first = instance
+            .prepare_effective_geometry_replacement(ObjectId::new(0), first_handle, &source, None)
+            .unwrap();
+        let frame = instance.prepare_advance_to(1.0).unwrap();
+        let writes = instance
+            .prepare_effective_property_batch(&[EffectivePropertyWrite::Translation {
+                object: ObjectId::new(0),
+                translation: Vec2::new(7.0, 0.0),
+            }])
+            .unwrap();
+        let publication = instance.publication_context();
+        let sequence = instance.next_effective_content_sequence;
+        instance.take_frame_changes();
+        assert!(matches!(
+            instance.commit_prepared_frame_with_contents(frame, writes, vec![first, stale]),
+            Err(PreparedFrameContentCommitError::Content(
+                EffectiveContentError::StaleLease(object)
+            )) if object == ObjectId::new(1)
+        ));
+        assert_eq!(instance.publication_context(), publication);
+        assert_eq!(instance.next_effective_content_sequence, sequence);
+        assert_eq!(instance.frame().time, 0.0);
+        assert_eq!(
+            instance.frame().objects[0].transform.translation,
+            Vec2::ZERO
+        );
+        assert_eq!(
+            instance.frame().objects[1].content,
+            ObjectContentRef::Geometry(GeometryRef::circle(1.75))
+        );
+        assert!(instance.geometry_resources().get(first_handle).is_none());
+        assert!(instance.geometry_resources().get(second_handle).is_none());
+        assert!(instance.take_frame_changes().object_indices().is_empty());
     }
 
     #[test]

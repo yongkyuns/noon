@@ -681,12 +681,12 @@ impl CompiledResources {
                 .all(|(handle, _)| self.images.contains_key(handle))
     }
 
-    /// Prepare one immutable geometry dependency from its producer-owned arena.
+    /// Prepare one immutable geometry dependency from a versioned lookup.
     /// The resource remains sparse until this set is admitted to a compiled or
     /// runtime-owned resource projection.
     pub fn capture_geometry_from_arena(
         &mut self,
-        source: &GeometryResourceArena,
+        source: &(impl GeometryResourceLookup + ?Sized),
         handle: GeometryResourceHandle,
     ) -> Result<(), CompiledResourceError> {
         let resource = source
