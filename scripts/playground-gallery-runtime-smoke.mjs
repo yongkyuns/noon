@@ -210,10 +210,9 @@ try {
           await native.observe('gallery-shell-ready');
           trace.setPhase('gallery-authored-execution', { exampleId: entry.id, noJspi });
           let completed = false;
-          // Longer authored examples can run materially slower than real time in Firefox CI.
-          // Keep wall-clock headroom for a progressing autoplay while still detecting a hang.
-          const deadline = Date.now() + 105000;
-          while (Date.now() < deadline) {
+          // The existing whole-case deadline bounds startup and natural playback.
+          // A second, shorter timer can reject a lesson that is still progressing.
+          while (true) {
             const { workerMessages, ...state } = await page.evaluate(profilePublicationStages => {
               const gallery = window.__noonExampleGallery;
               if (!window.__galleryMetricsPending) {
