@@ -84,6 +84,19 @@ impl PrefixReader {
         Ok(capacity)
     }
 
+    /// Explicit storage-growth barrier for a borrowed, source-bound batch.
+    /// Reserves only required object slots and immutable glyph-plan tables.
+    /// It never consumes output, evaluates a frame or invokes source code.
+    pub fn reserve_append_capacity(&mut self, batch: &PrefixBatch) -> Result<(), PrefixError> {
+        self.receiver
+            .reserve_append_capacity(&mut self.session.runtime, batch)?;
+        self.session
+            .slots
+            .reserve_object_capacity(batch.required_object_capacity())
+            .map_err(PrefixError::Slots)?;
+        Ok(())
+    }
+
     /// Observe delivery admission without consuming the batch or publishing its
     /// future targets. Slot work is proportional only to newly delivered rows.
     pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {

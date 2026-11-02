@@ -3,8 +3,10 @@
 //! The reader accepts future revisions without seeking to the producer frontier.
 use super::{ReplayError, ReplayLimits, Revision};
 use crate::{EvaluationError, PreparedTransientAnimation, RuntimeIdentity, SceneInstance};
-use noon_compile::{CompiledObject, CompiledResourceError, CompiledResources};
-use noon_core::{GeometryRef, ObjectId, SemanticClickIndicate};
+use noon_compile::{
+    CompiledFamilyAnimationChannel, CompiledObject, CompiledResourceError, CompiledResources,
+};
+use noon_core::{GeometryRef, ObjectId, RetainedFamilyAnimationPlan, SemanticClickIndicate};
 use std::sync::Arc;
 
 mod history_payload_budget;
@@ -14,6 +16,8 @@ mod storage;
 use history_payload_budget::HistoryPayloadBudget;
 use resource_budget::ResourceBudget;
 
+#[cfg(test)]
+mod family_tests;
 #[cfg(test)]
 mod history_index_budget_tests;
 #[cfg(test)]
@@ -79,6 +83,10 @@ pub enum PrefixError {
         required_bytes: Option<usize>,
         limit_bytes: usize,
     },
+    /// Plan/channel and scheduler tables need an explicit maintenance reservation.
+    FamilyAnimationCapacityRequired {
+        animations: usize,
+    },
     Resources(CompiledResourceError),
     Interaction(String),
 }
@@ -111,7 +119,7 @@ pub struct PrefixBatchStats {
     pub payloads: usize,
     pub row_payloads: usize,
     pub new_object_slots: usize,
-    /// Unique immutable resource entries delivered, not resource bytes.
+    /// Unique immutable resource entries and glyph plans delivered, not bytes.
     pub resource_payloads: usize,
 }
 
@@ -124,6 +132,7 @@ pub struct PrefixPublisher {
     scope: Arc<()>,
     stream: Arc<()>,
     next_revision: usize,
+    family_animations: usize,
     // Reader-side charge includes bootstrap and all extracted batches, even
     // pending ones. Source inverse-history cost omits new slots/resources.
     extracted_payloads: usize,
@@ -171,6 +180,8 @@ pub struct PrefixBatch {
     revisions: Vec<Revision>,
     stats: PrefixBatchStats,
     from_object_slots: usize,
+    from_family_animations: usize,
+    family_animations: Vec<(RetainedFamilyAnimationPlan, CompiledFamilyAnimationChannel)>,
     new_objects: Vec<CompiledObject>,
     resources: CompiledResources,
     resource_bytes: usize,
@@ -191,6 +202,11 @@ impl PrefixBatch {
     pub fn required_object_capacity(&self) -> usize {
         self.from_object_slots + self.new_objects.len()
     }
+    /// Required immutable plan/channel table entries, not live frame state.
+    pub fn required_family_animation_capacity(&self) -> usize {
+        self.from_family_animations + self.family_animations.len()
+    }
+
     /// Inspect only the newly delivered physical rows, in storage order.
     /// These keys are not live targets or proof of stream membership. A session
     /// must validate the batch before staging identity slots and must still use
@@ -231,6 +247,7 @@ pub struct PrefixReceiver {
     received_revisions: usize,
     limits: ReplayLimits,
     object_capacity: usize,
+    family_capacity: usize,
     initial_object_slots: usize,
     resource_budget: ResourceBudget,
     history_payload_budget: HistoryPayloadBudget,
@@ -426,7 +443,10 @@ impl PrefixReceiver {
         {
             return Err(PrefixError::UnexpectedBatch);
         }
-        if batch.from_object_slots != runtime.compiled.objects().len() {
+        if batch.from_object_slots != runtime.compiled.objects().len()
+            || batch.from_family_animations != runtime.compiled.family_animations().len()
+            || batch.from_family_animations != runtime.compiled.family_animation_plans().len()
+        {
             return Err(PrefixError::UnexpectedBatch);
         }
         let resource_budget = self.resource_budget.with_additional(batch.resource_bytes)?;
@@ -463,6 +483,15 @@ impl PrefixReceiver {
                 object_slots: required,
             });
         }
+        if batch.required_family_animation_capacity() > self.family_capacity
+            || !runtime
+                .timeline_scheduler
+                .prefix_groups_reserved(batch.family_animations.len())
+        {
+            return Err(PrefixError::FamilyAnimationCapacityRequired {
+                animations: batch.required_family_animation_capacity(),
+            });
+        }
         Ok((count, payloads, resource_budget, history_payload_budget))
     }
 
@@ -488,6 +517,17 @@ impl PrefixReceiver {
         runtime
             .compiled
             .install_prefix_tombstones(batch.new_objects);
+        let first_family = runtime.compiled.family_animations().len();
+        runtime
+            .compiled
+            .install_prefix_family_delta(batch.family_animations);
+        for index in first_family..runtime.compiled.family_animations().len() {
+            let (start, end) =
+                crate::family_animation_interval(&runtime.compiled.family_animations()[index]);
+            runtime
+                .timeline_scheduler
+                .append_family_animation(index, start, end);
+        }
         history.revisions.extend(batch.revisions);
         history.stats.revisions_retained = count;
         history.stats.payloads_retained = payloads;
@@ -502,7 +542,7 @@ impl PrefixReceiver {
 }
 
 impl SceneInstance {
-    /// Provisional experimental cap for logical immutable-resource payloads.
+    /// Provisional cap for logical immutable resources and glyph-plan descriptors.
     /// Not a total memory limit: revisions, object/storage capacity, allocator
     /// overhead, source allocations and renderer residency require separate caps.
     pub const DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
@@ -664,6 +704,7 @@ impl SceneInstance {
             .compiled
             .resources()
             .prefix_resource_bytes()
+            .and_then(|bytes| bytes.checked_add(self.compiled.prefix_family_payload_bytes(0)?))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
@@ -716,6 +757,7 @@ impl SceneInstance {
             scope: history.scope.clone(),
             stream: stream.clone(),
             next_revision: history.revisions.len(),
+            family_animations: self.compiled.family_animations().len(),
             extracted_payloads: history.stats.payloads_retained,
             frontier: self.frame.time,
             finished,
@@ -735,6 +777,7 @@ impl SceneInstance {
             received_revisions: history.revisions.len(),
             limits: history.limits,
             object_capacity: self.compiled.objects().len(),
+            family_capacity: self.compiled.family_animations().len(),
             initial_object_slots: self.compiled.objects().len(),
             resource_budget,
             history_payload_budget,
@@ -887,11 +930,19 @@ impl SceneInstance {
             .prefix_resource_delta(&forward, &publisher.resources)?;
         // Measure only the new dependency closure, never the retained arena.
         // Reject before moving the cursor or retaining new publisher pins.
+        let family_bytes = self
+            .compiled
+            .prefix_family_payload_bytes(publisher.family_animations)
+            .ok_or(ReplayError::RetentionLimit)?;
         let resource_bytes = resources
             .prefix_resource_bytes()
+            .and_then(|bytes| bytes.checked_add(family_bytes))
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget = publisher.resource_budget.with_additional(resource_bytes)?;
-        stats.resource_payloads = resources.prefix_payload_count();
+        stats.resource_payloads = resources
+            .prefix_payload_count()
+            .checked_add(self.compiled.family_animations().len() - publisher.family_animations)
+            .ok_or(ReplayError::RetentionLimit)?;
         stats.payloads = stats
             .payloads
             .checked_add(stats.resource_payloads)
@@ -919,6 +970,10 @@ impl SceneInstance {
             revisions,
             stats,
             from_object_slots: publisher.object_slots,
+            from_family_animations: publisher.family_animations,
+            family_animations: self
+                .compiled
+                .prefix_family_delta(publisher.family_animations),
             new_objects: new_objects.to_vec(),
             resources,
             resource_bytes,
@@ -931,6 +986,7 @@ impl SceneInstance {
         publisher.history_payload_budget = history_payload_budget;
         publisher.extracted_payloads = extracted_payloads;
         publisher.object_slots = self.compiled.objects().len();
+        publisher.family_animations = self.compiled.family_animations().len();
         publisher.next_revision = history.revisions.len();
         publisher.frontier = self.frame.time;
         publisher.finished = terminal;

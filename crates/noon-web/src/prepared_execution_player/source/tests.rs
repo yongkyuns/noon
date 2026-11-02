@@ -1,6 +1,15 @@
 use super::*;
-use noon::{ImageMobjectOptions, Scene};
+use noon::{ImageMobjectOptions, PrefixError, Scene};
 use noon_runtime::ReplayLimits;
+
+fn pending_capacity(player: &PreparedExecutionPlayer) -> Option<usize> {
+    player
+        .source
+        .as_ref()?
+        .pending
+        .as_ref()
+        .map(PrefixBatch::required_object_capacity)
+}
 
 // Stage a real compiler-produced creation suffix, then release the source scene.
 // Reservation/retry can only use this retained batch; no source can be rerun.
@@ -52,7 +61,7 @@ fn prepared_worker_source_reservation_rejects_foreign_pending_before_growth() {
         let mut player = staged_player(91, terminal);
         let mut foreign = staged_player(92, terminal);
         let capacity = player.reserve_object_capacity(0).unwrap();
-        let required = player.pending_source_object_capacity().unwrap();
+        let required = pending_capacity(&player).unwrap();
         assert!(required > capacity);
         let frame = player.playback.reader.frame().clone();
         let publication = player.playback.reader.publication_context();
@@ -61,13 +70,13 @@ fn prepared_worker_source_reservation_rejects_foreign_pending_before_growth() {
         // Private fault injection models stale source/reader pairing. Public
         // callers cannot forge batches; admission must still precede allocation.
         std::mem::swap(&mut player.source, &mut foreign.source);
-        for total in [0, capacity, required, required + 8] {
+        for _ in 0..2 {
             assert_eq!(
-                player.reserve_prefix_object_capacity(total),
+                player.reserve_source_prefix_capacity(),
                 Err(PrefixError::UnexpectedBatch.to_string())
             );
             assert_eq!(player.reserve_object_capacity(0).unwrap(), capacity);
-            assert_eq!(player.pending_source_object_capacity(), Some(required));
+            assert_eq!(pending_capacity(&player), Some(required));
             assert_eq!(player.prepared_frontier(), 1.0);
             assert_eq!(player.prepared_end_time(), None);
             assert_eq!(player.playback.reader.frame(), &frame);
@@ -78,7 +87,7 @@ fn prepared_worker_source_reservation_rejects_foreign_pending_before_growth() {
         }
         // The rightful owner can reserve and adopt the very same retained suffix.
         std::mem::swap(&mut player.source, &mut foreign.source);
-        player.reserve_prefix_object_capacity(required).unwrap();
+        assert!(player.reserve_source_prefix_capacity().unwrap());
         assert!(player.deliver_source_prefix().unwrap());
         assert_eq!(player.prepared_frontier(), 2.0);
         assert_eq!(player.prepared_end_time(), terminal.then_some(2.0));
@@ -92,7 +101,7 @@ fn prepared_worker_source_reservation_allows_capacity_retry_without_consuming_ba
     for terminal in [false, true] {
         let mut player = staged_player(93, terminal);
         let capacity = player.reserve_object_capacity(0).unwrap();
-        let required = player.pending_source_object_capacity().unwrap();
+        let required = pending_capacity(&player).unwrap();
         let frame = player.playback.reader.frame().clone();
         let publication = player.playback.reader.publication_context();
         let history = player.playback.reader.replay_stats();
@@ -103,19 +112,16 @@ fn prepared_worker_source_reservation_allows_capacity_retry_without_consuming_ba
         assert!(required > capacity);
         assert_eq!(player.deliver_source_prefix(), Err(expected.clone()));
         // Reserving too little is not permanent rejection or successful delivery.
-        assert_eq!(
-            player.reserve_prefix_object_capacity(capacity).unwrap(),
-            capacity
-        );
+        assert_eq!(player.reserve_object_capacity(capacity).unwrap(), capacity);
         assert_eq!(player.deliver_source_prefix(), Err(expected));
-        assert_eq!(player.pending_source_object_capacity(), Some(required));
+        assert_eq!(pending_capacity(&player), Some(required));
         assert_eq!(player.prepared_end_time(), None);
         assert_eq!(player.playback.reader.replay_stats(), history);
-        player.reserve_prefix_object_capacity(required).unwrap();
-        assert_eq!(player.pending_source_object_capacity(), Some(required));
+        assert!(player.reserve_source_prefix_capacity().unwrap());
+        assert_eq!(pending_capacity(&player), Some(required));
         assert_eq!(player.playback.reader.publication_context(), publication);
         assert!(player.deliver_source_prefix().unwrap());
-        assert_eq!(player.pending_source_object_capacity(), None);
+        assert_eq!(pending_capacity(&player), None);
         assert_eq!(player.prepared_end_time(), terminal.then_some(2.0));
         assert_eq!(player.playback.reader.frame(), &frame);
         assert!(player.drain_delta_json().unwrap().is_none());
@@ -148,37 +154,33 @@ fn prepared_worker_source_reservation_allows_capacity_retry_without_consuming_ba
 fn prepared_worker_source_failed_reservation_keeps_pending_terminal_retryable() {
     let mut player = staged_player(94, true);
     let capacity = player.reserve_object_capacity(0).unwrap();
-    let required = player.pending_source_object_capacity().unwrap();
+    let required = pending_capacity(&player).unwrap();
     let frame = player.playback.reader.frame().clone();
     let publication = player.playback.reader.publication_context();
-    assert!(player.reserve_prefix_object_capacity(usize::MAX).is_err());
+    assert!(player.reserve_object_capacity(usize::MAX).is_err());
     assert_eq!(player.reserve_object_capacity(0).unwrap(), capacity);
-    assert_eq!(player.pending_source_object_capacity(), Some(required));
+    assert_eq!(pending_capacity(&player), Some(required));
     assert_eq!(player.prepared_end_time(), None);
     assert_eq!(player.playback.reader.frame(), &frame);
     assert_eq!(player.playback.reader.publication_context(), publication);
-    player.reserve_prefix_object_capacity(required).unwrap();
+    assert!(player.reserve_source_prefix_capacity().unwrap());
     assert!(player.deliver_source_prefix().unwrap());
     assert_eq!(player.prepared_end_time(), Some(2.0));
     assert!(player.source.is_none());
 }
 
 #[test]
-fn prepared_worker_source_reservation_without_pending_output_keeps_explicit_maintenance() {
+fn prepared_worker_source_reservation_without_pending_output_does_not_allocate() {
     let mut player = staged_player(95, false);
-    let required = player.pending_source_object_capacity().unwrap();
+    let capacity = player.reserve_object_capacity(0).unwrap();
     player.source.as_mut().unwrap().pending = None;
     assert!(!player.deliver_source_prefix().unwrap());
-    assert_eq!(
-        player.reserve_prefix_object_capacity(required).unwrap(),
-        required
-    );
+    assert!(!player.reserve_source_prefix_capacity().unwrap());
+    assert_eq!(player.reserve_object_capacity(0).unwrap(), capacity);
     assert_eq!(player.prepared_frontier(), 1.0);
     assert_eq!(player.prepared_end_time(), None);
     player.stop_source_preparation();
-    assert_eq!(
-        player.reserve_prefix_object_capacity(required).unwrap(),
-        required
-    );
+    assert!(!player.reserve_source_prefix_capacity().unwrap());
+    assert_eq!(player.reserve_object_capacity(0).unwrap(), capacity);
     assert!(player.drain_delta_json().unwrap().is_none());
 }

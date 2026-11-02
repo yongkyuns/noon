@@ -55,6 +55,33 @@ pub(super) fn reserve_object_vectors(
 }
 
 impl PrefixReceiver {
+    /// Named maintenance barrier for all storage required by this admitted batch.
+    /// Failed validation never allocates; failed allocation changes capacity only.
+    pub fn reserve_append_capacity(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: &super::PrefixBatch,
+    ) -> Result<(), PrefixError> {
+        match self.preflight_append(runtime, batch) {
+            Ok(_)
+            | Err(PrefixError::CapacityRequired { .. })
+            | Err(PrefixError::FamilyAnimationCapacityRequired { .. }) => {}
+            Err(error) => return Err(error),
+        }
+        self.reserve_object_capacity(runtime, batch.required_object_capacity())?;
+        let total = batch.required_family_animation_capacity();
+        runtime
+            .compiled
+            .reserve_prefix_family_capacity(total)
+            .map_err(|_| PrefixError::Allocation)?;
+        runtime
+            .timeline_scheduler
+            .reserve_prefix_groups(batch.family_animations.len())
+            .map_err(|_| PrefixError::Allocation)?;
+        self.family_capacity = self.family_capacity.max(total);
+        Ok(())
+    }
+
     /// Named O(existing storage) maintenance barrier, separate from ordinary
     /// prefix delivery. Reserve ahead using a bounded workload capacity or the
     /// next batch's required_object_capacity(). Returns requested total slots.

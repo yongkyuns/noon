@@ -85,7 +85,7 @@ impl PreparedCanvasFixture {
         terminal: bool,
     ) -> Result<(), JsValue> {
         let batch = self.next_batch(terminal)?;
-        canvas.reserve_prepared_prefix_capacity(batch.required_object_capacity())?;
+        canvas.reserve_prepared_prefix_capacity(&batch)?;
         canvas.preflight_prepared_prefix(&batch)?;
         canvas.append_prepared_prefix(batch)?;
         if terminal {
@@ -388,7 +388,7 @@ impl InterpreterCanvasFixture {
                 .publish_prepared_prefix(&mut self.publisher)
                 .map_err(js_error)?
         };
-        canvas.reserve_prepared_prefix_capacity(batch.required_object_capacity())?;
+        canvas.reserve_prepared_prefix_capacity(&batch)?;
         canvas.preflight_prepared_prefix(&batch)?;
         canvas.append_prepared_prefix(batch).map(|_| ())
     }

@@ -50,12 +50,12 @@ fn interpreter_worker_completion_is_separate_from_quiet_historical_adoption() {
     player.prepare_interpreter_segment(&mut context).unwrap();
     assert_eq!(context.active_live_player().unwrap().time(), 2.0);
     assert_eq!(state(&player)["frontier"], 1.0);
-    assert!(player.pending_source_object_capacity().is_some());
+    assert!(player.reserve_source_prefix_capacity().unwrap());
     assert!(player.drain_delta_json().unwrap().is_none());
     assert!(player.deliver_source_prefix().unwrap());
     assert_eq!(state(&player)["frontier"], 2.0);
     assert_eq!(state(&player)["time"], 0.5);
-    assert!(player.pending_source_object_capacity().is_none());
+    assert!(!player.reserve_source_prefix_capacity().unwrap());
     assert!(player.drain_delta_json().unwrap().is_none());
     assert!(!player.deliver_source_prefix().unwrap());
     assert!(player.seek_delta_json(1.5).unwrap().is_some());
@@ -107,7 +107,6 @@ fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source(
     context.live_add_mobject(ObjectId::new(1), &extra).unwrap();
     context.begin_ordinary_wait(0.5).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
-    let required = player.pending_source_object_capacity().unwrap();
     let prepared = context.active_live_player().unwrap().debug_frame_json();
     let before = state(&player);
     assert!(player
@@ -115,7 +114,6 @@ fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source(
         .unwrap_err()
         .contains("CapacityRequired"));
     assert_eq!(state(&player), before);
-    assert_eq!(player.pending_source_object_capacity(), Some(required));
     assert!(player
         .prepare_interpreter_segment(&mut context)
         .unwrap_err()
@@ -125,11 +123,11 @@ fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source(
         context.active_live_player().unwrap().debug_frame_json(),
         prepared
     );
-    player.reserve_prefix_object_capacity(required).unwrap();
+    assert!(player.reserve_source_prefix_capacity().unwrap());
     assert!(player.deliver_source_prefix().unwrap());
     assert_eq!(state(&player)["frontier"], 1.5);
     assert!(player.drain_delta_json().unwrap().is_none());
-    assert!(player.pending_source_object_capacity().is_none());
+    assert!(!player.reserve_source_prefix_capacity().unwrap());
 }
 
 #[test]
@@ -140,13 +138,12 @@ fn interpreter_worker_terminal_capacity_failure_is_not_false_completion() {
         .unwrap();
     context.live_add_mobject(ObjectId::new(1), &extra).unwrap();
     player.finish_interpreter_source(&mut context).unwrap();
-    let required = player.pending_source_object_capacity().unwrap();
     drop(context);
     drop(extra);
     assert!(player.deliver_source_prefix().is_err());
     assert_eq!(state(&player)["end"], serde_json::Value::Null);
     assert!(player.seek_delta_json(1.0).is_err());
-    player.reserve_prefix_object_capacity(required).unwrap();
+    assert!(player.reserve_source_prefix_capacity().unwrap());
     assert!(player.deliver_source_prefix().unwrap());
     assert_eq!(state(&player)["end"], 1.0);
     assert_eq!(state(&player)["time"], 0.5);
@@ -166,7 +163,7 @@ fn interpreter_worker_zero_duration_completion_defers_same_time_edits() {
         .unwrap();
     context.begin_ordinary_wait(0.0).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
-    assert!(player.pending_source_object_capacity().is_none());
+    assert!(!player.reserve_source_prefix_capacity().unwrap());
     assert!(!player.deliver_source_prefix().unwrap());
     assert_eq!(state(&player)["frontier"], 1.0);
     assert!(player.seek_delta_json(1.0).is_err());
@@ -183,10 +180,10 @@ fn interpreter_worker_cancellation_releases_pending_only_and_never_seals_history
     let (mut context, _, mut player) = start();
     context.begin_ordinary_wait(0.25).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
-    assert!(player.pending_source_object_capacity().is_some());
+    assert!(player.reserve_source_prefix_capacity().unwrap());
     player.stop_source_preparation();
     player.stop_source_preparation();
-    assert!(player.pending_source_object_capacity().is_none());
+    assert!(!player.reserve_source_prefix_capacity().unwrap());
     assert!(player.deliver_source_prefix().is_err());
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
     assert_eq!(state(&player)["frontier"], 1.0);

@@ -789,9 +789,7 @@ function requirePreparedContinuation(run, context, signal = null) {
 
 function deliverPreparedSourcePrefix(continuation) {
   const player = continuation.preparedPlayer;
-  const capacity = invokePreparedEngine(() => player.pendingSourceObjectCapacity());
-  if (capacity === undefined) return false; // Completed zero-duration segment.
-  invokePreparedEngine(() => player.reservePrefixObjectCapacity(capacity));
+  if (!invokePreparedEngine(() => player.reserveSourcePrefixCapacity())) return false;
   if (!invokePreparedEngine(() => player.deliverSourcePrefix())) throw new Error("prepared source lost its retained suffix");
   // Future history is not a presentation. No transport/presentation await is
   // needed to release this source barrier, even while the reader is paused.

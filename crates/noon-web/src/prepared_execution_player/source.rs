@@ -3,7 +3,7 @@
 //! No scene/history payload crosses JavaScript between these Rust owners.
 use super::PreparedExecutionPlayer;
 use crate::canonical_authoring_scene::CanonicalAuthoringScene;
-use noon::{PrefixBatch, PrefixError, PrefixPublisher};
+use noon::{PrefixBatch, PrefixPublisher};
 
 pub(super) struct SourceDelivery {
     publisher: PrefixPublisher,
@@ -93,34 +93,23 @@ impl PreparedExecutionPlayer {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl PreparedExecutionPlayer {
-    /// Required physical-row capacity of the single undelivered suffix. This is
-    /// allocation metadata, not semantic identity, authored time or a wire batch.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pendingSourceObjectCapacity))]
-    pub fn pending_source_object_capacity(&self) -> Option<usize> {
-        self.source
-            .as_ref()?
-            .pending
-            .as_ref()
-            .map(PrefixBatch::required_object_capacity)
-    }
-
-    /// Explicit maintenance boundary, separate from extraction and adoption.
-    /// A pending suffix must pass permanent receiver admission before any growth;
-    /// only CapacityRequired is a recoverable rejection. The suffix is retained.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reservePrefixObjectCapacity))]
-    pub fn reserve_prefix_object_capacity(&mut self, total: usize) -> Result<usize, String> {
-        if let Some(batch) = self
+    /// Explicit maintenance for the single borrowed pending suffix. Rust owns
+    /// object/plan counts and permanent admission; JavaScript carries no batch.
+    /// False denotes no pending output, including a zero-duration boundary.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = reserveSourcePrefixCapacity))]
+    pub fn reserve_source_prefix_capacity(&mut self) -> Result<bool, String> {
+        let Some(batch) = self
             .source
             .as_ref()
             .and_then(|source| source.pending.as_ref())
-        {
-            match self.preflight_append(batch) {
-                Ok(_) | Err(PrefixError::CapacityRequired { .. }) => {}
-                Err(error) => return Err(error.to_string()),
-            }
-        }
-        self.reserve_object_capacity(total)
-            .map_err(|e| e.to_string())
+        else {
+            return Ok(false);
+        };
+        self.playback
+            .reader
+            .reserve_append_capacity(batch)
+            .map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     /// Adopt the same retained suffix, or fail before consuming it. A capacity
