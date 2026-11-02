@@ -65,6 +65,9 @@ const semanticContexts = new Map();
 let nextSemanticContext = 0;
 let nextContinuationGeneration = 1;
 let activeAuthoringRun = null;
+// Opaque source may modify imported modules/builtins. Never infer purity against
+// that environment on a later Run or retry/reconstruct the source to recover it.
+let authoringLibrariesPristine = true;
 let fatalAuthoringFailure = false;
 
 pyodidePromise
@@ -803,7 +806,7 @@ function createPreparedSourceDriver(run) {
       const continuation = requirePreparedContinuation(run, context, signal);
       if (continuation.observedExecution) return awaitObservedContinuation(continuation);
       if (!continuation.preparedBootstrapObserved) {
-        if (invokePreparedEngine(() => context.beginObservedPreparedSource())) {
+        if (invokePreparedEngine(() => context.beginObservedPreparedSource(run.sourceSceneOnly === true))) {
           continuation.observedExecution = true;
           // Install the original stack's await before attachment can request its
           // first callback. There is no reader or replacement source invocation.
@@ -1273,6 +1276,7 @@ async function handleRequest(request) {
       const run = {
         requestId, continuation: null, continuationCallbackSession: null,
         preparedPlayback: request.preparedPlayback === true,
+        sourceSceneOnly: false,
         preparationLookaheadSeconds: request.preparationLookaheadSeconds ?? 1,
         preparedDriver: null, completedPreparedContextId: null,
       };
@@ -1633,6 +1637,14 @@ _manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
 
 async function runAuthoringSource(pyodide, source, context, requestId) {
   return withAuthoringDiagnostics(pyodide, source, context, requestId, async (globals) => {
+    const run = activeAuthoringRun;
+    const sceneOnly = authoringLibrariesPristine && pyodide.runPython(`
+from _manim_source_execution import source_is_scene_only
+source_is_scene_only(__noon_source)
+`, { globals });
+    if (typeof sceneOnly !== "boolean") throw new TypeError("source effect proof must be a boolean");
+    authoringLibrariesPristine &&= sceneOnly;
+    run.sourceSceneOnly = sceneOnly;
     await prepareAuthoringDependencies(pyodide, source);
     return pyodide.runPythonAsync(diagnosedHostCode(`
 import json

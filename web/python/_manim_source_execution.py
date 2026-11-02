@@ -19,8 +19,10 @@ barriers, generators and custom Scene methods keep the original execution path.
 from __future__ import annotations
 
 import ast
+import builtins
 import copy
 import inspect
+import sys
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -28,6 +30,251 @@ from types import CodeType, FunctionType, MethodType
 
 BARRIER_GLOBAL = "_noon_await_source_barrier"
 MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
+
+# A closed source may use these trusted, scene/data-only entry points. This is
+# deliberately a positive capability list, not a blacklist of known I/O calls.
+# Unknown dispatch, descriptors and source hooks keep observed execution.
+_SOURCE_CONSTRUCTORS = frozenset("""
+Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
+Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text Code MathTypst
+Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
+ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
+ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur GlowPulse
+""".split())
+_SOURCE_FUNCTIONS = frozenset("""
+linear smooth rush_into rush_from there_and_back color_from_hex interpolate_color
+always_redraw
+""".split())
+_SOURCE_CONSTANTS = frozenset("""
+BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
+GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
+PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GRAY GOLD TEAL MAROON
+UP DOWN LEFT RIGHT IN OUT ORIGIN UL UR DL DR PI TAU DEGREES
+""".split())
+_SOURCE_BUILTINS = frozenset("""
+abs all any bool bytes bytearray dict enumerate filter float frozenset int
+isinstance len list map max min next range reversed round set slice sorted str
+sum tuple zip ValueError RuntimeError
+""".split())
+_SOURCE_MEMBERS = frozenset("""
+add remove clear play wait on_click set_drag_targets next_section
+add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
+shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
+set_fill set_stroke set_color set_opacity set_z_index set_glow remove_glow
+add_effect remove_effect get_center get_x get_y get_width get_height get_value
+set_value increment_value copy become add_updater remove_updater clear_updaters
+start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
+animate id width height radius append extend insert pop count index get keys values
+items update union intersection difference join split strip lower upper replace
+startswith endswith encode decode hex fromhex tobytes reverse sort
+""".split())
+_SOURCE_MODULES = {
+    "math": frozenset("""
+        pi tau e inf nan sin cos tan asin acos atan atan2 sinh cosh tanh sqrt hypot
+        exp log log2 log10 floor ceil trunc degrees radians copysign fabs fmod pow
+        isfinite isnan isclose dist prod fsum
+    """.split()),
+    "colorsys": frozenset("hsv_to_rgb rgb_to_hsv hls_to_rgb rgb_to_hls".split()),
+    "struct": frozenset("pack unpack calcsize".split()),
+    "zlib": frozenset("compress decompress crc32 adler32".split()),
+    "array": frozenset({"array"}),
+    "re": frozenset("compile escape findall finditer match fullmatch search split sub IGNORECASE MULTILINE DOTALL".split()),
+}
+
+
+class _OpaqueSource(Exception):
+    pass
+
+
+class _SourceBindings(ast.NodeVisitor):
+    """Lexical bindings only; nested functions/classes/comprehensions own theirs."""
+    def __init__(self):
+        self.names = set()
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, ast.Store):
+            self.names.add(node.id)
+
+    def visit_FunctionDef(self, node):
+        self.names.add(node.name)
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+    visit_ClassDef = visit_FunctionDef
+
+    def visit_Import(self, node):
+        self.names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+
+    def visit_ImportFrom(self, node):
+        self.names.update(alias.asname or alias.name for alias in node.names if alias.name != "*")
+
+    def visit_ListComp(self, node):
+        pass
+
+    visit_SetComp = visit_DictComp = visit_GeneratorExp = visit_ListComp
+
+
+class _SceneOnlySource(ast.NodeVisitor):
+    def __init__(self, tree, star_exports):
+        bindings = _SourceBindings()
+        for node in tree.body:
+            bindings.visit(node)
+        # A later module binding must not make an earlier builtin call look safe.
+        if (bindings.names.intersection(vars(builtins))
+                or any(name.startswith("_") for name in bindings.names)):
+            raise _OpaqueSource()
+        noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
+        imported = frozenset().union(*star_exports.values())
+        if ((imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})):
+            # A later assignment must not bless an earlier name supplied by an
+            # opaque wildcard export (e.g. noon.version, which reads metadata).
+            raise _OpaqueSource()
+        self.scopes = [bindings.names | {"context", "__name__"} | _SOURCE_BUILTINS]
+        self.members = _SOURCE_MEMBERS | frozenset().union(*_SOURCE_MODULES.values())
+        self.code_constructors = {"Code"} | {
+            alias.asname or alias.name for node in tree.body
+            if isinstance(node, ast.ImportFrom) and node.module in {"noon", "manim"}
+            for alias in node.names if alias.name == "Code"
+        }
+        self.admitted_code_loads = set()
+
+    def visit_Name(self, node):
+        # exec/eval installs __builtins__ before user module assignments. A
+        # later binding cannot turn that intrinsic (or compiler helpers) into
+        # owned data. __name__ is the one explicit string in our namespace.
+        if node.id.startswith("_") and node.id != "__name__":
+            raise _OpaqueSource()
+        if (isinstance(node.ctx, ast.Load) and node.id in self.code_constructors
+                and id(node) not in self.admitted_code_loads):
+            raise _OpaqueSource()
+        if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
+            raise _OpaqueSource()
+
+    def visit_Call(self, node):
+        # Code(code_file=...) reads the host filesystem. Only the explicit
+        # in-memory constructor form has the scene/data-only contract; aliases,
+        # positional paths and expanded keyword dictionaries are not proven.
+        if isinstance(node.func, ast.Name) and node.func.id in self.code_constructors:
+            keywords = {keyword.arg for keyword in node.keywords}
+            if node.args or "code_string" not in keywords or "code_file" in keywords or None in keywords:
+                raise _OpaqueSource()
+            self.admitted_code_loads.add(id(node.func))
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node):
+        if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
+            raise _OpaqueSource()
+        self.visit(node.value)
+
+    def visit_Import(self, node):
+        if len(self.scopes) != 1 or any(alias.name not in _SOURCE_MODULES for alias in node.names):
+            raise _OpaqueSource()
+
+    def visit_ImportFrom(self, node):
+        if len(self.scopes) != 1 or node.level:
+            raise _OpaqueSource()
+        noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
+        allowed = noon_names if node.module in {"noon", "manim"} else _SOURCE_MODULES.get(node.module, ())
+        for alias in node.names:
+            if alias.name == "*" and node.module in {"noon", "manim"}:
+                self.scopes[0].update(noon_names)
+            elif alias.name not in allowed:
+                raise _OpaqueSource()
+
+    def _scope(self, body, parameters=()):
+        bindings = _SourceBindings()
+        for node in body:
+            bindings.visit(node)
+        self.scopes.append(bindings.names | set(parameters))
+        try:
+            for node in body:
+                self.visit(node)
+        finally:
+            self.scopes.pop()
+
+    def visit_FunctionDef(self, node):
+        if node.name.startswith("_") or node.decorator_list or node.returns or getattr(node, "type_params", ()):
+            raise _OpaqueSource()
+        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+        if any(argument.annotation for argument in arguments) or node.args.vararg or node.args.kwarg:
+            raise _OpaqueSource()
+        for value in [*node.args.defaults, *filter(None, node.args.kw_defaults)]:
+            self.visit(value)
+        self._scope(node.body, (argument.arg for argument in arguments))
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        if (node.decorator_list or node.keywords or getattr(node, "type_params", ()) or len(node.bases) != 1
+                or not isinstance(node.bases[0], ast.Name) or node.bases[0].id != "Scene"):
+            raise _OpaqueSource()
+        self.visit(node.bases[0])
+        if any(not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Expr, ast.Pass))
+               or isinstance(member, ast.Expr) and not isinstance(member.value, ast.Constant)
+               for member in node.body):
+            raise _OpaqueSource()
+        # Methods resolve module globals, not names in their class dictionary.
+        for member in node.body:
+            self.visit(member)
+
+    def visit_Lambda(self, node):
+        self.visit_FunctionDef(ast.FunctionDef(name="callback", args=node.args,
+            body=[ast.Expr(value=node.body)], decorator_list=[], returns=None))
+
+    def _comprehension(self, node):
+        self.scopes.append(set())
+        try:
+            for generator in node.generators:
+                if generator.is_async:
+                    raise _OpaqueSource()
+                self.visit(generator.iter)
+                bindings = _SourceBindings()
+                bindings.visit(generator.target)
+                self.scopes[-1].update(bindings.names)
+                for condition in generator.ifs:
+                    self.visit(condition)
+            for value in ([node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]):
+                self.visit(value)
+        finally:
+            self.scopes.pop()
+
+    visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = _comprehension
+
+    def visit_Subscript(self, node):
+        if not isinstance(node.ctx, ast.Load):
+            raise _OpaqueSource()
+        self.generic_visit(node)
+
+    def _opaque(self, node):
+        raise _OpaqueSource()
+
+    visit_Global = visit_Nonlocal = visit_With = visit_AsyncWith = _opaque
+    visit_Delete = visit_NamedExpr = _opaque
+
+
+def source_is_scene_only(source: str) -> bool:
+    """Prove a closed trusted-API subset; unknown Python remains opaque.
+
+    This assumes a pristine interpreter (or only preceding proven sources).
+    The worker latches opaque execution as taint, since it may mutate libraries.
+    This is source-effect metadata only: Rust still checks callbacks/input,
+    replay, resources and actual continuation/publication receipts separately.
+    """
+    try:
+        tree = ast.parse(source)
+        exports = {}
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.ImportFrom) and node.module in {"noon", "manim"}
+                    and any(alias.name == "*" for alias in node.names)):
+                if node.module == "noon":
+                    import noon
+                module = sys.modules.get(node.module)
+                if module is None or not isinstance(getattr(module, "__all__", None), (list, tuple)):
+                    return False
+                exports[node.module] = frozenset(module.__all__)
+        _SceneOnlySource(tree, exports).visit(tree)
+        return True
+    except (_OpaqueSource, SyntaxError, RecursionError):
+        return False
 RESOURCE_BARRIER_METHODS = frozenset({
     "add_effect", "add", "add_foreground_mobject", "add_foreground_mobjects",
     "bring_to_front", "bring_to_back", "replace",

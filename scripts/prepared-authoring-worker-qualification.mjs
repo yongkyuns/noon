@@ -11,16 +11,14 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { installPreparedSourceCounterProbe } from "./prepared-source-counter-probe.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = process.env.NOON_PREPARED_AUTHORING_ARTIFACTS ?? path.join(root, "browser-smoke-artifacts/prepared-authoring-worker");
 const source = `from noon import *
-from js import JSON, postMessage
-import json
 events = []
 def mark(value):
     events.append(value)
-    postMessage(JSON.parse(json.dumps({"channel": "prepared.qualification", "events": events})))
 class PreparedWorkerScene(Scene):
     def construct(self):
         target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
@@ -42,10 +40,11 @@ class PreparedWorkerScene(Scene):
 `;
 const failureSource = source.slice(0, source.indexOf('        self.play(')) + '        raise RuntimeError("intentional prepared production failure")\n';
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
-const report = { status: "running", scope: "opt-in production Python authoring worker and render worker; default UI unchanged", sourceSha256: hash(source), cases: [] };
+const report = { status: "running", scope: "production Python/render workers with read-only counter probe; no timing or default-cutover claim", sourceSha256: hash(source), cases: [] };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 const launchOptions = backend => ({
-  headless: true, channel: "chromium", args: browserArgs(backend),
+  headless: true, ...(process.env.NOON_BROWSER_EXECUTABLE ? { executablePath: process.env.NOON_BROWSER_EXECUTABLE } : { channel: "chromium" }),
+  args: browserArgs(backend, { gpuMode: process.env.NOON_RENDER_GPU_MODE ?? "software" }),
   ...(process.env.NOON_BROWSER_PROXY ? { proxy: { server: process.env.NOON_BROWSER_PROXY, bypass: "127.0.0.1,localhost" } } : {}),
 });
 let server, browser;
@@ -59,7 +58,8 @@ function changedPixels(a, b) {
   return changed;
 }
 
-async function start(page, source, transportMode, cancelBeforeAttach = false) {
+async function start(page, source, transportMode, cancelBeforeAttach = false, evidence = report) {
+  await installPreparedSourceCounterProbe(page.context(), "prepared.qualification", evidence);
   await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
   await page.evaluate(async ({ source, transportMode, cancelBeforeAttach }) => {
     const { PythonAuthoringClient } = await import("./authoring-client.js");
@@ -142,7 +142,7 @@ try {
         assert.fail(`prepared state did not settle: ${JSON.stringify(await state())}`);
       };
       try {
-        await start(page, source, transportMode);
+        await start(page, source, transportMode, false, entry);
         await page.waitForFunction(() => preparedAuthoring.attached || preparedAuthoring.outcome?.status === "failed");
         assert.equal(await page.evaluate(() => preparedAuthoring.attached), true, JSON.stringify(await page.evaluate(() => preparedAuthoring.outcome)));
         await page.waitForFunction(async () => {
@@ -247,7 +247,7 @@ try {
     const entry = { mode, status: "running", checks: [] }; report.cases.push(entry);
     const page = await browser.newPage(); page.setDefaultTimeout(180_000); await cache.install(page.context());
     try {
-      await start(page, mode === "source-error" ? failureSource : source, "transferable", mode === "cancel-bootstrap");
+      await start(page, mode === "source-error" ? failureSource : source, "transferable", mode === "cancel-bootstrap", entry);
       if (mode !== "cancel-bootstrap") {
         await page.waitForFunction(() => preparedAuthoring.attached || preparedAuthoring.outcome?.status === "failed");
         assert.equal(await page.evaluate(() => preparedAuthoring.attached), true);

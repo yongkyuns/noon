@@ -29,6 +29,23 @@ fn deliver(reader: &mut PrefixReader, batch: PrefixBatch) {
 }
 
 #[test]
+fn interpreter_host_effect_admission_retains_a_quiet_original_source_at_its_actual_time() {
+    let (mut context, _) = fixture();
+    context.begin_ordinary_wait(1.0).unwrap();
+    let player = context.active_live_player().unwrap();
+    let before = player.debug_frame_json();
+    let identity = player.ownership_identity();
+    assert!(context
+        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+        .unwrap());
+    let player = context.take_execution_player(1.0, 0).unwrap();
+    assert_eq!(player.ownership_identity(), identity);
+    assert_eq!(player.debug_frame_json(), before);
+    assert_eq!(player.time(), 0.0);
+    assert!(player.has_pending_live_segment());
+}
+
+#[test]
 fn interpreter_prefix_uses_actual_completed_wait_without_transferring_source() {
     let (mut context, _) = fixture();
     assert!(context.prepare_live_segment().is_err());
@@ -172,7 +189,9 @@ fn interpreter_prefix_callback_rejection_does_not_advance_or_complete_source() {
     assert!(context.create_prepared_prefix().is_err());
 
     let identity = context.active_live_player().unwrap().ownership_identity();
-    assert!(context.begin_observed_prepared_source().unwrap());
+    assert!(context
+        .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
+        .unwrap());
     assert_eq!(
         context.active_live_player().unwrap().debug_frame_json(),
         before
