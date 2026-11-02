@@ -80,6 +80,7 @@ const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "p
 const hash = value => createHash("sha256").update(value).digest("hex");
 const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
+  runOptions: "viewer defaults; no qualification run-options hook",
   sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
 report.staticInputSourceSha256 = hash(staticInputSource); report.zeroInputSourceSha256 = hash(zeroInputSource);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
@@ -102,9 +103,6 @@ async function installFixture(page, evidence) {
   await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
   await page.addInitScript(() => {
-    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
-      authoringRunOptions: () => ({ preparedPlayback: true, preparationLookaheadSeconds: 0.75 }),
-    };
     // Count native worker construction without intercepting messages or work.
     globalThis.galleryWorkers = [];
     const NativeWorker = globalThis.Worker;
@@ -299,11 +297,24 @@ try {
         assert.equal(sourceInvocations, 1);
         entry.checks.push("exact-endpoint", "exact-rewind-pixels");
 
-        // A real Run replaces the historical stream, retaining the healthy VM.
+        // A real Run replaces the historical stream, retaining the renderer,
+        // canvas and healthy VM after acknowledged source retirement.
+        const beforeRerun = await page.evaluate(async () => {
+          globalThis.beforeRerunGalleryCanvas = document.querySelector("#scene");
+          return { metrics: (await __noonExampleGallery.executionMetrics()).metrics,
+            workers: galleryWorkers.length };
+        });
         await page.locator("#replace-scene").click(); await openReady(page); await pause(page);
-        assert.equal(await page.evaluate(() => originalGalleryCanvas === document.querySelector("#scene")), false);
+        assert.equal(await page.evaluate(() => beforeRerunGalleryCanvas === document.querySelector("#scene")), true);
+        const afterRerun = await page.evaluate(async () => ({
+          metrics: (await __noonExampleGallery.executionMetrics()).metrics,
+          workers: galleryWorkers.length,
+        }));
+        assert.ok(afterRerun.metrics.presentedSession > beforeRerun.metrics.presentedSession);
+        assert.ok(afterRerun.metrics.presentedFrames > beforeRerun.metrics.presentedFrames);
+        assert.equal(afterRerun.workers, beforeRerun.workers);
         assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
-        entry.checks.push("completed-rerun-uses-fresh-reader-warm-interpreter");
+        entry.checks.push("completed-rerun-fresh-reader-reuses-renderer-canvas-and-warm-interpreter");
 
         // Select another source while preparation is demand-paused. This uses
         // normal cooperative cancellation and the gallery's generation gates.

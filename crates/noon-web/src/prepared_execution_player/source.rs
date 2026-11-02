@@ -220,6 +220,15 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
+        /// Choose the original completed runtime when static history cannot
+        /// represent all authored work. Source execution and cleanup are done.
+        #[wasm_bindgen(js_name = prepareFinishedSource)]
+        pub fn prepare_finished_source(&mut self) -> Result<bool, JsValue> {
+            self.inner
+                .prepare_finished_source()
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
         /// Completed static source uses the same reader/worker presentation path.
         #[wasm_bindgen(js_name = createFinishedPreparedExecutionPlayer)]
         pub fn create_finished_prepared_execution_player(

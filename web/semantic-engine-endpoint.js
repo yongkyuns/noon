@@ -1521,7 +1521,17 @@ export async function attachSemanticEngine(
         if (prepared !== null) {
           // A failed renderer cannot consume further publications. Retain the
           // exact reader/source cursor for receiver replacement, never replay C.
+          try {
+            if (!receiverFailed && preparedClockAdmitted && player.preparedPlaying()) {
+              // A sleeping static wait can have observed elapsed time beyond
+              // its last evaluated frame. Commit it through Rust before resetting
+              // the wake epoch, preserving intent without publishing to a lost GPU.
+              player.pausePreparedAt(performance.now());
+              player.setPreparedPlaying(true);
+            }
+          } catch (error) { terminateProgression(error); return; }
           receiverFailed = true;
+          preparedClockAdmitted = false;
           latestTick = null;
           controls.length = 0;
           emitExecutionWake("idle", null, true);

@@ -111,6 +111,7 @@ function navigationFixture() {
   const window = new EventTarget();
   const diagnostics = { hidden: false };
   const context = {
+    __NOON_PLAYGROUND_TEST_HOOKS__: { authoringRunOptions: () => ({ preparedPlayback: false }) },
     window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" },
     generations: new PlaygroundGeneration(), status: { dataset: {} }, patchStatus: { dataset: {} },
     player: null, playerNeedsRestart: false, playbackControls: null, runtimePreparation: null,
@@ -328,7 +329,7 @@ test("delayed startup options admit one authoring request and unchanged Runs joi
     await f.waitForAuthoring(run);
     assert.equal(f.requests.length, 1);
     assert.equal(f.requests[0].source, "source");
-    assert.equal(f.requests[0].options.preparedPlayback, false);
+    assert.equal(f.requests[0].options.preparedPlayback, true);
     assert.equal(f.requests[0].options.preparationLookaheadSeconds, 1);
     assert.equal(f.requests[0].sourceContext.playground.run_generation, payload.runGeneration);
   } finally {
@@ -442,7 +443,7 @@ for (const asynchronous of [false, true]) {
   });
 }
 
-test("navigation after replacing a prepared reader retires each owner once", async () => {
+test("navigation after retiring a prepared reader releases its reused renderer once", async () => {
   const f = navigationFixture();
   const previous = f.context.ensureRuntimePreparation().candidate;
   f.context.player = previous; f.context.preparedPlaybackPlayer = previous;
@@ -453,18 +454,17 @@ test("navigation after replacing a prepared reader retires each owner once", asy
   try {
     await f.waitForAuthoring(run);
     assert.equal(pauses, 0, "a prepared reader must retire rather than pause for reuse");
-    assert.equal(previous.terminations, 1);
+    assert.equal(previous.terminations, 0);
     assert.equal(f.context.preparedPlaybackPlayer, null);
-    assert.equal(f.owners.length, 2);
+    assert.equal(f.owners.length, 1);
     assert.equal(f.requests.length, 1);
   } finally {
     f.dispatch("pagehide", false);
     await run;
   }
   assert.equal(previous.terminations, 1);
-  assert.equal(f.owners[1].terminations, 1);
   assert.equal(f.clients[0].terminated, true);
-  assert.equal(f.context.canvas, f.owners[1].canvas);
+  assert.equal(f.context.canvas, previous.canvas);
   assert.deepEqual(f.errors, []);
 });
 

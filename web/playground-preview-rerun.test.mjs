@@ -28,7 +28,7 @@ function deferred() {
 // Exercise the actual Run/retirement functions with an already-completed source
 // that is replaying. No input/edit event occurs before this explicit Run.
 function fixture({ retire = () => Promise.resolve(), started = true, prepared = false,
-  authoringRunOptions } = {}) {
+  authoringRunOptions = () => ({ preparedPlayback: false }) } = {}) {
   const events = [], errors = [], authorRequests = [];
   const retireEntered = deferred();
   const failure = new Error("second run fails");
@@ -167,16 +167,6 @@ test("Run waits for the retire acknowledgement and concurrent requests join the 
 });
 
 
-test("ordinary Run without qualification hooks preserves worker defaults", async () => {
-  const f = fixture();
-  assert.equal(Object.hasOwn(f.context, "__NOON_PLAYGROUND_TEST_HOOKS__"), false);
-  assert.equal((await f.context.runScene()).error, f.failure);
-  assert.equal(f.authorRequests.length, 1);
-  assert.equal(f.authorRequests[0].options.preparedPlayback, false);
-  assert.equal(f.authorRequests[0].options.preparationLookaheadSeconds, 1);
-  assert.deepEqual(f.errors, [f.failure]);
-});
-
 test("concurrent Runs await one options hook and one retire before authoring", async () => {
   const options = deferred(), retired = deferred();
   const calls = [];
@@ -232,10 +222,10 @@ for (const prepared of [false, true]) {
   test(`${prepared ? "prepared reader" : "ordinary reader entering prepared execution"} is retired before new authoring`, async () => {
     const f = fixture({ prepared, authoringRunOptions: () => ({ preparedPlayback: true }) });
     assert.equal((await f.context.runScene()).error, f.failure);
-    assert.deepEqual(f.events, ["hold", "retire", "terminate", "prepare", "author", "hold"]);
-    assert.equal(f.oldPlayer.terminations, 1);
+    assert.deepEqual(f.events, ["hold", "retire", "author", "hold"]);
+    assert.equal(f.oldPlayer.terminations, 0);
     assert.equal(f.playing, false);
-    assert.equal(f.context.player, null);
+    assert.equal(f.context.player, f.oldPlayer);
     assert.equal(f.context.preparedPlaybackPlayer, null);
     assert.equal(f.client.terminated, false);
     assert.equal(f.authorRequests[0].options.preparedPlayback, true);
@@ -247,8 +237,8 @@ for (const prepared of [false, true]) {
 test("prepared reader is retired even when the new Run requests ordinary execution", async () => {
   const f = fixture({ prepared: true });
   assert.equal((await f.context.runScene()).error, f.failure);
-  assert.deepEqual(f.events, ["hold", "retire", "terminate", "prepare", "author", "hold"]);
-  assert.equal(f.oldPlayer.terminations, 1);
+  assert.deepEqual(f.events, ["hold", "retire", "author", "hold"]);
+  assert.equal(f.oldPlayer.terminations, 0);
   assert.equal(f.context.preparedPlaybackPlayer, null);
   assert.equal(f.authorRequests[0].options.preparedPlayback, false);
   assert.deepEqual(f.errors, [f.failure]);

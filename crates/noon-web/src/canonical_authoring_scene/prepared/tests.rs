@@ -292,6 +292,43 @@ fn completed_static_scene_reader_has_no_fabricated_duration_or_source_lease() {
 }
 
 #[test]
+fn finished_source_admission_preserves_declared_work_and_static_history() {
+    for future in [false, true] {
+        let (mut context, _) = fixture();
+        if future {
+            let tracker = context.scene.value_tracker(0.0).unwrap();
+            context
+                .scene
+                .play_value(&tracker, 2.0)
+                .run_time(1.0)
+                .unwrap();
+        }
+        assert_eq!(context.prepare_finished_source().unwrap(), !future);
+        if future {
+            let mut player = context.take_execution_player(1.0, 7).unwrap();
+            player.pause();
+            assert_eq!(player.fresh_finite_source_duration(), Some(1.0));
+        } else {
+            let reader = context.create_finished_static_reader().unwrap().unwrap();
+            assert_eq!(reader.end_time(), Some(0.0));
+            assert_eq!(reader.frame().objects.len(), 1);
+        }
+    }
+    let (mut context, _) = fixture();
+    let source = crate::authoring_audio::pcm_resource(vec![0.25; 8_000], 8_000, 1).unwrap();
+    context
+        .audio(&source, noon::AudioClipOptions::default())
+        .unwrap();
+    assert_eq!(context.scene.time(), 0.0);
+    assert!(!context.prepare_finished_source().unwrap());
+    let player = context.take_execution_player(1.0, 7).unwrap();
+    assert!(
+        player.has_audio_wasm(),
+        "zero authored time cannot discard audio"
+    );
+}
+
+#[test]
 fn completed_static_drag_cannot_be_advertised_as_input_free_history() {
     for zero_wait in [false, true] {
         let (mut context, target) = fixture();
