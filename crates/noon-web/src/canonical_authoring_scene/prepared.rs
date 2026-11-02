@@ -4,6 +4,23 @@ use super::{AuthoringFailure, CanonicalAuthoringScene};
 use noon::{PrefixBatch, PrefixPublisher, PrefixReader};
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn prefix_source_requirement(
+        &mut self,
+        publisher: &PrefixPublisher,
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        self.active_live_player()?
+            .prefix_source_requirement(publisher)
+    }
+
+    pub(crate) fn begin_observed_prefix_source(
+        &mut self,
+        publisher: &PrefixPublisher,
+        reader: &PrefixReader,
+        playing: bool,
+    ) -> Result<(), AuthoringFailure> {
+        self.active_live_player()?
+            .begin_observed_prefix_source(publisher, reader, playing)
+    }
     /// Initial admission only: keep the original pending segment and player for
     /// observed execution, releasing open history before any reader is created.
     pub fn begin_observed_prepared_source(&mut self) -> Result<bool, AuthoringFailure> {

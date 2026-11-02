@@ -224,7 +224,7 @@ export class PlaygroundPlaybackControls {
     if (this.#destroyed || this.#seekActive || this.#commandPending) return;
     // Prepared state already distinguishes an open frontier from the adopted
     // final endpoint. Ordinary source-driven progress still has no replay range.
-    if (state.preparedPlayback === true || this.#preparedFrontier !== null) this.sync(state);
+    if (state.preparedPlayback === true || this.#preparedFrontier !== null || state.sourceExecution === "observed") this.sync(state);
     // A continuation's current play/wait endpoint is not its full duration.
     // Only the completed source result may set the replay range via setDuration.
     else this.sync({ time: state.time, playing: state.playing, canUndoTranslationDrag: state.canUndoTranslationDrag,
@@ -262,18 +262,26 @@ export class PlaygroundPlaybackControls {
     if (state.sourcePlaybackControllable !== undefined && typeof state.sourcePlaybackControllable !== "boolean") {
       throw new TypeError("sourcePlaybackControllable must be boolean when provided");
     }
-    const prepared = state.preparedPlayback === true || this.#preparedFrontier !== null;
+    const observed = state.sourceExecution === "observed";
+    const prepared = !observed && (state.preparedPlayback === true || this.#preparedFrontier !== null);
     let duration = this.#durationSeconds;
     if (prepared) {
       // Validate the entire observation before changing controls. It is a reader
       // capability, not inferred from Python completion or the bootstrap horizon.
       validatePreparedState(state);
       duration = durationSeconds;
+    } else if (observed) {
+      duration = null;
     } else if (this.#controllable && durationSeconds !== undefined) {
       duration = validateDuration(durationSeconds);
     }
     this.#durationSeconds = duration;
     this.#forwardPlayback = state.sourcePlaybackControllable === true;
+    if (observed) {
+      this.#preparedFrontier = null;
+      this.#buffering = false;
+      if (this.#controllable) this.setControllable(false);
+    }
     if (prepared) {
       this.#preparedFrontier = state.preparedFrontier;
       this.#buffering = state.buffering;

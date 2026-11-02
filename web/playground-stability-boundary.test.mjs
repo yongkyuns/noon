@@ -32,7 +32,7 @@ assert.doesNotMatch(
 );
 assert.match(
   executionClient,
-  /constructor\(canvas, \{ onError = null, onRecoverableError = null \} = \{\}\)/,
+  /constructor\(canvas, \{ onError = null, onRecoverableError = null, onSourceHandoff = null \} = \{\}\)/,
   "execution client must expose distinct fatal and recoverable error callbacks",
 );
 assert.match(

@@ -65,7 +65,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     setControllable(value) { this.controllable = value; }
     setBusy(value) { this.busy = value; }
     sync(value) {
-      if (this.state?.preparedPlayback) assert.equal(value.preparedPlayback, true, "do not strip prepared metadata");
+      if (this.state?.preparedPlayback && value.sourceExecution !== "observed") assert.equal(value.preparedPlayback, true, "do not strip prepared metadata");
       this.state = value;
     }
     observe(value) { if (!this.commandPending) this.sync(value); }
@@ -243,6 +243,27 @@ test("source completion cannot overwrite an in-flight user's prepared seek", asy
   assert.equal(control.state, previous);
   control.commandPending = false;
   await f.updateWorkerMetrics(); assert.equal(control.state.durationSeconds, 4);
+});
+
+for (const pollBeforeCompletion of [true, false]) test(`late source handoff retires the gallery reader role (poll=${pollBeforeCompletion})`, async () => {
+  const f = fixture(), { promise } = await f.start(); await f.register();
+  const player = f.inspect().player, controls = f.inspect().playbackControls;
+  player.status = { time: 2, playing: true, sourceExecution: "observed", replaySupported: false,
+    sourcePlaybackControllable: true, durationSeconds: null };
+  if (pollBeforeCompletion) {
+    await f.updateWorkerMetrics();
+    assert.equal(f.inspect().preparedPlaybackPlayer, null);
+    assert.equal(controls.state.sourceExecution, "observed");
+  }
+  player.status.time = 4; player.status.playing = false; player.status.sourcePlaybackControllable = false;
+  f.finish(); const completed = await promise;
+  assert.equal(completed.error, undefined);
+  assert.equal(f.inspect().preparedPlaybackPlayer, null);
+  assert.equal(f.inspect().playbackControls, controls);
+  assert.equal(controls.controllable, false);
+  assert.equal(f.count("reconcile"), 0);
+  assert.equal(f.count("terminate-runtime"), 0);
+  assert.deepEqual(f.errors, []);
 });
 
 test("ordinary source errors retain open history and the next Run uses the same healthy interpreter", async () => {
