@@ -32,7 +32,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
   };
   const context = vm.createContext({
     semanticContexts, activeAuthoringRun: null, fatalAuthoringFailure: false,
-    pyodidePromise: Promise.resolve({}), performance, WebAssembly,
+    pyodidePromise: Promise.resolve({}), performance, WebAssembly, Error,
     validateRequest() {},
     post: (type, payload) => messages.push({ type, ...payload }),
     postError: (requestId, error) => errors.push({ requestId, error }),
@@ -147,7 +147,15 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
 async function assertOrdinaryFailure(f, done, record, expected) {
   await f.drain();
   await done;
-  assert.deepEqual(f.errors, [{ requestId: 1, error: expected }], "preserve the engine rejection exactly");
+  assert.equal(f.errors.length, 1);
+  assert.equal(f.errors[0].requestId, 1);
+  const rejection = f.errors[0].error;
+  assert.ok(rejection instanceof Error, "the Python Promise boundary requires an Error");
+  if (expected instanceof Error) assert.equal(rejection, expected, "preserve existing engine Error identity");
+  else {
+    assert.equal(rejection.message, String(expected), "keep the opaque engine message");
+    assert.equal(rejection.cause, expected, "keep the original thrown value");
+  }
   assert.deepEqual(f.messages, [], "failure must not publish a success descriptor");
   assert.equal(f.closed, 0, "a budget rejection is not an interpreter-fatal trap");
   assert.equal(f.context.fatalAuthoringFailure, false);
@@ -170,6 +178,7 @@ async function assertOrdinaryFailure(f, done, record, expected) {
   assert.equal(f.tasks.size, 0);
   assert.equal(f.calls.length, before, "playback wakes must not retry rejected source work");
   await assert.rejects(record.owner.preparedDriver.run(() => assert.fail("no source retry")), /single-use/);
+  return rejection;
 }
 
 for (const [stage, label] of [
@@ -205,8 +214,8 @@ test("catching a budget rejection in source cannot seal or report success", asyn
   const failure = Object.freeze({ category: "opaque engine rejection" });
   const f = fixture({ failureAt: "reserve", failure, catchBarrier: true });
   const { done, record } = await f.run();
-  await assertOrdinaryFailure(f, done, record, failure);
-  assert.equal(record.caught, failure);
+  const rejection = await assertOrdinaryFailure(f, done, record, failure);
+  assert.equal(record.caught, rejection);
   assert.equal(record.statements, 3, "source caught the failure but did not heal the invocation");
   assert.equal(f.calls.some(([stage]) => stage === "finish"), false);
 });

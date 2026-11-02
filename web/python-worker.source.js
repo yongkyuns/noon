@@ -770,7 +770,9 @@ function invokePreparedEngine(callback) {
     // These typed calls bypass the Python facade's trap reporter. A trapped
     // WASM instance cannot be unwound, freed or reused by host recovery.
     if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
-    throw error;
+    // Rust bindings may reject with a JsValue string. Pyodide's Promise bridge
+    // requires an Error; keep the original value as its cause, without retrying.
+    throw error instanceof Error ? error : new Error(String(error), { cause: error });
   }
 }
 

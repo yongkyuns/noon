@@ -265,7 +265,21 @@ export class PythonAuthoringClient {
           this.#fail(error);
           return;
         }
-        this.#settle(message.requestId, ({ reject }) => reject(error));
+        const pending = this.#pendingFor(message.requestId);
+        if (pending === null) return;
+        const registrationCompletion = pending.preparedPlayback
+          ? pending.continuationRegistrationCompletion : undefined;
+        if (registrationCompletion === undefined) {
+          this.#settle(message.requestId, ({ reject }) => reject(error));
+        } else {
+          // Finish adopting the independent reader before reporting a failed
+          // producer. Late startup UI must not overwrite its failure state.
+          void registrationCompletion.then(() => {
+            if (this.#pending.get(message.requestId) === pending) {
+              this.#settle(message.requestId, ({ reject }) => reject(error));
+            }
+          }, () => {}); // The registration failure path owns its own rejection.
+        }
         return;
       }
 

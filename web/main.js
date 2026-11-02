@@ -438,8 +438,12 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
 function setPlaybackRuntimeStatus(playbackState, detail = "") {
   const sourceOwnsPlayback = sceneRunPromise !== null && activeSourceContinuation !== null &&
     playbackState?.preparedPlayback !== true;
-  const phase = sourceOwnsPlayback
-    ? { label: "Playing", state: "running" }
+  const failedPreparation = playbackState?.preparedPlayback === true &&
+    playbackState.playing === true && playbackState.buffering === true &&
+    status.dataset.authoringWarmup === "failed";
+  const phase = failedPreparation
+    ? { label: "Preparation failed", state: "ready" }
+    : sourceOwnsPlayback ? { label: "Playing", state: "running" }
     : playbackPresentation(playbackState);
   status.dataset.playbackPhase = phase.label.toLowerCase();
   status.dataset.playbackPlaying = String(phase.label === "Playing");
