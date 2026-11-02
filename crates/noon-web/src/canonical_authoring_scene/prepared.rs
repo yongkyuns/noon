@@ -25,8 +25,12 @@ impl CanonicalAuthoringScene {
     }
     /// Initial admission only: keep the original pending segment and player for
     /// observed execution, releasing open history before any reader is created.
-    pub fn begin_observed_prepared_source(&mut self) -> Result<bool, AuthoringFailure> {
-        self.active_live_player()?.begin_observed_prepared_source()
+    pub fn begin_observed_prepared_source(
+        &mut self,
+        effects: noon::ContinuationEffects,
+    ) -> Result<bool, AuthoringFailure> {
+        self.active_live_player()?
+            .begin_observed_prepared_source(effects)
     }
 
     pub(crate) fn prepare_prefix_segment(

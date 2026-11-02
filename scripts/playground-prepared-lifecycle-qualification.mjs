@@ -1,6 +1,6 @@
 // Exercise the real gallery/main.js, source restart router, controls, production
-// Python worker and renderer. Only input source/manifest and the existing run
-// options are selected by the harness; no runtime, clock or handoff is replaced.
+// Python worker and renderer, with read-only owned-counter observation. No
+// runtime, clock, completion receipt or handoff is supplied by the harness.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -11,6 +11,7 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { installPreparedSourceCounterProbe } from "./prepared-source-counter-probe.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, "browser-smoke-artifacts/prepared-gallery");
@@ -36,17 +37,17 @@ class PreparedGallery(Scene):
 const failureSource = source.slice(0, source.indexOf("        self.play(")) +
   '        raise RuntimeError("intentional gallery source failure")\n';
 const staticSource = `from noon import *
-from js import console
+events = []
 class StaticPrepared(Scene):
     def construct(self):
-        console.log("noon-static-source-invoked")
+        events.append("noon-static-source-invoked")
         self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0))
 `;
 const zeroSource = `from noon import *
-from js import console
+events = []
 class ZeroPrepared(Scene):
     def construct(self):
-        console.log("noon-zero-source-invoked")
+        events.append("noon-zero-source-invoked")
         target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
         target.shift(RIGHT)
         self.add(target)
@@ -55,10 +56,10 @@ class ZeroPrepared(Scene):
         target.shift(LEFT)
 `;
 const largeSource = `from noon import *
-from js import console
+events = []
 class LargePrepared(Scene):
     def construct(self):
-        console.log("noon-large-source-invoked")
+        events.append("noon-large-source-invoked")
         self.add(*[Circle(radius=0.06, fill=BLUE, fill_opacity=1, stroke=None,
                           position=((i % 100 - 49.5) * 0.14, (i // 100 - 34.5) * 0.10))
                    for i in range(7000)])
@@ -77,8 +78,9 @@ const cache = createPyodideResourceCache(await readFile(path.join(root, "web/pyt
 let browser, server;
 const largePixelsByBackend = new Map();
 
-async function installFixture(page) {
+async function installFixture(page, evidence) {
   await cache.install(page.context());
+  await installPreparedSourceCounterProbe(page.context(), null, evidence);
   await page.route("**/python/examples/manim_*_manifest.json", route => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ reference: { version: "0.21" },
@@ -184,7 +186,9 @@ try {
   report.workerSha256 = hash(await readFile(path.join(root, "web/python-worker.js")));
   report.wasmSha256 = hash(await readFile(path.join(root, "web/pkg/noon_web_bg.wasm")));
   for (const backend of ["webgpu", "webgl"]) {
-    browser = await playwright.chromium.launch({ headless: true, channel: "chromium", args: browserArgs(backend),
+    browser = await playwright.chromium.launch({ headless: true,
+      ...(process.env.NOON_BROWSER_EXECUTABLE ? { executablePath: process.env.NOON_BROWSER_EXECUTABLE } : { channel: "chromium" }),
+      args: browserArgs(backend, { gpuMode: process.env.NOON_RENDER_GPU_MODE ?? "software" }),
       ...(process.env.NOON_BROWSER_PROXY ? { proxy: { server: process.env.NOON_BROWSER_PROXY, bypass: "127.0.0.1,localhost" } } : {}) });
     for (const transport of ["transferable", "shared"]) {
       const entry = { backend, transport, status: "running", checks: [] }; report.cases.push(entry);
@@ -197,7 +201,7 @@ try {
         if (message.text() === "noon-zero-source-invoked") zeroInvocations++;
         if (message.text() === "noon-large-source-invoked") largeInvocations++; });
       try {
-        await installFixture(page);
+        await installFixture(page, entry);
         await page.goto(`${server.baseUrl}/web/index.html?example=prepared-lifecycle`);
         await page.waitForFunction(() => globalThis.__noonExampleGallery !== undefined);
         // CSS corner/shadow compositing can vary by one byte across captures.
