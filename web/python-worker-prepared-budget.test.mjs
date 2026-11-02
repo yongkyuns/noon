@@ -90,7 +90,8 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
         publishContinuationResult() { assert.fail("prepared history must not reconcile from source"); },
       };
       const continuation = {
-        contextId: `context-${id}`, generation: id, context: { prepareInitialSourceSegment: () => true }, terminal: false,
+        contextId: `context-${id}`, generation: id,
+        context: { beginObservedPreparedSource: () => false, prepareInitialSourceSegment: () => true }, terminal: false,
         preparedPlayback: true, preparedPlayer: player, preparedDriver: owner.preparedDriver,
         initialSourceReady: { resolve() {}, reject(error) { record.initialRejection = error; } },
         preparedReady: { promise: Promise.resolve(), reject(error) { record.readyRejection = error; } },

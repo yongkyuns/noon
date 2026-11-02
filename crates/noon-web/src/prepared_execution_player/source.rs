@@ -56,7 +56,9 @@ impl PreparedExecutionPlayer {
         // for another attempt. The historical reader remains independent. This
         // does not catch a panic, recover a WASM trap, or retry user statements.
         let mut source = self.source.take().expect("validated source delivery");
-        let endpoint = context.prepare_live_segment().map_err(|e| e.to_string())?;
+        let endpoint = context
+            .prepare_prefix_segment(&source.publisher)
+            .map_err(|e| e.to_string())?;
         if endpoint > source.publisher.frontier() {
             source.pending = Some(
                 context

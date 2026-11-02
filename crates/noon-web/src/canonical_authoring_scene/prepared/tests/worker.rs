@@ -210,6 +210,54 @@ fn interpreter_worker_failed_completion_cannot_retry_but_retains_playback() {
 }
 
 #[test]
+fn interpreter_worker_unsupported_new_plan_is_rejected_before_advancing_source() {
+    let (mut context, target) = fixture();
+    let path = context
+        .scene
+        .path(
+            noon_core::VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(2.0, 0.0)),
+            noon_core::SemanticStyle::default(),
+        )
+        .unwrap();
+    context.bind_mobject(ObjectId::new(1), &path).unwrap();
+    context.begin_ordinary_wait(1.0).unwrap();
+    context.prepare_live_segment().unwrap();
+    let mut player = PreparedExecutionPlayer::from_completed_source(&mut context, 901).unwrap();
+    player.seek_delta_json(0.5).unwrap();
+    context
+        .begin_ordinary_mixed_composition(
+            noon_core::SemanticAnimationCompositionKind::Parallel,
+            &[
+                crate::canonical_authoring_scene::OrdinaryCompositionChild::MoveAlongPath {
+                    target,
+                    path,
+                    options: AnimationOptions::new().run_time(1.0),
+                },
+            ],
+            AnimationOptions::new(),
+            AnimationOptions::new(),
+        )
+        .unwrap();
+    let before = context.active_live_player().unwrap().debug_frame_json();
+    let error = player
+        .prepare_interpreter_segment(&mut context)
+        .unwrap_err();
+    assert!(error.contains("observed execution"), "{error}");
+    assert_eq!(
+        context.active_live_player().unwrap().debug_frame_json(),
+        before
+    );
+    assert!(context
+        .active_live_player()
+        .unwrap()
+        .has_pending_live_segment());
+    assert_eq!(state(&player)["frontier"], 1.0);
+    assert!(player.seek_delta_json(0.75).is_ok());
+}
+
+#[test]
 fn interpreter_worker_raw_reader_has_no_implicit_source_authority() {
     let (mut context, _, _) = start();
     let (_, reader) = context.create_prepared_prefix().unwrap();

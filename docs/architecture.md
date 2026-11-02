@@ -878,6 +878,17 @@ restart still requires a fresh source run;
 it must reject before destroying the existing historical player. The gallery and
 default viewer do not opt into this experimental run option.
 
+Before a reader exists, Rust can instead admit the original pending interpreter
+segment to observed execution. This releases only its open source history and
+leases the same canonical player to the existing continuation endpoint. Required
+callback events return to the original suspended Python stack; neither admission
+nor source completion reruns its body. The endpoint reports observed execution
+and unavailable replay, rather than claiming historical readiness. New suffixes
+also use the shared source preflight before headless advancement. This initial
+admission does not qualify late reader-to-source handoff, observed pause/seek,
+post-source interaction/recovery, staged resource preparation or default cutover;
+those remain under #2211.
+
 At the genuine execution-to-render-worker boundary, an opt-in prepared player
 may own the independent reader in the producing execution context. It encodes
 only that reader's selected RendererPublication with the existing retained

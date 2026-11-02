@@ -157,11 +157,6 @@ async function initializePyodide() {
     if (activeAuthoringRun === null) {
       throw new Error("semantic continuation callback session requires an active Python authoring run");
     }
-    if (activeAuthoringRun.preparedPlayback) {
-      const error = new Error("prepared playback does not support required Python callbacks");
-      activeAuthoringRun.preparedDriver.cancel(error);
-      throw error;
-    }
     const existing = activeAuthoringRun.continuationCallbackSession;
     if (existing !== null && (existing.context !== context || existing.sessionId !== sessionId)) {
       throw new Error("semantic continuation callback session changed during authoring");
@@ -696,6 +691,7 @@ function registerContinuationContext(context) {
     preparedPlayer: null,
     preparedAttachmentStarted: false,
     preparedBootstrapObserved: false,
+    observedExecution: false,
     initialSourceReady: preparedPlayback ? preparedEndpointReady() : null,
     preparedSourceFinished: false,
     preparedReady: preparedPlayback ? preparedEndpointReady() : null,
@@ -725,11 +721,15 @@ function awaitSemanticContinuation(context, start = null) {
       throw new Error("semantic continuation is terminal");
     }
     if (continuation.preparedPlayback) return continuation.preparedDriver.awaitSegment(context);
-    if (continuation.pending !== null) {
-      throw new Error("semantic continuation already has a pending await");
-    }
   } catch (error) {
     return Promise.reject(error);
+  }
+  return awaitObservedContinuation(continuation, start);
+}
+
+function awaitObservedContinuation(continuation, start = null) {
+  if (continuation.pending !== null) {
+    return Promise.reject(new Error("semantic continuation already has a pending await"));
   }
   const result = new Promise((resolve, reject) => {
     continuation.pending = { resolve, reject };
@@ -801,7 +801,16 @@ function createPreparedSourceDriver(run) {
   return createPreparedInterpreterDriver({
     async prepareSegment(context, signal) {
       const continuation = requirePreparedContinuation(run, context, signal);
+      if (continuation.observedExecution) return awaitObservedContinuation(continuation);
       if (!continuation.preparedBootstrapObserved) {
+        if (invokePreparedEngine(() => context.beginObservedPreparedSource())) {
+          continuation.observedExecution = true;
+          // Install the original stack's await before attachment can request its
+          // first callback. There is no reader or replacement source invocation.
+          const event = awaitObservedContinuation(continuation);
+          continuation.initialSourceReady.resolve();
+          return event;
+        }
         // The interpreter has suspended before this queued worker turn. A zero
         // barrier releases once; source resumes on another turn, never in a loop.
         let readable;
@@ -840,9 +849,17 @@ function createPreparedSourceDriver(run) {
       const continuation = requirePreparedContinuation(run, run.continuation?.context, signal);
       const descriptor = JSON.parse(resultJson)?.semantic_execution;
       if (descriptor?.context_id !== continuation.contextId ||
-          descriptor.continuation_generation !== continuation.generation ||
-          descriptor.callback_session_id != null) {
-        throw new Error("prepared source must return its original context without Python callbacks");
+          descriptor.continuation_generation !== continuation.generation) {
+        throw new Error("prepared source must return its original context and continuation");
+      }
+      if (continuation.observedExecution) {
+        await continuation.endpoint.publishContinuationResult(continuation.generation);
+        requirePreparedContinuation(run, continuation.context, signal);
+        continuation.terminal = true;
+        return;
+      }
+      if (descriptor.callback_session_id != null) {
+        throw new Error("historical playback cannot discard Python callbacks");
       }
       if (!continuation.preparedBootstrapObserved) {
         // All actual barriers were zero-duration. Only successful source cleanup
@@ -1279,7 +1296,7 @@ async function handleRequest(request) {
           if (fatalAuthoringFailure) {
             // The fatal channel owns worker retirement. Never call back into
             // a trapped WASM engine while the Python source unwinds.
-          } else if (!run.preparedPlayback) {
+          } else if (!run.preparedPlayback || run.continuation.observedExecution) {
             if (entry) entry.released = true;
             run.continuation.endpoint?.stop();
           } else if (entry && run.continuation.endpoint === null &&
@@ -1340,11 +1357,15 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     if (!continuationOnly || !continuation?.preparedPlayback || request.replaceExistingEndpoint) {
       throw new Error("prepared playback cannot reattach or replace its endpoint");
     }
-    if (request.callbackSessionId != null || entry.callbackSessionId !== undefined || request.pacing !== "realtime") {
-      throw new Error("prepared playback requires realtime pacing without Python callbacks");
+    if (request.pacing !== "realtime") {
+      throw new Error("prepared playback requires realtime pacing");
     }
-    return attachPreparedSemanticExecution(request, entry, continuation);
+    return attachPreparedSemanticExecution(request, entry, continuation, pyodide);
   }
+  return attachObservedSemanticExecution(request, entry, continuation, continuationOnly, pyodide);
+}
+
+async function attachObservedSemanticExecution(request, entry, continuation, continuationOnly, pyodide) {
   if (request.initiallyPaused && continuationOnly) {
     throw new Error("source-owned semantic continuations cannot start paused");
   }
@@ -1407,6 +1428,7 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
   );
   entry.endpoints.add(endpoint);
   if (continuationOnly) continuation.endpoint = endpoint;
+  return endpoint;
 }
 
 function validatePreparedTransport(request) {
@@ -1417,7 +1439,7 @@ function validatePreparedTransport(request) {
   }
 }
 
-async function attachPreparedSemanticExecution(request, entry, continuation) {
+async function attachPreparedSemanticExecution(request, entry, continuation, pyodide) {
   if (continuation.preparedAttachmentStarted) throw new Error("prepared source attachment is single-use");
   validatePreparedTransport(request);
   continuation.preparedAttachmentStarted = true;
@@ -1427,6 +1449,15 @@ async function attachPreparedSemanticExecution(request, entry, continuation) {
     requirePreparedContinuation(run, entry.context);
     await continuation.initialSourceReady.promise;
     requirePreparedContinuation(run, entry.context);
+    if (continuation.observedExecution) {
+      endpoint = await attachObservedSemanticExecution(request, entry, continuation, true, pyodide);
+      requirePreparedContinuation(run, entry.context);
+      continuation.preparedReady.resolve();
+      return;
+    }
+    if (request.callbackSessionId != null || entry.callbackSessionId !== undefined) {
+      throw new Error("historical playback cannot discard Python callbacks");
+    }
     continuation.preparedPlayer = invokePreparedEngine(() => continuation.preparedSourceFinished
       ? entry.context.createFinishedPreparedExecutionPlayer(request.session)
       : entry.context.createPreparedExecutionPlayer(request.session));

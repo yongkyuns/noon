@@ -216,8 +216,8 @@ export class ExecutionWorkerClient {
     const pacing = validateSemanticPacing(options.pacing);
     const preparedPlayback = options.preparedPlayback ?? false;
     if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
-    if (preparedPlayback && (callbackSessionId !== null || pacing !== SEMANTIC_PACING_REALTIME)) {
-      throw new Error("prepared playback requires realtime pacing without Python callbacks");
+    if (preparedPlayback && pacing !== SEMANTIC_PACING_REALTIME) {
+      throw new Error("prepared playback requires realtime pacing");
     }
     const initialPointerView = options.initialPointerView === undefined ? undefined
       : validatedBrowserPointerView(options.initialPointerView.revision, options.initialPointerView.width, options.initialPointerView.height);
@@ -314,8 +314,8 @@ export class ExecutionWorkerClient {
       );
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
-      if (preparedPlayback && ready.engine.preparedPlayback !== true) {
-        throw new Error("prepared playback startup did not attach a prepared reader");
+      if (preparedPlayback && ready.engine.preparedPlayback !== true && ready.engine.sourceExecution !== "observed") {
+        throw new Error("playback startup attached neither a reader nor its observed source");
       }
       this.#rememberPlaybackDuration(ready.engine, loopDurationSeconds);
       this.#renderPrepared = null;
