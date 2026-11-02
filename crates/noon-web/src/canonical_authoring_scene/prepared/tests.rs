@@ -276,7 +276,7 @@ fn completed_static_scene_reader_has_no_fabricated_duration_or_source_lease() {
         "future work cannot be discarded as a static frame"
     );
     let (mut context, target) = fixture();
-    let mut reader = context.create_finished_static_reader().unwrap();
+    let mut reader = context.create_finished_static_reader().unwrap().unwrap();
     assert_eq!(context.live_execution_ownership(), "none");
     assert_eq!(reader.end_time(), Some(0.0));
     assert_eq!(reader.frame().time, 0.0);
@@ -292,6 +292,32 @@ fn completed_static_scene_reader_has_no_fabricated_duration_or_source_lease() {
 }
 
 #[test]
+fn completed_static_drag_cannot_be_advertised_as_input_free_history() {
+    for zero_wait in [false, true] {
+        let (mut context, target) = fixture();
+        if zero_wait {
+            context.begin_ordinary_wait(0.0).unwrap();
+            assert!(!context.prepare_initial_source_segment().unwrap());
+        }
+        context.set_translation_drag_targets(vec![target]).unwrap();
+        let original = context
+            .player_ownership
+            .local()
+            .map(|player| player.ownership_identity());
+        assert!(context.create_finished_static_reader().unwrap().is_none());
+        let retained = context.active_live_player().unwrap().ownership_identity();
+        if let Some(original) = original {
+            assert_eq!(retained, original);
+        }
+        let player = context.take_execution_player(1.0, 0).unwrap();
+        assert_eq!(player.ownership_identity(), retained);
+        assert_eq!(player.time(), 0.0);
+        assert!(!player.is_playing());
+        assert!(!player.has_pending_live_segment());
+    }
+}
+
+#[test]
 fn completed_zero_barriers_keep_final_same_time_edits_and_reject_pending_work() {
     let (mut context, target) = fixture();
     context.begin_ordinary_wait(0.0).unwrap();
@@ -304,7 +330,7 @@ fn completed_zero_barriers_keep_final_same_time_edits_and_reject_pending_work() 
         .unwrap();
     context.begin_ordinary_wait(0.0).unwrap();
     assert!(!context.prepare_initial_source_segment().unwrap());
-    let mut reader = context.create_finished_static_reader().unwrap();
+    let mut reader = context.create_finished_static_reader().unwrap().unwrap();
     assert_eq!(reader.end_time(), Some(0.0));
     assert_eq!(
         reader.frame().objects[0].transform.translation,

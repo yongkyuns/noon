@@ -56,6 +56,7 @@ export async function attachSemanticEngine(
     loopDurationSeconds,
     session,
     initiallyPaused = false,
+    completedStaticSource = false,
     pacing = SEMANTIC_PACING_REALTIME,
   } = request;
   if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
@@ -77,6 +78,10 @@ export async function attachSemanticEngine(
   }
   if (typeof initiallyPaused !== "boolean") {
     throw new Error("semantic execution has an invalid initially-paused state");
+  }
+  if (typeof completedStaticSource !== "boolean" ||
+      (completedStaticSource && (prepared !== null || continuation !== null))) {
+    throw new TypeError("completed static source requires its observed player lease");
   }
   if (![SEMANTIC_PACING_REALTIME, SEMANTIC_PACING_EXTERNAL_SAMPLES].includes(pacing)) {
     throw new Error(`unsupported semantic execution pacing ${pacing}`);
@@ -112,7 +117,7 @@ export async function attachSemanticEngine(
   let pointerView = null;
   let continuationActive = false;
   let sourceHandoffRequested = false;
-  let sourceFinished = continuation?.completed === true;
+  let sourceFinished = completedStaticSource || continuation?.completed === true;
   // Read-only observation of the last completed lease. The authoring context's
   // next segment horizon is future time, not elapsed playback time. Never use it
   // as a clock while Python holds the returned player.
@@ -365,7 +370,7 @@ export async function attachSemanticEngine(
       ...(hasAudio ? { hasAudio, durationSeconds: player.finiteAudioDuration() } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       // A Python continuation has not authored its complete future timeline.
-      ...(continuation === null
+      ...(continuation === null && !completedStaticSource
         ? { replaySupported: replayUnavailable === null, replayUnavailable }
         : { durationSeconds: null, sourceExecution: "observed", replaySupported: false,
           sourcePlaybackControllable: pacing === SEMANTIC_PACING_REALTIME && !sourceFinished,
@@ -1362,7 +1367,7 @@ export async function attachSemanticEngine(
     if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
     sections = prepared === null ? JSON.parse(player.sectionsJson()) : [];
-    if (continuation === null && prepared === null) {
+    if (continuation === null && prepared === null && !completedStaticSource) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
@@ -1400,13 +1405,13 @@ export async function attachSemanticEngine(
         if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
           throw new Error("finite export owns paused execution until capture completes");
         }
-        if (continuation !== null && FINITE_EXPORT_CONTROLS.has(message.type)) {
+        if ((continuation !== null || completedStaticSource) && FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error("finite export requires a completed immutable Python scene");
         }
         if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);
         }
-        if (continuation !== null && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
+        if ((continuation !== null || completedStaticSource) && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
           throw new Error(
             "playback controls are unavailable while a Python source continuation owns execution",
           );
@@ -1530,7 +1535,7 @@ export async function attachSemanticEngine(
     if (request.initialPointerView !== undefined) {
       applyNativeInput({ type: "browser_pointer_view", view: request.initialPointerView });
     }
-    if (prepared !== null || sourceFinished) send(player.initialDeltaJson());
+    if (prepared !== null || (sourceFinished && !completedStaticSource)) send(player.initialDeltaJson());
     else await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
     controlPort.start();
     renderPort.start();
@@ -1543,7 +1548,7 @@ export async function attachSemanticEngine(
     }
     const audioResources = hasAudio ? Uint8Array.from(player.audioResourceBundleBytes()) : null;
     post({ ...state("ready"), transportMode,
-      finiteSourceDuration: continuation === null && prepared === null ? player.freshFiniteSourceDuration() ?? null : null,
+      finiteSourceDuration: continuation === null && prepared === null && !completedStaticSource ? player.freshFiniteSourceDuration() ?? null : null,
       ...(audioResources === null ? {} : { audioResources }),
     }, audioResources === null ? [] : [audioResources.buffer]);
   } catch (error) { notePreparedTrap(error); stop(); throw error; }

@@ -124,14 +124,38 @@ impl SemanticExecutionPlayer {
 
     pub(crate) fn create_finished_static_reader(
         &mut self,
-    ) -> Result<PrefixReader, AuthoringFailure> {
-        let boundary = self.completed_prepared_boundary()?;
-        if boundary.end_time() != 0.0 || self.session.finite_timeline_end_time() != Some(0.0) {
+    ) -> Result<Option<PrefixReader>, AuthoringFailure> {
+        self.require_callback_progression_available()?;
+        if self.live_segment.is_some() {
+            self.completed_prepared_boundary()?;
+        }
+        if self.session.frame().time != 0.0
+            || self.session.finite_timeline_end_time() != Some(0.0)
+            || self.session.has_audio()
+            || self.session.has_playback_controls()
+        {
             return Err(prefix_error(noon::PrefixError::NotReady));
         }
-        self.seal_prepared_source()?;
+        if self.session.source_execution_requirement().is_some() {
+            self.session
+                .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
+                .map_err(prefix_error)?;
+            self.pause();
+            return Ok(None);
+        }
+        if !self.session.replay_scope_active() {
+            self.session
+                .begin_replay_retention(noon_runtime::ReplayLimits::default())
+                .map_err(|error| {
+                    AuthoringFailure::unclassified("prepared.static_source", &error)
+                })?;
+        }
+        self.session
+            .seal_replay()
+            .map_err(|error| AuthoringFailure::unclassified("prepared.static_source", &error))?;
         self.session
             .create_finished_prepared_reader()
+            .map(Some)
             .map_err(prefix_error)
     }
 

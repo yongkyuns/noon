@@ -1408,7 +1408,7 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
       if (request.callbackSessionId != null || request.pacing !== "realtime") {
         throw new Error("prepared playback requires realtime pacing without Python callbacks");
       }
-      return attachFinishedPreparedSemanticExecution(request, entry);
+      return attachFinishedPreparedSemanticExecution(request, entry, pyodide);
     }
     if (!continuationOnly || !continuation?.preparedPlayback || request.replaceExistingEndpoint) {
       throw new Error("prepared playback cannot reattach or replace its endpoint");
@@ -1461,6 +1461,7 @@ async function attachObservedSemanticExecution(request, entry, continuation, con
     request,
     () => {
       entry.endpoints.delete(endpoint);
+      if (request.completedStaticSource === true) entry.released = true;
       if (continuationOnly && continuation !== undefined) {
         failContinuation(continuation, new Error("semantic continuation endpoint stopped"));
       }
@@ -1498,6 +1499,8 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
   validatePreparedTransport(request);
   continuation.preparedAttachmentStarted = true;
   const run = activeAuthoringRun;
+  const pendingAttachment = { stop() {} };
+  entry.endpoints.add(pendingAttachment);
   let endpoint;
   try {
     requirePreparedContinuation(run, entry.context);
@@ -1515,6 +1518,15 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
     continuation.preparedPlayer = invokePreparedEngine(() => continuation.preparedSourceFinished
       ? entry.context.createFinishedPreparedExecutionPlayer(request.session)
       : entry.context.createPreparedExecutionPlayer(request.session));
+    if (continuation.preparedSourceFinished && continuation.preparedPlayer === undefined) {
+      continuation.preparedPlayer = null;
+      continuation.observedExecution = true;
+      endpoint = await attachObservedSemanticExecution({ ...request, completedStaticSource: true }, entry, continuation, false, pyodide);
+      requirePreparedContinuation(run, entry.context);
+      continuation.endpoint = endpoint;
+      continuation.preparedReady.resolve();
+      return;
+    }
     endpoint = await attachSemanticEngine(entry.context, request, () => {
       // This reader is single-use. A control-port stop owns retirement even if
       // a concurrent explicit release arrived while the source was still active.
@@ -1545,16 +1557,27 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
     }
     if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
     throw error;
+  } finally {
+    entry.endpoints.delete(pendingAttachment);
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
   }
 }
 
-async function attachFinishedPreparedSemanticExecution(request, entry) {
+async function attachFinishedPreparedSemanticExecution(request, entry, pyodide) {
   if (entry.preparedAttachmentStarted) throw new Error("prepared source attachment is single-use");
   validatePreparedTransport(request);
   entry.preparedAttachmentStarted = true;
+  const pendingAttachment = { stop() {} };
+  entry.endpoints.add(pendingAttachment);
   let player, endpoint;
   try {
     player = invokePreparedEngine(() => entry.context.createFinishedPreparedExecutionPlayer(request.session));
+    if (player === undefined) {
+      player = null;
+      endpoint = await attachObservedSemanticExecution({ ...request, completedStaticSource: true }, entry, null, false, pyodide);
+      if (entry.released) throw new Error("completed static source was released during attachment");
+      return;
+    }
     endpoint = await attachSemanticEngine(entry.context, request, () => {
       player = null; // The endpoint already owns cleanup of this WASM handle.
       entry.released = true;
@@ -1571,6 +1594,9 @@ async function attachFinishedPreparedSemanticExecution(request, entry) {
       retireSemanticContext(request.contextId, entry);
     }
     throw error;
+  } finally {
+    entry.endpoints.delete(pendingAttachment);
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
   }
 }
 
