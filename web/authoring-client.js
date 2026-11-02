@@ -142,8 +142,11 @@ export class PythonAuthoringClient {
       ? null
       : this.#matchingContinuation(contextId, continuationGeneration);
     const preparedPlayback = continuation?.preparedPlayback === true;
+    if (preparedPlayback && replaceExistingEndpoint) {
+      throw new Error("prepared receiver replacement cannot restart source continuation attachment");
+    }
     if (this.#continuations.get(contextId)?.preparedPlayback &&
-        (continuation === null || replaceExistingEndpoint)) {
+        continuation === null && !replaceExistingEndpoint) {
       throw new Error("prepared playback cannot reattach or replace its endpoint");
     }
     if (preparedPlayback && pacing !== "realtime") {
@@ -184,8 +187,19 @@ export class PythonAuthoringClient {
   // The owner may retry it without reconstructing semantic state, or retire it with
   // this explicit release. A successful transition transfers that duty to the
   // execution client.
-  async releaseSemanticExecution(contextId) {
+  async releaseSemanticExecution(contextId, { cancelActiveSource = false } = {}) {
     validateSemanticExecutionContextId(contextId);
+    if (typeof cancelActiveSource !== "boolean") throw new TypeError("cancelActiveSource must be a boolean");
+    const continuation = this.#continuations.get(contextId);
+    if (cancelActiveSource && continuation && this.#pending.has(continuation.runRequestId)) {
+      try {
+        await this.cancelSemanticContinuation(contextId, continuation.generation, "execution owner retired");
+      } catch (error) {
+        // A source result can beat cancellation on the same ordered worker port.
+        // Only its terminal result permits falling through to ordinary release.
+        if (this.#pending.has(continuation.runRequestId)) throw error;
+      }
+    }
     await this.ready();
     const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
