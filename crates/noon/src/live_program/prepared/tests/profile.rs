@@ -8,6 +8,7 @@ struct FollowPath {
     calls: Rc<Cell<usize>>,
 }
 impl LiveContinuation for FollowPath {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.stage;
@@ -113,6 +114,7 @@ struct StageAttachment {
     calls: Rc<Cell<usize>>,
 }
 impl LiveContinuation for StageAttachment {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.calls.get();

@@ -88,6 +88,7 @@ impl Scene {
 
 impl<C: LiveContinuation> LiveProgram<C> {
     /// Consume an unresumed continuation owner without reconstructing its scene.
+    /// Opaque host work retains that owner for observed execution without invoking it.
     pub fn into_prepared_source(
         mut self,
         limits: ReplayLimits,
@@ -98,7 +99,9 @@ impl<C: LiveContinuation> LiveProgram<C> {
             ));
         }
         let program = &mut self;
-        let phase = if let Some(requirement) = program.session().source_execution_requirement() {
+        let phase = if C::EFFECTS == super::ContinuationEffects::Opaque {
+            PreparedSourceStatus::ExecutionRequired(SourceExecutionRequirement::HostEffects)
+        } else if let Some(requirement) = program.session().source_execution_requirement() {
             PreparedSourceStatus::ExecutionRequired(requirement)
         } else {
             program

@@ -19,6 +19,7 @@ impl Drop for Script {
     }
 }
 impl LiveContinuation for Script {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.calls.get();
@@ -500,6 +501,7 @@ fn zero_only_source_yields_then_retains_final_edits_at_exact_endpoint() {
         calls: Rc<Cell<usize>>,
     }
     impl LiveContinuation for ZeroOnly {
+        const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
         fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
             let step = self.calls.get();

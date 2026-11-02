@@ -94,6 +94,7 @@ fn invalid_native_seek_preserves_committed_frame_and_publication() {
 fn native_transport_adopts_a_completed_static_source_at_the_exact_zero_range() {
     struct Finished;
     impl LiveContinuation for Finished {
+        const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
         fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
             Ok(ContinuationStep::Finished)

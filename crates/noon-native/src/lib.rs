@@ -1673,6 +1673,7 @@ mod tests {
     }
 
     impl LiveContinuation for NativeWaitContinuation {
+        const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = noon::LiveSessionError;
 
         fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
@@ -1730,6 +1731,7 @@ mod tests {
     }
 
     impl LiveContinuation for NativeWaitThenAnimateContinuation {
+        const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = noon::LiveSessionError;
 
         fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {

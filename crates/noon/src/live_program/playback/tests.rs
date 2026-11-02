@@ -12,6 +12,7 @@ struct Pure {
     fail: bool,
 }
 impl LiveContinuation for Pure {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.calls.get();
@@ -121,6 +122,7 @@ struct CallbackSource {
     calls: Rc<Cell<usize>>,
 }
 impl LiveContinuation for CallbackSource {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
         let step = self.calls.get();
@@ -293,4 +295,80 @@ fn attaching_an_already_advanced_program_preserves_its_owner_and_pending_segment
     assert_eq!(player.session().unwrap().frame().time, 0.75);
     assert_eq!(player.session().unwrap().runtime_identity(), identity);
     assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn opaque_source_waits_for_the_original_presented_endpoint_before_external_work() {
+    struct Opaque {
+        stage: u8,
+        effects: Rc<Cell<usize>>,
+    }
+    impl LiveContinuation for Opaque {
+        type Error = LiveSessionError;
+        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+            let stage = self.stage;
+            self.stage += 1;
+            Ok(match stage {
+                0 => ContinuationStep::Await(live.wait_segment(1.0)?),
+                1 => {
+                    self.effects.set(self.effects.get() + 1);
+                    ContinuationStep::Await(live.wait_segment(1.0)?)
+                }
+                2 => ContinuationStep::Finished,
+                _ => panic!("opaque source was restarted"),
+            })
+        }
+    }
+    let effects = Rc::new(Cell::new(0));
+    let program = Scene::new()
+        .into_live_program(Opaque {
+            stage: 0,
+            effects: effects.clone(),
+        })
+        .unwrap();
+    let identity = program.session().runtime_identity();
+    let mut preparing = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        preparing.prepare_next().unwrap(),
+        PreparedSourceStatus::ExecutionRequired(crate::SourceExecutionRequirement::HostEffects)
+    );
+    assert!(preparing.take_reader().is_none());
+    let program = preparing.take_execution_program().unwrap();
+    assert_eq!(
+        program.continuation.stage, 0,
+        "headless admission never invoked source"
+    );
+    let mut player = program.into_playback().unwrap();
+    let mut callbacks = RustHostCallbackTable::new();
+    player.prepare_ready(&mut callbacks).unwrap();
+    player.advance_to(&mut callbacks, 0.5).unwrap();
+    for _ in 0..3 {
+        assert!(!player.prepare_until(&mut callbacks, 100.0).unwrap());
+    }
+    assert_eq!(
+        effects.get(),
+        0,
+        "loading must not execute opaque future work"
+    );
+    assert_eq!(player.session().unwrap().runtime_identity(), identity);
+    assert!(!player.can_seek_to(0.0));
+    player.advance_to(&mut callbacks, 1.0).unwrap();
+    let endpoint = player
+        .pending_endpoint()
+        .expect("original presentation receipt");
+    assert!(!player.prepare_ready(&mut callbacks).unwrap());
+    assert_eq!(
+        effects.get(),
+        0,
+        "logical completion does not forge presentation"
+    );
+    player.take_renderer_publication();
+    player.admit_publication(endpoint).unwrap();
+    assert!(player.prepare_ready(&mut callbacks).unwrap());
+    assert_eq!(effects.get(), 1);
+    assert_eq!(player.session().unwrap().runtime_identity(), identity);
+    assert!(!player.prepare_until(&mut callbacks, 100.0).unwrap());
+    assert_eq!(effects.get(), 1, "the same invocation executes once");
 }
