@@ -1171,7 +1171,7 @@ async function runScene() {
             }
             const loopDurationSeconds = registration.duration > 0
               ? registration.duration
-              : playbackDurationSeconds;
+              : Math.max(1, playbackDurationSeconds);
             let result;
             if (player === null) {
               result = await ensureRuntimeReady({
@@ -1258,7 +1258,7 @@ async function runScene() {
         throw new Error("Python scene source must return shared semantic execution");
       }
 
-      const loopDurationSeconds = authored.duration > 0 ? authored.duration : playbackDurationSeconds;
+      const loopDurationSeconds = authored.duration > 0 ? authored.duration : Math.max(1, playbackDurationSeconds);
 
       await runPlaygroundTestHook("beforeReconcile", {
         exampleId: example.id,
@@ -1344,12 +1344,10 @@ async function runScene() {
       updatePlaybackControls({
         supported: result.replaySupported !== false,
         player,
-        durationSeconds: loopDurationSeconds,
+        durationSeconds: authored.duration,
         playbackState: result,
       });
-      if (authored.duration > 0) {
-        playbackDurationSeconds = authored.duration;
-      }
+      playbackDurationSeconds = authored.duration;
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
       if (!interactionConfigured) await applyExampleInteraction(example);

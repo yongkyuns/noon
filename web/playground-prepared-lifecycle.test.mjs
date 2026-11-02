@@ -211,20 +211,20 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
   };
 }
 
-test("completed observed replay atomically replaces old prefix controls and bootstrap seek bound", async () => {
+for (const duration of [0, 4]) test(`completed observed replay replaces old prefix controls with exact duration ${duration}`, async () => {
   const f = fixture(), { promise } = await f.start();
   await f.register();
   const player = f.inspect().player, controls = f.inspect().playbackControls;
   player.status = { preparedPlayback: false, replaySupported: true,
-    sourcePlaybackControllable: false, time: 4, playing: false };
-  f.finish();
+    sourcePlaybackControllable: false, time: duration, playing: false };
+  f.finish(undefined, duration);
   const completed = await promise;
   assert.equal(completed.error, undefined);
   assert.equal(f.inspect().player, player);
   assert.equal(f.inspect().playbackControls, controls);
   assert.equal(controls.state.preparedPlayback, false);
-  assert.equal(controls.state.durationSeconds, 4);
-  assert.deepEqual(f.calls.find(call => call[0] === "set-loop"), ["set-loop", 4]);
+  assert.equal(controls.state.durationSeconds, duration);
+  assert.deepEqual(f.calls.filter(call => call[0] === "set-loop"), duration > 0 ? [["set-loop", duration]] : []);
   assert.equal(f.count("reconcile"), 0);
 });
 

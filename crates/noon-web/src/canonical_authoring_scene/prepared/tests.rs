@@ -97,6 +97,32 @@ fn completed_observed_source_keeps_original_history_for_replay() {
 }
 
 #[test]
+fn completed_observed_zero_wait_keeps_exact_zero_during_replay() {
+    let (mut context, _) = fixture();
+    context.begin_ordinary_wait(0.0).unwrap();
+    assert!(context
+        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+        .unwrap());
+    let mut player = context.take_execution_player(4.0, 0).unwrap();
+    player.live_advance_segment_to(0.0).unwrap();
+    player.live_complete_segment().unwrap();
+    context.return_execution_player(player).unwrap();
+    let mut player = context.complete_source_playback().unwrap();
+    player.seal_replay().unwrap();
+    assert!(!player.is_playing());
+    player.resume();
+    assert!(!player.is_playing());
+    player.tick_delta_json(1_000.0).unwrap();
+    player.tick_delta_json(1_100.0).unwrap();
+    assert_eq!(player.time(), 0.0);
+    player.seek_delta_json(0.0).unwrap();
+    player.resume();
+    assert!(!player.is_playing());
+    player.tick_callback_phase_json(1_200.0).unwrap();
+    assert_eq!(player.time(), 0.0);
+}
+
+#[test]
 fn interpreter_prefix_uses_actual_completed_wait_without_transferring_source() {
     let (mut context, _) = fixture();
     assert!(context.prepare_live_segment().is_err());

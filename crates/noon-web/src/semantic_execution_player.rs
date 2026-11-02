@@ -6082,6 +6082,9 @@ impl SemanticExecutionPlayer {
         } else if !self.session.supports_immutable_playback() {
             return Err(noon_runtime::ReplayError::UnrecordedInput.to_string());
         }
+        if self.session.replay_end_time() == Some(0.0) {
+            self.clock.pause();
+        }
         Ok(())
     }
 
@@ -6196,6 +6199,11 @@ impl SemanticExecutionPlayer {
         self.clock.pause();
     }
     pub fn resume(&mut self) {
+        // A sealed snapshot has no authored interval. Native interactions still
+        // use their independent clock when the renderer needs another wake.
+        if self.session.replay_end_time() == Some(0.0) {
+            return;
+        }
         #[cfg(any(target_arch = "wasm32", test))]
         if !self.clock.is_playing() && self.live_segment.is_some() {
             // User pause gives up elapsed wall debt. The next admitted source

@@ -572,7 +572,7 @@ export class PlaygroundPlaybackControls {
           marker.className = "playback-section-marker";
           marker.title = label;
           marker.setAttribute("aria-label", `Jump to ${label}`);
-          marker.style.left = `${100 * section.time / this.#durationSeconds}%`;
+          marker.style.left = `${this.#durationSeconds > 0 ? 100 * section.time / this.#durationSeconds : 0}%`;
           marker.addEventListener("click", () => this.#jumpToSection(section));
           this.#sectionMarkers.append(marker);
         }
@@ -888,8 +888,8 @@ function validatePreparedState(state) {
 }
 
 function validateDuration(durationSeconds) {
-  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    throw new TypeError("playback duration must be positive and finite");
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 0) {
+    throw new TypeError("playback duration must be non-negative and finite");
   }
   return durationSeconds;
 }
