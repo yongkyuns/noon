@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -19,33 +19,7 @@ const artifactDir = path.resolve(
 
 await mkdir(artifactDir, { recursive: true });
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-server.stderr.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground playback server did not start: ${lastError}\n${serverOutput}`);
-}
+let server;
 
 function parseSeconds(text) {
   const match = String(text).match(/([0-9]+(?:\.[0-9]+)?)\s*s/);
@@ -151,7 +125,7 @@ const consoleErrors = [];
 const diagnostics = {};
 
 try {
-  await waitForServer();
+  server = await serveRepository(repoRoot, port);
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -231,11 +205,10 @@ try {
   const initial = await playbackSnapshot(page);
   diagnostics.initial = initial;
   diagnostics.lifecycle = await page.evaluate(() => window.__noonPlaybackLifecycle);
-  assert.equal(
-    diagnostics.lifecycle.sawSourceOwnedPass,
-    true,
-    "the first source-owned pass must keep host playback controls unavailable",
-  );
+  const preparedSamples = diagnostics.lifecycle.samples.filter(sample =>
+    sample.runInFlight && sample.controls === "available" && sample.controllable === "true");
+  assert.ok(diagnostics.lifecycle.sawSourceOwnedPass || preparedSamples.length > 0,
+    "the first pass must expose admitted prepared controls or source-owned progress");
   assert.ok(
     diagnostics.lifecycle.samples
       .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
@@ -245,8 +218,13 @@ try {
   const liveTimes = diagnostics.lifecycle.samples
     .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
     .map((sample) => sample.time);
-  assert.ok(liveTimes.length >= 2 && Math.max(...liveTimes) > Math.min(...liveTimes),
-    "live elapsed time must advance without a misleading percentage during the first Python-owned pass");
+  if (diagnostics.lifecycle.sawSourceOwnedPass) {
+    assert.ok(liveTimes.length >= 2 && Math.max(...liveTimes) > Math.min(...liveTimes),
+      "live elapsed time must advance without a misleading percentage during the first Python-owned pass");
+  } else {
+    assert.ok(preparedSamples.every(sample => sample.hasControls),
+      "admitted prepared playback must have real controls before source completion");
+  }
   assert.equal(initial.hasControls, true, "completed source playback must expose its replay lease");
   assert.equal(initial.playbackAvailability, "available");
   assert.equal(initial.runText, "Run");
@@ -458,10 +436,9 @@ class Lesson(Scene):
   diagnostics.consoleErrors = consoleErrors;
   diagnostics.error =
     error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error);
-  diagnostics.serverOutput = serverOutput;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   throw error;
 } finally {
   if (browser !== null) await browser.close();
-  server.kill("SIGTERM");
+  await server?.close();
 }

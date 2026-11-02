@@ -226,6 +226,7 @@ try {
                 transportMode: gallery.transportMode,
                 crossOriginIsolated: window.crossOriginIsolated,
                 patch: { ...document.querySelector('#patch-status')?.dataset },
+                playback: { ...document.querySelector('.playback-controls')?.dataset },
                 text: document.querySelector('#patch-status')?.value,
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
                 rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
@@ -252,7 +253,13 @@ try {
                 intervalSamples: metric.presentationIntervalSamples,
               } : {}),
             });
-            if (state.patch.state === 'applied' && !state.inFlight) { completed = true; break; }
+            if (state.patch.state === 'applied' && !state.inFlight) {
+              const authored = parseAuthoringResult(await page.evaluate(() => window.__galleryAuthoringResults.at(-1)));
+              if (authored.semanticExecution?.preparedPlayback !== true ||
+                  Math.abs(Number(state.playback.elapsedSeconds) - authored.duration) < 1e-7) {
+                completed = true; break;
+              }
+            }
             await page.waitForTimeout(100);
           }
           assert.ok(completed, `${entry.id}: initial autoplay did not finish`);

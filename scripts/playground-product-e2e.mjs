@@ -139,6 +139,13 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
     const state = await waitForApplied(page);
+    // Incremental preparation may finish before presentation. Complete the
+    // same authored pass in every arm before ending this run or its samples.
+    await page.waitForFunction(end => {
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      return controls?.busy === "false" &&
+        Number(controls.elapsedSeconds) >= end - 1e-7;
+    }, measurement.sourceEndSeconds, { timeout: 30_000 });
     const milliseconds = performance.now() - started;
     if (captureFrames) {
       // This is the final observation for this exact run, after its renderer
@@ -391,6 +398,7 @@ try {
   const fps = sampleRendererFps(warm.frameSamples, measurement.windowEndSeconds, {
     minMeasurementMs: MIN_PRODUCT_MEASUREMENT_MS,
     warmupSeconds: measurement.windowStartSeconds,
+    maxEndDelaySeconds: measurement.maxEndDelaySeconds,
   });
   const presentationGaps = measurement.gapClock === null ? null
     : samplePresentationGaps(warm.presentationSamples, fps);
