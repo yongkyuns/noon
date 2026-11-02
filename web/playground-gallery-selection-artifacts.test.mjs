@@ -18,7 +18,7 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, bootstrapFailure = false, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], deferNativeRelease = false, nativeReleaseAccepted = true, nativeHoverPixels = 650, env = {} } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, bootstrapFailure = false, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], deferNativeRelease = false, nativeReleaseAccepted = true, nativeHoverPixels = 650, replayable = false, staleEndpointReads = 0, env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
@@ -42,9 +42,15 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   let frame = 0;
   let capture = 0;
   let showcase = false;
+  let endpointRequested = false;
   const gallery = {
     selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
-    executionMetrics: async () => ({ metrics: { presentedFrames: frame, objectCount: 3, time: 2.6 } }),
+    executionMetrics: async () => {
+      const stale = endpointRequested && staleEndpointReads-- > 0;
+      if (endpointRequested) events.push(stale ? "render:stale" : "render:endpoint");
+      return { metrics: { presentedFrames: frame, objectCount: 3, time: stale ? 1.88 : 2.6,
+        ready: true, needsPresent: false, bufferedDeltas: 0 } };
+    },
   };
   const wheelListeners = [];
   const browserWindow = {
@@ -54,7 +60,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   };
   const browserDocument = { querySelector: (selector) => {
     if (selector === ".playback-controls") return {
-      dataset: { busy: "false", elapsedSeconds: "2.6", controllable: "false", playing: "false" },
+      dataset: { busy: "false", elapsedSeconds: "2.6", controllable: String(replayable), playing: "false" },
       title: "Replay unavailable: UnsupportedDomain",
       querySelector: () => ({ getAttribute: () => "Play animation", disabled: true }),
     };
@@ -166,7 +172,10 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       if (selector === "#replace-scene") return { click: async () => events.push("public:run") };
       if (selector === ".playback-scrubber") return {
         getAttribute: async () => "2.6",
-        evaluate: async (fn, value) => fn({ value: "", dispatchEvent() {} }, value),
+        evaluate: async (fn, value) => {
+          endpointRequested = true;
+          return fn({ value: "", dispatchEvent() {} }, value);
+        },
       };
       return canvas;
     },
@@ -261,6 +270,15 @@ test("successful legacy clear and source-declared indication retain their captur
   assert.equal(report.wheelInput, "browser mouse wheel");
   assert.equal(report.error, null);
   assert.equal(result.events.at(-1), "passed");
+});
+
+test("an acknowledged seek cannot baseline an earlier renderer publication", async () => {
+  const result = await runSmoke({ replayable: true, staleEndpointReads: 2 });
+  assert.equal(result.error, undefined);
+  assert.equal(result.events.filter(event => event === "render:stale").length, 2);
+  assert.ok(result.events.indexOf("render:endpoint") < result.events.indexOf("capture:authoredBaseline"));
+  const report = assertRetained(result, ["authoredBaseline", "indicated", "restored"]);
+  assert.equal(report.authoredPlayback.publishedTime, 2.6);
 });
 
 test("bootstrap failure retains request and cache evidence without replacing the original error", async () => {

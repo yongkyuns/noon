@@ -260,6 +260,14 @@ try {
         controls.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation" &&
         Math.abs(Number(controls.dataset.elapsedSeconds) - time) < 1e-7;
     }, endpoint);
+    // Nonaudio seek acknowledgement can precede presentation. Baseline the
+    // actual endpoint, not an earlier Create frame that the click will replace.
+    await waitForBrowserObservation(page, async time => {
+      const metrics = (await window.__noonExampleGallery.executionMetrics()).metrics;
+      return metrics?.ready === true && metrics.needsPresent === false &&
+        metrics.bufferedDeltas === 0 && metrics.presentedFrames > 0 &&
+        Math.abs(metrics.time - time) < 1e-7;
+    }, endpoint, { timeout: 15000 });
   } else {
     const manifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
     const lesson = manifest.entries.find(entry => entry.id === "showcase-pointer-selection");
@@ -272,7 +280,8 @@ try {
     assert.match(authoredPlayback.replayReason, /^Replay unavailable:/);
     for (const control of ["play", "restart", "scrubber"]) assert.equal(authoredPlayback.disabledReplayControls[control], true);
   }
-  report.authoredPlayback = authoredPlayback;
+  report.authoredPlaybackBeforeSeek = authoredPlayback;
+  report.authoredPlayback = await readLiveState(page);
   const authoredBox = await authoredCanvas.boundingBox();
   assert.ok(authoredBox && authoredBox.width > 0 && authoredBox.height > 0, "authored canvas is not drawable");
   const authoredBaseline = await authoredCanvas.screenshot();
