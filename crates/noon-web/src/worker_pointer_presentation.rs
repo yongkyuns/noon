@@ -148,6 +148,40 @@ mod admission {
             self.view
         }
 
+        /// A new receiver cannot inherit an old surface's presentation or contact.
+        /// Keep semantic input sequencing in the same runtime; only peer receipts
+        /// and collected-frame associations are disposable here.
+        pub(crate) fn reset_receiver(
+            &mut self,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
+            binding: &mut Option<BrowserPointerBinding>,
+            sequence: &mut u64,
+        ) -> Result<(), String> {
+            browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
+            let retired = binding.map(|contact| {
+                let (pointer, view, viewport) = contact.identity_and_view();
+                RejectedSource {
+                    source: pointer.source,
+                    pointer: (pointer.pointer as u32).cast_signed(),
+                    view,
+                    viewport: Some(viewport),
+                }
+            });
+            let rejected = match (self.rejected, retired) {
+                (Some(previous), Some(retired)) if previous.source > retired.source => {
+                    Some(previous)
+                }
+                (previous, retired) => retired.or(previous),
+            };
+            *self = Self {
+                view: self.view,
+                rejected,
+                refresh_pending: self.view.is_some(),
+                ..Self::default()
+            };
+            Ok(())
+        }
+
         pub(crate) fn set_view(
             &mut self,
             target: &mut (impl BrowserPointerTarget + ?Sized),
