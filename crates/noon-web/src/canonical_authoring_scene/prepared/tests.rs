@@ -236,3 +236,27 @@ fn interpreter_prefix_zero_wait_does_not_invent_a_readable_range() {
     context.prepare_live_segment().unwrap();
     assert_eq!(context.create_prepared_prefix().unwrap().1.frontier(), 0.25);
 }
+
+#[test]
+fn completed_static_scene_reader_has_no_fabricated_duration_or_source_lease() {
+    let (mut future, _) = fixture();
+    future.scene.wait(1.0).unwrap();
+    assert!(
+        future.create_finished_static_reader().is_err(),
+        "future work cannot be discarded as a static frame"
+    );
+    let (mut context, target) = fixture();
+    let mut reader = context.create_finished_static_reader().unwrap();
+    assert_eq!(context.live_execution_ownership(), "none");
+    assert_eq!(reader.end_time(), Some(0.0));
+    assert_eq!(reader.frame().time, 0.0);
+    assert_eq!(reader.frame().objects.len(), 1);
+    let expected = reader.frame().clone();
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert!(context.create_finished_static_reader().is_err());
+    drop(target);
+    drop(context);
+    reader.seek(0.0).unwrap();
+    assert_eq!(reader.frame(), &expected);
+    assert!(reader.seek(f64::EPSILON).is_err());
+}

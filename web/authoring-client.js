@@ -273,10 +273,13 @@ export class PythonAuthoringClient {
         const pending = this.#pendingFor(message.requestId);
         if (pending === null) return;
         const result = parseAuthoringResult(message.resultJson);
+        const registered = pending.continuationDescriptor;
+        const matchingPreparedSource = registered === undefined
+          ? result.duration === 0 && result.semanticExecution.continuationGeneration == null
+          : result.semanticExecution.contextId === registered.contextId &&
+            result.semanticExecution.continuationGeneration === registered.continuationGeneration;
         if (pending.preparedPlayback &&
-            (result.semanticExecution.preparedPlayback !== true ||
-             result.semanticExecution.contextId !== pending.continuationDescriptor?.contextId ||
-             result.semanticExecution.continuationGeneration !== pending.continuationDescriptor?.continuationGeneration)) {
+            (result.semanticExecution.preparedPlayback !== true || !matchingPreparedSource)) {
           throw new Error("prepared source result does not match its registered continuation");
         }
         if (message.workerRunTiming !== undefined && message.workerRunTiming !== null) {
@@ -498,8 +501,8 @@ export function validateSemanticExecutionDescriptor(descriptor) {
   if (preparedPlayback !== undefined && typeof preparedPlayback !== "boolean") {
     throw new TypeError("semantic prepared playback mode must be a boolean");
   }
-  if (preparedPlayback && (continuationGeneration == null || callbackSessionId != null)) {
-    throw new Error("prepared playback requires a source continuation without Python callbacks");
+  if (preparedPlayback && callbackSessionId != null) {
+    throw new Error("prepared playback requires a source without Python callbacks");
   }
   return Object.freeze({
     contextId: descriptor.context_id,

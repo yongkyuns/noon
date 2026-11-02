@@ -141,13 +141,13 @@ test("preparation metadata cannot cross a different source run mode", async () =
   }
 });
 
-test("prepared descriptors retain continuation identity and reject required callbacks", () => {
+test("prepared descriptors preserve optional continuation identity and reject required callbacks", () => {
   const descriptor = { context_id: "context", continuation_generation: 1, prepared_playback: true };
   assert.deepEqual(validateSemanticExecutionDescriptor(descriptor), {
     contextId: "context", continuationGeneration: 1, preparedPlayback: true,
   });
-  for (const change of [{ prepared_playback: "true" }, { continuation_generation: undefined }, { callback_session_id: 4 }]) {
-    assert.throws(() => validateSemanticExecutionDescriptor({ ...descriptor, ...change }), /boolean|source continuation/);
+  for (const change of [{ prepared_playback: "true" }, { callback_session_id: 4 }]) {
+    assert.throws(() => validateSemanticExecutionDescriptor({ ...descriptor, ...change }), /boolean|without Python callbacks/);
   }
 });
 
@@ -781,4 +781,22 @@ test("terminating the client rejects pending work", async () => {
   assert.equal(worker.terminated, true);
   assert.equal(client.terminated, true);
   await assert.rejects(resultPromise, /terminated/);
+});
+
+for (const duration of [0, 1]) test(`prepared result without a continuation requires completed static duration (${duration})`, async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  const running = client.run("static source", {}, { preparedPlayback: true, onSemanticContinuation() {} });
+  await Promise.resolve();
+  worker.emit("message", workerMessage("result", { requestId: 0,
+    resultJson: JSON.stringify({ kind: "semantic_scene", duration,
+      semantic_execution: { context_id: "static", prepared_playback: true } }),
+  }));
+  try {
+    if (duration === 0) {
+      const result = await running;
+      assert.equal(result.duration, 0);
+      assert.deepEqual(result.semanticExecution, { contextId: "static", preparedPlayback: true });
+    } else await assert.rejects(running, /registered continuation/);
+  } finally { client.terminate(); }
 });

@@ -216,8 +216,8 @@ export class ExecutionWorkerClient {
     const pacing = validateSemanticPacing(options.pacing);
     const preparedPlayback = options.preparedPlayback ?? false;
     if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
-    if (preparedPlayback && (continuationGeneration === null || pacing !== SEMANTIC_PACING_REALTIME)) {
-      throw new Error("prepared playback requires its original source continuation and realtime pacing");
+    if (preparedPlayback && (callbackSessionId !== null || pacing !== SEMANTIC_PACING_REALTIME)) {
+      throw new Error("prepared playback requires realtime pacing without Python callbacks");
     }
     const initialPointerView = options.initialPointerView === undefined ? undefined
       : validatedBrowserPointerView(options.initialPointerView.revision, options.initialPointerView.width, options.initialPointerView.height);

@@ -320,7 +320,7 @@ for (const explicit of [true, false]) test(`prepared reader refuses destructive 
 test("invalid prepared startup profiles reject before allocating a renderer", async () => {
   for (const options of [
     { preparedPlayback: "true", continuationGeneration: 1 },
-    { preparedPlayback: true },
+    { preparedPlayback: true, callbackSessionId: 4 },
     { preparedPlayback: true, continuationGeneration: 1, pacing: "external_samples" },
   ]) {
     const canvas = new FakeCanvas();
@@ -1210,5 +1210,20 @@ test("pause supersedes an outstanding device unlock without a delayed restart", 
     completeUnlock();
     await assert.rejects(resumed, error => error.name === "AbortError");
     assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+  } finally { client.terminate(); }
+});
+
+test("completed prepared source can attach without an active source continuation", async () => {
+  const authoring = new FakeSemanticAuthoringClient(); authoring.preparedPlayback = true;
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("static", authoring, {
+      preparedPlayback: true, initiallyPaused: true, transportMode: "transferable",
+    });
+    await finishStartup(starting, authoring, offset);
+    assert.equal(authoring.attachments[0].options.continuationGeneration, undefined);
+    assert.equal(authoring.attachments[0].options.initiallyPaused, true);
+    await assert.rejects(client.restart({ failedOwner: "render" }), /fresh Run/);
   } finally { client.terminate(); }
 });
