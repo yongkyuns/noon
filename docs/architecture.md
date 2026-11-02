@@ -891,8 +891,16 @@ wait time; resume reanchors the existing source wall conversion without charging
 paused time or restarting the interpreter. Source controls expose pause/resume
 without a seek range or invented duration. Paused transient input keeps its
 independent interaction timing within existing input/callback admission gates.
+After interpreter cleanup, a checked transfer returns that same completed player
+to the endpoint for input. Its encoder, runtime, semantic store and contacts stay
+intact; no source invocation or initial snapshot is repeated. Final authored output
+still waits for actual presentation. Receipts delivered while the context holds
+the player are retained until it returns, after any required pointer cancellation.
+Source completion freezes authored time while supported input and transient
+effects remain usable. Authored publication during an active translation drag
+and native input with required callbacks retain their existing explicit gates.
 This initial admission does not qualify late reader-to-source handoff or seeking,
-post-source interaction/recovery, staged resource preparation or default cutover;
+renderer recovery, staged resource preparation or default cutover;
 those remain under #2211.
 
 At the genuine execution-to-render-worker boundary, an opt-in prepared player
