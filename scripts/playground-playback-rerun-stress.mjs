@@ -71,6 +71,7 @@ async function snapshot(page) {
   return page.evaluate(() => {
     const controls = document.querySelector(".playback-controls");
     const scrubber = document.querySelector(".playback-scrubber");
+    const preparedSeek = document.querySelector(".playback-prepared-seek");
     const patch = document.querySelector("#patch-status");
     const status = document.querySelector("#status");
     const canvas = document.querySelector("#scene");
@@ -101,6 +102,9 @@ async function snapshot(page) {
       durationKnown: controls?.dataset.durationKnown,
       buffering: controls?.dataset.buffering,
       elapsedSeconds: Number(controls?.dataset.elapsedSeconds),
+      preparedSeekVisible: preparedSeek !== null && !preparedSeek.hidden,
+      preparedSeekDisabled: preparedSeek?.disabled ?? true,
+      preparedFrontier: Number(preparedSeek?.max),
     };
   });
 }
@@ -202,11 +206,20 @@ async function startMovingReplay(page) {
 function assertHeldControls(held) {
   assert.equal(held.playbackAvailability, liveComparison ? "unavailable" : "available");
   assert.equal(held.controllable, liveComparison ? "false" : "true");
-  assert.equal(held.scrubberDisabled, liveComparison);
-  if (!liveComparison) {
-    assert.equal(held.durationKnown, "true");
+  if (liveComparison) assert.equal(held.scrubberDisabled, true);
+  else {
     assert.equal(held.buffering, "false");
-    assert.ok(held.elapsedSeconds >= 0 && held.elapsedSeconds <= held.scrubberMax);
+    if (held.durationKnown === "true") {
+      assert.equal(held.scrubberDisabled, false);
+      assert.equal(held.preparedSeekVisible, false);
+      assert.ok(held.elapsedSeconds >= 0 && held.elapsedSeconds <= held.scrubberMax);
+    } else {
+      assert.equal(held.durationKnown, "false");
+      assert.equal(held.scrubberDisabled, true);
+      assert.equal(held.preparedSeekVisible, true);
+      assert.equal(held.preparedSeekDisabled, false);
+      assert.ok(held.elapsedSeconds >= 0 && held.elapsedSeconds <= held.preparedFrontier);
+    }
   }
 }
 let page = null;
