@@ -46,9 +46,28 @@ pub enum ContinuationStep {
     Finished,
 }
 
+/// Host effects of a continuation and its teardown, independent of scene replay support.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ContinuationEffects {
+    /// Arbitrary host work keeps ordinary observed execution and its barriers.
+    #[default]
+    Opaque,
+    /// The continuation reads/writes only its owned authoring state and Noon scene.
+    /// Neither execution nor teardown observes external time, external randomness,
+    /// I/O or shared host state. The same contract applies to owned values' destructors.
+    /// Registering callbacks/input is allowed; their separate runtime admission
+    /// still requires observed execution before they can run.
+    SceneOnly,
+}
+
 /// Resumable direct Rust authoring over one shared live scene/session pair.
 pub trait LiveContinuation {
     type Error;
+
+    /// Source-level contract, not a claim that the resulting scene is seekable.
+    /// Unknown Rust code is opaque. Only a body satisfying `SceneOnly` may run
+    /// ahead of presentation; the engine cannot infer this from compiled code.
+    const EFFECTS: ContinuationEffects = ContinuationEffects::Opaque;
 
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error>;
 }
