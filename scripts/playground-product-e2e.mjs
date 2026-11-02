@@ -10,6 +10,7 @@ import pngjs from "pngjs";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
+import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -24,6 +25,12 @@ const artifactDir = path.resolve(
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
+const showcaseEntry = JSON.parse(await readFile(path.join(repoRoot,
+  "web/python/examples/noon_showcase_manifest.json"), "utf8")).entries.find(entry => entry.id === exampleId) ?? null;
+if (showcaseEntry !== null) {
+  assert.equal(showcaseEntry.path, measurement.sourcePath, "product source differs from its declared lesson");
+  assert.equal(showcaseEntry.duration, measurement.sourceEndSeconds, "product endpoint differs from its declared lesson");
+}
 const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
 const startedAtMs = Date.now();
 const pair = process.env.NOON_PRODUCT_PAIR_INDEX === undefined ? null : {
@@ -206,6 +213,9 @@ async function waitForRenderedEndpoint(page, seconds) {
       return {
         metricsReplies: Number(probe?.metricsReplies ?? 0),
         latest: probe?.latest ?? null,
+        logicalTime: Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds),
+        busy: document.querySelector(".playback-controls")?.dataset.busy,
+        runInFlight: window.__noonExampleGallery?.runInFlight,
       };
     });
     const rendered = sample.latest;
@@ -217,9 +227,18 @@ async function waitForRenderedEndpoint(page, seconds) {
       Number.isFinite(rendered?.time) &&
       rendered.needsPresent === false &&
       rendered.bufferedDeltas === 0 &&
-      Math.abs(rendered.time - seconds) <= 0.001
+      sample.busy === "false" && sample.runInFlight === false &&
+      Math.abs(sample.logicalTime - seconds) <= 1e-7
     ) {
-      return rendered;
+      // A declared final still may retain its last changing publication. Keep
+      // that real timestamp and require the Rust playhead to reach the endpoint.
+      let publicationMatches = false;
+      try {
+        if (showcaseEntry !== null) assertNaturalFirstPassPublication(showcaseEntry, sample.logicalTime, rendered.time);
+        else assert.ok(Math.abs(rendered.time - seconds) <= 0.001);
+        publicationMatches = true;
+      } catch {}
+      if (publicationMatches) return { ...rendered, logicalTime: sample.logicalTime };
     }
     observedReplies = sample.metricsReplies;
     await page.waitForTimeout(50);
