@@ -210,7 +210,7 @@ fn interpreter_worker_failed_completion_cannot_retry_but_retains_playback() {
 }
 
 #[test]
-fn interpreter_worker_unsupported_new_plan_is_rejected_before_advancing_source() {
+fn interpreter_worker_late_source_handoff_waits_for_demand_and_keeps_original_player() {
     let (mut context, target) = fixture();
     let path = context
         .scene
@@ -241,10 +241,10 @@ fn interpreter_worker_unsupported_new_plan_is_rejected_before_advancing_source()
         )
         .unwrap();
     let before = context.active_live_player().unwrap().debug_frame_json();
-    let error = player
-        .prepare_interpreter_segment(&mut context)
-        .unwrap_err();
-    assert!(error.contains("observed execution"), "{error}");
+    let identity = context.active_live_player().unwrap().ownership_identity();
+    assert!(!player.prepare_interpreter_segment(&mut context).unwrap());
+    assert!(!player.source_execution_ready());
+    assert!(player.begin_source_execution(&mut context).is_err());
     assert_eq!(
         context.active_live_player().unwrap().debug_frame_json(),
         before
@@ -255,6 +255,28 @@ fn interpreter_worker_unsupported_new_plan_is_rejected_before_advancing_source()
         .has_pending_live_segment());
     assert_eq!(state(&player)["frontier"], 1.0);
     assert!(player.seek_delta_json(0.75).is_ok());
+    player.tick_delta_json(0.0).unwrap();
+    player.tick_delta_json(2000.0).unwrap();
+    assert!(player.source_execution_ready());
+    // A pause while buffering preserves play intent at the ownership boundary.
+    player.set_prepared_playing(false);
+    let (mut foreign, _, _) = start();
+    assert!(player.begin_source_execution(&mut foreign).is_err());
+    assert!(!player.begin_source_execution(&mut context).unwrap());
+    assert!(player.begin_source_execution(&mut context).is_err());
+    assert_eq!(
+        context.active_live_player().unwrap().ownership_identity(),
+        identity
+    );
+    assert_eq!(
+        context.active_live_player().unwrap().debug_frame_json(),
+        before
+    );
+    let original = context.take_execution_player(2.0, 0).unwrap();
+    assert_eq!(original.ownership_identity(), identity);
+    assert!(original.has_pending_live_segment());
+    assert_eq!(original.time(), 1.0);
+    assert!(!original.is_playing());
 }
 
 #[test]

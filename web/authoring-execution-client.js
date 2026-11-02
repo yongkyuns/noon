@@ -445,7 +445,20 @@ export class AuthoringExecutionClient {
     return new ExecutionWorkerClient(this.#canvas, {
       onError: this.#onError,
       onRecoverableError: this.#onRecoverableError,
+      onSourceHandoff: generation => this.#handoffPreparedSource(generation),
     });
+  }
+
+  async #handoffPreparedSource(generation) {
+    const active = this.#player;
+    this.#retirePointerInput();
+    await this.#runTransition(async () => {
+      if (this.#player !== active) throw new Error("source handoff belongs to a retired player");
+      const ready = await active.handoffPreparedSource(generation);
+      this.#preparedPlayback = false;
+      this.#rendererBackend = ready.render.backend;
+    });
+    await this.#withStablePlayer(() => this.#attachPointerInput(), { retryOnTransition: true });
   }
 
   #resolveStartupSharedSlotCapacity(sharedSlotCapacity) {

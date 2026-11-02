@@ -21,6 +21,9 @@ pub struct PrefixReader {
 }
 
 impl PrefixReader {
+    pub(super) fn matches_publisher(&self, publisher: &noon_runtime::PrefixPublisher) -> bool {
+        self.receiver.matches_publisher(publisher)
+    }
     pub(super) fn new(session: ExecutionSession, receiver: PrefixReceiver) -> Self {
         Self { session, receiver }
     }
