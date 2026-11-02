@@ -47,6 +47,18 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("completed observed replay retires open-prefix controls without inventing a frontier", () => {
+  const f = fixture();
+  f.controls.sync({ preparedPlayback: false, replaySupported: true,
+    time: 2, durationSeconds: 2, playing: false });
+  assert.equal(f.controls.durationSeconds, 2);
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.range.disabled, false);
+  assert.equal(f.input.hidden, true);
+  assert.equal(f.controls.element.dataset.buffering, "false");
+  assert.deepEqual(f.errors, []);
+});
+
 test("open history permits controls without inventing a final duration or a percentage", async () => {
   const f = fixture(prepared({ time: 3, preparedFrontier: 4 }));
   assert.equal(f.controls.durationSeconds, null);

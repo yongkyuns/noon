@@ -140,7 +140,7 @@ async function initializePyodide() {
     try {
       const continuation = activeAuthoringRun?.continuation;
       if (!continuation || continuation.context !== context || continuation.terminal ||
-          continuation.preparedPlayback || continuation.endpoint === null) {
+          (continuation.preparedPlayback && !continuation.observedExecution) || continuation.endpoint === null) {
         throw new Error("shader resource preparation requires the active render endpoint");
       }
       if (staged.startsSegment === true) {
@@ -724,7 +724,10 @@ function awaitSemanticContinuation(context, start = null) {
     if (continuation.terminal) {
       throw new Error("semantic continuation is terminal");
     }
-    if (continuation.preparedPlayback) return continuation.preparedDriver.awaitSegment(context);
+    if (continuation.preparedPlayback) {
+      if (start !== null && continuation.observedExecution) return awaitObservedContinuation(continuation, start);
+      return continuation.preparedDriver.awaitSegment(context);
+    }
   } catch (error) {
     return Promise.reject(error);
   }

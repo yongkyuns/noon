@@ -263,7 +263,11 @@ export class PlaygroundPlaybackControls {
       throw new TypeError("sourcePlaybackControllable must be boolean when provided");
     }
     const observed = state.sourceExecution === "observed";
-    const prepared = !observed && (state.preparedPlayback === true || this.#preparedFrontier !== null);
+    if (state.preparedPlayback === false && state.preparedFrontier !== undefined) {
+      throw new TypeError("completed playback state cannot contain a prepared frontier");
+    }
+    const prepared = !observed && state.preparedPlayback !== false &&
+      (state.preparedPlayback === true || this.#preparedFrontier !== null);
     let duration = this.#durationSeconds;
     if (prepared) {
       // Validate the entire observation before changing controls. It is a reader
@@ -272,15 +276,15 @@ export class PlaygroundPlaybackControls {
       duration = durationSeconds;
     } else if (observed) {
       duration = null;
-    } else if (this.#controllable && durationSeconds !== undefined) {
+    } else if (durationSeconds !== undefined) {
       duration = validateDuration(durationSeconds);
     }
     this.#durationSeconds = duration;
     this.#forwardPlayback = state.sourcePlaybackControllable === true;
-    if (observed) {
+    if (observed || state.preparedPlayback === false) {
       this.#preparedFrontier = null;
       this.#buffering = false;
-      if (this.#controllable) this.setControllable(false);
+      if (observed && this.#controllable) this.setControllable(false);
     }
     if (prepared) {
       this.#preparedFrontier = state.preparedFrontier;

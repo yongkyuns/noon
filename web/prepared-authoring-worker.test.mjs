@@ -489,6 +489,25 @@ test("initial observed admission relays callbacks to the original stack without 
   assert.equal(h.tasks.size, 0);
 });
 
+test("observed preparation forwards the original resource-start handshake", async () => {
+  const h = host({ observed: true });
+  let starts = 0;
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    await api.awaitSemanticContinuation(h.context, () => { starts++; });
+    return h.result();
+  });
+  await microtasks(); const initial = h.tick(); await h.attach();
+  const continuation = h.run().continuation;
+  h.completeContinuation(continuation, continuation.generation);
+  await initial; await microtasks();
+  assert.equal(starts, 1);
+  h.completeContinuation(continuation, continuation.generation);
+  await done;
+  assert.equal(h.errors.length, 0);
+  assert.equal(h.counters.segments, 0);
+});
+
 test("prepared attachment rejects replacement and invalid transport before completing its first segment", async () => {
   const h = host();
   const done = h.start(async api => { await api.awaitSemanticContinuation(h.context); return h.result(); });

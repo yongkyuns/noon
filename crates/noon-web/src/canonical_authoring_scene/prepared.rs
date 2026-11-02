@@ -24,7 +24,7 @@ impl CanonicalAuthoringScene {
             .begin_observed_prefix_source(publisher, reader, playing, finished)
     }
     /// Initial admission only: keep the original pending segment and player for
-    /// observed execution, releasing open history before any reader is created.
+    /// observed execution, retaining bounded history for completed replay admission.
     pub fn begin_observed_prepared_source(
         &mut self,
         effects: noon::ContinuationEffects,

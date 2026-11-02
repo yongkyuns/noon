@@ -371,8 +371,12 @@ export async function attachSemanticEngine(
       sections,
       ...(hasAudio ? { hasAudio, durationSeconds: player.finiteAudioDuration() } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
+      ...(sourceFinished && continuation !== null
+        ? { preparedPlayback: false, sourcePlaybackControllable: false,
+          ...(replayUnavailable !== null ? { sourceExecution: "observed" } : {}) }
+        : {}),
       // A Python continuation has not authored its complete future timeline.
-      ...(continuation === null && !completedStaticSource
+      ...((continuation === null || sourceFinished) && !completedStaticSource
         ? { replaySupported: replayUnavailable === null, replayUnavailable }
         : { durationSeconds: null, sourceExecution: "observed", replaySupported: false,
           sourcePlaybackControllable: pacing === SEMANTIC_PACING_REALTIME && !sourceFinished,
@@ -1007,7 +1011,7 @@ export async function attachSemanticEngine(
             break;
           case "pause": {
             latestTick = null;
-            if (sourceFinished) break;
+            if (sourceFinished && (completedStaticSource || replayUnavailable !== null)) break;
             if (prepared !== null) {
               if (!preparedClockAdmitted) player.setPreparedPlaying(false);
               else player.pausePreparedAt(performance.now());
@@ -1032,7 +1036,7 @@ export async function attachSemanticEngine(
             break;
           }
           case "resume": {
-            if (sourceFinished) break;
+            if (sourceFinished && (completedStaticSource || replayUnavailable !== null)) break;
             if (player === null) {
               context.setSourcePlaybackPlaying(true);
               break;
@@ -1372,7 +1376,7 @@ export async function attachSemanticEngine(
     if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
     sections = prepared === null ? JSON.parse(player.sectionsJson()) : [];
-    if (continuation === null && prepared === null && !completedStaticSource) {
+    if ((continuation === null || sourceFinished) && prepared === null && !completedStaticSource) {
       if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
       try { player.sealReplay(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
@@ -1411,13 +1415,13 @@ export async function attachSemanticEngine(
         if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
           throw new Error("finite export owns paused execution until capture completes");
         }
-        if ((continuation !== null || completedStaticSource) && FINITE_EXPORT_CONTROLS.has(message.type)) {
+        if (((continuation !== null && !sourceFinished) || completedStaticSource) && FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error("finite export requires a completed immutable Python scene");
         }
         if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);
         }
-        if ((continuation !== null || completedStaticSource) && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
+        if (((continuation !== null && !sourceFinished) || completedStaticSource) && SOURCE_CONTINUATION_PLAYBACK_CONTROLS.has(message.type)) {
           throw new Error(
             "playback controls are unavailable while a Python source continuation owns execution",
           );
@@ -1647,6 +1651,9 @@ export async function attachSemanticEngine(
       if (stopped) throw new Error("source completed after its endpoint stopped");
       player = context.completeSourcePlayback();
       sourceFinished = true;
+      sections = JSON.parse(player.sectionsJson());
+      try { player.sealReplay(); }
+      catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
       if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
       applyPointerInvalidation();
       if (stopped) throw new Error("source completion lost its pointer presentation");

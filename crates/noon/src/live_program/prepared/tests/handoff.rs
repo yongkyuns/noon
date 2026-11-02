@@ -229,7 +229,7 @@ fn late_callback_handoff_preserves_original_source_and_observed_phase_order() {
         assert_eq!(program.session().runtime_identity(), identity);
         assert_eq!(program.session().frame(), &before);
         assert_eq!(program.session().publication_context(), publication);
-        assert!(!program.session().replay_scope_active());
+        assert_eq!(program.session().replay_stats().revisions_retained, 0);
         assert_eq!(source.status(), PreparedSourceStatus::Transferred);
         assert!(source.take_execution_program().is_none());
         assert_eq!(
@@ -389,7 +389,7 @@ fn initial_callback_handoff_does_not_start_or_reconstruct_the_continuation() {
     drop(source);
     assert_eq!(calls.get(), 0);
     assert_eq!(drops.get(), 0);
-    assert!(!program.session().replay_scope_active());
+    assert_eq!(program.session().replay_stats().revisions_retained, 0);
     program.resume().unwrap();
     assert_eq!(calls.get(), 1);
     let invocations = Rc::new(Cell::new(0));

@@ -582,7 +582,8 @@ function createRuntimeClient() {
 
 function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
   if (playbackState?.preparedPlayback === true) preparedPlaybackPlayer = nextPlayer;
-  else if (playbackState?.sourceExecution === "observed" && isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
+  else if ((playbackState?.sourceExecution === "observed" || playbackState?.preparedPlayback === false) &&
+      isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
   if (playbackState?.hasAudio === true) durationSeconds = playbackState.durationSeconds;
   status.dataset.playbackControls = supported ? "available" : "unavailable";
   if (playbackControls === null) {
@@ -591,7 +592,7 @@ function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds
       document.querySelector(".preview-pane"),
       { durationSeconds, onError: showPlaybackError },
     );
-  } else if (playbackState?.preparedPlayback !== true && playbackState?.sourceExecution !== "observed") {
+  } else if (playbackState?.preparedPlayback === undefined && playbackState?.sourceExecution !== "observed") {
     playbackControls.setDuration(durationSeconds);
   }
   playbackControls.setControllable(supported);
@@ -690,7 +691,9 @@ async function ensureRuntimeReady({
       }
       if ((initialState.preparedPlayback === true && semanticExecution.preparedPlayback !== true) ||
           (semanticExecution.preparedPlayback === true && initialState.preparedPlayback !== true &&
-           initialState.sourceExecution !== "observed")) {
+           initialState.sourceExecution !== "observed" &&
+           !(initialState.preparedPlayback === false && initialState.replaySupported === true &&
+             initialState.sourcePlaybackControllable === false))) {
         throw new Error("runtime playback profile does not match its source registration");
       }
 
@@ -1286,8 +1289,14 @@ async function runScene() {
             throw new Error("prepared source completion has no matching adopted terminal history");
           }
           if (result.preparedPlayback !== true &&
-              (result.sourceExecution !== "observed" || result.time !== authored.duration)) {
+              (result.time !== authored.duration ||
+               (result.sourceExecution !== "observed" && result.replaySupported !== true))) {
             throw new Error("source completion does not match its original observed endpoint");
+          }
+          if (result.preparedPlayback === false && result.replaySupported === true && authored.duration > 0) {
+            // Replace the bootstrap seek bound with the completed authored range.
+            // The existing Rust control validates it on this same retained player.
+            result = await player.setLoopDurationSeconds(authored.duration);
           }
           // Preserve the selected reader or original observed endpoint and input.
           // The final source result is not another presentation authority.

@@ -6074,6 +6074,13 @@ impl SemanticExecutionPlayer {
             self.session
                 .seal_replay()
                 .map_err(|error| error.to_string())?;
+            #[cfg(any(target_arch = "wasm32", test))]
+            {
+                self.live_segment = None;
+                self.live_wake_clock = BrowserExecutionWakeClock::default();
+            }
+        } else if !self.session.supports_immutable_playback() {
+            return Err(noon_runtime::ReplayError::UnrecordedInput.to_string());
         }
         Ok(())
     }

@@ -67,7 +67,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     setControllable(value) { this.controllable = value; }
     setBusy(value) { this.busy = value; }
     sync(value) {
-      if (this.state?.preparedPlayback && value.sourceExecution !== "observed") assert.equal(value.preparedPlayback, true, "do not strip prepared metadata");
+      if (this.state?.preparedPlayback && value.sourceExecution !== "observed" && value.preparedPlayback !== false) assert.equal(value.preparedPlayback, true, "do not strip prepared metadata");
       this.state = value;
     }
     observe(value) { if (!this.commandPending) this.sync(value); }
@@ -117,6 +117,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
       },
       async metrics() { return { metrics: { objectCount: 1 }, engineMetrics: { host: {} } }; },
       async pause() { calls.push(["pause"]); this.status.playing = false; return { ...this.status }; },
+      async setLoopDurationSeconds(duration) { calls.push(["set-loop", duration]); return { ...this.status }; },
       async reconcileSemanticExecution(descriptor) {
         calls.push(["reconcile", descriptor]);
         assert.notEqual(this.status?.preparedPlayback, true, "cannot reconcile an unretired prepared reader");
@@ -209,6 +210,23 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     count: name => calls.filter(call => call[0] === name).length,
   };
 }
+
+test("completed observed replay atomically replaces old prefix controls and bootstrap seek bound", async () => {
+  const f = fixture(), { promise } = await f.start();
+  await f.register();
+  const player = f.inspect().player, controls = f.inspect().playbackControls;
+  player.status = { preparedPlayback: false, replaySupported: true,
+    sourcePlaybackControllable: false, time: 4, playing: false };
+  f.finish();
+  const completed = await promise;
+  assert.equal(completed.error, undefined);
+  assert.equal(f.inspect().player, player);
+  assert.equal(f.inspect().playbackControls, controls);
+  assert.equal(controls.state.preparedPlayback, false);
+  assert.equal(controls.state.durationSeconds, 4);
+  assert.deepEqual(f.calls.find(call => call[0] === "set-loop"), ["set-loop", 4]);
+  assert.equal(f.count("reconcile"), 0);
+});
 
 test("prepared startup releases only its UI busy ticket while the source remains suspended", async () => {
   const f = fixture(), { promise, job } = await f.start();

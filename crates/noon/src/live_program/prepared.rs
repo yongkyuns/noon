@@ -188,7 +188,7 @@ impl<C: LiveContinuation> PreparedSource<C> {
             program
                 .scene
                 .owned_execution_mut()
-                .release_prepared_source_history();
+                .retire_prepared_source_publication();
         }
         self.phase = PreparedSourceStatus::Transferred;
         Some(program)

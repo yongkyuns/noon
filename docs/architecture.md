@@ -895,11 +895,12 @@ canvas with a newer transport session and fresh controls. An active historical
 reader still cannot be replaced by reconciliation.
 
 Before a reader exists, Rust can instead admit the original pending interpreter
-segment to observed execution. This releases only its open source history and
+segment to observed execution. This retires prefix publishers while preserving
+the original bounded journal, its failure marker and valid identity pins, and
 leases the same canonical player to the existing continuation endpoint. Required
 callback events return to the original suspended Python stack; neither admission
 nor source completion reruns its body. The endpoint reports observed execution
-and unavailable replay, rather than claiming historical readiness. New suffixes
+and unavailable replay while source owns execution. New suffixes
 also use the shared source preflight before headless advancement. Observed source
 samples and returned leases preserve play/pause intent in the same Rust player
 clock. Manual authored-time samples remain paused. Pause commits elapsed interior
@@ -912,12 +913,16 @@ to the endpoint for input. Its encoder, runtime, semantic store and contacts sta
 intact; no source invocation or initial snapshot is repeated. Final authored output
 still waits for actual presentation. Receipts delivered while the context holds
 the player are retained until it returns, after any required pointer cancellation.
-Source completion freezes authored time while supported input and transient
-effects remain usable. Authored publication during an active translation drag
+After cleanup, Rust may seal that original journal for ordinary replay. Successful
+admission clears the completed live receipt and exposes its actual authored range;
+failure preserves explicit replay denial and native input. Completed lesson cues
+refresh on the same player. Python lessons with section navigation stay observed
+because the prefix profile does not carry that metadata; their completed replay
+still uses ordinary admission. Existing resource preparation on an observed source
+keeps its original GPU handshake and suspended callback.
+Authored publication during an active translation drag
 and native input with required callbacks retain their existing explicit gates.
-This initial admission does not qualify late reader-to-source handoff or seeking,
-renderer recovery, staged resource preparation or default cutover;
-those remain under #2211.
+These transitions neither rerun source nor create another history or clock.
 
 At the genuine execution-to-render-worker boundary, an opt-in prepared player
 may own the independent reader in the producing execution context. It encodes

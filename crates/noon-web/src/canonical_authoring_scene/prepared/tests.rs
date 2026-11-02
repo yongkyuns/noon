@@ -46,6 +46,57 @@ fn interpreter_host_effect_admission_retains_a_quiet_original_source_at_its_actu
 }
 
 #[test]
+fn completed_observed_source_keeps_original_history_for_replay() {
+    let (mut context, target) = fixture();
+    context
+        .scene
+        .next_section_at("Start", noon::SectionType::Normal, 0.0)
+        .unwrap();
+    context.begin_ordinary_wait(0.5).unwrap();
+    let initial = context.active_live_player().unwrap().debug_frame_json();
+    let identity = context.active_live_player().unwrap().ownership_identity();
+    assert!(context
+        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+        .unwrap());
+    let mut player = context.take_execution_player(1.0, 0).unwrap();
+    player.live_advance_segment_to(0.5).unwrap();
+    player.live_complete_segment().unwrap();
+    context.return_execution_player(player).unwrap();
+    context
+        .scene
+        .next_section_at("Middle", noon::SectionType::Normal, 0.5)
+        .unwrap();
+    context
+        .active_live_player()
+        .unwrap()
+        .live_set_translation(&target, 2.0, 0.0)
+        .unwrap();
+    context.begin_ordinary_wait(0.5).unwrap();
+    let mut player = context.resume_execution_player().unwrap();
+    player.live_advance_segment_to(1.0).unwrap();
+    player.live_complete_segment().unwrap();
+    context.return_execution_player(player).unwrap();
+    let mut player = context.complete_source_playback().unwrap();
+    player.seal_replay().unwrap();
+    let sections: serde_json::Value = serde_json::from_str(&player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().len(), 2);
+    assert_eq!(sections[1]["name"], "Middle");
+    assert_eq!(sections[1]["time"], 0.5);
+    assert_eq!(player.ownership_identity(), identity);
+    assert_eq!(target.center().unwrap(), (2.0, 0.0));
+    player.seek_delta_json(0.0).unwrap();
+    let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
+    let rewound: serde_json::Value = serde_json::from_str(&player.debug_frame_json()).unwrap();
+    assert_eq!(rewound["objects"], initial["objects"]);
+    player.resume();
+    player.tick_delta_json(1_000.0).unwrap();
+    player.tick_delta_json(1_100.0).unwrap();
+    assert!(player.time() > 0.0 && player.time() < 0.5);
+    player.seek_delta_json(1.0).unwrap();
+    assert_eq!(player.time(), 1.0);
+}
+
+#[test]
 fn interpreter_prefix_uses_actual_completed_wait_without_transferring_source() {
     let (mut context, _) = fixture();
     assert!(context.prepare_live_segment().is_err());

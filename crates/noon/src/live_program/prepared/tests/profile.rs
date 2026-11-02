@@ -88,7 +88,7 @@ fn unsupported_suffix_is_detected_before_headless_drive_and_runs_once_after_tran
         program.session().frame().objects[0].transform.translation,
         Vec2::ZERO
     );
-    assert!(!program.session().replay_scope_active());
+    assert!(program.session().replay_scope_active());
     let mut callbacks = RustHostCallbackTable::new();
     for (time, x) in [(1.25, 0.5), (1.5, 1.0), (2.0, 2.0)] {
         program.drive_to(&mut callbacks, time).unwrap();
@@ -101,6 +101,11 @@ fn unsupported_suffix_is_detected_before_headless_drive_and_runs_once_after_tran
     }
     assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
     assert_eq!(calls.get(), 3);
+    program.scene.owned_execution_mut().seal_replay().unwrap();
+    for (time, x) in [(0.5, 0.0), (1.5, 1.0), (2.0, 2.0)] {
+        program.scene.owned_execution_mut().seek(time).unwrap();
+        assert!((program.session().frame().objects[0].transform.translation.x - x).abs() < 1e-6);
+    }
     drop(program);
     reader.seek(0.5).unwrap();
     assert_eq!(reader.frame(), &baseline);

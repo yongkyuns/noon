@@ -290,7 +290,7 @@ fn cooperative_source_retention_failure_preserves_the_unadvanced_program() {
     assert_eq!(drops.get(), 0);
     let mut program = source.take_execution_program().unwrap();
     assert_eq!(program.session().frame().time, 1.0);
-    assert!(!program.session().replay_scope_active());
+    assert_eq!(program.session().replay_stats().revisions_retained, 0);
     assert!(matches!(program.status(), LiveProgramStatus::Awaiting(_)));
     program
         .drive_to(&mut crate::RustHostCallbackTable::new(), 1.5)
