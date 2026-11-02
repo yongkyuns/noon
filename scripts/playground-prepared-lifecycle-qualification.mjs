@@ -12,6 +12,7 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { installPreparedSourceCounterProbe } from "./prepared-source-counter-probe.mjs";
+import { installPreparedGpuLossProbe, losePreparedRenderer } from "./prepared-gpu-loss-probe.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, "browser-smoke-artifacts/prepared-gallery");
@@ -88,6 +89,7 @@ const largePixelsByBackend = new Map();
 async function installFixture(page, evidence) {
   await cache.install(page.context());
   await installPreparedSourceCounterProbe(page.context(), null, evidence);
+  await installPreparedGpuLossProbe(page.context(), evidence);
   await page.route("**/python/examples/manim_*_manifest.json", route => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({ reference: { version: "0.21" },
@@ -156,6 +158,8 @@ async function assertGallerySourceFailure(page) {
   assert.equal(await page.locator("#patch-status").evaluate(element => element.value ?? element.textContent), "Python raised RuntimeError");
   assert.equal(await panel.locator("strong").textContent(), "Python raised RuntimeError");
   assert.equal(await panel.locator("p").first().textContent(), "intentional gallery source failure");
+  assert.equal(await panel.getByRole("button", { name: /^Go to line / }).isVisible(), true,
+    "source diagnostics must retain the executed document after preview recovery");
 }
 async function selectGalleryExample(page, id) {
   // The production picker keeps cards hidden until its trigger opens the dialog.
@@ -166,10 +170,10 @@ async function selectGalleryExample(page, id) {
   await layer.locator(`.example-card[data-example-id="${id}"]`).click();
   await layer.waitFor({ state: "hidden" });
 }
-async function waitForObservation(page, observe) {
+async function waitForObservation(page, observe, argument) {
   const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
-    const result = await page.evaluate(observe);
+    const result = await page.evaluate(observe, argument);
     if (result) return result;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
@@ -189,6 +193,8 @@ async function pixels(page, name) {
 
 await mkdir(output, { recursive: true });
 try {
+  report.harnessSha256 = hash(await readFile(fileURLToPath(import.meta.url)));
+  report.gpuLossProbeSha256 = hash(await readFile(path.join(root, "scripts/prepared-gpu-loss-probe.mjs")));
   report.mainSha256 = hash(await readFile(path.join(root, "web/main.js")));
   report.workerSha256 = hash(await readFile(path.join(root, "web/python-worker.js")));
   report.wasmSha256 = hash(await readFile(path.join(root, "web/pkg/noon_web_bg.wasm")));
@@ -203,9 +209,10 @@ try {
       const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1 });
       page.setDefaultTimeout(180_000);
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
-      let staticInvocations = 0, zeroInvocations = 0, largeInvocations = 0;
+      let staticInvocations = 0, zeroInvocations = 0, largeInvocations = 0, sourceInvocations = 0;
       const inputInvocations = { static: 0, zero: 0 };
       page.on("console", message => { if (message.text() === "noon-static-source-invoked") staticInvocations++;
+        if (message.text() === "start") sourceInvocations++;
         if (message.text() === "noon-zero-source-invoked") zeroInvocations++;
         if (message.text() === "noon-static-input-invoked") inputInvocations.static++;
         if (message.text() === "noon-zero-input-invoked") inputInvocations.zero++;
@@ -231,6 +238,49 @@ try {
         entry.checks.push("actual-gallery-prepared-start", "source-does-not-lock-controls-or-gallery");
         await seekOpen(page, 5);
         const baseline = await pixels(page, `${backend}-${transport}-baseline`);
+        const recoverGpu = async (phase, playing = false) => {
+          const invocations = sourceInvocations;
+          if (playing) {
+            await page.locator(".playback-toggle").click();
+            await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "true");
+          }
+          const before = await page.evaluate(async () => ({
+            runGeneration: __noonExampleGallery.runPhaseMetrics.runGeneration,
+            elapsed: document.querySelector(".playback-controls").dataset.elapsedSeconds,
+            metrics: (await __noonExampleGallery.executionMetrics()).metrics,
+          }));
+          await page.evaluate(() => { globalThis.canvasBeforeGpuLoss = document.querySelector("#scene"); });
+          const fault = await losePreparedRenderer(page, backend);
+          const recover = page.locator("#preview-recover");
+          if (backend === "webgpu") {
+            await recover.waitFor({ state: "visible" });
+            await recover.click();
+            await recover.waitFor({ state: "hidden" });
+            assert.equal(await page.evaluate(() => canvasBeforeGpuLoss !== document.querySelector("#scene")), true);
+            assert.equal(await page.locator("#authoring-problem").isVisible(), false);
+          } else {
+            await waitForObservation(page, async old => {
+              const metrics = (await __noonExampleGallery.executionMetrics()).metrics;
+              return metrics.gpuGeneration > old.gpuGeneration && metrics.presentedFrames > old.presentedFrames;
+            }, before.metrics);
+            assert.equal(await recover.isVisible(), false);
+          }
+          if (playing) {
+            await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "true");
+            assert.ok(Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds")) >= Number(before.elapsed));
+            await pause(page); await seekSealed(page, 5);
+          } else {
+            assert.equal(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"), before.elapsed);
+          }
+          assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-${phase}-gpu-recovered`)));
+          assert.equal(await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration), before.runGeneration);
+          assert.equal(sourceInvocations, invocations, "GPU recovery cannot execute source again");
+          assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+          entry.checks.push(`${phase}-real-gpu-loss-exact-recovery-without-source-rerun`);
+          (entry.gpuRecovery ??= []).push({ phase, before, fault });
+        };
+        await recoverGpu("open");
+        assert.equal(sourceInvocations, 1);
         await page.evaluate(() => { globalThis.originalGalleryCanvas = document.querySelector("#scene"); });
         await seekOpen(page, 29.5, 31); await seekOpen(page, 30.5, 61); await seekOpen(page, 60.5);
         await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
@@ -244,6 +294,9 @@ try {
         assert.equal(baseline.equals(await pixels(page, `${backend}-${transport}-terminal`)), false);
         await seekSealed(page, 5);
         assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-rewind`)));
+        await recoverGpu("completed");
+        await recoverGpu("completed-playing", true);
+        assert.equal(sourceInvocations, 1);
         entry.checks.push("exact-endpoint", "exact-rewind-pixels");
 
         // A real Run replaces the historical stream, retaining the healthy VM.
@@ -256,7 +309,9 @@ try {
         // normal cooperative cancellation and the gallery's generation gates.
         await selectGalleryExample(page, "prepared-failure");
         await page.waitForFunction(() => __noonExampleGallery.selectedExampleId === "prepared-failure");
-        await openReady(page); await pause(page); await seekOpen(page, 29.5);
+        await openReady(page); await pause(page); await seekOpen(page, 5);
+        await recoverGpu("before-source-failure");
+        await seekOpen(page, 29.5);
         await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
           document.querySelector("#patch-status")?.dataset.state === "error");
         await assertGallerySourceFailure(page);

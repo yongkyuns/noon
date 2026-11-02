@@ -126,7 +126,7 @@ function navigationFixture() {
       dispose() { diagnosticDisposals += 1; },
     },
     currentExample: () => ({ id: "one", title: "One" }),
-    resetPresentationRate() {}, stopMetricsPolling() {},
+    resetPresentationRate() {}, stopMetricsPolling() {}, updatePreviewRecoveryControl() {},
     beginBusy: () => () => {}, setBusy() {},
     setRuntimeStatus(value) { context.runtimeStatus = value; },
     showSceneError: error => errors.push(error), showError: error => errors.push(error),
@@ -480,7 +480,7 @@ function busyControlsFixture() {
     playbackControls: { setBusy(value) { context.playbackBusy = value; } },
     activeRunRequest: null, sceneRunPromise: null, activeSourceContinuation: null,
     current: true, isCurrentRun: () => context.current,
-    updateGalleryPagerControls() {},
+    updateGalleryPagerControls() {}, updatePreviewRecoveryControl() {},
   };
   const start = main.indexOf("function setBusy(busy)");
   const end = main.indexOf("function beginBusy()", start);

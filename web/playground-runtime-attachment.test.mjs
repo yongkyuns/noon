@@ -50,6 +50,7 @@ function fixture({ preparedPlayback = true, continuationGeneration = 1,
     const setRuntimeStatus = (...args) => env.calls.push(["status", ...args]);
     const adoptRuntimeCanvas = owner => env.calls.push(["adopt", owner]);
     const startMetricsPolling = () => env.calls.push(["poll"]);
+    const updatePreviewRecoveryControl = () => {};
     const updatePlaybackControls = options => {
       env.calls.push(["controls", options]);
       playbackControls = { destroy: () => env.calls.push(["destroy-controls"]) };

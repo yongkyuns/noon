@@ -64,7 +64,7 @@ function fixture({ retire = () => Promise.resolve(), started = true, prepared = 
     currentExample: () => ({ id: "one", title: "One" }),
     generations: { beginRun: () => ({ selectionGeneration: 1, runGeneration: 2 }) },
     isCurrentRun: () => current, recordStale: (_, stage) => ({ stale: true, stage }),
-    resetPresentationRate() {}, stopMetricsPolling() {},
+    resetPresentationRate() {}, stopMetricsPolling() {}, updatePreviewRecoveryControl() {},
     beginBusy: () => () => { releases += 1; }, setRuntimeStatus() {},
     authoringSourceDocument, diagnosticPanel: { beginRun() {} },
     previousPreview: { hold() { events.push("hold"); } },

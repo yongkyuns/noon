@@ -31,6 +31,7 @@ function fixture({ summary = expectedTitle, title = expectedTitle, message = exp
     else assert.equal(visible, true, "await the visible diagnostic before inspecting it");
   };
   const panel = {
+    getByRole() { return { async isVisible() { return true; } }; },
     async waitFor(options) { assert.equal(options.state, "visible"); await step("visible"); },
     async textContent() { await step("whole-panel"); return `${title}\n${message}\nraise RuntimeError("${expectedMessage}")`; },
     locator(selector) {
