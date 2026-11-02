@@ -44,7 +44,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   let showcase = false;
   const gallery = {
     selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
-    executionMetrics: async () => ({ metrics: { presentedFrames: frame, objectCount: 3 } }),
+    executionMetrics: async () => ({ metrics: { presentedFrames: frame, objectCount: 3, time: 2.6 } }),
   };
   const wheelListeners = [];
   const browserWindow = {
@@ -191,7 +191,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       process: { env },
       setTimeout: (callback) => { callback(); return 0; },
       clearTimeout: () => {},
-      spawn: () => ({ kill: () => events.push("server:kill") }),
+      serveRepository: async () => ({ close: async () => events.push("server:close") }),
       mkdir: async () => {},
       writeFile: async (filename, bytes) => {
         const name = path.basename(filename);
@@ -241,7 +241,7 @@ function assertRetained(result, names) {
     assert.equal(result.writes.get(`${name}.png`), result.captures[index]);
   }
   assert.equal(result.events.filter((event) => event === "browser:close").length, 1);
-  assert.equal(result.events.filter((event) => event === "server:kill").length, 1);
+  assert.equal(result.events.filter((event) => event === "server:close").length, 1);
   // Artifact I/O must not insert a wait before any original screenshot.
   assert.ok(result.events.findIndex((event) => event.startsWith("write:")) >
     result.events.findLastIndex((event) => event.startsWith("capture:")));
@@ -399,7 +399,7 @@ test("artifact write failure never replaces the original strict assertion", asyn
   assert.equal(result.error.actual, 21);
   assert.ok(result.events.includes("diagnostic:error"));
   assert.ok(result.events.includes("browser:close"));
-  assert.ok(result.events.includes("server:kill"));
+  assert.ok(result.events.includes("server:close"));
   assert.ok(!result.events.includes("passed"));
 });
 
@@ -407,7 +407,7 @@ test("artifact write failure after passing pixels still fails the smoke", async 
   const result = await runSmoke({ writeFailure: true });
   assert.match(result.error?.message, /artifact write failed/);
   assert.ok(result.events.includes("browser:close"));
-  assert.ok(result.events.includes("server:kill"));
+  assert.ok(result.events.includes("server:close"));
   assert.ok(!result.events.includes("passed"));
 });
 

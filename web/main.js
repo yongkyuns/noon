@@ -1098,6 +1098,7 @@ async function runScene() {
   const releaseBusy = beginBusy();
   const task = (async () => {
     let earlyContinuation = null;
+    let interactionConfigured = false;
     let authoringFailed = false;
     try {
       diagnosticPanel.beginRun(authoringSourceDocument({ playground: {
@@ -1209,7 +1210,10 @@ async function runScene() {
             if (result.preparedPlayback === true || result.sourcePlaybackControllable === true) {
               // Only startup owns this busy ticket. Source demand can remain
               // suspended indefinitely while controls and gallery stay usable.
-              if (result.preparedPlayback === true) await applyExampleInteraction(example, attachedPlayer);
+              if (result.preparedPlayback === true) {
+                await applyExampleInteraction(example, attachedPlayer);
+                interactionConfigured = true;
+              }
               if (!isCurrentRun(runToken)) {
                 throw new Error("prepared source was superseded during interaction setup");
               }
@@ -1339,7 +1343,7 @@ async function runScene() {
       }
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
-      if (result.preparedPlayback !== true && result.sourceExecution !== "observed") await applyExampleInteraction(example);
+      if (!interactionConfigured) await applyExampleInteraction(example);
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-interaction-config");
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;

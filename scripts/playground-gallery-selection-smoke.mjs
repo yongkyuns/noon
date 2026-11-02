@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,16 +11,19 @@ import { createBrowserFailureTrace } from "./playground-browser-failure-evidence
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 import { assertNonreplayableShowcase, readLiveState } from "./showcase-live-review.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_GALLERY_SELECTION_PORT ?? 4217);
-const base = process.env.NOON_GALLERY_SELECTION_BASE ?? `http://127.0.0.1:${port}/web/`;
+const base = process.env.NOON_GALLERY_SELECTION_BASE ?? `http://127.0.0.1:${port}/web/index.html`;
 const artifacts = path.resolve(
   root,
   process.env.NOON_GALLERY_SELECTION_ARTIFACTS ??
     "browser-smoke-artifacts/gallery-pointer-selection",
 );
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? "chromium";
+const playbackProfile = process.env.NOON_GALLERY_SELECTION_PLAYBACK ?? "default";
+assert.ok(["default", "live"].includes(playbackProfile));
 const profileName = process.env.NOON_PLAYGROUND_PROFILE ?? "desktop-dpr1";
 const profiles = {
   // Preserve the original gallery-selection smoke's viewport exactly.
@@ -47,6 +49,7 @@ let detachFailureTrace;
 const captures = {};
 const report = {
   browser: browserName, profile: profileName, input: profile.hasTouch ? "touch" : "mouse",
+  playbackProfile,
   legacyInteraction: "pointer-fill-selection", authoredInteraction: "click-indicate", noJspi: true,
 };
 let failure;
@@ -121,18 +124,7 @@ async function assertSettled(page, label) {
 
 try {
   if (!process.env.NOON_GALLERY_SELECTION_BASE) {
-    server = spawn(
-      "python3",
-      ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", root],
-      { stdio: "ignore" },
-    );
-    let ready = false;
-    for (let i = 0; i < 100; i += 1) {
-      ready = await fetch(base).then((response) => response.ok).catch(() => false);
-      if (ready) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    assert.ok(ready, "gallery selection HTTP server did not start");
+    server = await serveRepository(root, port);
   }
 
   const worker = await fetch(new URL("python-worker.js", base));
@@ -141,6 +133,9 @@ try {
 
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext(profile);
+  if (playbackProfile === "live") await context.addInitScript(() => {
+    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: false }) };
+  });
   await runtimeCache.install(context);
   await disableAuthoringJspi(context);
   const page = await context.newPage();
@@ -210,7 +205,7 @@ try {
 
   // The curated lesson carries no manifest interaction policy. Its Rust-owned
   // click declaration must still work after the authored introduction has
-  // finished and replay has been paused at that endpoint.
+  // finished at its endpoint, with replay only when Rust admits it.
   await page.goto(`${base}?catalog=showcase&example=showcase-pointer-selection`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   assert.equal(
@@ -251,18 +246,33 @@ try {
   );
   const pause = page.getByRole("button", { name: "Pause animation", exact: true });
   if (await pause.count()) await pause.click();
-  const scrubber = page.locator(".playback-scrubber");
-  const endpoint = Number(await scrubber.getAttribute("max"));
-  await scrubber.evaluate((input, time) => {
-    input.value = String(time);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }, endpoint);
-  await page.waitForFunction((time) => {
-    const controls = document.querySelector(".playback-controls");
-    return controls?.dataset.busy === "false" &&
-      controls.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation" &&
-      Math.abs(Number(controls.dataset.elapsedSeconds) - time) < 1e-7;
-  }, endpoint);
+  const authoredPlayback = await readLiveState(page);
+  if (authoredPlayback.controls.controllable === "true") {
+    const scrubber = page.locator(".playback-scrubber");
+    const endpoint = Number(await scrubber.getAttribute("max"));
+    await scrubber.evaluate((input, time) => {
+      input.value = String(time);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, endpoint);
+    await page.waitForFunction((time) => {
+      const controls = document.querySelector(".playback-controls");
+      return controls?.dataset.busy === "false" &&
+        controls.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation" &&
+        Math.abs(Number(controls.dataset.elapsedSeconds) - time) < 1e-7;
+    }, endpoint);
+  } else {
+    const manifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
+    const lesson = manifest.entries.find(entry => entry.id === "showcase-pointer-selection");
+    assert.ok(lesson);
+    assert.equal(authoredPlayback.controls.controllable, "false");
+    assert.equal(authoredPlayback.controls.busy, "false");
+    assert.equal(authoredPlayback.controls.playing, "false");
+    assert.ok(Math.abs(Number(authoredPlayback.controls.elapsedSeconds) - lesson.duration) < 1e-7);
+    assert.ok(Math.abs(authoredPlayback.publishedTime - lesson.duration) < 1e-7);
+    assert.match(authoredPlayback.replayReason, /^Replay unavailable:/);
+    for (const control of ["play", "restart", "scrubber"]) assert.equal(authoredPlayback.disabledReplayControls[control], true);
+  }
+  report.authoredPlayback = authoredPlayback;
   const authoredBox = await authoredCanvas.boundingBox();
   assert.ok(authoredBox && authoredBox.width > 0 && authoredBox.height > 0, "authored canvas is not drawable");
   const authoredBaseline = await authoredCanvas.screenshot();
@@ -569,7 +579,7 @@ try {
     try {
       await browser?.close();
     } finally {
-      server?.kill("SIGTERM");
+      await server?.close();
     }
   }
 }

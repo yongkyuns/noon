@@ -104,6 +104,10 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
           sourceExecution: "observed", time: 0, playing: true, replaySupported: false,
           replayUnavailable: "source execution is not retained for replay", durationSeconds: null,
         };
+        if (env.completedStatic) {
+          Object.assign(this.status, { time: 0, playing: false, durationSeconds: 0 });
+          if (this.status.preparedPlayback) this.status.preparedFrontier = 0;
+        }
         return { engine: { preparedPlayback: this.status.preparedPlayback }, render: { backend: "WebGL2" } };
       },
       async state() {
@@ -275,6 +279,19 @@ for (const rejected of [false, true]) {
   });
 }
 
+for (const observed of [false, true]) test(`completed static ${observed ? "observed" : "prepared"} source applies gallery inspection once`, async () => {
+  const f = fixture(); f.env.completedStatic = true; f.env.observedExecution = observed;
+  const { promise, job } = await f.start();
+  job.resolve({ semanticExecution: { contextId: "static", preparedPlayback: true }, duration: 0 });
+  const completed = await promise;
+  assert.equal(completed.error, undefined);
+  assert.equal(f.inspect().player.status.time, 0);
+  if (!observed) assert.equal(f.inspect().playbackControls.state.durationSeconds, 0);
+  assert.equal(f.count("inspection"), 1);
+  assert.equal(f.count("reconcile"), 0); assert.equal(f.jobs.length, 1);
+  assert.deepEqual(f.errors, []);
+});
+
 test("terminal adoption keeps the reader, pause, playhead and inspection without reconciliation", async () => {
   const f = fixture(), { promise } = await f.start(); await f.register();
   const before = f.inspect().player, control = f.inspect().playbackControls;
@@ -301,6 +318,7 @@ test("Rust-admitted initial observed execution finishes on its original endpoint
   assert.equal(f.inspect().player, player);
   assert.equal(f.count("reconcile"), 0); assert.equal(f.count("terminate-runtime"), 0);
   assert.equal(f.inspect().playbackControls.controllable, false);
+  assert.equal(f.count("inspection"), 1);
   assert.deepEqual(f.errors, []);
 });
 
