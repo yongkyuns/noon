@@ -729,8 +729,9 @@ residency remain outside these charges; they are not total memory bounds.
 An empty reactive runtime installed by semantic lowering is admissible; actual
 signals or reactive bindings, including later enrollment, require their own history
 policy. Validated 2D geometry transforms/morphs and one resource-free Glow attachment
-share the sparse revision path. New family channels, path-motion/spatial plans,
-ordered effects/effect animation, reactive/causal native input and host callbacks
+share the sparse revision path, including generation-scoped Glow color, radius
+and intensity tracks. New family channels, path-motion/spatial plans, ordered
+effects/other effect animation, reactive/causal native input and host callbacks
 remain outside suffix admission. The opt-in cooperative `PreparedSource` may consume an
 ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each preparation
 call invokes at most one continuation and completes its actual admitted segment
