@@ -173,8 +173,16 @@ async function previewPixels(page, frozen = false) {
 
 async function pauseAndRecordPreview(page) {
   const toggle = page.locator(".playback-toggle");
-  if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
-  // Observe the compositor's placeholder update after the acknowledged pause.
+  const duration = Number(await page.locator(".playback-scrubber").getAttribute("max"));
+  if (duration === 0) {
+    assert.equal(await toggle.isDisabled(), true, "an exact-zero scene has no play interval");
+    assert.equal(await page.locator(".playback-scrubber").isDisabled(), true);
+    assert.equal(Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds")), 0);
+  } else {
+    assert.equal(await toggle.isEnabled(), true, "a positive replay interval must remain controllable");
+    if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
+  }
+  // Observe the compositor after pause or exact-zero completion.
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const pixels = await previewPixels(page);
   assert.ok(pixels.different > 50, "the successful scene must have visible nonuniform pixels");
