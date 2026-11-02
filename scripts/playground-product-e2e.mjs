@@ -435,8 +435,37 @@ try {
   const screenshotPath = path.join(artifactDir, screenshotName);
   const canvas = page.locator("#scene");
   await canvas.scrollIntoViewIfNeeded();
+  // Different control layouts can place the same bitmap half a CSS pixel
+  // apart. Align its layout origin, not a composited transform of an already
+  // resampled image. Keep the existing absolute positioning and all dimensions.
+  const captureAlignment = await canvas.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    if (style.position !== "absolute" || style.left !== "0px" || style.top !== "0px") {
+      throw new Error("product canvas has unexpected layout positioning");
+    }
+    const dpr = devicePixelRatio;
+    const offset = { x: Math.round(bounds.x * dpr) / dpr - bounds.x,
+      y: Math.round(bounds.y * dpr) / dpr - bounds.y };
+    const before = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    const backing = { width: element.width, height: element.height };
+    element.style.left = `${offset.x}px`;
+    element.style.top = `${offset.y}px`;
+    return { before, backing, offset, dpr };
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const bounds = await canvas.boundingBox();
   assert.ok(bounds?.width > 0 && bounds?.height > 0, "product canvas must have positive bounds");
+  assert.equal(bounds.width, captureAlignment.before.width, "capture alignment resized the canvas width");
+  assert.equal(bounds.height, captureAlignment.before.height, "capture alignment resized the canvas height");
+  assert.deepEqual(await canvas.evaluate(element => ({ width: element.width, height: element.height })),
+    captureAlignment.backing, "capture alignment resized the backing bitmap");
+  for (const axis of ["x", "y"]) assert.ok(Math.abs(bounds[axis] * captureAlignment.dpr -
+    Math.round(bounds[axis] * captureAlignment.dpr)) < 1e-6, "capture origin is not pixel aligned");
+  const alignedPublication = await sampleRendererObservation(page);
+  for (const key of ["frames", "time", "session", "clockOriginMs"]) {
+    assert.equal(alignedPublication[key], endpoint.rendered[key], "capture alignment changed the presented frame");
+  }
   // Element screenshots round both edges outwards, so moving identical content
   // to a fractional page offset can add a row. Compare the same pixel-sized
   // region in both runs; genuine canvas size changes still fail comparison.
@@ -480,6 +509,7 @@ try {
     },
     screenshot: screenshotName,
     captureBounds,
+    captureAlignment: { ...captureAlignment, alignedBounds: bounds },
     runtime: {
       runnerPlatform: process.platform,
       backend: cold.state.backend,

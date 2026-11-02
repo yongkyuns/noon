@@ -7,7 +7,8 @@ const END_TOLERANCE_SECONDS = 0.001;
 // Explicit workloads, using the same source and window on both packages. These
 // are test protocols, not an alternative runtime clock or benchmark registry.
 export function productMeasurement(exampleId) {
-  const common = { version: 6, clock: "renderer-sampled", sampler: "renderer-only",
+  // Version 7 also requires the final capture's layout origin to be pixel aligned.
+  const common = { version: 7, clock: "renderer-sampled", sampler: "renderer-only",
     maxEndDelaySeconds: 0.1,
     preparation: "completed-cold-pass" };
   switch (exampleId) {
