@@ -200,7 +200,24 @@ function changedPixelStats(buffer) {
   return { width: png.width, height: png.height, changedPixels: changed };
 }
 
-async function waitForRenderedEndpoint(page, seconds) {
+async function captureBackingBitmap(canvas, filename) {
+  const encoded = await canvas.evaluate(element => {
+    const copy = document.createElement("canvas");
+    copy.width = element.width;
+    copy.height = element.height;
+    copy.getContext("2d").drawImage(element, 0, 0);
+    return copy.toDataURL("image/png");
+  });
+  const buffer = Buffer.from(encoded.split(",")[1], "base64");
+  const png = PNG.sync.read(buffer);
+  const stats = changedPixelStats(buffer);
+  assert.ok(stats.changedPixels > 100, "capture backing bitmap is effectively blank");
+  await writeFile(path.join(artifactDir, filename), buffer);
+  return { png, evidence: { ...stats, screenshot: filename,
+    rgbaSha256: createHash("sha256").update(png.data).digest("hex") } };
+}
+
+async function waitForRenderedEndpoint(page, seconds, { explicitSeek = false } = {}) {
   const deadline = performance.now() + 10_000;
   let observedReplies = await page.evaluate(
     () => window.__noonProductRenderProbe?.metricsReplies ?? 0,
@@ -230,11 +247,12 @@ async function waitForRenderedEndpoint(page, seconds) {
       sample.busy === "false" && sample.runInFlight === false &&
       Math.abs(sample.logicalTime - seconds) <= 1e-7
     ) {
-      // A declared final still may retain its last changing publication. Keep
-      // that real timestamp and require the Rust playhead to reach the endpoint.
+      // A natural final still may retain its last changing publication. After
+      // an explicit seek, wait for that request's actual renderer endpoint;
+      // the UI acknowledgement can precede its retained publication.
       let publicationMatches = false;
       try {
-        if (showcaseEntry !== null) assertNaturalFirstPassPublication(showcaseEntry, sample.logicalTime, rendered.time);
+        if (!explicitSeek && showcaseEntry !== null) assertNaturalFirstPassPublication(showcaseEntry, sample.logicalTime, rendered.time);
         else assert.ok(Math.abs(rendered.time - seconds) <= 0.001);
         publicationMatches = true;
       } catch {}
@@ -273,7 +291,7 @@ async function synchronizeFinalFrame(page, seconds) {
     assert.equal(await page.locator(".playback-scrubber").isDisabled(), true,
       "nonreplayable execution must disable seeking");
   }
-  const rendered = await waitForRenderedEndpoint(page, seconds);
+  const rendered = await waitForRenderedEndpoint(page, seconds, { explicitSeek: capability === "available" });
   assert.ok(rendered.frames > 0, "authored endpoint was not presented by the render worker");
   return { capability, rendered };
 }
@@ -435,6 +453,7 @@ try {
   const screenshotPath = path.join(artifactDir, screenshotName);
   const canvas = page.locator("#scene");
   await canvas.scrollIntoViewIfNeeded();
+  const backingBefore = await captureBackingBitmap(canvas, "frame-backing-before.png");
   // Different control layouts can place the same bitmap half a CSS pixel
   // apart. Align its layout origin, not a composited transform of an already
   // resampled image. Keep the existing absolute positioning and all dimensions.
@@ -462,10 +481,24 @@ try {
     captureAlignment.backing, "capture alignment resized the backing bitmap");
   for (const axis of ["x", "y"]) assert.ok(Math.abs(bounds[axis] * captureAlignment.dpr -
     Math.round(bounds[axis] * captureAlignment.dpr)) < 1e-6, "capture origin is not pixel aligned");
-  const alignedPublication = await sampleRendererObservation(page);
-  for (const key of ["frames", "time", "session", "clockOriginMs"]) {
-    assert.equal(alignedPublication[key], endpoint.rendered[key], "capture alignment changed the presented frame");
+  const alignedPublication = await waitForRenderedEndpoint(page, measurement.sourceEndSeconds,
+    { explicitSeek: endpoint.capability === "available" });
+  const publicationDetail = JSON.stringify({ before: endpoint.rendered, after: alignedPublication });
+  for (const key of ["time", "session", "clockOriginMs"]) {
+    assert.equal(alignedPublication[key], endpoint.rendered[key],
+      `capture alignment changed the presented frame: ${publicationDetail}`);
   }
+  assert.ok(Number.isSafeInteger(alignedPublication.frames) &&
+    alignedPublication.frames >= endpoint.rendered.frames, "capture presentation counter moved backwards");
+  const backingAfter = await captureBackingBitmap(canvas, "frame-backing-after.png");
+  for (const bitmap of [backingBefore, backingAfter]) {
+    assert.equal(bitmap.png.width, captureAlignment.backing.width, "capture backing width changed");
+    assert.equal(bitmap.png.height, captureAlignment.backing.height, "capture backing height changed");
+  }
+  // Layout/input receipts can present the same paused frame again. Compare
+  // unscaled rendered pixels directly instead of requiring an unchanged count.
+  assert.ok(backingAfter.png.data.equals(backingBefore.png.data),
+    `capture alignment changed backing pixels: ${publicationDetail}`);
   // Element screenshots round both edges outwards, so moving identical content
   // to a fractional page offset can add a row. Compare the same pixel-sized
   // region in both runs; genuine canvas size changes still fail comparison.
@@ -509,7 +542,8 @@ try {
     },
     screenshot: screenshotName,
     captureBounds,
-    captureAlignment: { ...captureAlignment, alignedBounds: bounds },
+    captureAlignment: { ...captureAlignment, alignedBounds: bounds, publication: alignedPublication,
+      backingBefore: backingBefore.evidence, backingAfter: backingAfter.evidence },
     runtime: {
       runnerPlatform: process.platform,
       backend: cold.state.backend,
