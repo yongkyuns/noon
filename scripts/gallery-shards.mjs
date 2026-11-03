@@ -55,6 +55,17 @@ export function includeShowcaseCatalog(entries, showcaseEntries) {
     .map(entry => ({ ...entry, expected_duration: entry.duration }))];
 }
 
+export function galleryPoolForProfileGate(entries, showcaseEntries, mode, selectedIds = null) {
+  assert.ok(["disabled", "baseline", "strict"].includes(mode), "unknown showcase profile gate mode");
+  assert.ok(!(mode === "strict" && selectedIds !== null),
+    "strict showcase qualification requires the complete unfiltered gallery pool");
+  const pool = mode === "disabled" ? entries : includeShowcaseCatalog(entries, showcaseEntries);
+  if (selectedIds === null) return pool;
+  const selected = new Set(selectedIds);
+  assert.ok([...selected].every(id => pool.some(entry => entry.id === id)), "unknown gallery case selection");
+  return pool.filter(entry => selected.has(entry.id));
+}
+
 // Preserve the original case ordering: first the regular inventory, then
 // portable no-JSPI controls on Chromium and WebKit only.
 export function galleryCaseQueue(entries, browserName) {

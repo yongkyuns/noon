@@ -11,14 +11,14 @@ import { createBrowserFailureTrace, createNativeWebKitEvidence } from './playgro
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
-import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryShardFromEnvironment, includeShowcaseCatalog, shardGalleryEntries } from './gallery-shards.mjs';
-import { evaluateShowcaseDiagnostics, SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
+import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryPoolForProfileGate, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
+import { evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
 const profile = process.env.NOON_PLAYGROUND_PROFILE ?? 'mobile-dpr2';
-const profileGateMode = process.env.NOON_SHOWCASE_PROFILE_GATE ?? 'baseline';
-assert.ok(['baseline', 'strict'].includes(profileGateMode), 'NOON_SHOWCASE_PROFILE_GATE must be baseline or strict');
+const profileGateMode = process.env.NOON_SHOWCASE_PROFILE_GATE ?? 'disabled';
+assert.ok(['disabled', 'baseline', 'strict'].includes(profileGateMode), 'NOON_SHOWCASE_PROFILE_GATE must be disabled, baseline, or strict');
 const port = Number(process.env.NOON_GALLERY_PORT ?? 4197);
 const external = process.env.NOON_GALLERY_BASE;
 const base = external ?? `http://127.0.0.1:${port}/web/`;
@@ -61,6 +61,14 @@ async function json(relative) {
   assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
   return response.json();
 }
+async function showcaseSourceBytes(relative) {
+  if (!external) return readFileSync(path.join(root, 'web', relative));
+  const response = await fetch(new URL(relative, base), {
+    signal: AbortSignal.timeout(20000), headers: { 'Cache-Control': 'no-cache' },
+  });
+  assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+}
 try {
   if (!external) {
     httpServerState = { kind: 'owned-repository-server', port, ready: false, error: null };
@@ -86,17 +94,15 @@ try {
   if (process.env.NOON_GALLERY_REVISION) assert.equal(revision?.commit, process.env.NOON_GALLERY_REVISION);
   const manifests = await Promise.all(galleryManifestPaths.map(relative => json(relative)));
   const showcaseManifest = manifests[3];
-  validateShowcaseInventory(showcaseManifest.entries,
-    relative => readFileSync(path.join(root, 'web', relative)));
   const entries = galleryEntriesFromManifests(manifests);
-  const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
-  if (selectedIds) for (const id of selectedIds) {
-    assert.ok(entries.some(entry => entry.id === id), "unknown gallery case: " + id);
+  if (profileGateMode !== 'disabled') {
+    const sources = new Map();
+    for (const entry of showcaseManifest.entries) sources.set(entry.path, await showcaseSourceBytes(entry.path));
+    validateShowcaseInventory(showcaseManifest.entries, relative => sources.get(relative));
   }
-  assert.ok(!(profileGateMode === 'strict' && selectedIds),
-    'strict showcase qualification requires the complete unfiltered gallery pool');
-  const selectedPool = selectedIds ? entries.filter(entry => selectedIds.includes(entry.id))
-    : profileGateMode === 'strict' ? includeShowcaseCatalog(entries, showcaseManifest.entries) : entries;
+  const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
+  const selectedPool = galleryPoolForProfileGate(entries, showcaseManifest.entries,
+    profileGateMode, selectedIds ?? null);
   const shard = galleryShardFromEnvironment(process.env);
   const selectedEntries = shard ? shardGalleryEntries(selectedPool, shard.index, shard.count) : selectedPool;
   assert.ok(selectedEntries.length > 0, "gallery selection is empty");
@@ -108,10 +114,12 @@ try {
     shard,
     profileGateMode,
     sourceCaseCount: entries.length,
-    showcaseCatalog: SHOWCASE_PROFILE_EXPECTATIONS.map(({ id, path: sourcePath, sha256 }) =>
+    profileGateScope: profileGateMode === 'disabled' ? 'disabled'
+      : selectedIds ? 'focused' : 'full-catalog',
+    showcaseCatalog: profileGateMode === 'disabled' ? [] : SHOWCASE_PROFILE_EXPECTATIONS.map(({ id, path: sourcePath, sha256 }) =>
       ({ id, path: sourcePath, sha256 })),
     selectedCaseIds: selectedEntries.map(entry => entry.id),
-    strictShowcaseCaseIds: profileGateMode === 'strict'
+    profileGateShowcaseCaseIds: profileGateMode !== 'disabled'
       ? selectedEntries.filter(entry => SHOWCASE_PROFILE_EXPECTATIONS.some(row => row.id === entry.id)).map(entry => entry.id)
       : [],
     expectedCases: queue.map(({ entry, noJspi }) => ({ id: entry.id, noJspi })),
@@ -183,7 +191,8 @@ try {
     page.setDefaultTimeout(10000);
     const trace = createBrowserFailureTrace();
     const detachTrace = trace.attach(caseBrowser, context, page);
-    const expectedProfile = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === entry.id) ?? null;
+    const expectedProfile = profileGateMode === 'disabled' ? null
+      : SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === entry.id) ?? null;
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(),
       ...(expectedProfile ? { source: { path: expectedProfile.path, sha256: expectedProfile.sha256 } } : {}),
       errors: [], failedRequests: [], samples: [], presentations: [] };
@@ -249,7 +258,9 @@ try {
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
                 rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
                 renderHost: document.querySelector('#status')?.dataset.renderHost,
-                metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
+                metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError,
+                executionDiagnostics: document.querySelector('#patch-status')?.dataset.state === 'applied'
+                  ? gallery.executionDiagnostics ?? null : null };
             }, Object.hasOwn(liveMathAnimations, entry.id));
             lastWorkerMessages = workerMessages;
             result.state = state;
@@ -273,8 +284,15 @@ try {
             });
             if (state.patch.state === 'applied' && !state.inFlight) {
               const authored = parseAuthoringResult(await page.evaluate(() => window.__galleryAuthoringResults.at(-1)));
-              if (authored.semanticExecution?.preparedPlayback !== true ||
-                  Math.abs(Number(state.playback.elapsedSeconds) - authored.duration) < 1e-7) {
+              const requiresDisposition = authored.semanticExecution?.preparedPlayback === true ||
+                (profileGateMode !== 'disabled' && expectedProfile !== null);
+              if (galleryCaseLifecycleReady({
+                patchApplied: state.patch.state === 'applied',
+                runInFlight: state.inFlight,
+                requiresDisposition,
+                diagnostics: state.executionDiagnostics,
+                exampleId: entry.id,
+              })) {
                 completed = true; break;
               }
             }
@@ -372,14 +390,7 @@ try {
             `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
           if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
           if (expectedProfile) {
-            if (profileGateMode === 'strict') {
-              await page.waitForFunction(exampleId => {
-                const diagnostics = window.__noonExampleGallery?.executionDiagnostics;
-                return diagnostics?.context?.exampleId === exampleId &&
-                  Array.isArray(diagnostics.events) && diagnostics.events.some(event => event.stage === 'disposition');
-              }, entry.id, { timeout: 150000 });
-            }
-            result.executionDiagnostics = await page.evaluate(() =>
+            result.executionDiagnostics = result.state?.executionDiagnostics ?? await page.evaluate(() =>
               window.__noonExampleGallery?.executionDiagnostics ?? null);
             result.profileGate = {
               mode: profileGateMode,

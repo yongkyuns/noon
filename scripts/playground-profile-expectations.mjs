@@ -107,6 +107,14 @@ export function evaluateShowcaseDiagnostics(expected, diagnostics) {
   }
 }
 
+export function galleryCaseLifecycleReady({ patchApplied, runInFlight, requiresDisposition,
+  diagnostics, exampleId }) {
+  if (!patchApplied || runInFlight) return false;
+  if (!requiresDisposition) return true;
+  return diagnostics?.context?.exampleId === exampleId && Array.isArray(diagnostics.events) &&
+    diagnostics.events.some(event => event.stage === 'disposition');
+}
+
 export function validateShowcaseInventory(manifestEntries, readSource) {
   const actual = new Map(manifestEntries.map(entry => [entry.id, entry]));
   assert.equal(actual.size, manifestEntries.length, 'showcase manifest contains duplicate IDs');

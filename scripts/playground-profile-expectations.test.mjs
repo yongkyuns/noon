@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   SHOWCASE_PROFILE_EXPECTATIONS,
   evaluateShowcaseDiagnostics,
+  galleryCaseLifecycleReady,
   validateShowcaseDiagnostics,
   validateShowcaseInventory,
 } from './playground-profile-expectations.mjs';
@@ -125,6 +126,20 @@ test('baseline diagnostics report failures without converting them into target e
   assert.equal(report.status, 'unresolved');
   assert.equal(report.observed.disposition, 'looped', 'baseline report should preserve observed policy without adopting it');
   assert.equal(immutable.disposition, null, 'baseline observations must not freeze the unresolved immutable policy');
+});
+
+test('gallery lifecycle waits for the real disposition instead of an authored-end sample', () => {
+  const diagnostics = { context: { exampleId: 'showcase-first-scene' }, events: [] };
+  const base = { patchApplied: true, runInFlight: false, requiresDisposition: true,
+    diagnostics, exampleId: 'showcase-first-scene' };
+  assert.equal(galleryCaseLifecycleReady(base), false);
+  diagnostics.events.push({ stage: 'source-complete' }, { stage: 'terminal-adopted' });
+  assert.equal(galleryCaseLifecycleReady(base), false);
+  diagnostics.events.push({ stage: 'disposition', disposition: 'looped', loopCount: 1 });
+  assert.equal(galleryCaseLifecycleReady(base), true);
+  assert.equal(galleryCaseLifecycleReady({ ...base, exampleId: 'other-run' }), false);
+  assert.equal(galleryCaseLifecycleReady({ ...base, runInFlight: true }), false);
+  assert.equal(galleryCaseLifecycleReady({ ...base, requiresDisposition: false }), true);
 });
 
 test('completed callback dispositions expose no transport commands', () => {
