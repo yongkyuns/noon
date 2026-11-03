@@ -193,6 +193,11 @@ try {
 
   await page.addInitScript(installStressObservation);
   await page.addInitScript(() => {
+    // This case tests superseding a live source continuation, including its
+    // 600-second wait. Ordinary divmod-based scenes now admit prepared playback.
+    window.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+      authoringRunOptions: () => ({ preparedPlayback: false }),
+    };
     window.addEventListener("DOMContentLoaded", () => {
       const status = document.querySelector("#status");
       if (!status) return;

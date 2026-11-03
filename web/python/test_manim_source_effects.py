@@ -103,7 +103,7 @@ class SourceEffectsTests(unittest.TestCase):
     def test_unchanged_deterministic_gallery_sources_use_the_closed_subset(self):
         examples = Path(__file__).parent / 'examples'
         for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py', 'showcase_gpu_glow.py',
-                     'showcase_dynamic_scene.py'):
+                     'showcase_dynamic_scene.py', 'manim_parity_stress_grid.py'):
             with self.subTest(name=name):
                 self.assertTrue(source_is_scene_only((examples / name).read_text()))
 
