@@ -1135,14 +1135,14 @@ export async function attachSemanticEngine(
             if (prepared !== null) {
               if (!preparedClockAdmitted) player.setPreparedPlaying(false);
               else player.pausePreparedAt(performance.now());
-              const acceptedEpochMs = performance.now();
+              const acceptedEpochMs = performance.timeOrigin + performance.now();
               const publication = drainAndSendDelta();
               presentationReceipt = await settlePreparedControlPresentation(
                 publication, player.preparedTime(),
               );
               commandTiming = {
                 acceptedEpochMs,
-                presentationSettledEpochMs: performance.now(),
+                presentationSettledEpochMs: performance.timeOrigin + performance.now(),
               };
               observeExecutionWake(performance.now(), true);
               break;
@@ -1159,12 +1159,17 @@ export async function attachSemanticEngine(
               if (time > player.time()) await advanceToAuthoredTime(time);
             }
             player.pause();
-            const acceptedEpochMs = performance.now();
+            const acceptedEpochMs = performance.timeOrigin + performance.now();
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else observeExecutionWake(performance.now(), true);
             if (hasAudio) {
-              await awaitPresentation(null);
-              commandTiming = { acceptedEpochMs, presentationSettledEpochMs: performance.now() };
+              const presented = await awaitPresentation(null);
+              if (presented !== null) {
+                presentationReceipt = { session: presented.session, sequence: presented.sequence,
+                  time: presented.time, unchanged: true };
+                commandTiming = { acceptedEpochMs,
+                  presentationSettledEpochMs: performance.timeOrigin + performance.now() };
+              }
             }
             break;
           }
@@ -1182,7 +1187,7 @@ export async function attachSemanticEngine(
             }
             if (prepared !== null) player.setPreparedPlaying(true);
             else player.resume();
-            const acceptedEpochMs = performance.now();
+            const acceptedEpochMs = performance.timeOrigin + performance.now();
             if (prepared !== null) {
               const publication = drainAndSendDelta();
               presentationReceipt = await settlePreparedControlPresentation(
@@ -1190,11 +1195,16 @@ export async function attachSemanticEngine(
               );
               commandTiming = {
                 acceptedEpochMs,
-                presentationSettledEpochMs: performance.now(),
+                presentationSettledEpochMs: performance.timeOrigin + performance.now(),
               };
             } else if (hasAudio) {
-              await awaitPresentation(null);
-              commandTiming = { acceptedEpochMs, presentationSettledEpochMs: performance.now() };
+              const presented = await awaitPresentation(null);
+              if (presented !== null) {
+                presentationReceipt = { session: presented.session, sequence: presented.sequence,
+                  time: presented.time, unchanged: true };
+                commandTiming = { acceptedEpochMs,
+                  presentationSettledEpochMs: performance.timeOrigin + performance.now() };
+              }
             }
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else if (!hasAudio) observeExecutionWake(performance.now(), true);
@@ -1228,22 +1238,26 @@ export async function attachSemanticEngine(
             const delta = message.type === "seek_section"
               ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
-            const acceptedEpochMs = performance.now();
+            const acceptedEpochMs = performance.timeOrigin + performance.now();
             const publication = send(delta);
             if (prepared !== null) {
               const selectedTime = player.preparedTime();
               presentationReceipt = await settlePreparedControlPresentation(publication, selectedTime, "seek");
               commandTiming = {
                 acceptedEpochMs,
-                presentationSettledEpochMs: performance.now(),
+                presentationSettledEpochMs: performance.timeOrigin + performance.now(),
               };
               if (playing) player.setPreparedPlaying(true);
             } else if (hasAudio) {
-              await awaitPresentation(publication);
-              commandTiming = {
-                acceptedEpochMs,
-                presentationSettledEpochMs: performance.now(),
-              };
+              const presented = await awaitPresentation(publication);
+              if (presented !== null) {
+                presentationReceipt = { session: presented.session, sequence: presented.sequence,
+                  time: presented.time, unchanged: publication === null };
+                commandTiming = {
+                  acceptedEpochMs,
+                  presentationSettledEpochMs: performance.timeOrigin + performance.now(),
+                };
+              }
               if (playing) player.resume();
             } else observeExecutionWake(performance.now());
             break;

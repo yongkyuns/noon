@@ -10,6 +10,28 @@ export const PRODUCT_GATE_THRESHOLD_ENVS = {
   maxVisualDiffRatio: "NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO",
 };
 
+export function readinessCommandReceipt(result, requestEpochMs) {
+  const timing = result?.commandTiming;
+  const acceptedEpochMs = Number.isFinite(timing?.acceptedEpochMs) ? timing.acceptedEpochMs : null;
+  const presentationSettledEpochMs = Number.isFinite(timing?.presentationSettledEpochMs)
+    ? timing.presentationSettledEpochMs : null;
+  const receipt = result?.presentationReceipt;
+  const matchingPresentation = Number.isSafeInteger(receipt?.session) && receipt.session >= 0 &&
+    Number.isSafeInteger(receipt?.sequence) && receipt.sequence >= 0 && Number.isFinite(receipt?.time) &&
+    typeof receipt?.unchanged === "boolean"
+    ? { session: receipt.session, sequence: receipt.sequence, time: receipt.time, unchanged: receipt.unchanged }
+    : null;
+  return {
+    runtimeAcceptanceEpochMs: acceptedEpochMs,
+    runtimeAcceptanceMs: Number.isFinite(acceptedEpochMs) && Number.isFinite(requestEpochMs)
+      ? acceptedEpochMs - requestEpochMs : null,
+    presentationSettledEpochMs,
+    commandPresentationMs: Number.isFinite(presentationSettledEpochMs) && Number.isFinite(requestEpochMs)
+      ? presentationSettledEpochMs - requestEpochMs : null,
+    matchingPresentation,
+  };
+}
+
 // A measurement oracle for the selected nonuniform gallery scenes, not a renderer
 // or a general definition of visual usefulness. Ignore CSS decoration and alpha-zero
 // bytes; require scene ink distinguishable from the dominant canvas background.
@@ -155,7 +177,7 @@ export function summarizeReadiness(cases, contract) {
         const samples = {
           feedback: command.uiFeedbackMs ?? command.feedbackMs,
           accepted: command.runtimeAcceptanceMs ?? command.acceptedMs,
-          presented: command.commandCompletionUpperMs ?? command.presentedMs,
+          presented: command.commandPresentationMs ?? command.presentedMs,
         };
         for (const [stage, value] of Object.entries(samples)) if (Number.isFinite(value)) values[stage].push(value);
       }
@@ -214,6 +236,15 @@ export function validateReadinessResults(cases, contract) {
           if (!Number.isFinite(command.uiFeedbackMs)) errors.push(`${source.id}/${arm}: missing UI feedback timing`);
           if (!Number.isFinite(command.commandCompletionUpperMs)) errors.push(`${source.id}/${arm}: missing command completion timing`);
           if (!Number.isFinite(command.runtimeAcceptanceEpochMs)) errors.push(`${source.id}/${arm}: missing command acceptance receipt`);
+          if (Number.isFinite(command.requestEpochMs) && Number.isFinite(command.runtimeAcceptanceEpochMs) &&
+              command.runtimeAcceptanceEpochMs < command.requestEpochMs) {
+            errors.push(`${source.id}/${arm}: command acceptance predates its DOM request`);
+          }
+          if (!Number.isFinite(command.presentationSettledEpochMs) ||
+              command.presentationSettledEpochMs < command.runtimeAcceptanceEpochMs) {
+            errors.push(`${source.id}/${arm}: missing ordered presentation-settled receipt`);
+          }
+          if (!Number.isFinite(command.commandPresentationMs)) errors.push(`${source.id}/${arm}: missing command presentation timing`);
           if (!command.matchingPresentation) {
             errors.push(`${source.id}/${arm}: command has no command-correlated renderer receipt`);
           }
@@ -222,7 +253,7 @@ export function validateReadinessResults(cases, contract) {
               Number.isFinite(acceptanceMs) && acceptanceMs > contract.bounds.commandAcceptanceMs) {
             errors.push(`${source.id}/${arm}/${stratum}: command acceptance exceeds its bound`);
           }
-          const presentationMs = command.commandCompletionUpperMs ?? command.presentedMs;
+          const presentationMs = command.commandPresentationMs ?? command.presentedMs;
           if (Number.isFinite(contract.bounds.commandPresentationMs) &&
               Number.isFinite(presentationMs) && presentationMs > contract.bounds.commandPresentationMs) {
             errors.push(`${source.id}/${arm}/${stratum}: command presentation exceeds its bound`);

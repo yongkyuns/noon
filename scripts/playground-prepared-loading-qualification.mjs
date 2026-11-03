@@ -17,7 +17,7 @@ import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs"
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
 import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
-  PRODUCT_GATE_THRESHOLD_ENVS } from "./playground-prepared-loading-observation.mjs";
+  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -88,8 +88,8 @@ const report = { status: "running", readinessMode,
   scope: "W7/W8 same-package profile measurements; source pass plus retained replay; warm-resource-cache strata only; not cold-network, physical-scanout or total-memory qualification",
   instrumentationMode: "bounded-diagnostics",
   instrumentationLimitations: [
-    "first useful capture is an observed upper bound; the current API exposes no renderer-submission or separate runtime-acceptance timestamp",
-    "command completion uses the observed busy-clear upper bound plus renderer session/time evidence; no engine acceptance time is inferred",
+    "first useful capture is an observed upper bound; startup exposes no renderer-submission or separate runtime-acceptance timestamp",
+    "command acceptance and presentation receipts come from actual endpoint command results; UI busy-clear remains a separate upper bound",
     "renderer frame timing is a renderer.render() call-completion timestamp after submission, not GPU completion or physical scanout",
     "bounded probes can perturb timings; this report is diagnostic, not minimally instrumented timing",
   ],
@@ -109,6 +109,7 @@ const report = { status: "running", readinessMode,
   clockOrigins: {
     pageEvents: "performance.timeOrigin + performance.now(), epoch milliseconds",
     rendererEvents: "renderer performance.timeOrigin + presentedAtMs; per-session gaps use one renderer clock origin",
+    endpointCommandTiming: "endpoint performance.timeOrigin + performance.now(), epoch milliseconds across worker and page",
     processLifecycle: "Node performance.now() for durations and Date.now() for audit timestamps",
     runMilestones: "page or renderer epoch timestamp minus page source-run-start epoch timestamp",
   },
@@ -191,10 +192,16 @@ async function installReadinessPresentationProbe(context) {
     const NativeWorker = window.Worker;
     const requestId = Number.MAX_SAFE_INTEGER;
     const probe = { worker: null, pending: false, samples: [], keys: new Set(), error: null,
-      uiEvents: [], droppedUiEvents: 0,
+      uiEvents: [], commandResults: [], droppedUiEvents: 0,
       recordUiEvent(event) {
         if (probe.uiEvents.length >= maxSamples) { probe.droppedUiEvents++; return; }
         probe.uiEvents.push(event);
+      },
+      recordCommandResult(message) {
+        if (probe.commandResults.length >= maxSamples) { probe.error = "command result bound exceeded"; return; }
+        probe.commandResults.push({ type: message.type, requestId: message.requestId,
+          clockOriginMs: performance.timeOrigin, receivedEpochMs: performance.timeOrigin + performance.now(),
+          commandTiming: message.commandTiming ?? null, presentationReceipt: message.presentationReceipt ?? null });
       },
       requestMetrics() {
         if (probe.worker === null || probe.pending) return;
@@ -203,6 +210,23 @@ async function installReadinessPresentationProbe(context) {
           type: "metrics", requestId, profilePublicationStages: true });
       } };
     window.__noonReadinessPresentationProbe = probe;
+    if (globalThis.MessagePort?.prototype) {
+      const addMessageListener = MessagePort.prototype.addEventListener;
+      const observedPorts = new WeakSet();
+      MessagePort.prototype.addEventListener = function(type, listener, options) {
+        if (type === "message" && !observedPorts.has(this)) {
+          observedPorts.add(this);
+          addMessageListener.call(this, "message", event => {
+            const message = event.data;
+            if (Number.isSafeInteger(message?.requestId) &&
+                ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
+              probe.recordCommandResult(message);
+            }
+          });
+        }
+        return addMessageListener.call(this, type, listener, options);
+      };
+    }
     const uiState = () => {
       const controls = document.querySelector(".playback-controls");
       return controls ? { playing: controls.dataset.playing ?? null,
@@ -333,6 +357,7 @@ async function retiredWorkerObservation(worker, timeoutMs = 500) {
 
 async function issueReadinessClick(page, button, controlClass) {
   const marker = await page.evaluate(() => ({ index: window.__noonReadinessPresentationProbe?.uiEvents.length ?? 0,
+    commandResultIndex: window.__noonReadinessPresentationProbe?.commandResults.length ?? 0,
     epochMs: performance.timeOrigin + performance.now() }));
   await button.click();
   const events = await page.evaluate(index =>
@@ -342,7 +367,15 @@ async function issueReadinessClick(page, button, controlClass) {
   assert.ok(request, `actual ${controlClass} DOM request was not captured`);
   const feedback = events.find(event => event.kind === "state" && event.attribute === "data-busy" &&
     event.state?.busy === "true" && event.epochMs >= request.epochMs) ?? null;
-  return { automationIssuedEpochMs: marker.epochMs, requestEpochMs: request.epochMs, feedback };
+  return { automationIssuedEpochMs: marker.epochMs, requestEpochMs: request.epochMs, feedback,
+    commandResultIndex: marker.commandResultIndex };
+}
+
+async function readinessCommandResult(page, startIndex, expectedType) {
+  return page.evaluate(({ startIndex, expectedType }) =>
+    [...(window.__noonReadinessPresentationProbe?.commandResults ?? [])].slice(startIndex)
+      .filter(result => result.type === expectedType).at(-1) ?? null,
+  { startIndex, expectedType });
 }
 
 function rendererSnapshot(metrics) {
@@ -370,6 +403,9 @@ async function readinessCommand(page, row, desiredPlaying) {
       event.kind === "state" && event.attribute === "data-busy" && event.state?.busy === "false" &&
       event.epochMs >= requestEpoch) ?? null, requestEpochMs);
   assert.ok(commandCompleted, "playback command completion transition was not observed");
+  const engineResult = await readinessCommandResult(page, issued.commandResultIndex,
+    desiredPlaying ? "resume" : "pause");
+  const runtimeReceipt = readinessCommandReceipt(engineResult, requestEpochMs);
   const after = await observation(page);
   const command = {
     name: desiredPlaying ? "play" : "pause",
@@ -382,10 +418,11 @@ async function readinessCommand(page, row, desiredPlaying) {
     commandCompletionObservedEpochMs: after.epochMs,
     commandCompletionUpperMs: after.epochMs - requestEpochMs,
     rendererObservation: rendererSnapshot(after.metrics),
-    runtimeAcceptanceEpochMs: null,
-    runtimeAcceptanceLimitation: "no separate engine command-acceptance receipt is currently exposed",
-    matchingPresentation: null,
-    presentationReceiptLimitation: "no command-correlated renderer receipt exists; elapsed-time equality is not a receipt",
+    ...runtimeReceipt,
+    runtimeAcceptanceLimitation: runtimeReceipt.runtimeAcceptanceEpochMs === null
+      ? "endpoint command result did not expose an acceptance timestamp" : null,
+    presentationReceiptLimitation: runtimeReceipt.matchingPresentation === null
+      ? "endpoint command result did not expose a validated matching publication receipt" : null,
   };
   row.commands.push(command);
   return after;
@@ -573,6 +610,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         event.kind === "state" && event.attribute === "data-busy" && event.state?.busy === "false" &&
         event.epochMs >= requestEpoch) ?? null, replayStartedAtEpochMs);
     assert.ok(restartCompleted, "restart command completion transition was not observed");
+    const restartEngineResult = await readinessCommandResult(page, restartIssued.commandResultIndex, "restart_playback");
+    const restartRuntimeReceipt = readinessCommandReceipt(restartEngineResult, replayStartedAtEpochMs);
     const restartPresented = await observation(page);
     replayRow.startup.restartCompletedUiEpochMs = restartCompleted.epochMs;
     replayRow.commands.push({ name: "restart", automationIssuedEpochMs: restartIssued.automationIssuedEpochMs,
@@ -583,10 +622,11 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       commandCompletedUiEpochMs: replayRow.startup.restartCompletedUiEpochMs,
       commandCompletionUpperMs: restartPresented.epochMs - replayStartedAtEpochMs,
       rendererObservation: rendererSnapshot(restartPresented.metrics),
-      runtimeAcceptanceEpochMs: null,
-      runtimeAcceptanceLimitation: "no separate engine command-acceptance receipt is currently exposed",
-      matchingPresentation: null,
-      presentationReceiptLimitation: "no command-correlated renderer receipt exists" });
+      ...restartRuntimeReceipt,
+      runtimeAcceptanceLimitation: restartRuntimeReceipt.runtimeAcceptanceEpochMs === null
+        ? "endpoint command result did not expose an acceptance timestamp" : null,
+      presentationReceiptLimitation: restartRuntimeReceipt.matchingPresentation === null
+        ? "endpoint command result did not expose a validated matching publication receipt" : null });
     if (restartPresented.controls?.playing !== "true") await readinessCommand(page, replayRow, true);
     let replayCurrent = await read(replayRow);
     let replayMaxTime = Number(replayCurrent.metrics?.time ?? -Infinity);
@@ -641,7 +681,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     replayRow.startup.firstSubmittedMs = null;
     replayRow.startup.firstSubmittedLimitation = "queue-submit start is unavailable; renderer call completion is reported separately";
     replayRow.startup.runtimeAcceptanceMs = null;
-    replayRow.startup.runtimeAcceptanceLimitation = "engine command-acceptance timestamp is not exposed by the current browser API";
+    replayRow.startup.runtimeAcceptanceLimitation = "startup has no command acceptance event; control commands report endpoint acceptance separately";
     sourceRow.startup.firstSubmittedMs = null;
     sourceRow.startup.firstSubmittedLimitation = replayRow.startup.firstSubmittedLimitation;
     sourceRow.startup.runtimeAcceptanceMs = null;

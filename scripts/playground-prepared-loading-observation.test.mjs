@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { sceneInkPixels, distribution, summarizeReadiness,
   validateReadinessContract, validateReadinessTrace, validateReadinessResults,
-  PRODUCT_GATE_THRESHOLD_ENVS } from "./playground-prepared-loading-observation.mjs";
+  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 function canvas() {
@@ -165,15 +165,24 @@ test("strict readiness fails closed when acceptance and submission receipts are 
   assert.ok(errors.some(error => /missing firstSubmittedMs/.test(error)));
   assert.ok(errors.some(error => /missing runtimeAcceptanceMs/.test(error)));
   assert.ok(errors.some(error => /no command-correlated renderer receipt/.test(error)));
+  assert.ok(errors.some(error => /missing ordered presentation-settled receipt/.test(error)));
   assert.ok(errors.some(error => /incomplete starts/.test(error)));
 });
 
-test("readiness command timings use the captured DOM request and do not infer a display receipt", async () => {
+test("readiness command receipts use endpoint timing and matching publication metadata", async () => {
+  const measured = readinessCommandReceipt({
+    commandTiming: { acceptedEpochMs: 1012, presentationSettledEpochMs: 1018 },
+    presentationReceipt: { session: 7, sequence: 9, time: 1.5, unchanged: false } }, 1010);
+  assert.deepEqual(measured, { runtimeAcceptanceEpochMs: 1012, runtimeAcceptanceMs: 2,
+    presentationSettledEpochMs: 1018, commandPresentationMs: 8,
+    matchingPresentation: { session: 7, sequence: 9, time: 1.5, unchanged: false } });
+  assert.equal(readinessCommandReceipt(null, 1010).matchingPresentation, null);
   const source = await readFile(new URL("./playground-prepared-loading-qualification.mjs", import.meta.url), "utf8");
   assert.match(source, /requestEpochMs: request\.epochMs/);
   assert.match(source, /automationIssuedEpochMs: marker\.epochMs/);
   assert.match(source, /event\.attribute === "data-busy" &&\s*event\.state\?\.busy === "true"/);
-  assert.match(source, /matchingPresentation: null/);
+  assert.match(source, /probe\.recordCommandResult\(message\)/);
+  assert.match(source, /readinessCommandReceipt\(engineResult, requestEpochMs\)/);
   assert.doesNotMatch(source, /Math\.abs\(displayedTime - receiptTime\)/);
   assert.match(source, /value\.epochMs >= replayStartedAtEpochMs/);
 });
