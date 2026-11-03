@@ -228,13 +228,95 @@ try {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   await page.evaluate(async () => {
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
+    const { PythonAuthoringClient } = await import("./authoring-client.js");
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
     const original = AuthoringExecutionClient.prototype.startSemanticExecution;
     audioQualification.attachments = 0;
+    audioQualification.sourceTrace = [];
+    audioQualification.readyFailureCount = 0;
+    audioQualification.stateFailureCount = 0;
+    const trace = event => {
+      if (audioQualification.sourceTrace.length < 128) audioQualification.sourceTrace.push(event);
+      else if (audioQualification.sourceTrace.at(-1)?.phase !== "trace-truncated") {
+        audioQualification.sourceTrace.push({ phase: "trace-truncated" });
+      }
+    };
+    for (const method of ["terminate", "retireExecutionSource"]) {
+      const originalMethod = ExecutionWorkerClient.prototype[method];
+      ExecutionWorkerClient.prototype[method] = function (...args) {
+        trace({ phase: `execution-${method}`, diagnostics: this.diagnostics,
+          callsite: new Error().stack });
+        return originalMethod.apply(this, args);
+      };
+    }
+    const originalReady = ExecutionWorkerClient.prototype.ready;
+    ExecutionWorkerClient.prototype.ready = function (...args) {
+      try { return originalReady.apply(this, args); }
+      catch (error) {
+        audioQualification.readyFailureCount++;
+        if (audioQualification.readyFailureCount === 1) {
+          trace({ phase: "execution-ready-missing",
+            error: String(error?.stack ?? error), diagnostics: this.diagnostics, callsite: new Error().stack });
+        }
+        throw error;
+      }
+    };
     AuthoringExecutionClient.prototype.startSemanticExecution = async function (...args) {
+      trace({ phase: "runtime-attach-start" });
       const result = await original.apply(this, args);
       audioQualification.execution = this;
       audioQualification.attachments++;
+      trace({ phase: "runtime-attach-ready", attachments: audioQualification.attachments });
       return result;
+    };
+    const originalRun = PythonAuthoringClient.prototype.run;
+    PythonAuthoringClient.prototype.run = async function (source, context, options = {}) {
+      const item = { phase: "source-run-start", generation: this.interpreterGeneration,
+        requestedProfile: options.preparedPlayback === true ? "incremental" : "observed" };
+      trace(item);
+      const onContinuation = options.onSemanticContinuation;
+      const tracedOptions = onContinuation === null || onContinuation === undefined ? options : {
+        ...options,
+        async onSemanticContinuation(registration) {
+          trace({ phase: "continuation-registered", generation: item.generation,
+            contextId: registration.semanticExecution.contextId,
+            continuationGeneration: registration.generation, duration: registration.duration });
+          try {
+            const result = await onContinuation(registration);
+            trace({ phase: "continuation-adopted", generation: item.generation });
+            return result;
+          } catch (error) {
+            trace({ phase: "continuation-adoption-failed", generation: item.generation,
+              error: String(error?.stack ?? error) });
+            throw error;
+          }
+        },
+      };
+      try {
+        const result = await originalRun.call(this, source, context, tracedOptions);
+        trace({ phase: "source-run-result", generation: item.generation,
+          contextId: result.semanticExecution?.contextId ?? null,
+          continuationGeneration: result.semanticExecution?.continuationGeneration ?? null,
+          diagnostics: this.executionDiagnostics });
+        return result;
+      } catch (error) {
+        trace({ phase: "source-run-failed", generation: item.generation,
+          error: String(error?.stack ?? error), diagnostics: this.executionDiagnostics,
+          client: this.diagnostics });
+        throw error;
+      }
+    };
+    const originalState = AuthoringExecutionClient.prototype.state;
+    AuthoringExecutionClient.prototype.state = async function (...args) {
+      try { return await originalState.apply(this, args); }
+      catch (error) {
+        audioQualification.stateFailureCount++;
+        if (audioQualification.stateFailureCount === 1) {
+          trace({ phase: "authoring-state-failed",
+            error: String(error?.stack ?? error), diagnostics: this.executionDiagnostics });
+        }
+        throw error;
+      }
     };
     const { WasmWorkerAudioOutput } = await import("./pkg/noon_web.js");
     const start = WasmWorkerAudioOutput.prototype.start;
@@ -690,7 +772,26 @@ class AudioWithOrdinaryPlay(Scene):
         return playback.preparedPlayback === true || playback.sourceExecution === "observed";
       } catch { return false; }
     }, null, { timeout: 180_000 });
-    const initial = await state();
+    let initial;
+    try {
+      initial = await state();
+    } catch (stateError) {
+      await page.waitForFunction(() => window.audioQualification.fourierRunError !== null ||
+        window.__noonExampleGallery?.runInFlight === false, null, { timeout: 120_000 });
+      const lifecycle = await page.evaluate(() => ({
+        runError: window.audioQualification.fourierRunError,
+        sourceTrace: window.audioQualification.sourceTrace,
+        sourceDiagnostics: window.__noonExampleGallery?.executionDiagnostics ?? null,
+        runPhaseMetrics: window.__noonExampleGallery?.runPhaseMetrics ?? null,
+        generationDiagnostics: window.__noonExampleGallery?.generationDiagnostics ?? null,
+        patchStatus: { state: document.querySelector("#patch-status")?.dataset.state ?? null,
+          text: document.querySelector("#patch-status")?.value ?? document.querySelector("#patch-status")?.textContent ?? null },
+        pythonDiagnostic: document.querySelector("#python-diagnostics")?.textContent ?? null,
+        pythonTraceback: document.querySelector("#python-traceback")?.textContent ?? null,
+      }));
+      throw new Error(`Fourier attachment state failed: ${String(stateError?.stack ?? stateError)}\n`+
+        `Authoring lifecycle: ${JSON.stringify(lifecycle)}`);
+    }
     assert.equal(initial.starts.length, beforeStarts, "the visual-only source remains silent");
     assert.equal(initial.transport.preparedPlayback, true, "the actual reader, not a final replay, owns playback");
     assert.ok(initial.transport.preparedFrontier > initial.transport.time);
