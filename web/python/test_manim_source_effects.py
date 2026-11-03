@@ -332,6 +332,15 @@ class SourceEffectsTests(unittest.TestCase):
         ''')
         self.assertTrue(source_is_scene_only(alias))
 
+        identity = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    group = VGroup(Square(), Square())
+                    self.play(LaggedStartMap(FadeIn, group, arg_creator=lambda member: member))
+        ''')
+        self.assertTrue(source_is_scene_only(identity))
+
         blocked = (
             ('from noon import *\nclass Example(Scene):\n'
              '    def construct(self):\n'
@@ -354,7 +363,47 @@ class SourceEffectsTests(unittest.TestCase):
              '        group = VGroup(Square())\n'
              '        self.play(LaggedStartMap(FadeIn, group, '
              'arg_creator=lambda member: print(member)))\n',
-             'unknown_name', 'print'),
+             'unproven_callback_argument', 'lambda member: print(member)'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, '
+             'arg_creator=lambda member: (self.wait(0.1) and member,)))\n',
+             'unproven_callback_argument',
+             'lambda member: (self.wait(0.1) and member,)'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=self.wait))\n',
+             'unproven_callback_argument', 'self.wait'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=self.play))\n',
+             'unproven_callback_argument', 'self.play'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, '
+             'lambda member: (member, Code(code_file="input.py"))))\n',
+             'unproven_callback_argument', 'lambda member: (member, Code(code_file="input.py"))'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, self.wait))\n',
+             'unproven_callback_argument', 'self.wait'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        animation_factory = self.play\n'
+             '        self.play(LaggedStartMap(animation_factory, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\n'
+             'def make(scene, member):\n    scene.wait(0.1)\n    return (member,)\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=make))\n',
+             'unproven_callback_argument', 'make'),
         )
         for source, code, span_text in blocked:
             with self.subTest(source=source):

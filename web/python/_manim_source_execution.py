@@ -92,6 +92,23 @@ class _OpaqueSource(Exception):
         self.reason = reason
 
 
+def _inert_factory_aliases(tree):
+    stores = {}
+    assignments = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assignments[target.id] = node.value if isinstance(node.value, ast.Name) else None
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            assignments[node.target.id] = node.value if isinstance(node.value, ast.Name) else None
+    return frozenset(name for name, value in assignments.items()
+                     if stores.get(name) == 1 and value is not None
+                     and value.id in _SOURCE_CONSTRUCTORS)
+
+
 class _SourceBindings(ast.NodeVisitor):
     """Lexical bindings only; nested functions/classes/comprehensions own theirs."""
     def __init__(self, integer_names=()):
@@ -170,6 +187,7 @@ class _SourceBindings(ast.NodeVisitor):
 
 class _SceneOnlySource(ast.NodeVisitor):
     def __init__(self, tree, star_exports):
+        self.inert_factory_aliases = _inert_factory_aliases(tree)
         bindings = _SourceBindings()
         for node in tree.body:
             bindings.visit(node)
@@ -229,6 +247,23 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unknown_name")
 
     def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id == "LaggedStartMap":
+            if any(keyword.arg is None for keyword in node.keywords):
+                raise _OpaqueSource(node, "unproven_callback_arguments")
+            factories = ([node.args[0]] if node.args else []) + [
+                keyword.value for keyword in node.keywords if keyword.arg == "animation_class"
+            ]
+            for factory in factories:
+                if (not isinstance(factory, ast.Name)
+                        or factory.id not in _SOURCE_CONSTRUCTORS
+                        and factory.id not in self.inert_factory_aliases):
+                    raise _OpaqueSource(factory, "unproven_callback_factory")
+            creators = ([node.args[2]] if len(node.args) > 2 else []) + [
+                keyword.value for keyword in node.keywords if keyword.arg == "arg_creator"
+            ]
+            if len(creators) > 1 or any(not self._is_inert_arg_creator(value) for value in creators):
+                callback = creators[0] if creators else node
+                raise _OpaqueSource(callback, "unproven_callback_argument")
         # Code(code_file=...) reads the host filesystem. Only the explicit
         # in-memory constructor form has the scene/data-only contract; aliases,
         # positional paths and expanded keyword dictionaries are not proven.
@@ -238,6 +273,20 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unproven_resource_input")
             self.admitted_code_loads.add(id(node.func))
         self.generic_visit(node)
+
+    @staticmethod
+    def _is_inert_arg_creator(node):
+        if isinstance(node, ast.Constant) and node.value is None:
+            return True
+        if (not isinstance(node, ast.Lambda) or node.args.posonlyargs
+                or len(node.args.args) != 1 or node.args.defaults or node.args.kwonlyargs
+                or node.args.kw_defaults or node.args.vararg or node.args.kwarg):
+            return False
+        parameter = node.args.args[0].arg
+        return (isinstance(node.body, ast.Name) and node.body.id == parameter) or (
+            isinstance(node.body, ast.Tuple) and len(node.body.elts) == 1
+            and isinstance(node.body.elts[0], ast.Name) and node.body.elts[0].id == parameter
+        )
 
     def visit_Attribute(self, node):
         if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
