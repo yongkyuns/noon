@@ -42,7 +42,7 @@ Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
 ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
-TransformMatchingShapes
+TransformMatchingShapes Rotate
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
 ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve
 """.split())
@@ -55,6 +55,8 @@ always_redraw
 # not a generally pure function and is admitted only as a direct awaited call.
 _SOURCE_RESOURCE_PREPARATIONS = frozenset({"prepare_latex"})
 _SOURCE_CONTROLLED_TEXT_COMPILERS = frozenset({"MathTex"})
+_SOURCE_SHADER_CONSTRUCTORS = frozenset({"WgslEffectProgram", "ShaderParameter", "ShaderEffect"})
+_SOURCE_TYPED_PAINT_CONSTRUCTORS = frozenset({"LinearGradient"})
 _SOURCE_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
@@ -191,6 +193,7 @@ class _SourceBindings(ast.NodeVisitor):
 
 class _SceneOnlySource(ast.NodeVisitor):
     def __init__(self, tree, star_exports):
+        self.tree = tree
         self.admitted_lagged_map_loads = set()
         self.admitted_plot_loads = set()
         self.admitted_spatial_constructor_loads = set()
@@ -213,6 +216,42 @@ class _SceneOnlySource(ast.NodeVisitor):
             node.name: node for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
+        self.shader_function_names = set()
+        self.shader_helper_specs = {}
+        self.shader_program_call_specs = {}
+        self.admitted_shader_loads = set()
+        self.admitted_shader_attributes = set()
+        self.admitted_shader_helper_loads = set()
+        self.admitted_typed_paint_loads = set()
+        self.shader_call_values = {}
+        self.shader_expression_values = {}
+        self.shader_values = []
+        self.shader_control_depth = 0
+        self.scopes = [set()]
+        self.shader_source_constants = self._shader_source_constants()
+        for name, function in self.module_functions.items():
+            body = function.body
+            if (self.module_binding_counts.get(name) != 1
+                    or not isinstance(function, ast.FunctionDef)
+                    or function.decorator_list or function.returns
+                    or len(function.args.args) != 1 or function.args.posonlyargs
+                    or function.args.kwonlyargs or function.args.defaults
+                    or function.args.kw_defaults or function.args.vararg or function.args.kwarg
+                    or len(body) != 1 or not isinstance(body[0], ast.Return)
+                    or not isinstance(body[0].value, ast.Call)):
+                continue
+            call = body[0].value
+            coordinate = next((keyword.value for keyword in call.keywords
+                               if keyword.arg == "coordinates"), None)
+            if (not isinstance(coordinate, ast.Name)
+                    or coordinate.id != function.args.args[0].arg):
+                continue
+            try:
+                schema = self._shader_program_spec(call, coordinate_parameter=coordinate.id)
+            except _OpaqueSource:
+                continue
+            self.shader_helper_specs[name] = schema
+        self.shader_function_names = set(self.shader_helper_specs)
         self.resource_preparation_imports = {
             alias.name
             for node in tree.body
@@ -254,7 +293,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                                                     *function.args.kwonlyargs]}
                 self._image_pixel_source_names(function.body, function_bindings, parameters)
         noon_names = (_SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
-                      | _SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS)
+                      | _SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS
+                      | _SOURCE_SHADER_CONSTRUCTORS | _SOURCE_TYPED_PAINT_CONSTRUCTORS)
         imported = frozenset().union(*star_exports.values())
         conflicts = (imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})
         if conflicts:
@@ -278,6 +318,248 @@ class _SceneOnlySource(ast.NodeVisitor):
         }
         self.admitted_code_loads = set()
 
+    def _shader_source_constants(self):
+        constants = {}
+        for name in self.module_binding_counts:
+            if self.module_binding_counts[name] != 1:
+                continue
+            for node in self.tree.body:
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name
+                        and isinstance(node.value, ast.Constant) and type(node.value.value) is str):
+                    constants[name] = node.value.value
+                    break
+        return constants
+
+    def _shader_role_unshadowed(self, name):
+        if any(name in scope for scope in self.scopes[1:]):
+            return False
+        if name not in self.module_bindings:
+            return True
+        origin = self.module_binding_locations.get(name)
+        return (isinstance(origin, ast.ImportFrom) and origin in self.tree.body
+                and origin.module in {"noon", "manim"}
+                and self.module_binding_counts.get(name) == 1
+                and any(alias.name == name and alias.asname is None for alias in origin.names))
+
+    def _shader_number(self, node):
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            value = self._shader_number(node.operand)
+            return None if value is None else value if isinstance(node.op, ast.UAdd) else -value
+        if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+            return node.value if not isinstance(node.value, float) or math.isfinite(node.value) else None
+        if isinstance(node, ast.Name):
+            if node.id not in {"PI", "TAU", "DEGREES"} or not self._shader_role_unshadowed(node.id):
+                return None
+            return {"PI": math.pi, "TAU": math.tau, "DEGREES": math.pi / 180}.get(node.id)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+            left, right = (self._shader_number(value) for value in (node.left, node.right))
+            if left is None or right is None or isinstance(node.op, ast.Div) and right == 0:
+                return None
+            result = (left + right if isinstance(node.op, ast.Add) else
+                      left - right if isinstance(node.op, ast.Sub) else
+                      left * right if isinstance(node.op, ast.Mult) else left / right)
+            return result if math.isfinite(result) else None
+        return None
+
+    def _shader_color(self, node):
+        if (isinstance(node, ast.Name) and node.id in _SOURCE_COLOR_CONSTANTS
+                and self._shader_role_unshadowed(node.id)):
+            return True
+        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name)
+                or node.func.id != "Color" or not self._shader_role_unshadowed(node.func.id)
+                or node.keywords or len(node.args) not in {3, 4}
+                or any(self._shader_number(value) is None for value in node.args)):
+            return False
+        return True
+
+    def _shader_parameter_spec(self, node):
+        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute)
+                or not isinstance(node.func.value, ast.Name) or node.func.value.id != "ShaderParameter"
+                or not self._shader_role_unshadowed(node.func.value.id)
+                or node.func.attr not in {"scalar", "color"} or len(node.args) != 1
+                or not isinstance(node.args[0], ast.Constant) or type(node.args[0].value) is not str
+                or not node.args[0].value or any(keyword.arg is None for keyword in node.keywords)):
+            raise _OpaqueSource(node, "unproven_shader_schema")
+        values = {keyword.arg: keyword.value for keyword in node.keywords}
+        if len(values) != len(node.keywords):
+            raise _OpaqueSource(node, "unproven_shader_schema")
+        name = node.args[0].value
+        if node.func.attr == "scalar":
+            if set(values) not in ({"default", "minimum", "maximum"},
+                                   {"default", "minimum", "maximum", "unit"}):
+                raise _OpaqueSource(node, "unproven_shader_schema")
+            numbers = [self._shader_number(values[key]) for key in ("default", "minimum", "maximum")]
+            unit = values.get("unit")
+            valid_unit = (unit is None or isinstance(unit, ast.Constant) and type(unit.value) is str
+                          and unit.value in {"unitless", "normalized", "scene", "pixels", "radians", "seconds"})
+            if (any(value is None for value in numbers) or numbers[1] > numbers[2]
+                    or not numbers[1] <= numbers[0] <= numbers[2] or not valid_unit):
+                raise _OpaqueSource(node, "unproven_shader_schema")
+        elif set(values) != {"default"} or not self._shader_color(values["default"]):
+            raise _OpaqueSource(node, "unproven_shader_schema")
+        self.admitted_shader_attributes.add(id(node.func))
+        self.admitted_shader_loads.add(id(node.func.value))
+        return name
+
+    def _shader_program_spec(self, node, coordinate_parameter=None):
+        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name)
+                or node.func.id != "WgslEffectProgram" or not self._shader_role_unshadowed(node.func.id)
+                or len(node.args) != 1 or any(isinstance(arg, ast.Starred) for arg in node.args)
+                or any(keyword.arg is None for keyword in node.keywords)):
+            raise _OpaqueSource(node, "unproven_shader_program")
+        source = node.args[0]
+        source_text = (source.value if isinstance(source, ast.Constant) and type(source.value) is str
+                       else self.shader_source_constants.get(source.id)
+                       if isinstance(source, ast.Name) else None)
+        if source_text is None or not source_text.strip() or len(source_text.encode("utf-8")) > 1024 * 1024:
+            raise _OpaqueSource(source, "unproven_shader_source")
+        values = {keyword.arg: keyword.value for keyword in node.keywords}
+        if len(values) != len(node.keywords) or not set(values).issubset(
+                {"coordinates", "parameters", "authored_time", "seed"}):
+            raise _OpaqueSource(node, "unproven_shader_program")
+        coordinates = values.get("coordinates")
+        if coordinate_parameter is not None and isinstance(coordinates, ast.Name) \
+                and coordinates.id == coordinate_parameter:
+            pass
+        elif coordinates is not None and (
+                not isinstance(coordinates, ast.Constant) or type(coordinates.value) is not str
+                or coordinates.value not in {"local", "scene", "pixels"}):
+            raise _OpaqueSource(coordinates, "unproven_shader_program")
+        for dependency in ("authored_time", "seed"):
+            value = values.get(dependency)
+            if value is not None and (not isinstance(value, ast.Constant) or value.value is not False):
+                raise _OpaqueSource(value, "unproven_shader_dependency")
+        parameters = values.get("parameters")
+        if parameters is None or not isinstance(parameters, ast.List):
+            raise _OpaqueSource(parameters or node, "unproven_shader_schema")
+        names = [self._shader_parameter_spec(item) for item in parameters.elts]
+        if len(names) != len(set(names)):
+            raise _OpaqueSource(parameters, "unproven_shader_schema")
+        self.admitted_shader_loads.add(id(node.func))
+        self.shader_program_call_specs[id(node)] = frozenset(names)
+        return frozenset(names)
+
+    def _shader_value(self, node):
+        if id(node) in self.shader_expression_values:
+            return self.shader_expression_values[id(node)]
+        if id(node) in self.shader_call_values:
+            return self.shader_call_values[id(node)]
+        if isinstance(node, ast.Name):
+            if self._shader_number(node) is not None:
+                return ("number",)
+            return next((values.get(node.id) for values in reversed(self.shader_values)
+                         if node.id in values), None)
+        if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+            return ("number",)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            items = tuple(self._shader_value(item) for item in node.elts)
+            if isinstance(node, ast.List) and all(item and item[0] == "programs" for item in items):
+                return ("programs", tuple(entry for item in items for entry in item[1]))
+            if isinstance(node, ast.List) and all(item and item[0] == "keys" for item in items):
+                return ("keys", tuple(entry for item in items for entry in item[1]))
+            return ("sequence", items)
+        if isinstance(node, ast.Subscript):
+            base, index = self._shader_value(node.value), self._shader_number(node.slice)
+            if base and base[0] == "sequence" and index is not None and int(index) == index:
+                try:
+                    return base[1][int(index)]
+                except IndexError:
+                    return None
+        if isinstance(node, ast.BinOp) and self._shader_number(node) is not None:
+            return ("number",)
+        if isinstance(node, ast.ListComp):
+            return self.shader_expression_values.get(id(node))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "zip":
+            return ("zip", tuple(self._shader_value(arg) for arg in node.args))
+        return None
+
+    @staticmethod
+    def _merge_shader_values(values):
+        values = tuple(values)
+        if not values or any(value is None for value in values):
+            return None
+        if all(value[0] == "programs" for value in values):
+            entries = tuple(entry for value in values for entry in value[1])
+            return ("programs", entries)
+        if all(value[0] == "keys" for value in values):
+            entries = tuple(entry for value in values for entry in value[1])
+            return ("keys", entries)
+        if all(value == values[0] for value in values):
+            return values[0]
+        if all(value and value[0] == "sequence" for value in values):
+            rows = [value[1] for value in values]
+            if not rows or any(len(row) != len(rows[0]) for row in rows):
+                return None
+            columns = [
+                _SceneOnlySource._merge_shader_values(row[index] for row in rows)
+                for index in range(len(rows[0]))
+            ]
+            return ("sequence", tuple(columns)) if all(columns) else None
+        return None
+
+    def _assign_shader_value(self, target, value):
+        if isinstance(target, ast.Name):
+            if self.shader_values:
+                self.shader_values[-1][target.id] = value
+            return
+        if isinstance(target, (ast.Tuple, ast.List)):
+            parts = value[1] if value and value[0] == "sequence" else ()
+            for index, item in enumerate(target.elts):
+                self._assign_shader_value(item, parts[index] if index < len(parts) else None)
+
+    def _loop_shader_value(self, iterable, index):
+        if iterable and iterable[0] == "zip":
+            value = iterable[1][index] if index < len(iterable[1]) else None
+            return value
+        if iterable and iterable[0] in {"programs", "keys"}:
+            return iterable
+        if iterable and iterable[0] == "sequence":
+            rows = iterable[1]
+            return self._merge_shader_values(
+                row[1][index] for row in rows
+                if row and row[0] == "sequence" and index < len(row[1])
+            )
+        return None
+
+    def _shader_parameter_mapping(self, node, programs=None):
+        if not isinstance(node, ast.Dict) or any(key is None for key in node.keys):
+            raise _OpaqueSource(node, "unproven_shader_key")
+        program_ids = {identity for identity, _ in programs[1]} if programs else None
+        for key, value in zip(node.keys, node.values):
+            origin = self._shader_value(key)
+            if (not origin or origin[0] != "keys" or not origin[1]
+                    or programs is not None and any(identity not in program_ids
+                                                    for identity, _ in origin[1])
+                    or not self._shader_numeric_value(value)):
+                raise _OpaqueSource(key, "unproven_shader_key")
+
+    def _linear_gradient(self, node):
+        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name)
+                or node.func.id != "LinearGradient" or not self._shader_role_unshadowed(node.func.id)
+                or len(node.args) != 1 or any(isinstance(arg, ast.Starred) for arg in node.args)
+                or any(keyword.arg is None for keyword in node.keywords)):
+            raise _OpaqueSource(node, "unproven_typed_paint")
+        stops = node.args[0]
+        if not isinstance(stops, (ast.List, ast.Tuple)) or not stops.elts:
+            raise _OpaqueSource(stops, "unproven_typed_paint")
+        for stop in stops.elts:
+            if (not isinstance(stop, (ast.List, ast.Tuple)) or len(stop.elts) != 2
+                    or self._shader_number(stop.elts[0]) is None
+                    or not self._shader_color(stop.elts[1])):
+                raise _OpaqueSource(stop, "unproven_typed_paint")
+        options = {keyword.arg: keyword.value for keyword in node.keywords}
+        if len(options) != len(node.keywords) or not set(options).issubset({"start", "end"}):
+            raise _OpaqueSource(node, "unproven_typed_paint")
+        for option in options.values():
+            if (not isinstance(option, (ast.Tuple, ast.List)) or len(option.elts) != 2
+                    or any(self._shader_number(value) is None for value in option.elts)):
+                raise _OpaqueSource(option, "unproven_typed_paint")
+        self.admitted_typed_paint_loads.add(id(node.func))
+
+    def _shader_numeric_value(self, node):
+        return self._shader_number(node) is not None or self._shader_value(node) == ("number",)
+
     def visit(self, node):
         try:
             return super().visit(node)
@@ -296,6 +578,15 @@ class _SceneOnlySource(ast.NodeVisitor):
         )
         if node.id.startswith("_") and node.id != "__name__" and not local_discard_store:
             raise _OpaqueSource(node, "private_name")
+        if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_SHADER_CONSTRUCTORS
+                and id(node) not in self.admitted_shader_loads):
+            raise _OpaqueSource(node, "unproven_shader_reference")
+        if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_TYPED_PAINT_CONSTRUCTORS
+                and id(node) not in self.admitted_typed_paint_loads):
+            raise _OpaqueSource(node, "unproven_typed_paint")
+        if (isinstance(node.ctx, ast.Load) and node.id in self.shader_function_names
+                and id(node) not in self.admitted_shader_helper_loads):
+            raise _OpaqueSource(node, "unproven_shader_factory")
         if (isinstance(node.ctx, ast.Load) and node.id in self.code_constructors
                 and id(node) not in self.admitted_code_loads):
             raise _OpaqueSource(node, "unproven_resource_reference")
@@ -326,6 +617,44 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_shadowed_spatial_constructor")
         if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
             raise _OpaqueSource(node, "unknown_name")
+
+    def visit_Assign(self, node):
+        self.visit(node.value)
+        value = self._shader_value(node.value)
+        if self.shader_control_depth:
+            value = None
+        for target in node.targets:
+            self.visit(target)
+            self._assign_shader_value(target, value)
+
+    def visit_If(self, node):
+        self.visit(node.test)
+        self.shader_control_depth += 1
+        try:
+            for statement in [*node.body, *node.orelse]:
+                self.visit(statement)
+        finally:
+            self.shader_control_depth -= 1
+
+    def visit_For(self, node):
+        self.visit(node.iter)
+        self.visit(node.target)
+        iterable = self._shader_value(node.iter)
+        if isinstance(node.target, (ast.Tuple, ast.List)):
+            values = [self._loop_shader_value(iterable, index)
+                      for index in range(len(node.target.elts))]
+            self._assign_shader_value(node.target, ("sequence", tuple(values)))
+        else:
+            self._assign_shader_value(node.target, self._loop_shader_value(iterable, 0))
+        self.shader_control_depth += 1
+        try:
+            for statement in [*node.body, *node.orelse]:
+                self.visit(statement)
+        finally:
+            self.shader_control_depth -= 1
+        for target in ast.walk(node.target):
+            if isinstance(target, ast.Name) and self.shader_values:
+                self.shader_values[-1][target.id] = None
 
     def _closed_pixel_proof(self, name=None, *, expression=None, initial_values=None, return_type=False):
         """Type-check fresh numeric pixel data without running source or ranges."""
@@ -712,6 +1041,56 @@ class _SceneOnlySource(ast.NodeVisitor):
         return True
 
     def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id == "LinearGradient":
+            self._linear_gradient(node)
+        elif isinstance(node.func, ast.Name) and node.func.id == "WgslEffectProgram":
+            schema = self.shader_program_call_specs.get(id(node))
+            if schema is None:
+                schema = self._shader_program_spec(node)
+            self.admitted_shader_loads.add(id(node.func))
+            self.shader_call_values[id(node)] = ("programs", ((id(node), schema),))
+        elif isinstance(node.func, ast.Name) and node.func.id in self.shader_helper_specs:
+            if (node.func.id in self.module_bindings
+                    and self.module_binding_counts.get(node.func.id) != 1
+                    or any(node.func.id in scope for scope in self.scopes[1:])
+                    or len(node.args) != 1 or node.keywords
+                    or not isinstance(node.args[0], ast.Constant)
+                    or type(node.args[0].value) is not str
+                    or node.args[0].value not in {"local", "scene", "pixels"}):
+                raise _OpaqueSource(node, "unproven_shader_factory")
+            self.admitted_shader_helper_loads.add(id(node.func))
+            self.shader_call_values[id(node)] = (
+                "programs", ((id(node), self.shader_helper_specs[node.func.id]),)
+            )
+        elif isinstance(node.func, ast.Attribute) and node.func.attr == "parameter":
+            programs = self._shader_value(node.func.value)
+            if (not programs or programs[0] != "programs" or len(node.args) != 1
+                    or node.keywords or not isinstance(node.args[0], ast.Constant)
+                    or type(node.args[0].value) is not str
+                    or any(node.args[0].value not in schema for _, schema in programs[1])):
+                raise _OpaqueSource(node, "unproven_shader_key")
+            self.admitted_shader_attributes.add(id(node.func))
+            self.shader_call_values[id(node)] = (
+                "keys", tuple((identity, node.args[0].value) for identity, _ in programs[1])
+            )
+        elif isinstance(node.func, ast.Name) and node.func.id == "ShaderEffect":
+            if (not self._shader_role_unshadowed(node.func.id)
+                    or len(node.args) != 1 or any(isinstance(arg, ast.Starred) for arg in node.args)
+                    or any(keyword.arg is None or keyword.arg != "parameters" for keyword in node.keywords)
+                    or len(node.keywords) > 1):
+                raise _OpaqueSource(node, "unproven_shader_effect")
+            programs = self._shader_value(node.args[0])
+            if not programs or programs[0] != "programs":
+                raise _OpaqueSource(node.args[0], "unproven_shader_effect")
+            for keyword in node.keywords:
+                self._shader_parameter_mapping(keyword.value, programs)
+            self.admitted_shader_loads.add(id(node.func))
+        elif (isinstance(node.func, ast.Attribute) and node.func.attr == "set_effect"
+              and any(keyword.arg == "parameters" for keyword in node.keywords)):
+            if any(keyword.arg is None for keyword in node.keywords):
+                raise _OpaqueSource(node, "unproven_shader_key")
+            mapping = next(keyword.value for keyword in node.keywords if keyword.arg == "parameters")
+            self._shader_parameter_mapping(mapping)
         if isinstance(node.func, ast.Attribute) and node.func.attr == "plot":
             # The canonical axes API samples this scalar callable once into a
             # retained Rust path; it never installs a per-frame host callback.
@@ -972,6 +1351,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         )
 
     def visit_Attribute(self, node):
+        if id(node) in self.admitted_shader_attributes:
+            self.visit(node.value)
+            return
         if node.attr == "plot" and id(node) not in self.admitted_plot_loads:
             raise _OpaqueSource(node, "unproven_plot_function")
         if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
@@ -1032,8 +1414,19 @@ class _SceneOnlySource(ast.NodeVisitor):
             and alias.asname is not None for alias in node.names
         ):
             raise _OpaqueSource(node, "unproven_resource_preparation")
+        if node.module in {"noon", "manim"} and any(
+            alias.name in _SOURCE_SHADER_CONSTRUCTORS and alias.asname is not None
+            for alias in node.names
+        ):
+            raise _OpaqueSource(node, "unproven_shader_reference")
+        if node.module in {"noon", "manim"} and any(
+            alias.name in _SOURCE_TYPED_PAINT_CONSTRUCTORS and alias.asname is not None
+            for alias in node.names
+        ):
+            raise _OpaqueSource(node, "unproven_typed_paint")
         noon_names = (_SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
-                      | _SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS)
+                      | _SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS
+                      | _SOURCE_SHADER_CONSTRUCTORS | _SOURCE_TYPED_PAINT_CONSTRUCTORS)
         if node.module in {"noon", "manim"} and any(
             alias.name in _SOURCE_SPATIAL_CONSTRUCTORS and alias.asname is not None for alias in node.names
         ):
@@ -1090,6 +1483,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                 bindings.visit(node)
         image_pixel_sources = self._image_pixel_source_names(body, bindings, parameters)
         self.scopes.append(bindings.names | parameters)
+        self.shader_values.append({})
         self.image_pixel_sources.append(image_pixel_sources)
         # Every lexical binding must have a fresh origin; a parameter, alias,
         # conditional rebind or loop target cannot inherit another value's proof.
@@ -1113,6 +1507,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         finally:
             self.resource_preparation_scopes.pop()
             self.image_pixel_sources.pop()
+            self.shader_values.pop()
             self.scopes.pop()
             self.owned_containers.pop()
 
@@ -1248,20 +1643,32 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.scopes.append(set())
         self.owned_containers.append(set())
         self.image_pixel_sources.append(self.image_pixel_sources[-1].copy())
+        self.shader_values.append({})
         try:
             for generator in node.generators:
                 if generator.is_async:
                     raise _OpaqueSource()
                 self.visit(generator.iter)
+                iterable = self._shader_value(generator.iter)
                 bindings = _SourceBindings()
                 bindings.visit(generator.target)
                 self.scopes[-1].update(bindings.names)
                 self.image_pixel_sources[-1].difference_update(bindings.names)
+                if isinstance(generator.target, (ast.Tuple, ast.List)):
+                    values = [self._loop_shader_value(iterable, index)
+                              for index in range(len(generator.target.elts))]
+                    self._assign_shader_value(generator.target, ("sequence", tuple(values)))
+                else:
+                    self._assign_shader_value(generator.target, self._loop_shader_value(iterable, 0))
                 for condition in generator.ifs:
                     self.visit(condition)
             for value in ([node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]):
                 self.visit(value)
+            result = self._shader_value(node.key if isinstance(node, ast.DictComp) else node.elt)
+            if result and result[0] in {"programs", "keys"}:
+                self.shader_expression_values[id(node)] = result
         finally:
+            self.shader_values.pop()
             self.image_pixel_sources.pop()
             self.scopes.pop()
             self.owned_containers.pop()
@@ -1280,6 +1687,8 @@ class _SceneOnlySource(ast.NodeVisitor):
     def visit_AugAssign(self, node):
         if isinstance(node.target, ast.Name) and node.target.id == "_":
             raise _OpaqueSource(node.target, "private_name")
+        if isinstance(node.target, ast.Name) and self.shader_values:
+            self.shader_values[-1][node.target.id] = None
         self.generic_visit(node)
 
     def _opaque(self, node):

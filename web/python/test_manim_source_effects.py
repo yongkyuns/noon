@@ -326,6 +326,58 @@ class Example(Scene):
         self.assertFalse(external_image["admitted"])
         self.assertEqual(external_image["reason"]["code"], "unproven_image_paint_source")
 
+    def test_shader_showcases_use_closed_wgsl_schemas_and_bound_parameter_keys(self):
+        examples = Path(__file__).with_name("examples")
+        for filename in ("showcase_shader_material.py", "showcase_wave_interference.py"):
+            with self.subTest(filename=filename):
+                self.assertEqual(source_execution_proof((examples / filename).read_text()),
+                                 {"admitted": True, "reason": None})
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    self.play(Rotate(Square(), angle=PI))
+        ''')))
+
+        unsafe_sources = (
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram(open("shader.wgsl").read(), parameters=[])\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=[], authored_time=True)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=[], seed=context)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=['
+            'ShaderParameter.scalar("phase", default=context, minimum=0, maximum=1)])\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=['
+            'ShaderParameter.scalar("phase", default=0, minimum=0, maximum=1)])\n'
+            '        key = program.parameter("other")\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        a = WgslEffectProgram("a", parameters=['
+            'ShaderParameter.scalar("phase", default=0, minimum=0, maximum=1)])\n'
+            '        b = WgslEffectProgram("b", parameters=['
+            'ShaderParameter.scalar("phase", default=0, minimum=0, maximum=1)])\n'
+            '        key = a.parameter("phase")\n'
+            '        Rectangle().add_effect(ShaderEffect(b, parameters={key: 1}))\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        factory = WgslEffectProgram\n',
+            'from noon import ShaderEffect as Apply\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        paint = LinearGradient([(0, RED), (1, external_color())])\n',
+        )
+        for source in unsafe_sources:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
     def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_ordered_reveal.py"
