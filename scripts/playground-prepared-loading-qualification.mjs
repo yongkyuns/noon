@@ -167,7 +167,8 @@ async function observation(page) {
     const controls = document.querySelector(".playback-controls");
     const scrubber = controls?.querySelector(".playback-scrubber");
     const renderProbe = globalThis.__noonReadinessPresentationProbe;
-    return { metrics: response?.metrics, preparedRetention: response?.preparedRetention ?? null, run: gallery?.runPhaseMetrics,
+    return { metrics: response?.metrics, preparedRetention: response?.metrics?.preparedRetention ?? null,
+      run: gallery?.runPhaseMetrics,
       executionDiagnostics: gallery?.executionDiagnostics ?? null,
       presentationProbe: renderProbe ? { count: renderProbe.samples.length, error: renderProbe.error,
         uiEventCount: renderProbe.uiEvents.length, droppedUiEvents: renderProbe.droppedUiEvents } : null,
