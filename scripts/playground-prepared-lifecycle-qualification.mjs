@@ -156,6 +156,46 @@ async function seekSealed(page, time) {
       !c.querySelector(".playback-live-status")?.textContent.includes("waiting for display");
   }, time);
 }
+
+async function holdTimelineDuringGrowth(page, touch) {
+  const rail = page.locator(".playback-scrubber");
+  await rail.focus();
+  const before = await rail.evaluate(element => {
+    globalThis.gestureRail = element;
+    return { min: element.min, max: element.max };
+  });
+  const box = await rail.boundingBox(), y = box.y + box.height / 2;
+  const x = box.x + box.width / 2, endX = box.x + box.width - 10;
+  const device = touch ? await page.context().newCDPSession(page) : null;
+  const sendTouch = (type, x) => device.send("Input.dispatchTouchEvent", {
+    type, touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+  });
+  try {
+    if (touch) await sendTouch("touchStart", x);
+    else { await page.mouse.move(x, y); await page.mouse.down(); }
+    if (touch) await sendTouch("touchMove", endX);
+    else await page.mouse.move(endX, y);
+    const heldValue = await rail.inputValue();
+    await page.waitForFunction(() => gestureRail.title.includes("31.00 seconds"));
+    assert.deepEqual(await rail.evaluate(element => ({ min: element.min, max: element.max })), before);
+    assert.equal(await rail.inputValue(), heldValue, "prefix growth must not move a held thumb");
+    assert.ok(Number(heldValue) > 29 && Number(heldValue) < 30);
+    assert.equal(await rail.evaluate(element => element === gestureRail && document.activeElement === element), true);
+  } finally {
+    if (touch) { await sendTouch("touchEnd"); await device.detach(); }
+    else await page.mouse.up();
+  }
+  await openReady(page, 31);
+  await rail.press("Home");
+  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.elapsedSeconds === "0");
+  await rail.press("ArrowRight");
+  const keyboardTarget = Number(await rail.inputValue());
+  assert.ok(keyboardTarget > 0);
+  await page.waitForFunction(time => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.busy === "false" && Number(controls.dataset.elapsedSeconds) === time;
+  }, keyboardTarget);
+}
 async function assertGallerySourceFailure(page) {
   // The status is the exception title. Its message belongs to the visible
   // diagnostic panel, not the status or the echoed Python source excerpt.
@@ -212,7 +252,7 @@ try {
     for (const transport of ["transferable", "shared"]) {
       const entry = { backend, transport, status: "running", checks: [] }; report.cases.push(entry);
       server = await serveRepository(root, 0, { crossOriginIsolated: transport === "shared" });
-      const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1 });
+      const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1, hasTouch: true });
       page.setDefaultTimeout(180_000);
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
       let staticInvocations = 0, zeroInvocations = 0, largeInvocations = 0, sourceInvocations = 0;
@@ -242,6 +282,11 @@ try {
         assert.equal(metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
         assert.equal(await page.evaluate(() => __noonExampleGallery.transportMode), transport);
         entry.checks.push("actual-gallery-prepared-start", "source-does-not-lock-controls-or-gallery");
+        if (backend === "webgpu") {
+          await holdTimelineDuringGrowth(page, transport === "shared");
+          entry.checks.push(`${transport === "shared" ? "touch" : "mouse"}-held-range-and-focus-survive-growth`,
+            "native-home-and-arrow-seek");
+        }
         await seekOpen(page, 5);
         const baseline = await pixels(page, `${backend}-${transport}-baseline`);
         const recoverGpu = async (phase, playing = false) => {
