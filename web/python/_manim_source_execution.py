@@ -38,7 +38,7 @@ MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
 _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
-Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
+Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource
 ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
@@ -69,7 +69,7 @@ isinstance len list map max min next range reversed round set slice sorted str
 sum tuple zip ValueError RuntimeError
 """.split())
 _SOURCE_MEMBERS = frozenset("""
-add remove clear play wait on_click set_drag_targets next_section
+add remove clear play wait audio on_click set_drag_targets next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect
@@ -79,7 +79,7 @@ plot plot_samples
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
 animate id width height radius append extend insert pop count index get keys values
 items update union intersection difference join split strip lower upper replace
-startswith endswith encode decode hex fromhex tobytes reverse sort
+startswith endswith encode decode hex fromhex tobytes reverse sort small_discovery
 """.split())
 _SOURCE_SPATIAL_MEMBERS = frozenset("""
 set_camera_orientation move_camera point_light add_world_mobjects
@@ -271,6 +271,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.resource_preparation_scopes = []
         self.admitted_image_loads = set()
         self.admitted_image_paint_loads = set()
+        self.admitted_scene_audio_calls = set()
+        self.admitted_audio_factory_attributes = set()
         self.image_pixel_sources = [set()]
         self.pixel_factory_names = set()
         self.admitted_pixel_factory_loads = set()
@@ -1185,6 +1187,9 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or not self._scalar_plot_lambda(node.args[0])):
                 raise _OpaqueSource(node, "unproven_plot_function")
             self.admitted_plot_loads.add(id(node.func))
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "audio":
+            if id(node.func) not in self.admitted_scene_audio_calls:
+                raise _OpaqueSource(node, "unproven_audio_declaration")
         if isinstance(node.func, ast.Name) and node.func.id == "ImageMobject":
             if "ImageMobject" in self.module_bindings or any(
                 "ImageMobject" in scope for scope in self.scopes[1:]
@@ -1444,6 +1449,10 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_plot_function")
         if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
             raise _OpaqueSource(node, "unsupported_member" if isinstance(node.ctx, ast.Load) else "unproven_member_write")
+        if node.attr == "audio" and id(node) not in self.admitted_scene_audio_calls:
+            raise _OpaqueSource(node, "unproven_audio_declaration")
+        if node.attr == "small_discovery" and id(node) not in self.admitted_audio_factory_attributes:
+            raise _OpaqueSource(node, "unproven_audio_source")
         self.visit(node.value)
 
     def _scalar_plot_lambda(self, node):
@@ -1646,6 +1655,13 @@ class _SceneOnlySource(ast.NodeVisitor):
                or isinstance(member, ast.Expr) and not isinstance(member.value, ast.Constant)
                for member in node.body):
             raise _OpaqueSource(node, "unsupported_class_contract")
+        constructs = [member for member in node.body
+                      if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                      and member.name == "construct"]
+        if len(constructs) > 1:
+            raise _OpaqueSource(constructs[1], "unproven_audio_declaration")
+        if constructs:
+            self._prepare_scene_audio_calls(constructs[0])
         # Methods resolve module globals, not names in their class dictionary.
         previous_members = self.members
         previous_module_scope = self.scopes[0]
@@ -1720,6 +1736,59 @@ class _SceneOnlySource(ast.NodeVisitor):
                        or type(keyword.value.value) is bool and options[keyword.arg] is not bool
                        for keyword in call.keywords)):
             raise _OpaqueSource(node, "unsupported_class_contract")
+
+    def _prepare_scene_audio_calls(self, construct):
+        arguments = [*construct.args.posonlyargs, *construct.args.args]
+        if not arguments:
+            return
+        receiver = arguments[0].arg
+        bindings = _SourceBindings()
+        for statement in construct.body:
+            bindings.visit(statement)
+        if "AudioSource" in self.module_bindings | bindings.names | {arg.arg for arg in arguments}:
+            return
+
+        barrier_seen = False
+        for statement in construct.body:
+            call = statement.value if isinstance(statement, ast.Expr) else None
+            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name) and call.func.value.id == receiver
+                    and call.func.attr == "audio"):
+                if barrier_seen:
+                    raise _OpaqueSource(call, "late_audio_declaration")
+                if (len(call.args) != 1 or isinstance(call.args[0], ast.Starred)
+                        or any(keyword.arg is None for keyword in call.keywords)):
+                    raise _OpaqueSource(call, "unproven_audio_declaration")
+                source = call.args[0]
+                if (not isinstance(source, ast.Call) or not isinstance(source.func, ast.Attribute)
+                        or not isinstance(source.func.value, ast.Name)
+                        or source.func.value.id != "AudioSource"
+                        or source.func.attr != "small_discovery"
+                        or source.args or source.keywords):
+                    raise _OpaqueSource(source, "unproven_audio_source")
+                options = {}
+                allowed = {"start_time", "duration", "loop", "gain", "fade_in", "fade_out"}
+                for keyword in call.keywords:
+                    if keyword.arg not in allowed or keyword.arg in options:
+                        raise _OpaqueSource(keyword, "unproven_audio_option")
+                    value = keyword.value
+                    if keyword.arg == "loop":
+                        valid = isinstance(value, ast.Constant) and type(value.value) is bool
+                    else:
+                        valid = (isinstance(value, ast.Constant) and type(value.value) in (int, float)
+                                 and math.isfinite(value.value))
+                    if not valid:
+                        raise _OpaqueSource(value, "unproven_audio_option")
+                    options[keyword.arg] = value.value
+                if "duration" not in options or options["duration"] <= 0:
+                    raise _OpaqueSource(call, "unproven_audio_option")
+                self.admitted_scene_audio_calls.add(id(call.func))
+                self.admitted_audio_factory_attributes.add(id(source.func))
+                continue
+            if any(isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                   and isinstance(child.func.value, ast.Name) and child.func.value.id == receiver
+                   and child.func.attr in {"play", "wait"} for child in ast.walk(statement)):
+                barrier_seen = True
 
     def visit_Lambda(self, node):
         self.visit_FunctionDef(ast.copy_location(ast.FunctionDef(name="callback", args=node.args,
@@ -1893,7 +1962,7 @@ def authoring_source_scope():
 # Known Scene calls, with suspension handled only at the explicit barriers above.
 # Unknown methods (including super().construct()) keep their original host path.
 _SCENE_CALLS = frozenset({
-    "play", "wait", "add", "remove", "clear", "on_click", "set_drag_targets",
+    "play", "wait", "audio", "add", "remove", "clear", "on_click", "set_drag_targets",
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "next_section",

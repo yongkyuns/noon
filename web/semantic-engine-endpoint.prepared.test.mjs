@@ -519,6 +519,49 @@ test("prepared render failure freezes its reader until explicit retirement", { t
   } finally { f.close(); }
 });
 
+test("prepared prefix audio extends only an already playing Rust anchor", async () => {
+  const f = fixture(undefined, { initiallyPaused: true });
+  Object.assign(f.player, {
+    hasAudio: () => true,
+    isPlaying: () => f.player.preparedPlaying(),
+    time: () => f.player.preparedTime(),
+    finiteAudioDuration: () => null,
+    audioResourceBundleBytes: () => new Uint8Array([1]),
+    audioAnchorJsonAt: (wallTime, sampledEpochMs) => JSON.stringify({
+        session: 7, time: f.player.preparedPlaybackTimeAt(wallTime),
+        playing: f.player.preparedPlaying(), sampledEpochMs,
+        authorizedUntil: f.player.preparedFrontier(),
+      }),
+    tickCallbackPhaseJson: () => null,
+  });
+  try {
+    await f.attach();
+    const ready = f.replies.find(message => message.type === "ready");
+    assert.equal(ready.hasAudio, true);
+    assert.equal(ready.durationSeconds, null, "an open reader frontier is not a finite audio endpoint");
+    assert.deepEqual(ready.audioResources, new Uint8Array([1]));
+    f.deliver(5);
+    assert.equal(f.replies.some(message => message.type === "audio_state"), false,
+      "buffer growth cannot start a paused device");
+    const resumed = f.request("resume");
+    await f.present();
+    const result = await resumed;
+    assert.ok(result.audioAnchor, JSON.stringify(result));
+    assert.equal(result.audioAnchor.playing, true);
+    assert.equal(result.audioAnchor.authorizedUntil, 5);
+    f.deliver(6);
+    await f.when(() => f.replies.some(message => message.type === "audio_state"));
+    const extension = f.replies.find(message => message.type === "audio_state");
+    assert.equal(extension.audioAnchor.playing, true);
+    assert.equal(extension.audioAnchor.authorizedUntil, 6);
+    assert.equal(extension.audioAnchor.time, f.player.preparedTime());
+    f.endpoint.sourcePrefixDelivered();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.replies.filter(message => message.type === "audio_state").length, 1,
+      "repeated delivery without new Rust authorization does not re-anchor the device");
+  } finally { f.close(); }
+});
+
 test("prepared render failure commits observed static-wait time without losing playback intent", { timeout: 3000 }, async () => {
   const f = fixture();
   try {

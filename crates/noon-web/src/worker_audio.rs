@@ -7,6 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon::ExecutionSession;
+#[cfg(feature = "prepared-prefix")]
+use noon::PrefixReader;
 use noon_core::{
     AudioClipDefinition, AudioClipOptions, AudioResource, AudioResourceHandle, AudioResourceId,
     SemanticNodeId, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
@@ -56,15 +58,37 @@ pub(crate) fn encode(
     session: &ExecutionSession,
     transport_session: u32,
 ) -> Result<Vec<u8>, String> {
+    encode_clips(
+        session
+            .audio_playback_at(0.0)
+            .map_err(|error| error.to_string())?,
+        transport_session,
+    )
+}
+
+#[cfg(feature = "prepared-prefix")]
+pub(crate) fn encode_prepared(
+    reader: &PrefixReader,
+    transport_session: u32,
+) -> Result<Vec<u8>, String> {
+    encode_clips(
+        reader
+            .audio_playback_at(0.0)
+            .map_err(|error| error.to_string())?,
+        transport_session,
+    )
+}
+
+fn encode_clips<'a>(
+    playback_clips: impl Iterator<Item = AudioPlaybackClip<'a>>,
+    transport_session: u32,
+) -> Result<Vec<u8>, String> {
     let mut indices = BTreeMap::new();
     let mut resources = Vec::new();
     let mut payloads = Vec::new();
     let mut clips = Vec::new();
     let mut pcm_bytes = 0_usize;
-    for clip in session
-        .audio_playback_at(0.0)
-        .map_err(|error| error.to_string())?
-    {
+    for clip in playback_clips {
         if clips.len() == MAX_CLIPS {
             return Err("worker audio exceeds the finite clip limit".into());
         }
@@ -311,6 +335,70 @@ mod wasm {
             let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
             self.output
                 .start_clips(self.resources.at_time(time).map_err(js_error)?)
+        }
+
+        /// Start the immutable schedule only through the Rust reader's
+        /// currently admitted open-prefix boundary.
+        #[wasm_bindgen(js_name = startUntil)]
+        pub fn start_until(
+            &mut self,
+            session: u32,
+            time: f64,
+            authorized_until: f64,
+            sampled_epoch_ms: f64,
+            received_epoch_ms: f64,
+        ) -> Result<(), JsValue> {
+            if session != self.resources.session()
+                || !time.is_finite()
+                || time < 0.0
+                || !authorized_until.is_finite()
+                || authorized_until < time
+                || !sampled_epoch_ms.is_finite()
+                || !received_epoch_ms.is_finite()
+                || received_epoch_ms < sampled_epoch_ms
+            {
+                return Err(js_error("stale or invalid bounded worker audio anchor"));
+            }
+            let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
+            if time >= authorized_until {
+                return Ok(());
+            }
+            self.output.start_clips_until(
+                self.resources.at_time(time).map_err(js_error)?,
+                time,
+                authorized_until,
+            )
+        }
+
+        #[wasm_bindgen(js_name = extendUntil)]
+        pub fn extend_until(
+            &mut self,
+            session: u32,
+            time: f64,
+            authorized_until: f64,
+            sampled_epoch_ms: f64,
+            received_epoch_ms: f64,
+        ) -> Result<(), JsValue> {
+            if session != self.resources.session()
+                || !time.is_finite()
+                || time < 0.0
+                || !authorized_until.is_finite()
+                || authorized_until < time
+                || !sampled_epoch_ms.is_finite()
+                || !received_epoch_ms.is_finite()
+                || received_epoch_ms < sampled_epoch_ms
+            {
+                return Err(js_error("stale or invalid bounded worker audio extension"));
+            }
+            let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
+            if time >= authorized_until {
+                return Ok(());
+            }
+            self.output.extend_clips_until(
+                self.resources.at_time(time).map_err(js_error)?,
+                time,
+                authorized_until,
+            )
         }
 
         pub fn pause(&mut self) -> Result<(), JsValue> {

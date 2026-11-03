@@ -143,6 +143,70 @@ fn prepared_worker_snapshot_uses_existing_receiver_and_clean_frames_send_nothing
 }
 
 #[test]
+fn prepared_audio_uses_reader_resources_and_never_reports_frontier_as_duration() {
+    let mut scene = Scene::new();
+    let resource =
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.125; 8_000], 32_000).unwrap();
+    scene
+        .audio(resource, noon_core::AudioClipOptions::default())
+        .unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.wait_segment(0.25).unwrap();
+    source.advance_to(segment.end_time()).unwrap();
+    let (mut publisher, reader) = source.create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 951);
+    player.set_prepared_playing(false);
+
+    assert!(player.has_audio());
+    assert_eq!(player.finite_audio_duration(), None);
+    let initial_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(0.0, 10.0)
+            .expect("open prefix audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(initial_anchor["time"], 0.0);
+    assert_eq!(initial_anchor["playing"], false);
+    assert_eq!(initial_anchor["authorizedUntil"], 0.25);
+    assert_eq!(initial_anchor["sampledEpochMs"], 10.0);
+    let resources = crate::worker_audio::WorkerAudioResources::decode(
+        &player.audio_resource_bundle_bytes().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resources.session(), 951);
+    assert_eq!(resources.at_time(0.125).unwrap()[0].source_offset, 0.125);
+
+    let next = source.wait_segment(0.5).unwrap();
+    source.advance_to(next.end_time()).unwrap();
+    let batch = source
+        .publish_prepared_prefix(next, &mut publisher)
+        .unwrap();
+    player.preflight_append(&batch).unwrap();
+    player.append(batch).unwrap();
+    let extended_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(0.0, 20.0)
+            .expect("extended open prefix audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(extended_anchor["time"], 0.0);
+    assert_eq!(extended_anchor["playing"], false);
+    assert_eq!(extended_anchor["authorizedUntil"], 0.75);
+    assert_eq!(player.finite_audio_duration(), None);
+
+    let original = source.audio_playback_at(0.125).unwrap().collect::<Vec<_>>();
+    let mirrored = resources.at_time(0.125).unwrap();
+    assert_eq!(original.len(), 1);
+    assert_eq!(mirrored.len(), 1);
+    assert_eq!(original[0].resource, mirrored[0].resource);
+    assert_eq!(original[0].pcm, mirrored[0].pcm);
+    assert_eq!(original[0].source_offset, mirrored[0].source_offset);
+}
+
+#[test]
 fn prepared_sections_share_reader_admission_and_terminal_endpoint_rules() {
     let mut f = Fixture::new(721);
     let mut scene = Scene::new();

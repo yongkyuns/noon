@@ -436,6 +436,12 @@ impl SemanticNode {
         &self.kind
     }
 
+    pub fn has_scoped_audio_clips(&self) -> bool {
+        self.scoped_audio_clips
+            .as_ref()
+            .is_some_and(|clips| !clips.is_empty())
+    }
+
     pub(crate) fn semantic_signal_state_mut(&mut self) -> Option<&mut SemanticSignalState> {
         match &mut self.kind {
             SemanticNodeKind::Signal(state) => Some(state),

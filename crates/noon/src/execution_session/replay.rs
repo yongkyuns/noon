@@ -45,9 +45,10 @@ impl ExecutionSession {
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
-        // Immutable audio/control plans support direct seek. Live revision
-        // retention needs its own resource/binding history qualification (#2263).
-        if self.has_audio() || self.has_playback_controls() {
+        // Immutable audio schedules are retained with the original runtime;
+        // later audio schedule mutations still invalidate this history scope.
+        // Playback-control binding history remains outside this profile.
+        if self.has_playback_controls() {
             return Err(ReplayError::UnsupportedDomain);
         }
         if self.pending_segment_completion.is_some()

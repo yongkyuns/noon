@@ -510,6 +510,93 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     return { fixtureSha256: hash(fixture), prepared, running };
   });
 
+  await record("open prepared Python audio starts from the displayed scene and extends its admitted voice", async () => {
+    const fixture = `from noon import *
+
+class AudioWithOrdinaryPlay(Scene):
+    def construct(self):
+        self.audio(
+            AudioSource.small_discovery(),
+            duration=3.0,
+            gain=0.5,
+            fade_in=0.5,
+            fade_out=0.5,
+        )
+        self.play(Create(Circle(radius=0.5)), run_time=1.0)
+        self.wait(2.0)
+`;
+    assert.equal(hash(fixture), "a898089e0534e31a5a149daaff4fec95ffc7ba5d108125d8ba93b4e252e5a60b",
+      "the open audio qualification uses the original issue fixture bytes");
+    const before = await state();
+    await page.waitForFunction(() => !window.__noonExampleGallery?.runInFlight &&
+      document.querySelector("#patch-status")?.dataset.state === "applied", null, { timeout: 90_000 });
+    await page.evaluate(source => {
+      const editor = document.querySelector("#python-scene-source");
+      if (!(editor instanceof HTMLTextAreaElement)) throw new Error("ordinary Python editor is unavailable");
+      editor.value = source;
+      void window.__noonExampleGallery.run().catch(error => {
+        window.audioQualification.sourceRunError = String(error?.stack ?? error);
+      });
+    }, fixture);
+    await page.waitForFunction(() => {
+      if (window.audioQualification.sourceRunError) throw new Error(window.audioQualification.sourceRunError);
+      return window.__noonExampleGallery?.runInFlight === true;
+    }, null, { timeout: 90_000 });
+    await page.waitForFunction(() => {
+      const patch = document.querySelector("#patch-status");
+      if (window.audioQualification.sourceRunError) throw new Error(window.audioQualification.sourceRunError);
+      if (patch?.dataset.state === "error") throw new Error(patch.value || patch.textContent);
+      return patch?.dataset.state === "applied";
+    }, null, { timeout: 180_000 });
+    await waitForBrowserObservation(page, async () => {
+      try {
+        const result = await audioQualification.execution.state();
+        return result.hasAudio === true && result.preparedPlayback === true;
+      } catch {
+        return false;
+      }
+    });
+    const initial = await state();
+    assert.equal(initial.transport.durationSeconds, null, "an open prepared source has no finite endpoint");
+    assert.equal(initial.transport.playing, false);
+    assert.equal(initial.starts.length, before.starts.length, "prepared audio must stay silent before Play");
+    assert.equal(initial.transport.audioReady, true, "the normal gesture path exposes the prepared device");
+    assert.ok(initial.transport.preparedFrontier > initial.transport.time);
+    const audioControls = page.locator(".playback-audio-controls");
+    assert.equal(await audioControls.isVisible(), true, "audio controls remain available for an open prepared source");
+    assert.equal(await page.locator(".playback-mute").count(), 1);
+
+    const canvas = page.locator("#scene");
+    await page.getByRole("button", { name: "Play animation", exact: true }).click();
+    await waitForBrowserObservation(page, async startCount => audioQualification.starts.length > startCount,
+      before.starts.length);
+    const first = await state();
+    const firstVoice = first.starts.at(-1);
+    assert.equal(firstVoice.args.length, 2, "prepared voice remains extendable with an explicit stop");
+    const voiceStops = first.stops.filter(stop => stop.node === firstVoice.node && stop.args.length > 0);
+    assert.ok(voiceStops.length > 0 && voiceStops[0].args[0] > voiceStops[0].observedAt);
+    assert.equal(first.transport.playing, true);
+    const shown = await canvas.screenshot();
+    assert.ok(shown.length > 0, "the prepared scene is displayed during playback");
+
+    await page.waitForFunction(node => audioQualification.stops.filter(stop => stop.node === node && stop.args.length > 0).length > 1,
+      firstVoice.node, { timeout: 30_000 });
+    const extended = await state();
+    const laterStops = extended.stops.filter(stop => stop.node === firstVoice.node && stop.args.length > 0);
+    assert.ok(laterStops.at(-1).args[0] > voiceStops[0].args[0],
+      "Rust prefix growth extends the already playing voice instead of restarting it");
+    assert.equal(extended.starts.filter(start => start.node === firstVoice.node).length, 1);
+    await command("pause");
+    await quiet();
+    return {
+      fixtureSha256: hash(fixture),
+      initial: { time: initial.transport.time, frontier: initial.transport.preparedFrontier,
+        durationSeconds: initial.transport.durationSeconds, startsBeforePlay: initial.starts.length - before.starts.length },
+      voice: { node: firstVoice.node, firstStop: voiceStops[0].args[0], extendedStop: laterStops.at(-1).args[0] },
+      displayedSceneBytes: shown.length,
+    };
+  });
+
   assert.deepEqual(report.browserErrors, [], "no uncaught browser/WASM errors");
   assert.deepEqual(report.consoleErrors, [], "no browser audio/GPU errors");
   report.status = "passed";

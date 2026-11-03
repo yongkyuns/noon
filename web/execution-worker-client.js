@@ -1109,9 +1109,17 @@ export class ExecutionWorkerClient {
           return;
         }
         if (owner === "engine" && message.type === "audio_state") {
-          // Unsolicited anchors can only retire naturally completed output.
-          if (message.audioAnchor?.session !== this.#session || message.audioAnchor?.playing !== false) {
-            throw new Error("invalid terminal worker audio state");
+          if (message.audioAnchor?.session !== this.#session) {
+            throw new Error("worker audio state belongs to a different playback session");
+          }
+          if (message.audioAnchor.playing === true) {
+            // Prefix growth can extend only an already-started, gesture-unlocked
+            // graph. It cannot start playback or revive a retired device.
+            this.#audioDevice.extendAnchor(message.audioAnchor, this.#session);
+            return;
+          }
+          if (message.audioAnchor.playing !== false) {
+            throw new Error("invalid worker audio state");
           }
           this.#audioDevice.pause();
           this.#playing = false;

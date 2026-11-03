@@ -100,6 +100,7 @@ export async function attachSemanticEngine(
   let player = null;
   let replayUnavailable = null;
   let hasAudio = false;
+  let lastAudioAuthorizedUntil = null;
   let sections = [];
   // Live execution leases its existing source player. Prepared execution owns
   // an independent typed reader; the source player stays in its active context.
@@ -387,6 +388,7 @@ export async function attachSemanticEngine(
         sections,
         sectionState: sections.length ? JSON.parse(player.sectionStateJson(time)) : null,
         playing: observation.playing,
+        hasAudio,
         preparedFrontier: observation.frontier,
         seekRange: observation.seekRange,
         durationSeconds: observation.end,
@@ -408,6 +410,7 @@ export async function attachSemanticEngine(
       }
       return {
         type, time, playing: !sourceFinished && context.sourcePlaybackPlaying(), nextPatchSequence: "0", durationSeconds: null,
+        hasAudio: false,
         sourcePlaybackControllable: pacing === SEMANTIC_PACING_REALTIME && !sourceFinished,
         sourceExecution: "observed", replaySupported: false,
         replayUnavailable: "source execution is not retained for replay",
@@ -422,7 +425,8 @@ export async function attachSemanticEngine(
       sectionState: sections.length ? JSON.parse(player.sectionStateJson(time)) : null,
       playing: player.isPlaying(), nextPatchSequence: "0",
       sections,
-      ...(hasAudio ? { hasAudio, durationSeconds: player.finiteAudioDuration() } : {}),
+      hasAudio,
+      ...(hasAudio ? { durationSeconds: player.finiteAudioDuration() } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       ...(sourceFinished && continuation !== null
         ? { preparedPlayback: false, sourcePlaybackControllable: false,
@@ -436,6 +440,8 @@ export async function attachSemanticEngine(
           replayUnavailable: "source execution is not retained for replay" }),
     };
   };
+  const currentPlayerTime = () => prepared !== null ? player.preparedTime() : player.time();
+  const currentPlayerPlaying = () => prepared !== null ? player.preparedPlaying() : player.isPlaying();
   // Observe admitted owners and command readiness, never the caller's desired
   // profile. Emit lifecycle changes only; the trace does not retain frames.
   function observeExecution(snapshot, attached = false) {
@@ -1136,7 +1142,7 @@ export async function attachSemanticEngine(
             }
             if (hasAudio) {
               await awaitPresentation(null);
-              if (player.time() === player.finiteAudioDuration()) {
+              if (currentPlayerTime() === player.finiteAudioDuration()) {
                 await awaitPresentation(send(player.seekDeltaJson(0)));
               }
             }
@@ -1166,8 +1172,11 @@ export async function attachSemanticEngine(
               const navigation = JSON.parse(player.sectionStateJson(sectionTime));
               noTargetSectionQuery = navigation[message.previous ? "previous" : "next"] == null;
             }
-            const playing = hasAudio && player.isPlaying();
-            if (hasAudio) player.pause();
+            const playing = hasAudio && currentPlayerPlaying();
+            if (hasAudio) {
+              if (prepared !== null) player.pausePreparedAt(performance.now());
+              else player.pause();
+            }
             const delta = message.type === "seek_section"
               ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
@@ -1192,6 +1201,7 @@ export async function attachSemanticEngine(
                 session: presented.session, sequence: presented.sequence, time: selectedTime,
                 unchanged: publication === null,
               };
+              if (playing) player.setPreparedPlaying(true);
             } else if (hasAudio) {
               await awaitPresentation(publication);
               if (playing) player.resume();
@@ -1210,7 +1220,7 @@ export async function attachSemanticEngine(
           case "advance_to": {
             if (callbackFault !== null) throw callbackFault;
             sampleTiming = createSampleTiming(message.collectTimings);
-            if (player.isPlaying()) {
+            if (currentPlayerPlaying()) {
               throw new Error(
                 "pause semantic execution before forward authored-time advancement",
               );
@@ -1294,9 +1304,15 @@ export async function attachSemanticEngine(
           // the runtime and no frontend cursor is retained.
           await awaitPresentation(null);
           const sampledAt = performance.now();
-          await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+          if (prepared === null) {
+            await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+          }
           observeExecutionWake(sampledAt, true);
-          audioAnchor = JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt));
+          audioAnchor = JSON.parse(prepared !== null && typeof player.audioAnchorJsonAt === "function"
+            ? player.audioAnchorJsonAt(sampledAt, performance.timeOrigin + sampledAt)
+            : player.audioAnchorJson(performance.timeOrigin + sampledAt));
+          lastAudioAuthorizedUntil = Number.isFinite(audioAnchor.authorizedUntil)
+            ? audioAnchor.authorizedUntil : null;
         }
         const observedState = state(message.type);
         if (noTargetSectionQuery && prepared !== null) {
@@ -1373,10 +1389,10 @@ export async function attachSemanticEngine(
               // monotonic clock for authored-time conversion and wake projection.
               // Qualification may supply deterministic worker tick timestamps
               // without replacing the worker's global clock or its scheduler.
-              const wasPlaying = player.isPlaying();
+              const wasPlaying = currentPlayerPlaying();
               const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
               await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
-              if (hasAudio && wasPlaying && !player.isPlaying()) {
+              if (hasAudio && wasPlaying && !currentPlayerPlaying()) {
                 post({ type: "audio_state", audioAnchor: JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt)) });
               }
               observeExecutionWake(performance.now());
@@ -1732,6 +1748,17 @@ export async function attachSemanticEngine(
       // History adoption alone neither selects another frame nor drains a
       // renderer delta. It may release Rust buffering/demand and wake sleepers.
       try {
+        if (hasAudio && currentPlayerPlaying() && typeof player.audioAnchorJsonAt === "function") {
+          const sampledAt = performance.now();
+          const audioAnchor = JSON.parse(player.audioAnchorJsonAt(
+            sampledAt, performance.timeOrigin + sampledAt,
+          ));
+          if (Number.isFinite(audioAnchor.authorizedUntil) &&
+              (lastAudioAuthorizedUntil === null || audioAnchor.authorizedUntil > lastAudioAuthorizedUntil)) {
+            lastAudioAuthorizedUntil = audioAnchor.authorizedUntil;
+            post({ type: "audio_state", audioAnchor });
+          }
+        }
         if (diagnosticReady) observeExecution(state("state"));
         observeExecutionWake(performance.now());
         prepared.wakeSource();

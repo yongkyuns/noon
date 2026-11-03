@@ -1,4 +1,5 @@
 import unittest
+from hashlib import sha256
 from pathlib import Path
 from textwrap import dedent
 
@@ -131,6 +132,60 @@ class SourceEffectsTests(unittest.TestCase):
                         1,
                     )
                     self.assertFalse(source_execution_proof(poisoned)["admitted"])
+    def test_builtin_audio_source_is_confined_to_initial_scene_audio(self):
+        source = dedent('''
+            from noon import *
+
+            class AudioWithOrdinaryPlay(Scene):
+                def construct(self):
+                    self.audio(
+                        AudioSource.small_discovery(),
+                        duration=3.0,
+                        gain=0.5,
+                        fade_in=0.5,
+                        fade_out=0.5,
+                    )
+                    self.play(Create(Circle(radius=0.5)), run_time=1.0)
+                    self.wait(2.0)
+        ''').lstrip()
+        self.assertEqual(sha256(source.encode()).hexdigest(),
+                         "a898089e0534e31a5a149daaff4fec95ffc7ba5d108125d8ba93b4e252e5a60b")
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        rejected = (
+            # Module or local rebinding cannot change the trusted factory.
+            'from noon import *\nAudioSource = Circle\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self, AudioSource):\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            # Factory/member aliases and escaped resources are not a proof.
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        make = AudioSource.small_discovery\n'
+            '        self.audio(make(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        source = AudioSource.small_discovery()\n'
+            '        self.audio(source, duration=3)\n',
+            'from noon import *\nAudioSource.small_discovery()\n',
+            # A source cannot add or replace audio after execution has started.
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        self.play(Create(Circle()), run_time=1)\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        if True:\n            self.play(Create(Circle()), run_time=1)\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        self.audio(AudioSource.small_discovery(channels=1), duration=3)\n',
+        )
+        for unsafe in rejected:
+            with self.subTest(source=unsafe):
+                self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
     def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
         source = Path(__file__).with_name("examples").joinpath(

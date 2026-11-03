@@ -79,6 +79,10 @@ impl PreparedExecutionPlayer {
         self.playback.reader.preflight_append(batch)
     }
 
+    pub fn has_audio(&self) -> bool {
+        self.playback.reader.has_audio()
+    }
+
     /// Delivery does not issue a render sequence or alter a displayed receipt.
     pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
         let was_buffering = self.playback.buffering();
@@ -363,6 +367,47 @@ impl PreparedExecutionPlayer {
         RetainedResourceBundle::empty()
             .encode_binary()
             .map_err(|error| error.to_string())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = hasAudio))]
+    pub fn has_audio_wasm(&self) -> bool {
+        self.has_audio()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finiteAudioDuration))]
+    pub fn finite_audio_duration(&self) -> Option<f64> {
+        self.playback.reader.end_time()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioResourceBundleBytes))]
+    pub fn audio_resource_bundle_bytes(&self) -> Result<Vec<u8>, String> {
+        crate::worker_audio::encode_prepared(&self.playback.reader, self.encoder.session())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJson))]
+    pub fn audio_anchor_json(&self, sampled_epoch_ms: f64) -> Result<String, String> {
+        self.audio_anchor_json_at(self.prepared_time(), sampled_epoch_ms)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJsonAt))]
+    pub fn audio_anchor_json_at(
+        &self,
+        wall_time_ms: f64,
+        sampled_epoch_ms: f64,
+    ) -> Result<String, String> {
+        let time = self.prepared_playback_time_at(wall_time_ms)?;
+        if !sampled_epoch_ms.is_finite() {
+            return Err("audio anchor requires a finite host timestamp".into());
+        }
+        Ok(serde_json::json!({
+            "session": self.encoder.session(),
+            "time": time,
+            "playing": self.playback.playing(),
+            "sampledEpochMs": sampled_epoch_ms,
+            "authorizedUntil": self.playback.reader.end_time()
+                .unwrap_or_else(|| self.playback.reader.frontier()),
+        })
+        .to_string())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = initialDeltaJson))]

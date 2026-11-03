@@ -7,8 +7,8 @@ use crate::ExecutionSession;
 use noon_core::{ObjectId, PublicationContext, SemanticClickIndicate};
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_changes,
-    FrameState, PrefixBatch, PrefixBatchStats, PrefixError, PrefixReceiver,
-    PreparedTransientAnimation, RendererPublication, ReplayStats, RuntimeIdentity,
+    AudioPlaybackClip, AudioPlaybackError, FrameState, PrefixBatch, PrefixBatchStats, PrefixError,
+    PrefixReceiver, PreparedTransientAnimation, RendererPublication, ReplayStats, RuntimeIdentity,
 };
 
 mod input;
@@ -75,6 +75,21 @@ impl PrefixReader {
     }
     pub fn frame(&self) -> &FrameState {
         self.session.frame()
+    }
+    /// Immutable authored audio retained with this reader's original runtime.
+    pub fn has_audio(&self) -> bool {
+        self.session.has_audio()
+    }
+    pub fn audio_end_time(&self) -> Option<f64> {
+        self.session.audio_end_time()
+    }
+    /// Borrow the original PCM and clip schedule at an accepted reader time.
+    /// This query does not advance or publish history.
+    pub fn audio_playback_at(
+        &self,
+        time: f64,
+    ) -> Result<impl Iterator<Item = AudioPlaybackClip<'_>>, AudioPlaybackError> {
+        self.session.audio_playback_at(time)
     }
     pub fn replay_stats(&self) -> ReplayStats {
         self.session.replay_stats()

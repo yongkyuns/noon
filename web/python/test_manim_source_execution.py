@@ -328,6 +328,28 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(original.co_qualname, "RasterImage.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_initial_audio_declaration_keeps_the_ordinary_scene_portable(self):
+        source = textwrap.dedent('''
+            from noon import *
+
+            class AudioWithOrdinaryPlay(Scene):
+                def construct(self):
+                    self.audio(
+                        AudioSource.small_discovery(),
+                        duration=3.0,
+                        gain=0.5,
+                        fade_in=0.5,
+                        fade_out=0.5,
+                    )
+                    self.play(Create(Circle(radius=0.5)), run_time=1.0)
+                    self.wait(2.0)
+        ''').lstrip()
+        _, pairs = compile_authoring_source(source, filename="audio_with_ordinary_play.py")
+        self.assertEqual(len(pairs), 1)
+        original, portable = next(iter(pairs.items()))
+        self.assertEqual(original.co_qualname, "AudioWithOrdinaryPlay.construct")
+        self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
+
     def test_effect_showcases_with_sections_use_portable_continuations(self):
         examples = Path(__file__).with_name("examples")
         for filename, scene_name in (

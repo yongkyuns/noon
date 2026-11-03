@@ -1298,6 +1298,25 @@ test("a retired device unlock cannot resume its former worker", async t => {
   assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
 });
 
+test("a prepared prefix extension is forwarded without issuing a second playback start", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const anchors = [];
+  t.mock.method(WorkerAudioDevice.prototype, "extendAnchor", (anchor, session) => {
+    anchors.push({ anchor, session });
+    return true;
+  });
+  const { client, engine } = await startClient();
+  try {
+    const anchor = { session: 1, time: 0.2, playing: true, sampledEpochMs: 1234,
+      authorizedUntil: 0.75 };
+    engine.emitMessage(engineMessage("audio_state", { audioAnchor: anchor }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(anchors, [{ anchor, session: 1 }]);
+    assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false,
+      "an append notification extends an existing device graph; it never starts playback");
+  } finally { client.terminate(); }
+});
+
 test("a queued playback activation unlock is synchronous and remains owner-qualified", async t => {
   const { WorkerAudioDevice } = await import("./worker-audio-device.js");
   let completeUnlock;

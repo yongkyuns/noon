@@ -73,7 +73,7 @@ export class PlaygroundPlaybackControls {
     this.#player = player;
     this.#undoDragSupported = typeof player.undoTranslationDrag === "function";
     this.#onError = onError;
-    this.#durationSeconds = validateDuration(durationSeconds);
+    this.#durationSeconds = durationSeconds === null ? null : validateDuration(durationSeconds);
 
     installStyles();
 
@@ -237,6 +237,11 @@ export class PlaygroundPlaybackControls {
         this.#seekRange = state.seekRange;
         this.#durationSeconds = state.durationSeconds;
         this.#buffering = state.buffering;
+        this.#hasAudio = state.hasAudio === true;
+        this.#audioReady = state.audioReady === true;
+        if (state.hasAudio === false) this.#audioReady = false;
+        if (state.audioMuted !== undefined) this.#audioMuted = state.audioMuted === true;
+        if (state.audioVolume !== undefined) this.#volume.value = String(state.audioVolume);
         this.#render();
       }
       return;
@@ -341,9 +346,13 @@ export class PlaygroundPlaybackControls {
     this.#playing = playing;
     this.#desiredPlaying = pendingPlaying;
     this.#pendingActivation = pendingActivation;
-    if (prepared) this.#hasAudio = false;
+    if (prepared) {
+      this.#hasAudio = hasAudio === true;
+      this.#audioReady = audioReady === true;
+    }
     else if (hasAudio !== undefined) this.#hasAudio = hasAudio === true;
-    if (audioReady !== undefined) this.#audioReady = audioReady === true;
+    if (!prepared && audioReady !== undefined) this.#audioReady = audioReady === true;
+    if (hasAudio === false) this.#audioReady = false;
     if (audioMuted !== undefined) this.#audioMuted = audioMuted === true;
     if (audioVolume !== undefined) this.#volume.value = String(audioVolume);
     if (sections !== undefined) this.#sections = sections;

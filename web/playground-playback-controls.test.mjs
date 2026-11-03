@@ -5,7 +5,7 @@ const initial = dom();
 globalThis.HTMLElement = Element;
 globalThis.document = initial.document;
 const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
-function fixture(withDragUndo = false) {
+function fixture(withDragUndo = false, durationSeconds = 2) {
   const { document, preview } = dom();
   globalThis.document = document;
   const calls = [];
@@ -15,7 +15,7 @@ function fixture(withDragUndo = false) {
   }
   if (withDragUndo) player.undoTranslationDrag = async () => ({ time: 0, playing: false, canUndoTranslationDrag: false });
   const errors = [];
-  const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 2, onError: (error) => errors.push(error) });
+  const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds, onError: (error) => errors.push(error) });
   return { controls, player, preview, calls, errors, range: preview.querySelector(".playback-scrubber"), output: preview.querySelector(".playback-time") };
 }
 
@@ -325,6 +325,66 @@ test("prepared playback keeps Rust-provided cues and clears them when a new prof
   f.controls.sync({ time: 0.25, playing: false, sourceExecution: "observed" });
   assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true,
     "a profile switch cannot retain prepared cue metadata");
+  f.controls.destroy();
+});
+
+test("prepared playback retains Rust audio capability and device controls without a finite endpoint", () => {
+  const f = fixture();
+  const base = { preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false };
+  f.controls.sync({ ...base, hasAudio: true, audioReady: true,
+    audioMuted: true, audioVolume: 0.35 });
+  const audio = f.preview.querySelector(".playback-audio-controls");
+  assert.equal(audio.hidden, false);
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Unmute");
+  assert.equal(audio.children[1].children[0].value, "0.35");
+  assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play",
+    "a Rust reader with an open end does not use finite-audio endpoint logic");
+
+  f.controls.sync({ ...base, hasAudio: true, audioReady: false,
+    audioMuted: false, audioVolume: 0.7 });
+  assert.equal(audio.hidden, false);
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Mute");
+  assert.equal(audio.children[1].children[0].value, "0.7");
+  assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play with sound");
+
+  f.controls.sync({ ...base, hasAudio: false });
+  assert.equal(audio.hidden, true, "explicit absence clears prior audio capability");
+  f.controls.destroy();
+});
+
+test("prepared observation refreshes audio capability while a seek is pending", () => {
+  const f = fixture();
+  const base = { preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false };
+  f.controls.sync({ ...base, hasAudio: false });
+  const audio = f.preview.querySelector(".playback-audio-controls");
+  assert.equal(audio.hidden, true);
+  f.player.seek = () => new Promise(() => {});
+  f.range.value = "0.5";
+  f.range.dispatchEvent(new Event("input"));
+
+  f.controls.observe({ ...base, hasAudio: true, audioReady: false,
+    audioMuted: true, audioVolume: 0.4 });
+  assert.equal(audio.hidden, false, "a replacement prepared profile exposes its Rust audio capability");
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Unmute");
+  assert.equal(audio.children[1].children[0].value, "0.4");
+  f.controls.destroy();
+});
+
+test("prepared playback controls can start with an unknown duration", () => {
+  const f = fixture(false, null);
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    hasAudio: true, audioReady: true,
+  });
+  assert.equal(f.controls.durationSeconds, null);
+  assert.equal(f.range.max, "0.9999999999999999");
+  assert.equal(f.controls.element.dataset.durationKnown, "false");
   f.controls.destroy();
 });
 
