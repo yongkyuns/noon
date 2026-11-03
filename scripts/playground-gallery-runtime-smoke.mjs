@@ -12,7 +12,7 @@ import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryPoolForProfileGate, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
-import { evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
+import { evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, showcaseAudioGestureReady, SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
@@ -196,6 +196,8 @@ try {
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(),
       ...(expectedProfile ? { source: { path: expectedProfile.path, sha256: expectedProfile.sha256 } } : {}),
       errors: [], failedRequests: [], samples: [], presentations: [] };
+    let audioGestureIssued = false;
+    let audioAttachmentObserved = false;
     const observedPublications = new Set();
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     const native = createNativeWebKitEvidence({
@@ -254,6 +256,7 @@ try {
                 crossOriginIsolated: window.crossOriginIsolated,
                 patch: { ...document.querySelector('#patch-status')?.dataset },
                 playback: { ...document.querySelector('.playback-controls')?.dataset },
+                playButtonDisabled: document.querySelector('.playback-controls .playback-toggle')?.disabled ?? null,
                 text: document.querySelector('#patch-status')?.value,
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
                 rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
@@ -267,6 +270,54 @@ try {
             assert.equal(state.selected, entry.id);
             assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
             assert.equal(state.metricsError, undefined);
+            if (expectedProfile?.audioPolicy === 'authored-audio') {
+              const attachedEvent = state.executionDiagnostics?.events?.find(event => event.stage === 'attached');
+              if (!audioAttachmentObserved && attachedEvent) {
+                audioAttachmentObserved = true;
+                result.audioAttachment = {
+                  runRequestId: state.executionDiagnostics.runRequestId,
+                  interpreterGeneration: state.executionDiagnostics.interpreterGeneration,
+                  context: state.executionDiagnostics.context,
+                  attachedEvent,
+                  initiallyPaused: state.playback?.playing === 'false',
+                  playButtonDisabled: state.playButtonDisabled,
+                };
+              }
+              const gestureReady = showcaseAudioGestureReady({ expected: expectedProfile,
+                patchApplied: state.patch.state === 'applied', runInFlight: state.inFlight,
+                diagnostics: state.executionDiagnostics, playback: state.playback,
+                playButtonDisabled: state.playButtonDisabled });
+              const attached = Boolean(attachedEvent);
+              if (!audioGestureIssued && gestureReady) {
+                result.audioGesture = {
+                  action: 'playback-controls Play button click',
+                  issued: true,
+                  initiallyPaused: state.playback?.playing === 'false',
+                  sample: {
+                    runRequestId: state.executionDiagnostics.runRequestId,
+                    interpreterGeneration: state.executionDiagnostics.interpreterGeneration,
+                    context: state.executionDiagnostics.context,
+                    attachedEvent,
+                  },
+                  playingConfirmed: false,
+                };
+                audioGestureIssued = true;
+                await page.locator('.playback-controls .playback-toggle').click();
+              } else if (!audioGestureIssued && attached &&
+                  galleryCaseLifecycleReady({ patchApplied: state.patch.state === 'applied',
+                    runInFlight: state.inFlight, requiresDisposition: true,
+                    diagnostics: state.executionDiagnostics, exampleId: entry.id })) {
+                assert.fail(`${entry.id}: attached authored audio lacked an enabled paused Play gesture path`);
+              }
+              if (audioGestureIssued && state.playback?.playing === 'true') {
+                result.audioGesture.playingConfirmed = true;
+                result.audioGesture.confirmedSample = {
+                  runRequestId: state.executionDiagnostics?.runRequestId,
+                  interpreterGeneration: state.executionDiagnostics?.interpreterGeneration,
+                  context: state.executionDiagnostics?.context,
+                };
+              }
+            }
             const metric = state.metrics?.metrics;
             for (const presentation of metric?.publicationStageSamples ?? []) {
               const key = `${presentation.session}:${presentation.sequence}`;
@@ -286,7 +337,8 @@ try {
               const authored = parseAuthoringResult(await page.evaluate(() => window.__galleryAuthoringResults.at(-1)));
               const requiresDisposition = authored.semanticExecution?.preparedPlayback === true ||
                 (profileGateMode !== 'disabled' && expectedProfile !== null);
-              if (galleryCaseLifecycleReady({
+              if ((expectedProfile?.audioPolicy !== 'authored-audio' ||
+                    result.audioGesture?.playingConfirmed === true) && galleryCaseLifecycleReady({
                 patchApplied: state.patch.state === 'applied',
                 runInFlight: state.inFlight,
                 requiresDisposition,

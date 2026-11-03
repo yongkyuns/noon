@@ -8,6 +8,7 @@ import {
   SHOWCASE_PROFILE_EXPECTATIONS,
   evaluateShowcaseDiagnostics,
   galleryCaseLifecycleReady,
+  showcaseAudioGestureReady,
   validateShowcaseDiagnostics,
   validateShowcaseInventory,
 } from './playground-profile-expectations.mjs';
@@ -140,6 +141,24 @@ test('gallery lifecycle waits for the real disposition instead of an authored-en
   assert.equal(galleryCaseLifecycleReady({ ...base, exampleId: 'other-run' }), false);
   assert.equal(galleryCaseLifecycleReady({ ...base, runInFlight: true }), false);
   assert.equal(galleryCaseLifecycleReady({ ...base, requiresDisposition: false }), true);
+});
+
+test('authored audio gesture requires actual attachment capability and paused enabled UI', () => {
+  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.audioPolicy === 'authored-audio');
+  const diagnostics = diagnosticsFor(expected);
+  const base = { expected, patchApplied: true, runInFlight: false, diagnostics,
+    playback: { playing: 'false' }, playButtonDisabled: false };
+  assert.equal(showcaseAudioGestureReady(base), true);
+  assert.equal(showcaseAudioGestureReady({ ...base, playback: { playing: 'true' } }), false);
+  assert.equal(showcaseAudioGestureReady({ ...base, playButtonDisabled: true }), false);
+  assert.equal(showcaseAudioGestureReady({ ...base, runInFlight: true }), false);
+  const noAudioCapability = diagnosticsFor(expected);
+  noAudioCapability.events[0].capabilities.audio = false;
+  assert.equal(showcaseAudioGestureReady({ ...base, diagnostics: noAudioCapability }), false,
+    'the expected audio policy must not grant a runtime capability');
+  const noPlayCommand = diagnosticsFor(expected);
+  noPlayCommand.events[0].capabilities.commands = [];
+  assert.equal(showcaseAudioGestureReady({ ...base, diagnostics: noPlayCommand }), false);
 });
 
 test('completed callback dispositions expose no transport commands', () => {

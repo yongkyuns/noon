@@ -115,6 +115,16 @@ export function galleryCaseLifecycleReady({ patchApplied, runInFlight, requiresD
     diagnostics.events.some(event => event.stage === 'disposition');
 }
 
+export function showcaseAudioGestureReady({ expected, patchApplied, runInFlight,
+  diagnostics, playback, playButtonDisabled }) {
+  if (expected?.audioPolicy !== 'authored-audio' || !patchApplied || runInFlight ||
+      diagnostics?.context?.exampleId !== expected.id || playback?.playing !== 'false' ||
+      playButtonDisabled !== false) return false;
+  return diagnostics.events?.some(event => event.stage === 'attached' &&
+    event.profile === expected.attachedProfile && event.capabilities?.audio === true &&
+    event.capabilities.commands?.includes('play')) === true;
+}
+
 export function validateShowcaseInventory(manifestEntries, readSource) {
   const actual = new Map(manifestEntries.map(entry => [entry.id, entry]));
   assert.equal(actual.size, manifestEntries.length, 'showcase manifest contains duplicate IDs');
