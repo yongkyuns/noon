@@ -764,7 +764,7 @@ class AudioWithOrdinaryPlay(Scene):
       return window.audioQualification.fourierRunStarted
         && window.__noonExampleGallery?.runInFlight === true;
     }, null, { timeout: 90_000 });
-    await page.waitForFunction(async () => {
+    await waitForBrowserObservation(page, async () => {
       if (window.audioQualification.fourierRunError) throw new Error(window.audioQualification.fourierRunError);
       if (audioQualification.attachments <= window.audioQualification.fourierBeforeAttachments) return false;
       try {
