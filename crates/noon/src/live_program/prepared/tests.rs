@@ -491,6 +491,77 @@ fn affine_lifecycle_prefix_preserves_intro_removal_rewind_and_future_isolation()
 }
 
 #[test]
+fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind() {
+    let program = crate::example_scenes::ordinary_composition_continuation_program().unwrap();
+    let mut source = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    let left_id = reader.frame().objects[0].id;
+    let right_id = reader.frame().objects[1].id;
+
+    reader.seek(0.5).unwrap();
+    let parallel_midpoint = reader.frame().clone();
+    assert_eq!(parallel_midpoint.objects[0].id, left_id);
+    assert_eq!(parallel_midpoint.objects[1].id, right_id);
+    assert_eq!(parallel_midpoint.objects[0].transform.translation, Vec2::new(-2.0, 0.25));
+    assert_eq!(parallel_midpoint.objects[1].transform.translation, Vec2::new(2.0, -0.25));
+    let publication = reader.publication_context();
+
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(reader.frame(), &parallel_midpoint);
+    assert_eq!(reader.publication_context(), publication);
+
+    reader.seek(2.0).unwrap();
+    assert_eq!(reader.frame().objects[0].transform.translation, Vec2::new(-2.0, 1.0));
+    assert_eq!(reader.frame().objects[1].transform.translation, Vec2::new(2.0, -1.0));
+
+    assert_eq!(
+        source.prepare_until(4.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    assert!(batch.is_terminal());
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+
+    reader.seek(3.0).unwrap();
+    assert_eq!(reader.frame().objects[0].style.fill, Some(Color::rgb(1.0, 0.0, 0.0)));
+    assert_eq!(reader.frame().objects[1].style.fill, Some(Color::rgb(1.0, 1.0, 1.0)));
+    reader.seek(3.5).unwrap();
+    let right_fill = reader.frame().objects[1].style.fill.unwrap();
+    assert!((right_fill.red - 0.5).abs() < 1e-6);
+    assert!((right_fill.green - 0.5).abs() < 1e-6);
+    assert!((right_fill.blue - 1.0).abs() < 1e-6);
+
+    assert_eq!(reader.end_time(), Some(4.0));
+    reader.seek(4.0).unwrap();
+    assert_eq!(reader.frame().objects[0].style.fill, Some(Color::rgb(0.0, 1.0, 0.0)));
+    assert_eq!(reader.frame().objects[1].style.fill, Some(Color::rgb(0.0, 0.0, 1.0)));
+
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.frame(), &parallel_midpoint);
+    assert_eq!(reader.frame().objects[0].id, left_id);
+    assert_eq!(reader.frame().objects[1].id, right_id);
+}
+
+#[test]
 fn cooperative_source_invalid_demand_is_atomic_before_and_after_output() {
     let (mut source, calls, _) = fixture(false, false, None, ReplayLimits::default());
     for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
