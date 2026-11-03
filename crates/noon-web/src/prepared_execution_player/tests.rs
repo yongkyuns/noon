@@ -88,6 +88,10 @@ fn receive(mirror: &mut InstalledRetainedExecutionMirror, json: &str) {
     assert_ne!(outcome, RetainedTransportApplyOutcome::DroppedStale);
 }
 
+fn playback_state(player: &PreparedExecutionPlayer) -> serde_json::Value {
+    serde_json::from_str(&player.prepared_playback_state_json()).unwrap()
+}
+
 fn ready(
     player: &mut PreparedExecutionPlayer,
 ) -> (InstalledRetainedExecutionMirror, WorkerPointerReceipt) {
@@ -629,6 +633,42 @@ fn prepared_worker_static_observation_stops_at_next_revision_before_terminal_tim
     assert_eq!(f.player.prepared_time(), 2.0);
     assert_eq!(f.player.prepared_end_time(), Some(2.0));
     assert!(!f.player.prepared_buffering());
+}
+
+#[test]
+fn prepared_worker_loop_reanchors_the_existing_wall_clock_at_each_wrap() {
+    let mut f = Fixture::new(851);
+    let terminal = f.next(true);
+    f.deliver(terminal);
+    ready(&mut f.player);
+    assert_eq!(playback_state(&f.player)["completed"], false);
+    f.player.set_prepared_loop_duration(Some(2.0)).unwrap();
+    f.player.set_prepared_playing(true);
+    f.player.tick_delta_json(1_000.0).unwrap();
+    f.player.tick_delta_json(3_500.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.0);
+    assert_eq!(playback_state(&f.player)["loopCount"], 1);
+    assert_eq!(playback_state(&f.player)["completed"], false);
+    assert!(f.player.prepared_playing());
+    assert_eq!(f.player.prepared_playback_time_at(4_000.0).unwrap(), 1.5);
+    f.player.tick_delta_json(5_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(playback_state(&f.player)["loopCount"], 2);
+    assert_eq!(f.player.prepared_playback_time_at(5_250.0).unwrap(), 0.75);
+    f.player.set_prepared_playing(false);
+    f.player.set_prepared_playing(true);
+    f.player.tick_delta_json(6_000.0).unwrap();
+    f.player.tick_delta_json(6_500.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.0);
+    f.player.tick_delta_json(11_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.5);
+    assert_eq!(playback_state(&f.player)["loopCount"], 4);
+    f.player.set_prepared_playing(false);
+    f.player.set_prepared_playing(true);
+    f.player.tick_delta_json(12_000.0).unwrap();
+    f.player.tick_delta_json(13_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(playback_state(&f.player)["loopCount"], 5);
 }
 
 #[test]

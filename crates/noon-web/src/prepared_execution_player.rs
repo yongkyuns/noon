@@ -151,6 +151,11 @@ impl PreparedExecutionPlayer {
             self.playback
                 .advance_clock_sample(target)
                 .map_err(|error| error.to_string())?;
+            if self.playback.take_clock_reanchor() {
+                self.clock
+                    .reanchor(wall_time_ms, self.playback.reader.frame().time)
+                    .ok_or("prepared playback loop cannot re-anchor its clock")?;
+            }
         }
         self.playback
             .reader
@@ -275,6 +280,17 @@ impl PreparedExecutionPlayer {
         }
     }
 
+    /// Configure the gallery's existing loop policy. The duration is retained
+    /// while the prefix is open, but can only take effect after terminal admission.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPreparedLoopDuration))]
+    pub fn set_prepared_loop_duration(&mut self, duration: Option<f64>) -> Result<(), String> {
+        self.playback
+            .set_loop_duration(duration)
+            .map_err(str::to_owned)?;
+        self.clock = BrowserExecutionWakeClock::default();
+        Ok(())
+    }
+
     /// Last coherent evaluated sample, independent of the producer's frontier.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedTime))]
     pub fn prepared_time(&self) -> f64 {
@@ -304,6 +320,13 @@ impl PreparedExecutionPlayer {
         self.playback.buffering()
     }
 
+    /// One coherent Rust-owned observation for status and qualification traces.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaybackStateJson))]
+    pub fn prepared_playback_state_json(&self) -> String {
+        serde_json::to_string(&self.playback.observation())
+            .expect("prepared playback observation is serializable")
+    }
+
     /// Observe elapsed time in a sleeping static interval through the existing
     /// Rust clock. This never starts/reanchors that clock or evaluates a frame.
     /// Active animation stays at its last coherent sample; a static observation
@@ -318,12 +341,17 @@ impl PreparedExecutionPlayer {
         else {
             return Ok(current);
         };
-        Ok(self
-            .clock
-            .scene_time_at(wall_time_ms)
-            .unwrap_or(current)
-            .min(deadline)
-            .max(current))
+        let observed = self.clock.scene_time_at(wall_time_ms).unwrap_or(current);
+        if self.playback.reader.end_time().is_some()
+            && self.playback.loop_duration().is_some()
+            && matches!(
+                self.playback.reader.wake_state().timeline(),
+                noon_runtime::TimelineWakeState::Quiescent
+            )
+        {
+            return Ok(self.playback.time_from_clock(observed));
+        }
+        Ok(observed.min(deadline).max(current))
     }
 
     /// Preserve elapsed interior static-wait time before pausing, without a
@@ -337,6 +365,7 @@ impl PreparedExecutionPlayer {
             self.playback
                 .advance(time)
                 .map_err(|error| error.to_string())?;
+            self.playback.take_clock_reanchor();
         }
         self.set_prepared_playing(false);
         Ok(())
@@ -419,15 +448,7 @@ impl PreparedExecutionPlayer {
     #[cfg(any(test, debug_assertions, feature = "renderer-smoke"))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugPreparedPlaybackJson))]
     pub fn debug_prepared_playback_json(&self) -> String {
-        serde_json::json!({
-            "time": self.playback.reader.frame().time,
-            "frontier": self.playback.reader.frontier(),
-            "end": self.playback.reader.end_time(),
-            "playing": self.playback.playing(),
-            "buffering": self.playback.buffering(),
-            "interactions": self.playback.reader.interactions_active(),
-        })
-        .to_string()
+        self.prepared_playback_state_json()
     }
 }
 

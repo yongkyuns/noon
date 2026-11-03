@@ -247,10 +247,24 @@ impl PlaybackClock {
         let raw = self.anchor_scene_time + elapsed;
         match self.loop_duration {
             Some(duration) if elapsed == 0.0 && self.anchor_scene_time == duration => duration,
-            Some(duration) => raw.rem_euclid(duration),
+            Some(duration) => loop_phase(raw, duration),
             None => raw,
         }
     }
+}
+
+/// Shared loop phase used by the completed clock and prepared reader transport.
+pub(crate) fn loop_phase(time: f64, duration: f64) -> f64 {
+    if time < duration {
+        time
+    } else {
+        time.rem_euclid(duration)
+    }
+}
+
+/// Completed loop cycles in an elapsed scene-time sample, before phase wrapping.
+pub(crate) fn completed_loop_cycles(time: f64, duration: f64) -> u64 {
+    (time / duration).floor().min(u64::MAX as f64) as u64
 }
 
 impl Default for PlaybackClock {
@@ -275,6 +289,13 @@ mod tests {
         let mut clock = PlaybackClock::looping(2.0).unwrap();
         assert_eq!(clock.scene_time(100.0).unwrap(), 0.0);
         assert_eq!(clock.scene_time(2_600.0).unwrap(), 0.5);
+    }
+
+    #[test]
+    fn looping_clock_wraps_at_the_exact_duration_boundary() {
+        let mut clock = PlaybackClock::looping(2.0).unwrap();
+        assert_eq!(clock.scene_time(100.0).unwrap(), 0.0);
+        assert_eq!(clock.scene_time(2_100.0).unwrap(), 0.0);
     }
 
     #[test]

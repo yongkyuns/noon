@@ -145,19 +145,209 @@ fn prepared_canvas_terminal_clamps_and_then_settles_at_exact_endpoint() {
     playback
         .append(next(&mut source, &mut publisher, true))
         .unwrap();
+    assert!(
+        !playback.completed(),
+        "sealing history alone is not playback completion"
+    );
+    playback.seek(0.0).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.0);
+    assert!(!playback.completed());
     drop(source);
     drop(publisher);
     playback.advance(200.0).unwrap();
     assert_eq!(playback.reader.frame().time, 2.0);
     assert_eq!(playback.reader.end_time(), Some(2.0));
+    assert!(playback.completed());
+    assert!(
+        !playback.playing(),
+        "finite completion must clear effective play intent"
+    );
     playback.reader.take_renderer_publication();
     assert!(playback.wake_state().is_quiescent());
     playback.seek(0.5).unwrap();
     playback.reader.take_renderer_publication();
+    assert!(matches!(
+        playback.wake_state().timeline(),
+        TimelineWakeState::Quiescent
+    ));
+    assert!(playback.set_playing(true));
+    assert!(!playback.completed());
     assert!(!matches!(
         playback.wake_state().timeline(),
         TimelineWakeState::Quiescent
     ));
+}
+
+#[test]
+fn prepared_canvas_configured_loop_activates_after_terminal_and_counts_multi_cycle_samples() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback.set_loop_duration(Some(2.0)).unwrap();
+    assert_eq!(
+        playback.wake_state().timeline(),
+        TimelineWakeState::Deadline(1.0)
+    );
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+
+    playback.advance(1.9).unwrap();
+    assert_eq!(playback.reader.frame().time, 1.9);
+    playback.advance(2.0).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.0);
+    assert!(playback.playing());
+    assert!(playback.advancing());
+    assert_eq!(playback.loop_count, 1);
+    assert!(playback.take_clock_reanchor());
+    playback.advance(0.25).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.25);
+    playback.advance(6.25).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.25);
+    assert_eq!(playback.loop_count, 4);
+    assert!(playback.take_clock_reanchor());
+    playback.advance(0.375).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.375);
+}
+
+#[test]
+fn prepared_canvas_loop_keeps_a_static_terminal_hold_until_the_configured_duration() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback.set_loop_duration(Some(3.0)).unwrap();
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    playback.advance(2.5).unwrap();
+    assert_eq!(playback.reader.frame().time, 2.0);
+    assert!(playback.playing());
+    assert!(!playback.completed(), "a loop end hold is not completion");
+    assert_eq!(
+        playback.wake_state().timeline(),
+        TimelineWakeState::Deadline(3.0)
+    );
+    playback.advance(3.0).unwrap();
+    assert_eq!(playback.reader.frame().time, 0.0);
+    assert_eq!(playback.loop_count, 1);
+    assert!(!playback.completed());
+    playback.advance(3.01).unwrap();
+    assert!((playback.reader.frame().time - 0.01).abs() < 1e-12);
+}
+
+#[test]
+fn prepared_canvas_loop_setting_does_not_wrap_an_open_prefix() {
+    let (_, _, mut playback, _) = fixture();
+    playback.set_loop_duration(Some(2.0)).unwrap();
+    let before = playback.reader.frame().clone();
+    playback.advance(3.0).unwrap();
+    assert!(playback.buffering());
+    assert_eq!(playback.reader.frame(), &before);
+    assert!(playback.playing());
+}
+
+#[test]
+fn prepared_canvas_rejects_loop_duration_shorter_than_closed_range() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    assert!(playback.set_loop_duration(Some(1.0)).is_err());
+    assert_eq!(playback.loop_duration(), None);
+    assert_eq!(playback.loop_error, None);
+}
+
+#[test]
+fn prepared_canvas_reports_open_prefix_loop_mismatch_when_terminal_is_adopted() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback.set_loop_duration(Some(1.0)).unwrap();
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    assert_eq!(playback.loop_duration(), None);
+    assert_eq!(
+        playback.loop_error,
+        Some("configured loop duration is shorter than the completed range")
+    );
+    playback.advance(3.0).unwrap();
+    assert_eq!(playback.reader.frame().time, 2.0);
+    assert!(!playback.playing());
+}
+
+#[test]
+fn prepared_canvas_explicit_seek_keeps_exact_loop_endpoint_until_time_advances() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback.set_loop_duration(Some(2.0)).unwrap();
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    playback.seek(2.0).unwrap();
+    assert_eq!(playback.time_from_clock(2.0), 2.0);
+    playback.advance(2.0).unwrap();
+    assert_eq!(playback.reader.frame().time, 2.0);
+    assert_eq!(playback.loop_count, 0);
+    playback.advance(2.01).unwrap();
+    assert!((playback.reader.frame().time - 0.01).abs() < 1e-12);
+    assert_eq!(playback.loop_count, 1);
+}
+
+#[test]
+fn prepared_canvas_finite_seek_to_end_stops_only_an_active_playback() {
+    let (mut playing_source, mut playing_publisher, mut playing, _) = fixture();
+    let (mut paused_source, mut paused_publisher, mut paused, _) = fixture();
+    playing
+        .append(next(&mut playing_source, &mut playing_publisher, true))
+        .unwrap();
+    paused.set_playing(false);
+    paused
+        .append(next(&mut paused_source, &mut paused_publisher, true))
+        .unwrap();
+    playing.seek(2.0).unwrap();
+    paused.seek(2.0).unwrap();
+    assert!(!playing.playing());
+    assert!(!paused.playing());
+    assert!(!playing.advancing());
+}
+
+#[test]
+fn prepared_canvas_zero_duration_is_an_idle_snapshot_without_loop_cadence() {
+    let mut scene = Scene::new();
+    let circle = scene.circle(0.5).unwrap();
+    scene.add(&circle).unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    source.seal_replay().unwrap();
+    let reader = source.create_finished_prepared_reader().unwrap();
+    let mut playback = PreparedCanvasPlayback::new(reader);
+    assert_eq!(playback.reader.end_time(), Some(0.0));
+    assert!(playback.completed());
+    assert!(playback.completed());
+    assert!(!playback.playing());
+    assert!(!playback.advancing());
+    assert_eq!(
+        playback.wake_state().timeline(),
+        TimelineWakeState::Quiescent
+    );
+    assert!(playback.set_loop_duration(Some(1.0)).is_ok());
+    assert_eq!(playback.loop_duration(), None);
+    playback.set_playing(true);
+    assert!(!playback.playing());
+    assert_eq!(
+        playback.wake_state().timeline(),
+        TimelineWakeState::Quiescent
+    );
+}
+
+#[test]
+fn prepared_canvas_created_at_a_finite_endpoint_starts_completed_and_stopped() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    playback.seek(2.0).unwrap();
+    let playback = PreparedCanvasPlayback::new(playback.reader);
+    assert_eq!(playback.reader.frame().time, 2.0);
+    assert!(playback.completed());
+    assert!(!playback.playing());
+    assert!(!playback.advancing());
 }
 
 #[test]
