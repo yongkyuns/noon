@@ -39,6 +39,7 @@ Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text Code MathTypst
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
+SpinInFromNothing ShrinkToCenter
 ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur GlowPulse
 """.split())
 _SOURCE_FUNCTIONS = frozenset("""

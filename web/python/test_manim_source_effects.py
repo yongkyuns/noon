@@ -260,6 +260,43 @@ class SourceEffectsTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(source_is_scene_only((examples / name).read_text()))
 
+    def test_affine_lifecycle_wrappers_are_trusted_as_exact_closed_imports(self):
+        examples = Path(__file__).parent / 'examples'
+        for name in ('manim_parity_affine_lifecycle.py', 'showcase_entrances_exits.py'):
+            with self.subTest(name=name):
+                source = (examples / name).read_text()
+                self.assertTrue(source_is_scene_only(source))
+
+        alias = dedent('''
+            from noon import *
+            intro = SpinInFromNothing
+            class Example(Scene):
+                def construct(self):
+                    square = Square()
+                    self.play(intro(square))
+                    self.play(ShrinkToCenter(square))
+        ''')
+        self.assertTrue(source_is_scene_only(alias))
+
+        for source, code, span_text in (
+            ('from noon import *\nSpinInFromNothing = print\n',
+             'unknown_name', 'print'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        SpinInFromNothing.__call__ = Circle\n',
+             'unproven_member_write', 'SpinInFromNothing.__call__'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        SpinInFromNothing(context.target)\n',
+             'unsupported_member', 'context.target'),
+        ):
+            with self.subTest(source=source):
+                reason = source_execution_proof(source)['reason']
+                self.assertEqual(reason['code'], code)
+                span = reason['span']
+                self.assertEqual(source.splitlines()[span['line'] - 1].encode()
+                                 [span['column']:span['endColumn']].decode(), span_text)
+
 
 if __name__ == '__main__':
     unittest.main()
