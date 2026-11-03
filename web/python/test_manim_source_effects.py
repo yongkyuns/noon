@@ -50,7 +50,45 @@ class SourceEffectsTests(unittest.TestCase):
                     f"from noon import *\n{constructor}('x')\n"
                 )
                 self.assertFalse(proof["admitted"])
-                self.assertEqual(proof["reason"]["code"], "unknown_name")
+                self.assertEqual(proof["reason"]["code"], "unproven_text_compiler"
+                                 if constructor == "MathTex" else "unproven_resource_preparation")
+
+    def test_latex_showcase_requires_direct_controlled_preparation(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_latex_create.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        safe = '''from noon import *
+class Example(Scene):
+    async def construct(self):
+        await prepare_latex()
+        MathTex("x^2", font_size=24, color=BLUE, opacity=0.8)
+'''
+        self.assertEqual(source_execution_proof(safe), {"admitted": True, "reason": None})
+
+        unsafe_sources = (
+            # Preparation must be awaited before compilation in the same scope.
+            safe.replace('        await prepare_latex()\n', ''),
+            safe.replace('        await prepare_latex()', '        prepare_latex()'),
+            safe.replace('        await prepare_latex()', '        await prepare_latex(context)'),
+            safe.replace('        await prepare_latex()', '        await prep()').replace(
+                'from noon import *', 'from noon import *\nprep = prepare_latex'
+            ),
+            safe.replace('await prepare_latex()', 'await prepare()').replace(
+                'from noon import *', 'from noon import prepare_latex as prepare, MathTex'
+            ),
+            safe.replace('MathTex("x^2"', 'MathTex(context'),
+            safe.replace('MathTex("x^2", font_size=24', 'MathTex("x^2", font_size=context'),
+            safe.replace('await prepare_latex()', 'if True:\n            await prepare_latex()'),
+            safe.replace('await prepare_latex()', 'await prepare_latex()\n        prepare_latex = None'),
+            safe.replace('MathTex("x^2"', 'Compiler("x^2"').replace(
+                'from noon import *', 'from noon import *\nCompiler = MathTex'
+            ),
+        )
+        for unsafe in unsafe_sources:
+            with self.subTest(source=unsafe):
+                self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
     def test_raster_image_source_requires_fresh_numeric_lists(self):
         source = Path(__file__).with_name("examples").joinpath(

@@ -50,6 +50,10 @@ _SOURCE_FUNCTIONS = frozenset("""
 linear smooth rush_into rush_from there_and_back color_from_hex interpolate_color
 always_redraw
 """.split())
+# LaTeX preparation performs an explicit, bounded worker resource fetch. It is
+# not a generally pure function and is admitted only as a direct awaited call.
+_SOURCE_RESOURCE_PREPARATIONS = frozenset({"prepare_latex"})
+_SOURCE_CONTROLLED_TEXT_COMPILERS = frozenset({"MathTex"})
 _SOURCE_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
@@ -193,6 +197,23 @@ class _SceneOnlySource(ast.NodeVisitor):
             node.name: node for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
+        self.resource_preparation_imports = {
+            alias.name
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom) and node.module in {"noon", "manim"}
+            for alias in node.names
+            if alias.name in _SOURCE_RESOURCE_PREPARATIONS and alias.asname is None
+        }
+        self.controlled_text_imports = {
+            alias.name
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom) and node.module in {"noon", "manim"}
+            for alias in node.names
+            if alias.name in _SOURCE_CONTROLLED_TEXT_COMPILERS and alias.asname is None
+        }
+        self.admitted_resource_preparation_loads = set()
+        self.admitted_controlled_text_loads = set()
+        self.resource_preparation_scopes = []
         self.admitted_image_loads = set()
         self.admitted_image_paint_loads = set()
         self.image_pixel_sources = [set()]
@@ -216,7 +237,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 parameters = {arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
                                                     *function.args.kwonlyargs]}
                 self._image_pixel_source_names(function.body, function_bindings, parameters)
-        noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
+        noon_names = (_SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
+                      | _SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS)
         imported = frozenset().union(*star_exports.values())
         conflicts = (imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})
         if conflicts:
@@ -267,6 +289,12 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id == "ImagePaint"
                 and id(node) not in self.admitted_image_paint_loads):
             raise _OpaqueSource(node, "unproven_image_paint_reference")
+        if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_RESOURCE_PREPARATIONS
+                and id(node) not in self.admitted_resource_preparation_loads):
+            raise _OpaqueSource(node, "unproven_resource_preparation")
+        if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_CONTROLLED_TEXT_COMPILERS
+                and id(node) not in self.admitted_controlled_text_loads):
+            raise _OpaqueSource(node, "unproven_text_compiler")
         if (isinstance(node.ctx, ast.Load) and node.id in self.pixel_factory_names
                 and id(node) not in self.admitted_pixel_factory_loads):
             raise _OpaqueSource(node, "unproven_image_factory_reference")
@@ -638,6 +666,46 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or node.args[0].id not in self.image_pixel_sources[-1]):
                 raise _OpaqueSource(node, "unproven_image_paint_source")
             self.admitted_image_paint_loads.add(id(node.func))
+        if isinstance(node.func, ast.Name) and node.func.id == "MathTex":
+            name = node.func.id
+            shadowed = any(name in scope for scope in self.scopes[1:])
+            if name in self.module_bindings:
+                trusted_import = (name in self.controlled_text_imports
+                    and self.module_binding_counts.get(name) == 1
+                    and isinstance(self.module_binding_locations.get(name), ast.ImportFrom))
+                shadowed = shadowed or not trusted_import
+            state = self.resource_preparation_scopes[-1] if self.resource_preparation_scopes else None
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            if (shadowed or state is None or not state["ready"]
+                    or len(node.args) != 1 or not isinstance(node.args[0], ast.Constant)
+                    or type(node.args[0].value) is not str or not node.args[0].value
+                    or len(node.args[0].value.encode("utf-8")) > 1024 * 1024
+                    or any(keyword.arg is None for keyword in node.keywords)
+                    or len(keywords) != len(node.keywords)
+                    or not set(keywords).issubset({"font_size", "color", "opacity"})):
+                raise _OpaqueSource(node, "unproven_text_compiler")
+            font_size = keywords.get("font_size")
+            if font_size is not None and (
+                not isinstance(font_size, ast.Constant)
+                or type(font_size.value) not in (int, float)
+                or font_size.value <= 0
+            ):
+                raise _OpaqueSource(font_size, "unproven_text_compiler_option")
+            opacity = keywords.get("opacity")
+            if opacity is not None and (
+                not isinstance(opacity, ast.Constant)
+                or type(opacity.value) not in (int, float)
+                or not 0 <= opacity.value <= 1
+            ):
+                raise _OpaqueSource(opacity, "unproven_text_compiler_option")
+            color = keywords.get("color")
+            if color is not None and (
+                not isinstance(color, ast.Name) or color.id not in _SOURCE_CONSTANTS
+                or color.id in self.module_bindings
+                or any(color.id in scope for scope in self.scopes[1:])
+            ):
+                raise _OpaqueSource(color, "unproven_text_compiler_option")
+            self.admitted_controlled_text_loads.add(id(node.func))
         if isinstance(node.func, ast.Name) and node.func.id == "LaggedStartMap":
             shadowed = "LaggedStartMap" in self.module_bindings or any(
                 "LaggedStartMap" in scope for scope in self.scopes[1:]
@@ -678,6 +746,24 @@ class _SceneOnlySource(ast.NodeVisitor):
             if node.args or "code_string" not in keywords or "code_file" in keywords or None in keywords:
                 raise _OpaqueSource(node, "unproven_resource_input")
             self.admitted_code_loads.add(id(node.func))
+        self.generic_visit(node)
+
+    def visit_Await(self, node):
+        call = node.value
+        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id in _SOURCE_RESOURCE_PREPARATIONS):
+            name = call.func.id
+            state = self.resource_preparation_scopes[-1] if self.resource_preparation_scopes else None
+            shadowed = any(name in scope for scope in self.scopes[1:])
+            if name in self.module_bindings:
+                trusted_import = (name in self.resource_preparation_imports
+                    and self.module_binding_counts.get(name) == 1
+                    and isinstance(self.module_binding_locations.get(name), ast.ImportFrom))
+                shadowed = shadowed or not trusted_import
+            if (state is None or id(node) not in state["awaits"] or call.args or call.keywords
+                    or shadowed or not any(name in scope for scope in self.scopes)):
+                raise _OpaqueSource(call, "unproven_resource_preparation")
+            self.admitted_resource_preparation_loads.add(id(call.func))
         self.generic_visit(node)
 
     @staticmethod
@@ -750,7 +836,13 @@ class _SceneOnlySource(ast.NodeVisitor):
             alias.name == "ImagePaint" and alias.asname is not None for alias in node.names
         ):
             raise _OpaqueSource(node, "unproven_image_paint_constructor")
-        noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
+        if node.module in {"noon", "manim"} and any(
+            alias.name in (_SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS)
+            and alias.asname is not None for alias in node.names
+        ):
+            raise _OpaqueSource(node, "unproven_resource_preparation")
+        noon_names = (_SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
+                      | _SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS)
         allowed = noon_names if node.module in {"noon", "manim"} else _SOURCE_MODULES.get(node.module, ())
         for alias in node.names:
             if alias.name == "*" and node.module in {"noon", "manim"}:
@@ -806,10 +898,24 @@ class _SceneOnlySource(ast.NodeVisitor):
         # Every lexical binding must have a fresh origin; a parameter, alias,
         # conditional rebind or loop target cannot inherit another value's proof.
         self.owned_containers.append(bindings.container_names - bindings.other_names - parameters)
+        preparation_awaits = {
+            id(node.value)
+            for node in body
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Await)
+            and isinstance(node.value.value, ast.Call)
+            and isinstance(node.value.value.func, ast.Name)
+            and node.value.value.func.id in _SOURCE_RESOURCE_PREPARATIONS
+        }
+        preparation_scope = {"awaits": preparation_awaits, "ready": False}
+        self.resource_preparation_scopes.append(preparation_scope)
         try:
             for node in body:
                 self.visit(node)
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Await) \
+                        and id(node.value) in preparation_awaits:
+                    preparation_scope["ready"] = True
         finally:
+            self.resource_preparation_scopes.pop()
             self.image_pixel_sources.pop()
             self.scopes.pop()
             self.owned_containers.pop()

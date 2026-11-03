@@ -225,6 +225,8 @@ impl CompiledResources {
 mod image_paint_tests;
 #[cfg(test)]
 mod resource_bytes_tests;
+#[cfg(test)]
+mod text_tests;
 
 #[cfg(test)]
 mod tests {
