@@ -95,29 +95,68 @@ class _SourceBindings(ast.NodeVisitor):
     def __init__(self):
         self.names = set()
         self.locations = {}
+        self.container_stores = set()
+        self.container_names = set()
+        self.other_names = set()
+
+    def visit_Assign(self, node):
+        def record(target, value):
+            if isinstance(target, ast.Name):
+                fresh = isinstance(value, (ast.List, ast.Dict, ast.ListComp, ast.DictComp))
+                if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
+                    fresh = any(isinstance(items, ast.List) and isinstance(count, ast.Constant)
+                        and type(count.value) is int for items, count in
+                        ((value.left, value.right), (value.right, value.left)))
+                if fresh:
+                    self.container_stores.add(id(target))
+            elif (isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+                    and len(target.elts) == len(value.elts)):
+                for item, origin in zip(target.elts, value.elts):
+                    record(item, origin)
+        for target in node.targets:
+            record(target, node.value)
+        self.generic_visit(node)
+
+    def _bind(self, name, node, container=False):
+        self.names.add(name)
+        self.locations.setdefault(name, node)
+        (self.container_names if container else self.other_names).add(name)
 
     def visit_Name(self, node):
         if isinstance(node.ctx, ast.Store):
-            self.names.add(node.id)
-            self.locations.setdefault(node.id, node)
+            self._bind(node.id, node, id(node) in self.container_stores)
 
     def visit_FunctionDef(self, node):
-        self.names.add(node.name)
-        self.locations.setdefault(node.name, node)
+        self._bind(node.name, node)
 
     visit_AsyncFunctionDef = visit_FunctionDef
     visit_ClassDef = visit_FunctionDef
 
     def visit_Import(self, node):
-        self.names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
         for alias in node.names:
-            self.locations.setdefault(alias.asname or alias.name.split(".")[0], node)
+            self._bind(alias.asname or alias.name.split(".")[0], node)
 
     def visit_ImportFrom(self, node):
-        self.names.update(alias.asname or alias.name for alias in node.names if alias.name != "*")
         for alias in node.names:
             if alias.name != "*":
-                self.locations.setdefault(alias.asname or alias.name, node)
+                self._bind(alias.asname or alias.name, node)
+
+    def visit_ExceptHandler(self, node):
+        if node.name:
+            self._bind(node.name, node)
+        self.generic_visit(node)
+
+    def visit_MatchAs(self, node):
+        if node.name:
+            self._bind(node.name, node)
+        self.generic_visit(node)
+
+    visit_MatchStar = visit_MatchAs
+
+    def visit_MatchMapping(self, node):
+        if node.rest:
+            self._bind(node.rest, node)
+        self.generic_visit(node)
 
     def visit_ListComp(self, node):
         pass
@@ -149,6 +188,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and node.module in star_exports and any(alias.name == "*" for alias in node.names))
             raise _OpaqueSource(origin, "unproven_wildcard_binding")
         self.scopes = [bindings.names | {"context", "__name__"} | _SOURCE_BUILTINS]
+        self.owned_containers = [set()]
         self.members = _SOURCE_MEMBERS | frozenset().union(*_SOURCE_MODULES.values())
         # Constructor aliases and wildcard exports are proven only for direct
         # module declarations, never imports hidden in a conditional suite.
@@ -220,11 +260,15 @@ class _SceneOnlySource(ast.NodeVisitor):
         for node in body:
             bindings.visit(node)
         self.scopes.append(bindings.names | set(parameters))
+        # Every lexical binding must have a fresh origin; a parameter, alias,
+        # conditional rebind or loop target cannot inherit another value's proof.
+        self.owned_containers.append(bindings.container_names - bindings.other_names - set(parameters))
         try:
             for node in body:
                 self.visit(node)
         finally:
             self.scopes.pop()
+            self.owned_containers.pop()
 
     def visit_FunctionDef(self, node):
         if node.name.startswith("_") or node.decorator_list or node.returns or getattr(node, "type_params", ()):
@@ -257,6 +301,7 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def _comprehension(self, node):
         self.scopes.append(set())
+        self.owned_containers.append(set())
         try:
             for generator in node.generators:
                 if generator.is_async:
@@ -271,12 +316,17 @@ class _SceneOnlySource(ast.NodeVisitor):
                 self.visit(value)
         finally:
             self.scopes.pop()
+            self.owned_containers.pop()
 
     visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = _comprehension
 
     def visit_Subscript(self, node):
         if not isinstance(node.ctx, ast.Load):
-            raise _OpaqueSource(node, "unproven_ownership")
+            name = node.value.id if isinstance(node.value, ast.Name) else None
+            owner = next((owned for scope, owned in zip(reversed(self.scopes), reversed(self.owned_containers))
+                if name in scope), ())
+            if name not in owner:
+                raise _OpaqueSource(node, "unproven_ownership")
         self.generic_visit(node)
 
     def visit_AugAssign(self, node):

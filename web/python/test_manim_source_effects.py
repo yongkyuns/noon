@@ -116,7 +116,7 @@ class SourceEffectsTests(unittest.TestCase):
             ('from noon import *\ndef outer():\n    _ = 1\n    def inner():\n'
              '        nonlocal _\n        _ = 2\n', "unproven_scope_effect"),
             ('from noon import *\nclass Example(Scene):\n'
-             '    def construct(self):\n        values = [1]\n        values[0] = 2\n',
+             '    def construct(self):\n        values = context\n        values[0] = 2\n',
              "unproven_ownership"),
             ('from noon import *\nclass Example(Scene):\n'
              '    def construct(self):\n        values = [1]\n        alias = values\n'
@@ -126,6 +126,45 @@ class SourceEffectsTests(unittest.TestCase):
                 proof = source_execution_proof(source)
                 self.assertFalse(proof["admitted"])
                 self.assertEqual(proof["reason"]["code"], code)
+
+    def test_subscript_writes_require_fresh_local_container_bindings(self):
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            def trace():
+                tile, loads = {}, []
+                tile[0] = 7
+                output = [None] * 4
+                output[0] = tile[0]
+                counts = [0 for _ in range(4)]
+                counts[0] += 1
+                return output
+            class Example(Scene):
+                def construct(self):
+                    self.wait(trace()[0])
+        ''')))
+        for body in (
+            'data = context; data[0] = 1',
+            'data = []; alias = data; alias[0] = 1',
+            'data = []; data = context; data[0] = 1',
+            'data = [];\n        if True: data = context\n        data[0] = 1',
+            'data = [[]]; data[0][0] = 1',
+            'data = [0] * self; data[0] = 1',
+            'data = [];\n        match context:\n            case data: data[0] = 1',
+            'data = [];\n        try: self.wait(0)\n        except ValueError as data: data[0] = 1',
+        ):
+            with self.subTest(body=body):
+                proof = source_execution_proof('from noon import *\nclass Example(Scene):\n'
+                    '    def construct(self):\n        ' + body + '\n')
+                self.assertFalse(proof['admitted'])
+                self.assertEqual(proof['reason']['code'], 'unproven_ownership')
+        for source in (
+            'from noon import *\ndata = []; data[0] = 1\n',
+            'from noon import *\ndef edit(data):\n    data[0] = 1\n',
+            'from noon import *\ndef outer():\n    data = []\n'
+            '    def edit(data):\n        data[0] = 1\n',
+        ):
+            with self.subTest(source=source):
+                self.assertFalse(source_is_scene_only(source))
 
     def test_unknown_host_work_and_dispatch_cannot_be_proven(self):
         for statement in (
