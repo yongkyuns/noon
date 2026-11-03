@@ -37,6 +37,64 @@ class SourceEffectsTests(unittest.TestCase):
                 self.assertFalse(proof["admitted"])
                 self.assertEqual(proof["reason"]["code"], "unknown_name")
 
+    def test_raster_image_source_requires_fresh_numeric_lists(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_raster_images.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        for source in (
+            'from noon import *\ndef pixels():\n    return "image.png"\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef landscape(width=1):\n'
+            '    if width:\n        pixels = [[1]]\n    return pixels\n'
+            'class Example(Scene):\n    def construct(self):\n        data = landscape()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [context]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels(flag=1):\n'
+            '    if flag:\n        row = [1]\n    else:\n        row = [context]\n'
+            '    return [row]\nclass Example(Scene):\n'
+            '    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    row = [1]\n    return [row]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        pixels = lambda: "file.png"\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        factory = pixels\n'
+            '        data = pixels()\n        factory()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        alias = data\n        alias.append(context)\n        ImageMobject(data)\n',
+            'from noon import *\nImageMobject("image.png")\n',
+            'from noon import *\nImageMobject(context)\n',
+            'from noon import *\nfactory = ImageMobject\n',
+            'from noon import ImageMobject as Raster\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self, ImageMobject):\n'
+            '        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        ImageMobject(*[data])\n',
+            'from noon import *\ndef landscape():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        pixels = landscape()\n'
+            '        images = [ImageMobject(pixels) for pixels in ["file.png"]]\n',
+            'from noon import *\ndef landscape():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        pixels = landscape()\n'
+            '        images = {0: ImageMobject(pixels) for pixels in ["file.png"]}\n',
+            'from noon import *\ndef landscape():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        pixels = landscape()\n'
+            '        images = (ImageMobject(pixels) for pixels in ["file.png"])\n',
+            'from noon import *\nImageMobject.from_url("https://example.test/image.png")\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        ImageMobject(data, height=context)\n',
+            'from noon import *\ndef pixels():\n    return open("image.png")\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+        ):
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
     def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_ordered_reveal.py"
