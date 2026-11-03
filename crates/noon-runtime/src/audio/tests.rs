@@ -228,16 +228,94 @@ fn prepared_time_does_not_change_audio_until_the_coherent_frame_commits() {
 }
 
 #[test]
-fn unsupported_audio_history_does_not_open_a_retention_scope() {
+fn initial_audio_schedule_counts_toward_retention_payload_limit() {
     let mut runtime = runtime();
     let publication = runtime.publication_context();
     assert_eq!(
-        runtime.begin_replay_retention(crate::ReplayLimits::default()),
-        Err(crate::ReplayError::UnsupportedDomain)
+        runtime.begin_replay_retention(crate::ReplayLimits {
+            revisions: 16,
+            payloads: 0,
+        }),
+        Err(crate::ReplayError::RetentionLimit)
     );
     assert!(!runtime.replay_scope_active());
     assert_eq!(runtime.publication_context(), publication);
     assert_eq!(runtime.frame().time, 0.0);
+
+    runtime
+        .begin_replay_retention(crate::ReplayLimits {
+            revisions: 16,
+            payloads: 1,
+        })
+        .unwrap();
+    assert_eq!(runtime.replay_stats().payloads_retained, 1);
+}
+
+#[test]
+fn audio_prefix_keeps_initial_pcm_and_schedule_across_paused_append_and_rewind() {
+    let mut source = runtime();
+    let (pcm_bytes, source_pcm) = {
+        let clip = source.audio_playback_at(3.0).unwrap().next().unwrap();
+        (clip.pcm.retained_bytes(), clip.pcm as *const AudioResource)
+    };
+    source
+        .begin_replay_retention(crate::ReplayLimits {
+            revisions: 16,
+            payloads: 128,
+        })
+        .unwrap();
+    source.advance_to(1.0).unwrap();
+
+    let state = source.frame().clone();
+    assert!(matches!(
+        source.create_prefix_projection_with_resource_budget(pcm_bytes - 1),
+        Err(crate::PrefixError::ResourceBudgetExceeded {
+            retained_bytes: 0,
+            additional_bytes,
+            limit_bytes,
+        }) if additional_bytes == pcm_bytes && limit_bytes == pcm_bytes - 1
+    ));
+    assert_eq!(
+        source.frame(),
+        &state,
+        "failed audio budget keeps source state"
+    );
+
+    let (mut publisher, mut reader, mut receiver) = source
+        .create_prefix_projection_with_resource_budget(pcm_bytes)
+        .unwrap();
+    assert_eq!(receiver.retained_resource_bytes(), pcm_bytes);
+    receiver.prepare_seek(&mut reader, 0.5).unwrap();
+    reader.seek(0.5).unwrap();
+    let paused_time = reader.frame().time;
+
+    source.advance_to(4.0).unwrap();
+    let batch = source.prepare_prefix_update(&mut publisher).unwrap();
+    receiver.append(&mut reader, batch).unwrap();
+    assert_eq!(
+        reader.frame().time,
+        paused_time,
+        "append preserves reader time"
+    );
+    let paused = reader.audio_playback().unwrap().next().unwrap();
+    assert!(std::ptr::eq(paused.pcm, source_pcm));
+    assert_eq!(paused.start_delay, 1.5);
+    assert_eq!(paused.source_offset, 1.0);
+
+    receiver.prepare_seek(&mut reader, 3.0).unwrap();
+    reader.seek(3.0).unwrap();
+    let selected = reader.audio_playback().unwrap().next().unwrap();
+    assert!(std::ptr::eq(selected.pcm, source_pcm));
+    assert_eq!(selected.start_delay, 0.0);
+    assert_eq!(selected.source_offset, 2.0);
+
+    receiver.prepare_seek(&mut reader, 0.5).unwrap();
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.frame().time, 0.5);
+    let rewound = reader.audio_playback().unwrap().next().unwrap();
+    assert_eq!(rewound.start_delay, 1.5);
+    assert_eq!(rewound.source_offset, 1.0);
+    assert_eq!(receiver.retained_resource_bytes(), pcm_bytes);
 }
 
 #[test]

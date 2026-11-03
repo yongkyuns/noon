@@ -117,11 +117,11 @@ impl SceneInstance {
         if self.has_temporary_glow_interactions() {
             return Err(ReplayError::UnrecordedInput);
         }
-        // Initial audio pins its immutable resource closure but does not yet
-        // participate in bounded historical publication/retention (#2263).
-        if self.has_audio() {
-            return Err(ReplayError::UnsupportedDomain);
-        }
+        // Authored audio clips are immutable initial projection entries, so
+        // retain their schedule cost alongside any source-owned timeline data.
+        let initial_payloads = initial_payloads
+            .checked_add(self.compiled.audio_clips().len())
+            .ok_or(ReplayError::RetentionLimit)?;
         if initial_payloads > limits.payloads {
             return Err(ReplayError::RetentionLimit);
         }
@@ -213,7 +213,11 @@ impl SceneInstance {
             return;
         }
         if history.revisions.len() >= history.limits.revisions
-            || cost > history.limits.payloads.saturating_sub(history.stats.payloads_retained)
+            || cost
+                > history
+                    .limits
+                    .payloads
+                    .saturating_sub(history.stats.payloads_retained)
         {
             self.invalidate_replay(ReplayError::RetentionLimit);
             return;
