@@ -36,6 +36,7 @@ function fixture(mode = "transferable", options = {}) {
     return json();
   };
   const player = {
+    sectionsJson: () => "[]",
     resourceBundleBytes() { record("resources"); return new Uint8Array([1]); },
     initialDeltaJson() { record("initial"); return json(); },
     drainDeltaTransportJson() {
