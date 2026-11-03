@@ -1861,7 +1861,11 @@ class _SceneOnlySource(ast.NodeVisitor):
                     call = node.func
                     if isinstance(call, ast.Name):
                         callee = call.id
-                        if callee in local_functions or callee in _SOURCE_BUILTINS:
+                        if callee in _SOURCE_BUILTINS:
+                            if self._resource_builtin_shadowed(node, callee, parents):
+                                return False
+                            continue
+                        if callee in local_functions:
                             continue
                         if callee in local_names:
                             return False
@@ -1944,6 +1948,37 @@ class _SceneOnlySource(ast.NodeVisitor):
             )
         finally:
             active.remove(name)
+
+    @staticmethod
+    def _resource_builtin_shadowed(call, name, parents):
+        child = call
+        node = parents.get(child)
+        inside_function = False
+        while node is not None:
+            if isinstance(node, ast.comprehension):
+                if any(isinstance(item, ast.Name) and item.id == name for item in ast.walk(node.target)):
+                    return True
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                in_body = child in node.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else child is node.body
+                if in_body:
+                    args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+                    if any(arg.arg == name for arg in args):
+                        return True
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        bindings = _SourceBindings()
+                        for statement in node.body:
+                            bindings.visit(statement)
+                        if name in bindings.names:
+                            return True
+                    inside_function = True
+            elif isinstance(node, ast.ClassDef) and not inside_function:
+                bindings = _SourceBindings()
+                for statement in node.body:
+                    bindings.visit(statement)
+                if name in bindings.names:
+                    return True
+            child, node = node, parents.get(node)
+        return False
 
     def _closed_module_data(self, name, active=None):
         active = set() if active is None else active
@@ -2215,33 +2250,14 @@ class _SceneOnlySource(ast.NodeVisitor):
                         and loop.iter.args[0].args[1].slice.lower.value == 1):
                     counter = loop.target.elts[0].id
                     checkpoint_guard = (bindings.binding_counts.get(counter) == 1
-                        and bindings.binding_counts.get("checkpoints", 0) == 0
                         and "set" not in bindings.names | parameters
                         and self.module_binding_counts.get("set", 0) == 0
-                        and self._closed_checkpoint_references(function, parents)
                         and any(
-                        isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
-                        and isinstance(node.test.left, ast.Name) and node.test.left.id == counter
-                        and len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.In)
-                        and isinstance(node.test.comparators[0], ast.Name)
-                        and any(
-                            isinstance(assignment, ast.Assign) and len(assignment.targets) == 1
-                            and isinstance(assignment.targets[0], ast.Name)
-                            and assignment.targets[0].id == node.test.comparators[0].id
-                            and isinstance(assignment.value, ast.Call)
-                            and isinstance(assignment.value.func, ast.Name)
-                            and assignment.value.func.id == "set" and len(assignment.value.args) == 1
-                            and isinstance(assignment.value.args[0], ast.Name)
-                            and assignment.value.args[0].id in {
-                                arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
-                                                    *function.args.kwonlyargs]}
-                            and bindings.binding_counts.get(assignment.targets[0].id) == 1
-                            for assignment in ast.walk(function)
+                            self._closed_checkpoint_guard_if(
+                                function, node, counter, append, parents, parameters, bindings)
+                            for node in append_ancestors[0] if isinstance(node, ast.If)
                         )
-                        and any(append is descendant for statement in node.body
-                                for descendant in ast.walk(statement))
-                        for node in append_ancestors[0]
-                    ))
+                    )
             if (len(appends) == 1 and allowed_loads and not mutated and checkpoint_guard
                     and not any(append_scopes)
                     and all(len(node.args) == 1 and not node.keywords and is_png_call(node.args[0])
@@ -2250,20 +2266,48 @@ class _SceneOnlySource(ast.NodeVisitor):
         return None
 
     @staticmethod
-    def _closed_checkpoint_references(function, parents):
+    def _closed_checkpoint_parameter(function, wanted, parameters, bindings):
+        assignments = [node for node in ast.walk(function)
+                       if isinstance(node, ast.Assign) and len(node.targets) == 1
+                       and isinstance(node.targets[0], ast.Name) and node.targets[0].id == wanted
+                       and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                       and node.value.func.id == "set" and len(node.value.args) == 1
+                       and isinstance(node.value.args[0], ast.Name)]
+        if len(assignments) != 1 or bindings.binding_counts.get(wanted) != 1:
+            return None
+        name = assignments[0].value.args[0].id
+        return name if name in parameters and bindings.binding_counts.get(name, 0) == 0 else None
+
+    def _closed_checkpoint_guard_if(self, function, node, counter, append, parents, parameters, bindings):
+        if (not isinstance(node.test, ast.Compare) or not isinstance(node.test.left, ast.Name)
+                or node.test.left.id != counter or len(node.test.ops) != 1
+                or not isinstance(node.test.ops[0], ast.In) or len(node.test.comparators) != 1
+                or not isinstance(node.test.comparators[0], ast.Name)
+                or not any(append is descendant for statement in node.body
+                           for descendant in ast.walk(statement))):
+            return False
+        wanted = node.test.comparators[0].id
+        parameter = self._closed_checkpoint_parameter(function, wanted, parameters, bindings)
+        return parameter is not None and self._closed_checkpoint_references(
+            function, parents, parameter, wanted)
+
+    @staticmethod
+    def _closed_checkpoint_references(function, parents, parameter, wanted):
         def parent_of(node):
             return parents.get(node)
 
         for node in ast.walk(function):
-            if not isinstance(node, ast.Name) or node.id != "checkpoints" or not isinstance(node.ctx, ast.Load):
+            if not isinstance(node, ast.Name) or node.id != parameter:
                 continue
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                return False
             parent = parents.get(node)
             if (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
                     and parent.args and parent.args[0] is node):
                 outer = parent_of(parent)
                 if (parent.func.id == "set"
                         and (isinstance(outer, ast.Assign) and outer.value is parent
-                             and any(isinstance(target, ast.Name) and target.id == "wanted"
+                             and any(isinstance(target, ast.Name) and target.id == wanted
                                      for target in outer.targets)
                              or isinstance(outer, ast.Call) and isinstance(outer.func, ast.Name)
                              and outer.func.id == "sorted" and outer.args and outer.args[0] is parent)):

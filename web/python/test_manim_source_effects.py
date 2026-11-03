@@ -510,6 +510,47 @@ class Example(Scene):
             "showcase_triangle_light.py"
         ).read_text()
         self.assertEqual(source_execution_proof(triangle), {"admitted": True, "reason": None})
+        factory_start = triangle.index("def accumulate_ray_exposures(")
+        factory_end = triangle.index("\n\n\ndef wood_texture", factory_start)
+        factory = triangle[factory_start:factory_end]
+        renamed_factory = factory.replace("checkpoints", "stops")
+        renamed = triangle[:factory_start] + renamed_factory + triangle[factory_end:]
+        self.assertEqual(source_execution_proof(renamed), {"admitted": True, "reason": None})
+        grown_factory = renamed_factory.replace(
+            "    wanted = set(stops)\n",
+            "    stops += tuple(range(1, len(points)))\n    wanted = set(stops)\n",
+            1,
+        )
+        self.assertFalse(source_execution_proof(
+            triangle[:factory_start] + grown_factory + triangle[factory_end:]
+        )["admitted"])
+        shadowed_builtin = triangle.replace(
+            "def accumulate_ray_exposures(vertices, points, checkpoints, width=EXPOSURE_WIDTH):",
+            "def checkpoint_tuple(value):\n"
+            "    scratch = bytearray(100_000_000)\n"
+            "    return value\n\n\n"
+            "def accumulate_ray_exposures(vertices, points, checkpoints, "
+            "width=EXPOSURE_WIDTH, tuple=checkpoint_tuple):",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_builtin)["admitted"])
+        nested_shadow = triangle.replace(
+            "def accumulate_ray_exposures(",
+            "def checkpoint_tuple(value):\n"
+            "    scratch = bytearray(100_000_000)\n"
+            "    return value\n\n\n"
+            "def accumulate_ray_exposures(",
+            1,
+        ).replace(
+            "    def pixel(p):\n"
+            "        return (min(width - 1, max(0, round((p[0] - xmin) * width / (xmax - xmin) - 0.5))),\n"
+            "                min(height - 1, max(0, round((ymax - p[1]) * height / (ymax - ymin) - 0.5))))",
+            "    def pixel(p, tuple=checkpoint_tuple):\n"
+            "        return tuple((min(width - 1, max(0, round((p[0] - xmin) * width / (xmax - xmin) - 0.5))),\n"
+            "                      min(height - 1, max(0, round((ymax - p[1]) * height / (ymax - ymin) - 0.5)))))",
+            1,
+        )
+        self.assertFalse(source_execution_proof(nested_shadow)["admitted"])
         for unsafe in (
             triangle.replace("        if count in wanted:\n",
                              "        if count in wanted:\n            pass\n        else:\n", 1),
