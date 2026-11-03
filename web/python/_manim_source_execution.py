@@ -1093,9 +1093,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unsupported_class_contract")
             methods = [member for member in node.body
                        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))]
-            if (len(methods) != 1 or not isinstance(methods[0], ast.FunctionDef)
-                    or methods[0].name != "construct"
-                    or not self._simple_moving_camera_construct(methods[0])):
+            if (len(methods) != 1 or methods[0].name != "construct"
+                    or not self._simple_construct(methods[0])):
                 raise _OpaqueSource(node, "unsupported_class_contract")
         elif node.bases[0].id != "Scene":
             raise _OpaqueSource(node, "unsupported_class_contract")
@@ -1157,7 +1156,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and any(alias.name == name and alias.asname is None for alias in origin.names))
 
     @staticmethod
-    def _simple_moving_camera_construct(node):
+    def _simple_construct(node):
         return (not node.decorator_list and node.returns is None
                 and not getattr(node, "type_params", ()) and not node.args.posonlyargs
                 and len(node.args.args) == 1 and node.args.args[0].arg == "self"
@@ -1167,12 +1166,7 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     @staticmethod
     def _simple_three_d_construct(node):
-        return (not node.decorator_list and node.returns is None
-                and not getattr(node, "type_params", ()) and not node.args.posonlyargs
-                and len(node.args.args) == 1 and node.args.args[0].arg == "self"
-                and not node.args.args[0].annotation and not node.args.defaults
-                and not node.args.kwonlyargs and not node.args.kw_defaults
-                and node.args.vararg is None and node.args.kwarg is None)
+        return _SceneOnlySource._simple_construct(node)
 
     @staticmethod
     def _validate_three_d_super_init(node):

@@ -16,6 +16,10 @@ class SourceEffectsTests(unittest.TestCase):
             'from noon import MovingCameraScene\n'
             'class Example(MovingCameraScene):\n'
             '    def construct(self): self.wait(0.1)\n'))
+        self.assertTrue(source_is_scene_only(
+            'from noon import MovingCameraScene\n'
+            'class Example(MovingCameraScene):\n'
+            '    async def construct(self): await self.wait(0.1)\n'))
 
         unsafe_sources = (
             'from noon import *\nMovingCameraScene = Scene\n'
