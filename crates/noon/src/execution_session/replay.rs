@@ -47,8 +47,11 @@ impl ExecutionSession {
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
         // Immutable audio/control plans support direct seek. Live revision
         // retention needs its own resource/binding history qualification (#2263).
-        if self.has_audio() || self.has_playback_controls() {
+        if self.has_playback_controls() {
             return Err(ReplayError::UnsupportedDomain);
+        }
+        if self.has_audio() {
+            return Err(ReplayError::AudioHistoryUnavailable);
         }
         if self.pending_segment_completion.is_some()
             || self.pending_callback.is_some()

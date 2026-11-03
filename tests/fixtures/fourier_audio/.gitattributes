@@ -1,0 +1,3 @@
+# Preserve the byte-identified source fixtures on all checkout platforms.
+*.py text eol=lf
+*.json text eol=lf
