@@ -27,6 +27,31 @@ fn row_geometry_bytes(row: &CompiledObject) -> Option<usize> {
     row.content.geometry().map_or(Some(0), geometry_bytes)
 }
 
+/// Logical inline bytes for one immutable supported effect-stack payload. Arc
+/// aliases are charged at each row reference; allocator metadata, renderer
+/// working storage, and unsupported effect programs/resources are excluded.
+fn effect_stack_bytes(row: &CompiledObject) -> Option<usize> {
+    let Some(stack) = row.effects.as_deref() else {
+        return Some(0);
+    };
+    if !super::local_effect_stack(stack) {
+        return Some(0);
+    }
+    std::mem::size_of::<crate::CompiledEffectStack>()
+        .checked_add(
+            stack
+                .attachments()
+                .len()
+                .checked_mul(std::mem::size_of::<noon_core::SemanticNodeId>())?,
+        )?
+        .checked_add(
+            stack
+                .definitions()
+                .len()
+                .checked_mul(std::mem::size_of::<noon_core::EffectDefinition>())?,
+        )
+}
+
 fn track_geometry_bytes(track: &CompiledTrack) -> Option<usize> {
     let values = match &track.values {
         TrackValues::PreparedMorph { geometry, .. } => geometry_bytes(geometry)?,
@@ -67,6 +92,9 @@ impl CompiledScene {
                     .filter(|row| row.live),
             ) {
                 bytes = bytes.checked_add(row_geometry_bytes(row)?)?;
+                revision.effect_payload_bytes = revision
+                    .effect_payload_bytes
+                    .checked_add(effect_stack_bytes(row)?)?;
             }
         }
         for (id, saved) in &revision.tracks {
@@ -77,18 +105,28 @@ impl CompiledScene {
         revision.geometry_payload_bytes = bytes;
         Some(())
     }
+
+    /// Logical closure bytes for supported immutable stacks in the current
+    /// projection. One charge per row reference; shared `Arc`s are intentionally
+    /// not deduplicated because this is a conservative retained-history charge.
+    pub fn prefix_effect_payload_bytes(&self) -> Option<usize> {
+        self.objects.iter().try_fold(0usize, |total, row| {
+            total.checked_add(effect_stack_bytes(row)?)
+        })
+    }
 }
 
 impl CompiledReplayRevision {
-    /// Requested row/channel/track backing plus both-side logical inline path bytes.
+    /// Requested row/channel/track backing plus both-side path/effect payloads.
     /// These operations preserve occupied lengths, not source spare capacity.
     /// This is a pre-allocation request, not a bound on allocator over-allocation.
     pub fn prefix_clone_payload_bytes(&self) -> Option<usize> {
         revision_payload_bytes(self.rows.len(), self.channels.len(), self.tracks.len())?
-            .checked_add(self.geometry_payload_bytes)
+            .checked_add(self.geometry_payload_bytes)?
+            .checked_add(self.effect_payload_bytes)
     }
 
-    /// Reported Vec backing plus the stable both-side logical path charge.
+    /// Reported Vec backing plus stable both-side logical path/effect charges.
     /// Shared paths are conservatively charged per saved/current reference.
     /// Revision exchange only swaps elements; it cannot resize these buffers.
     /// Excludes the outer index, object/track storage in the active projection,
@@ -99,7 +137,8 @@ impl CompiledReplayRevision {
             self.channels.capacity(),
             self.tracks.capacity(),
         )?
-        .checked_add(self.geometry_payload_bytes)
+        .checked_add(self.geometry_payload_bytes)?
+        .checked_add(self.effect_payload_bytes)
     }
 }
 
@@ -181,6 +220,7 @@ mod tests {
             camera_motion_payloads: 0,
             path_motion_commands: 0,
             geometry_payload_bytes: 0,
+            effect_payload_bytes: 0,
         };
         assert_eq!(revision.prefix_clone_payload_bytes(), Some(0));
         let reserved = revision_payload_bytes(
@@ -269,7 +309,7 @@ mod tests {
         };
         for definitions in [
             vec![EffectDefinition::Glow(Glow::default()); 2],
-            vec![EffectDefinition::Blur(Blur::default())],
+            vec![EffectDefinition::Blur(Blur::default()); 2],
         ] {
             let id = ObjectId::new(0);
             let effects = std::sync::Arc::new(
@@ -312,5 +352,133 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn ordered_blur_glow_visibility_stack_is_admitted_as_one_bounded_profile() {
+        use crate::{CompiledEffect, CompiledEffectStack, CompiledObject, ExecutionPatch};
+        use noon_core::{
+            Blur, Color, EffectDefinition, GeometryRef, Glow, NoiseDissolve, ObjectId,
+            SemanticNodeId, Style, Transform2D,
+        };
+        use std::sync::Arc;
+
+        let object_id = ObjectId::new(0);
+        let visibility = SemanticNodeId::new(9, 1);
+        let blur = SemanticNodeId::new(7, 1);
+        let glow = SemanticNodeId::new(8, 1);
+        let effects = Arc::new(
+            CompiledEffectStack::new_with_visibility(
+                [
+                    CompiledEffect {
+                        attachment: blur,
+                        definition: EffectDefinition::Blur(Blur::default()),
+                    },
+                    CompiledEffect {
+                        attachment: glow,
+                        definition: EffectDefinition::Glow(Glow::default()),
+                    },
+                    CompiledEffect {
+                        attachment: visibility,
+                        definition: EffectDefinition::NoiseDissolve(NoiseDissolve::default()),
+                    },
+                ],
+                Some(visibility),
+            )
+            .unwrap(),
+        );
+        let mut row = CompiledObject::new(
+            object_id,
+            GeometryRef::circle(0.5),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        row.effects = Some(Arc::clone(&effects));
+        let mut scene = CompiledScene::compile_objects(vec![row], &[]).unwrap();
+        let patch = ExecutionPatch::SetStyle {
+            object: object_id,
+            style: Style {
+                fill: Some(Color::RED),
+                ..Style::default()
+            },
+            fill_paint: None,
+        };
+        let inverse = scene.prepare_replay_revision(&patch).unwrap();
+        scene.apply_execution_patch(&patch).unwrap();
+
+        assert!(scene.supports_prefix_revision(&inverse));
+        assert!(scene.forward_prefix_revisions(&[&inverse]).is_some());
+
+        let blur_and_visibility = Arc::new(
+            CompiledEffectStack::new_with_visibility(
+                [
+                    CompiledEffect {
+                        attachment: blur,
+                        definition: EffectDefinition::Blur(Blur::default()),
+                    },
+                    CompiledEffect {
+                        attachment: visibility,
+                        definition: EffectDefinition::NoiseDissolve(NoiseDissolve::default()),
+                    },
+                ],
+                Some(visibility),
+            )
+            .unwrap(),
+        );
+        let visibility_only = Arc::new(
+            CompiledEffectStack::new_with_visibility(
+                [CompiledEffect {
+                    attachment: visibility,
+                    definition: EffectDefinition::NoiseDissolve(NoiseDissolve::default()),
+                }],
+                Some(visibility),
+            )
+            .unwrap(),
+        );
+        for (expected, next) in [
+            (
+                vec![blur, glow, visibility],
+                Some(Arc::clone(&blur_and_visibility)),
+            ),
+            (vec![blur, visibility], Some(Arc::clone(&visibility_only))),
+            (vec![visibility], None),
+            (vec![], Some(Arc::clone(&effects))),
+        ] {
+            let patch = ExecutionPatch::SetEffectStack {
+                object: object_id,
+                expected: expected.into_boxed_slice(),
+                effects: next,
+            };
+            let inverse = scene.prepare_replay_revision(&patch).unwrap();
+            scene.apply_execution_patch(&patch).unwrap();
+            assert!(scene.supports_prefix_revision(&inverse));
+            assert!(scene.forward_prefix_revisions(&[&inverse]).is_some());
+        }
+
+        let wrong_order = Arc::new(
+            CompiledEffectStack::new([
+                CompiledEffect {
+                    attachment: SemanticNodeId::new(8, 1),
+                    definition: EffectDefinition::Glow(Glow::default()),
+                },
+                CompiledEffect {
+                    attachment: SemanticNodeId::new(7, 1),
+                    definition: EffectDefinition::Blur(Blur::default()),
+                },
+            ])
+            .unwrap(),
+        );
+        let mut unsupported = CompiledObject::new(
+            object_id,
+            GeometryRef::circle(0.5),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        unsupported.effects = Some(wrong_order);
+        let mut rejected = CompiledScene::compile_objects(vec![unsupported], &[]).unwrap();
+        let inverse = rejected.prepare_replay_revision(&patch).unwrap();
+        rejected.apply_execution_patch(&patch).unwrap();
+        assert!(!rejected.supports_prefix_revision(&inverse));
+        assert!(rejected.forward_prefix_revisions(&[&inverse]).is_none());
     }
 }

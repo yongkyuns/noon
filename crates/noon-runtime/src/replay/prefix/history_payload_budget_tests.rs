@@ -166,6 +166,57 @@ fn history_payload_bootstrap_charges_reported_capacity_and_keeps_readiness_prece
 }
 
 #[test]
+fn history_payload_bootstrap_charges_the_initial_supported_effect_stack() {
+    use noon_compile::{CompiledEffect, CompiledEffectStack};
+    use noon_core::{Blur, EffectDefinition, SemanticNodeId};
+
+    let mut row = object(0);
+    row.effects = Some(Arc::new(
+        CompiledEffectStack::new([
+            CompiledEffect {
+                attachment: SemanticNodeId::new(17, 1),
+                definition: EffectDefinition::Blur(Blur::default()),
+            },
+            CompiledEffect {
+                attachment: SemanticNodeId::new(18, 1),
+                definition: EffectDefinition::Glow(noon_core::Glow::default()),
+            },
+        ])
+        .unwrap(),
+    ));
+    let compiled = CompiledScene::compile_objects(vec![row], &[]).unwrap();
+    let baseline_effect_bytes = compiled.prefix_effect_payload_bytes().unwrap();
+    assert!(baseline_effect_bytes > 0);
+
+    let mut source = SceneInstance::new(compiled);
+    source
+        .begin_replay_retention(ReplayLimits {
+            revisions: 16,
+            payloads: 256,
+        })
+        .unwrap();
+    source.advance_to(1.0).unwrap();
+    let history = source.replay_history.as_ref().unwrap();
+    let expected_additional = baseline_effect_bytes
+        + history_payload_budget::clone_bytes(
+            history
+                .revisions
+                .iter()
+                .filter_map(|revision| revision.inverse.as_ref()),
+        )
+        .unwrap();
+    assert!(matches!(
+        source.create_prefix_projection_with_budgets(0, 0),
+        Err(PrefixError::HistoryPayloadBudgetExceeded {
+            retained_bytes: 0,
+            additional_bytes,
+            limit_bytes: 0,
+        }) if additional_bytes == expected_additional
+    ));
+    assert_eq!(source.frame().objects[0].effects.as_ref().unwrap().len(), 2);
+}
+
+#[test]
 fn history_payload_outstanding_batch_blocks_further_extraction_without_false_completion() {
     for terminal in [false, true] {
         let mut source = source();

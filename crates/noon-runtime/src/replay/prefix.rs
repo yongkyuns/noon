@@ -737,15 +737,21 @@ impl SceneInstance {
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
-        let history_payload_budget = HistoryPayloadBudget::new(history_payload_budget_bytes);
+        let history_payload_budget = HistoryPayloadBudget::new(history_payload_budget_bytes)
+            .with_additional(
+                self.compiled
+                    .prefix_effect_payload_bytes()
+                    .ok_or(ReplayError::RetentionLimit)?,
+            )?;
         // Check the requested nested-vector storage before cloning the runtime.
         // Source spare capacity is not copied, so this pass uses occupied lengths.
-        history_payload_budget.with_additional(history_payload_budget::clone_bytes(
-            history
-                .revisions
-                .iter()
-                .filter_map(|revision| revision.inverse.as_ref()),
-        )?)?;
+        let history_payload_budget =
+            history_payload_budget.with_additional(history_payload_budget::clone_bytes(
+                history
+                    .revisions
+                    .iter()
+                    .filter_map(|revision| revision.inverse.as_ref()),
+            )?)?;
         let stream = Arc::new(());
         let mut runtime = self.clone();
         // Reserve every historical row, including inactive order slots, once.

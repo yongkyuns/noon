@@ -252,6 +252,7 @@ mod tests {
             camera_motion_payloads: 0,
             path_motion_commands: 0,
             geometry_payload_bytes: 0,
+            effect_payload_bytes: 0,
         }
     }
 

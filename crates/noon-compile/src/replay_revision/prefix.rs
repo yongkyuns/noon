@@ -1,7 +1,7 @@
 //! Experimental sparse lifecycle/content prefix transfer. Uses the existing compiler
 //! revision representation; no second scene, evaluator, or resource registry.
 use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
-use crate::CompiledObject;
+use crate::{CompiledEffectStack, CompiledObject};
 use noon_core::{Property, TrackId};
 use std::collections::BTreeMap;
 
@@ -30,13 +30,108 @@ fn local_property(property: Property) -> bool {
             | Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectProgress
+            | Property::EffectSoftness
+            | Property::EffectSeed
     )
+}
+
+/// The bounded built-in history profile: optional Blur, then optional Glow,
+/// then optional stack-owned visibility NoiseDissolve. Arbitrary stacks and
+/// shader programs remain outside this profile.
+pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
+    use noon_core::EffectDefinition::{Blur, Glow, NoiseDissolve};
+
+    match (stack.definitions(), stack.visibility()) {
+        ([], None) => true,
+        ([Blur(_)], None) => true,
+        ([Glow(_)], None) => true,
+        ([Blur(_), Glow(_)], None) => true,
+        ([NoiseDissolve(_)], Some(visibility))
+        | ([Blur(_), NoiseDissolve(_)], Some(visibility))
+        | ([Glow(_), NoiseDissolve(_)], Some(visibility))
+        | ([Blur(_), Glow(_), NoiseDissolve(_)], Some(visibility)) => {
+            stack.attachments().last() == Some(&visibility.attachment)
+        }
+        _ => false,
+    }
 }
 
 fn local_track(track: Option<&CompiledTrack>) -> bool {
     track.is_none_or(|track| {
         local_property(track.property) && super::path_motion_command_count(&track.values) == 0
     })
+}
+
+fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) -> bool {
+    use noon_core::{EffectTrackValue, TrackValues};
+
+    let property = track.property;
+    if !matches!(
+        property,
+        Property::EffectColor
+            | Property::EffectRadius
+            | Property::EffectIntensity
+            | Property::EffectProgress
+            | Property::EffectSoftness
+            | Property::EffectSeed
+    ) {
+        return true;
+    }
+    let Some(object) = object else {
+        return false;
+    };
+    let Some(stack) = object.effects.as_deref() else {
+        return false;
+    };
+    if !local_effect_stack(stack) {
+        return false;
+    }
+    let TrackValues::Effect {
+        attachment,
+        from,
+        to,
+        ..
+    } = &track.values
+    else {
+        return false;
+    };
+    if from.property() != property || to.property() != property {
+        return false;
+    }
+    let Some(effect) = stack.get(*attachment) else {
+        return false;
+    };
+    match (property, from, to) {
+        (Property::EffectColor, EffectTrackValue::Color(_), EffectTrackValue::Color(_)) => {
+            effect.definition.as_glow().is_some()
+        }
+        (Property::EffectRadius, EffectTrackValue::Radius(_), EffectTrackValue::Radius(_)) => {
+            effect.definition.as_blur().is_some() || effect.definition.as_glow().is_some()
+        }
+        (
+            Property::EffectIntensity,
+            EffectTrackValue::Intensity(_),
+            EffectTrackValue::Intensity(_),
+        ) => effect.definition.as_glow().is_some(),
+        (
+            Property::EffectProgress | Property::EffectSoftness,
+            EffectTrackValue::Progress(_) | EffectTrackValue::Softness(_),
+            EffectTrackValue::Progress(_) | EffectTrackValue::Softness(_),
+        ) => {
+            stack
+                .visibility()
+                .is_some_and(|visibility| visibility.attachment == *attachment)
+                && effect.definition.as_noise_dissolve().is_some()
+        }
+        (Property::EffectSeed, EffectTrackValue::Seed(_), EffectTrackValue::Seed(_)) => {
+            stack
+                .visibility()
+                .is_some_and(|visibility| visibility.attachment == *attachment)
+                && effect.definition.as_noise_dissolve().is_some()
+        }
+        _ => false,
+    }
 }
 
 fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
@@ -46,7 +141,7 @@ fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
         && object
             .effects
             .as_ref()
-            .is_none_or(|stack| stack.len() == 1 && stack.definitions()[0].as_glow().is_some())
+            .is_none_or(|stack| local_effect_stack(stack))
 }
 
 impl CompiledReplayRevision {
@@ -85,9 +180,29 @@ impl CompiledScene {
                 }
             }
         }
-        old.tracks
-            .iter()
-            .all(|(id, before)| local_track(before.as_ref()) && local_track(self.track(*id)))
+        old.tracks.iter().all(|(id, before)| {
+            let after = self.track(*id);
+            if !local_track(before.as_ref()) || !local_track(after) {
+                return false;
+            }
+            let Some(index) = before
+                .as_ref()
+                .or(after)
+                .map(|track| track.object_index as usize)
+            else {
+                return true;
+            };
+            let physical = self.objects.get(index).filter(|object| object.live);
+            let before_object = old
+                .rows
+                .iter()
+                .find(|row| row.index as usize == index)
+                .map_or(physical, |row| row.object.as_ref());
+            before
+                .as_ref()
+                .is_none_or(|track| local_effect_track(track, before_object))
+                && after.is_none_or(|track| local_effect_track(track, physical))
+        })
     }
 
     /// Recover the forward sides of a NEW suffix of inverse revisions without
@@ -101,9 +216,9 @@ impl CompiledScene {
     /// transforms, path-motion and spatial plans require separate qualification.
     /// Append-only glyph plans travel through the existing immutable plan table.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
-    /// Rows may carry one resource-free glow attachment and its ordinary
-    /// generation-scoped color/radius/intensity tracks; ordered stacks and
-    /// other effect definitions remain outside this suffix profile.
+    /// Rows may carry the bounded ordered Blur/Glow profile with optional
+    /// trailing visibility NoiseDissolve and its typed tracks. Other effect
+    /// definitions remain outside this suffix profile.
     /// Ordering reconstruction visits only affected rows and their neighbours;
     /// it never clones/scans the full painter/family order.
     /// The caller must pass the complete, ordered suffix ending at this scene's
@@ -124,6 +239,7 @@ impl CompiledScene {
                 return None;
             }
             let mut rows = Vec::with_capacity(old.rows.len());
+            let mut after_objects = BTreeMap::new();
             for saved in &old.rows {
                 let physical = self.objects.get(saved.index as usize)?;
                 let current = row_overlay
@@ -134,6 +250,7 @@ impl CompiledScene {
                         return None;
                     }
                 }
+                after_objects.insert(saved.index, current.clone());
                 // Capture the actual opposite membership/order, then undo this
                 // one local order change in the sparse scratch view.
                 let forward_order = if let Some(before) = saved.order {
@@ -161,6 +278,29 @@ impl CompiledScene {
                 if !local_track(before.as_ref()) || !local_track(after.as_ref()) {
                     return None;
                 }
+                if let Some(index) = before
+                    .as_ref()
+                    .or(after.as_ref())
+                    .map(|track| track.object_index)
+                {
+                    let physical = self
+                        .objects
+                        .get(index as usize)
+                        .filter(|object| object.live);
+                    let before_object = row_overlay.get(&index).map_or(physical, Option::as_ref);
+                    let after_object = after_objects
+                        .get(&index)
+                        .map_or(before_object, Option::as_ref);
+                    if before
+                        .as_ref()
+                        .is_some_and(|track| !local_effect_track(track, before_object))
+                        || after
+                            .as_ref()
+                            .is_some_and(|track| !local_effect_track(track, after_object))
+                    {
+                        return None;
+                    }
+                }
                 tracks.push((*id, after.clone()));
                 *after = before.clone();
             }
@@ -172,9 +312,124 @@ impl CompiledScene {
                 camera_motion_payloads: 0,
                 path_motion_commands: 0,
                 geometry_payload_bytes: old.geometry_payload_bytes,
+                effect_payload_bytes: old.effect_payload_bytes,
             });
         }
         output.reverse();
         Some(output)
+    }
+}
+
+#[cfg(test)]
+mod effect_profile_tests {
+    use super::*;
+    use crate::{CompiledEffect, CompiledObject};
+    use noon_core::{
+        Blur, CompositionTimeMap, EffectDefinition, EffectTrackEndBehavior, EffectTrackValue,
+        GeometryRef, Glow, NoiseDissolve, ObjectId, RateFunction, SemanticNodeId, Style,
+        TrackTiming, TrackValues, Transform2D,
+    };
+    use std::sync::Arc;
+
+    fn effect_track(
+        property: Property,
+        attachment: SemanticNodeId,
+        from: EffectTrackValue,
+        to: EffectTrackValue,
+    ) -> CompiledTrack {
+        CompiledTrack {
+            id: TrackId::new(0),
+            object_index: 0,
+            property,
+            values: TrackValues::Effect {
+                attachment,
+                from,
+                to,
+                end_behavior: EffectTrackEndBehavior::Sample,
+            },
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+            transform_geometry_plan: None,
+            reconciled: false,
+        }
+    }
+
+    #[test]
+    fn effect_tracks_are_limited_to_the_matching_profile_attachment() {
+        let blur = SemanticNodeId::new(7, 1);
+        let glow = SemanticNodeId::new(8, 1);
+        let visibility = SemanticNodeId::new(9, 1);
+        let mut object = CompiledObject::new(
+            ObjectId::new(0),
+            GeometryRef::circle(0.5),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        object.effects = Some(Arc::new(
+            CompiledEffectStack::new_with_visibility(
+                [
+                    CompiledEffect {
+                        attachment: blur,
+                        definition: EffectDefinition::Blur(Blur::default()),
+                    },
+                    CompiledEffect {
+                        attachment: glow,
+                        definition: EffectDefinition::Glow(Glow::default()),
+                    },
+                    CompiledEffect {
+                        attachment: visibility,
+                        definition: EffectDefinition::NoiseDissolve(NoiseDissolve::default()),
+                    },
+                ],
+                Some(visibility),
+            )
+            .unwrap(),
+        ));
+
+        assert!(local_effect_track(
+            &effect_track(
+                Property::EffectRadius,
+                blur,
+                EffectTrackValue::Radius(Blur::default().radius()),
+                EffectTrackValue::Radius(Blur::default().radius()),
+            ),
+            Some(&object),
+        ));
+        assert!(local_effect_track(
+            &effect_track(
+                Property::EffectIntensity,
+                glow,
+                EffectTrackValue::Intensity(0.0),
+                EffectTrackValue::Intensity(1.0),
+            ),
+            Some(&object),
+        ));
+        assert!(local_effect_track(
+            &effect_track(
+                Property::EffectProgress,
+                visibility,
+                EffectTrackValue::Progress(0.0),
+                EffectTrackValue::Progress(1.0),
+            ),
+            Some(&object),
+        ));
+        assert!(!local_effect_track(
+            &effect_track(
+                Property::EffectIntensity,
+                blur,
+                EffectTrackValue::Intensity(0.0),
+                EffectTrackValue::Intensity(1.0),
+            ),
+            Some(&object),
+        ));
+        assert!(!local_effect_track(
+            &effect_track(
+                Property::EffectProgress,
+                glow,
+                EffectTrackValue::Progress(0.0),
+                EffectTrackValue::Progress(1.0),
+            ),
+            Some(&object),
+        ));
     }
 }
