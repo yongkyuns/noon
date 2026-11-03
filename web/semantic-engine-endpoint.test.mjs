@@ -3437,6 +3437,86 @@ test("prepared execution publishes admitted Rust cues and waits for section pres
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("prepared no-target section acknowledgement keeps the Rust playhead without a new picture", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: false });
+  let currentPublication = null;
+  let noChangeProof = null;
+  let playing = true;
+  let sectionQueries = [];
+  let deltaCount = 0;
+  f.render.port2.on("message", message => {
+    if (message.type === "execution_delta") deltaCount += 1;
+  });
+  f.player.seekDeltaJson(3);
+  const initialDelta = f.player.initialDeltaJson;
+  f.player.initialDeltaJson = () => {
+    const delta = JSON.parse(initialDelta());
+    currentPublication = { session: delta.session, sequence: delta.sequence };
+    return JSON.stringify(delta);
+  };
+  f.player.setPreparedPlaying = value => { playing = value; };
+  f.player.preparedTime = () => f.player.time();
+  f.player.preparedPlaybackTimeAt = () => 4;
+  f.player.preparedFrontier = () => 5;
+  f.player.preparedPlaybackStateJson = () => JSON.stringify({
+    time: f.player.time(), frontier: 5, end: null,
+    seekRange: { start: 0, end: 4.999999999999999 }, playing,
+    buffering: false, completed: false, advancing: true,
+    loopDuration: null, loopCount: 0, loopError: null,
+  });
+  f.player.sectionsJson = () => JSON.stringify([
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Last", time: 2 },
+  ]);
+  f.player.sectionStateJson = time => {
+    sectionQueries.push(time);
+    return JSON.stringify({ current: 1, previous: 0, next: null });
+  };
+  f.player.seekSectionDeltaJson = (previous, time) => {
+    assert.equal(previous, false);
+    assert.equal(time, 4);
+    assert.equal(JSON.parse(f.player.sectionStateJson(time)).next, null);
+    noChangeProof = JSON.stringify({ ...currentPublication, time: f.player.time() });
+    return f.player.drainDeltaJson();
+  };
+  f.player.sourceExecutionReady = () => false;
+  f.player.takePreparedNoChangePresentationJson = () => {
+    const proof = noChangeProof;
+    noChangeProof = null;
+    return proof;
+  };
+  f.player.setPreparedLoopDuration = () => {};
+  f.player.stopSourcePreparation = () => {};
+  f.player.free = () => {};
+  const prepared = { player: f.player, generation: 1, wakeSource() {} };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(prepared);
+    const initialState = await ready;
+    assert.equal(initialState.time, 3);
+    present(f.render.port2, await initial);
+    await turn();
+
+    const result = await request(f.control.port2, "seek_section", 2, { previous: false });
+    assert.equal(result.time, 4, "the no-op acknowledgement preserves the logical playhead");
+    assert.equal(result.playing, true, "a no-target query preserves playback intent");
+    assert.equal(f.player.time(), 3, "the reader remains at its displayed sample");
+    assert.deepEqual(result.presentationReceipt, {
+      ...currentPublication,
+      time: 3,
+      unchanged: true,
+    }, "the receipt stays attached to the unchanged displayed sample");
+    assert.equal(result.sectionState.next, null);
+    assert.ok(sectionQueries.filter(time => time === 4).length >= 3,
+      "Rust cue metadata detects the no-target query and describes its logical acknowledgement");
+    await turn();
+    assert.equal(deltaCount, 1, "the no-target query does not force a renderer upload");
+    assert.equal(f.stats().initialSnapshots, 1);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 
 test("shared endpoint continues an oversized initial snapshot only under transport credits", { timeout: 3000 }, async () => {
   const f = fixture("shared", null, null, { sharedSlotCapacity: 256 });

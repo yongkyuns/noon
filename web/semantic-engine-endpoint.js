@@ -1066,6 +1066,7 @@ export async function attachSemanticEngine(
       let sampleTiming = null;
       let audioAnchor;
       let presentationReceipt = null;
+      let noTargetSectionQuery = false;
       let finiteExport;
       let audioBlock;
       try {
@@ -1161,6 +1162,10 @@ export async function attachSemanticEngine(
                 ? player.preparedPlaybackTimeAt(performance.now())
                 : pacing === SEMANTIC_PACING_REALTIME
                   ? player.playbackTimeAt(performance.now()) : player.time()) : null;
+            if (message.type === "seek_section" && prepared !== null) {
+              const navigation = JSON.parse(player.sectionStateJson(sectionTime));
+              noTargetSectionQuery = navigation[message.previous ? "previous" : "next"] == null;
+            }
             const playing = hasAudio && player.isPlaying();
             if (hasAudio) player.pause();
             const delta = message.type === "seek_section"
@@ -1293,9 +1298,18 @@ export async function attachSemanticEngine(
           observeExecutionWake(sampledAt, true);
           audioAnchor = JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt));
         }
+        const observedState = state(message.type);
+        if (noTargetSectionQuery && prepared !== null) {
+          // This was a logical no-op at the Rust-observed clock time. Keep its
+          // unchanged presentation receipt at the reader frame while reporting
+          // the current Rust playhead so controls do not jump backward to that
+          // older frame for one state update.
+          observedState.time = player.preparedPlaybackTimeAt(performance.now());
+          observedState.sectionState = JSON.parse(player.sectionStateJson(observedState.time));
+        }
         post({
           requestId: message.requestId,
-          ...state(message.type),
+          ...observedState,
           ...(rendererObservation === null ? {} : { rendererObservation }),
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
