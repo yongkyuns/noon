@@ -85,15 +85,17 @@ test('runtime package identity records clean source revision and file hashes for
 
 test('diagnostics accept actual profile attachment and required capabilities', () => {
   for (const expected of SHOWCASE_PROFILE_EXPECTATIONS) {
-    if (expected.disposition === null) continue;
     assert.equal(validateShowcaseDiagnostics(expected, diagnosticsFor(expected)).id, expected.id);
   }
   const immutable = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.attachedProfile === 'immutable');
   assert.equal(immutable.transitions[0], 'immutable');
   assert.notEqual(immutable.transitions[0], 'incremental');
-  assert.throws(() => validateShowcaseDiagnostics(immutable, diagnosticsFor(immutable)), /policy is unresolved/);
-  assert.equal(validateShowcaseDiagnostics({ ...immutable, completionPolicy: 'finite-host', disposition: 'finite-complete' },
-    diagnosticsFor({ ...immutable, completionPolicy: 'finite-host', disposition: 'finite-complete' })).profile, 'immutable');
+  assert.equal(immutable.completionPolicy, 'finite-audio');
+  assert.equal(immutable.disposition, 'finite-complete');
+  assert.equal(immutable.capabilities.dispositionCommands.includes('loop'), false);
+  const wrongEnd = diagnosticsFor(immutable);
+  wrongEnd.events.at(-1).disposition = 'observed-complete';
+  assert.throws(() => validateShowcaseDiagnostics(immutable, wrongEnd), /unexpected terminal disposition/);
 });
 
 test('diagnostics reject unexpected late fallback and requested-versus-attached mismatch', () => {
@@ -142,12 +144,12 @@ test('baseline diagnostics report failures without converting them into target e
   assert.equal(evaluateShowcaseDiagnostics(ordinary, lateFallback).status, 'failed');
 
   const immutable = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.attachedProfile === 'immutable');
-  const currentTrace = diagnosticsFor({ ...immutable, disposition: 'finite-complete' });
+  const currentTrace = diagnosticsFor(immutable);
   currentTrace.events.at(-1).disposition = 'looped';
   const report = evaluateShowcaseDiagnostics(immutable, currentTrace);
-  assert.equal(report.status, 'unresolved');
-  assert.equal(report.observed.disposition, 'looped', 'baseline report should preserve observed policy without adopting it');
-  assert.equal(immutable.disposition, null, 'baseline observations must not freeze the unresolved immutable policy');
+  assert.equal(report.status, 'failed');
+  assert.match(report.reason, /unexpected terminal disposition/);
+  assert.equal(immutable.disposition, 'finite-complete', 'baseline failures cannot rewrite the qualified finite policy');
 });
 
 test('gallery lifecycle waits for the real disposition instead of an authored-end sample', () => {

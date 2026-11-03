@@ -3,12 +3,14 @@ import { createHash } from 'node:crypto';
 
 // Test-owned expectations for the unchanged 33-entry public showcase catalog.
 // This ledger binds exact source bytes; it does not grant runtime admission.
-const ordinaryCommands = Object.freeze(["play", "pause", "seek", "restart"]);
+const replayCommands = Object.freeze(["play", "pause", "seek", "restart"]);
+const ordinaryCommands = Object.freeze([...replayCommands, "loop"]);
+const audioCommands = Object.freeze([...replayCommands, "sections"]);
 const initialObservedCommands = Object.freeze(["play", "pause"]);
 const rows = [
   ['showcase-first-scene','showcase_first_scene.py','1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8','incremental','ordinary',[], 'looped'],
   ['showcase-dynamic-scene','showcase_dynamic_scene.py','bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca','incremental','ordinary',[], 'looped'],
-  ['showcase-background-music','background_music_lesson.py','b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40','immutable','immutable',['audio','sections'], null],
+  ['showcase-background-music','background_music_lesson.py','b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40','immutable','immutable',['audio','sections'], 'finite-complete'],
   ['showcase-entrances-exits','showcase_entrances_exits.py','55818966017c4643b8abb1fab036164f28fc9c019b2ce3b415e28679c1911f73','incremental','ordinary',[], 'looped'],
   ['showcase-timing','showcase_timing.py','d0fa3d4e2281f066a2aaa35ae1f5b3e1272b5a2f1d202437a80a457c238e7c2b','incremental','ordinary',[], 'looped'],
   ['showcase-gpu-glow','showcase_gpu_glow.py','526c40036c50a960cdb2b6e01e13178f5d989e1f7680ca7e14af856063be49da','incremental','ordinary',[], 'looped'],
@@ -51,7 +53,7 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
     attachedProfile: profile,
     dispositionKind,
     completionPolicy: dispositionKind === 'ordinary' ? 'gallery-loop'
-      : dispositionKind === 'immutable' ? 'coordinator-unresolved'
+      : dispositionKind === 'immutable' ? 'finite-audio'
         : dispositionKind === 'callback' ? 'observed-nonreplayable' : 'native-input-handoff',
     requiredDomains: Object.freeze(requiredDomains),
     seekRangePolicy: dispositionKind === 'callback' ? 'unavailable'
@@ -62,8 +64,10 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
     inputPolicy: id === 'showcase-translation-drag' ? 'native-input-handoff'
       : id === 'showcase-pointer-selection' ? 'selection-inspection' : 'none',
     capabilities: Object.freeze({
-      attachedCommands: dispositionKind === 'callback' ? initialObservedCommands : ordinaryCommands,
-      dispositionCommands: dispositionKind === 'ordinary' || dispositionKind === 'immutable' ? ordinaryCommands : [],
+      attachedCommands: dispositionKind === 'callback' ? initialObservedCommands
+        : dispositionKind === 'immutable' ? audioCommands : ordinaryCommands,
+      dispositionCommands: dispositionKind === 'ordinary' ? ordinaryCommands
+        : dispositionKind === 'immutable' ? audioCommands : [],
       replayAtDisposition: dispositionKind === 'ordinary' || dispositionKind === 'immutable',
       audio: requiredDomains.includes('audio'),
       sections: requiredDomains.includes('sections'),
@@ -85,21 +89,6 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
 // an execution trace alone does not prove range readiness or semantic domains.
 
 export function evaluateShowcaseDiagnostics(expected, diagnostics) {
-  if (expected.disposition === null) {
-    const events = diagnostics?.events ?? [];
-    const terminal = events.filter(event => event.stage === 'disposition').at(-1);
-    return {
-      status: 'unresolved',
-      observed: {
-        attachedProfiles: events.filter(event => ['attached', 'profile-change'].includes(event.stage))
-          .map(event => event.profile),
-        lifecycleStages: events.filter(event => ['source-complete', 'terminal-adopted', 'disposition'].includes(event.stage))
-          .map(event => event.stage),
-        disposition: terminal?.disposition ?? 'missing',
-        droppedEvents: diagnostics?.droppedEvents ?? null,
-      },
-    };
-  }
   try {
     return { status: 'observed-match', result: validateShowcaseDiagnostics(expected, diagnostics) };
   } catch (error) {
