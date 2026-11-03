@@ -6,6 +6,8 @@ use noon_core::{Property, TrackId, TrackValues};
 use std::collections::BTreeMap;
 
 #[cfg(test)]
+mod authored_view;
+#[cfg(test)]
 mod backdrop;
 mod family;
 mod order;
@@ -25,6 +27,7 @@ fn local_property(property: Property) -> bool {
             | Property::Fill
             | Property::Stroke
             | Property::StrokeWidth
+            | Property::Emission
             | Property::Opacity
             | Property::Appearance
             | Property::Reveal
@@ -32,6 +35,7 @@ fn local_property(property: Property) -> bool {
             | Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectThreshold
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSeed
@@ -115,6 +119,7 @@ fn local_channel_for_objects(
     after: &CompiledObject,
 ) -> bool {
     match property {
+        Property::EffectThreshold => authored_bloom_owner(before) && authored_bloom_owner(after),
         property if local_property(property) => before.spatial.is_none() && after.spatial.is_none(),
         Property::WorldTransform => {
             (camera_owner(before) && camera_owner(after)) || same_world_spatial_owner(before, after)
@@ -169,6 +174,7 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
         Property::EffectColor
             | Property::EffectRadius
             | Property::EffectIntensity
+            | Property::EffectThreshold
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSeed
@@ -181,7 +187,7 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
     let Some(stack) = object.effects.as_deref() else {
         return false;
     };
-    if !local_effect_stack(stack) {
+    if !local_effect_stack_for_object(object, stack) {
         return false;
     }
     let TrackValues::Effect {
@@ -207,12 +213,21 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
             effect.definition.as_blur().is_some()
                 || effect.definition.as_glow().is_some()
                 || effect.definition.as_backdrop_blur().is_some()
+                || (authored_view_owner(object) && effect.definition.as_bloom().is_some())
         }
         (
             Property::EffectIntensity,
             EffectTrackValue::Intensity(_),
             EffectTrackValue::Intensity(_),
-        ) => effect.definition.as_glow().is_some(),
+        ) => {
+            effect.definition.as_glow().is_some()
+                || (authored_view_owner(object) && effect.definition.as_bloom().is_some())
+        }
+        (
+            Property::EffectThreshold,
+            EffectTrackValue::Threshold(_),
+            EffectTrackValue::Threshold(_),
+        ) => authored_view_owner(object) && effect.definition.as_bloom().is_some(),
         (
             Property::EffectProgress | Property::EffectSoftness,
             EffectTrackValue::Progress(_) | EffectTrackValue::Softness(_),
@@ -233,6 +248,35 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
     }
 }
 
+fn authored_view_owner(object: &CompiledObject) -> bool {
+    object.live
+        && object.spatial.is_none()
+        && object.view_color_profile == Some(noon_core::ViewColorProfile::LinearHdr)
+}
+
+fn authored_bloom_owner(object: &CompiledObject) -> bool {
+    authored_view_owner(object)
+        && object.effects.as_deref().is_some_and(|stack| {
+            matches!(stack.definitions(), [noon_core::EffectDefinition::Bloom(_)])
+                && stack.visibility().is_none()
+                && stack.attachments().len() == 1
+        })
+}
+
+fn local_effect_stack_for_object(object: &CompiledObject, stack: &CompiledEffectStack) -> bool {
+    use noon_core::{EffectDefinition::Bloom, EffectInputRole};
+
+    if stack
+        .definitions()
+        .iter()
+        .any(|definition| definition.input_role() == EffectInputRole::AuthoredView)
+    {
+        authored_bloom_owner(object) && matches!(stack.definitions(), [Bloom(_)])
+    } else {
+        local_effect_stack(stack)
+    }
+}
+
 fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
     object.live
         && object.id == physical.id
@@ -242,7 +286,7 @@ fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
         && object
             .effects
             .as_ref()
-            .is_none_or(|stack| local_effect_stack(stack))
+            .is_none_or(|stack| local_effect_stack_for_object(object, stack))
 }
 
 impl CompiledReplayRevision {
@@ -331,7 +375,9 @@ impl CompiledScene {
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry the bounded ordered Blur/Glow profile with optional
     /// trailing visibility NoiseDissolve, or a standalone BackdropBlur with typed
-    /// radius tracks. Other effect definitions remain outside this suffix profile.
+    /// radius tracks. Authored-view Bloom history is limited to the actual linear-HDR
+    /// camera owner and its typed radius, intensity and threshold channels. Other
+    /// effect definitions remain outside this suffix profile.
     /// Ordering reconstruction visits only affected rows and their neighbours;
     /// it never clones/scans the full painter/family order.
     /// The caller must pass the complete, ordered suffix ending at this scene's

@@ -6,6 +6,36 @@ from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_moving_camera_scene_requires_the_canonical_closed_wrapper(self):
+        examples = Path(__file__).with_name("examples")
+        bloom = (examples / "showcase_bloom_emission.py").read_text()
+        self.assertEqual(source_execution_proof(bloom), {"admitted": True, "reason": None})
+        camera_callbacks = (examples / "showcase_camera_follows_path.py").read_text()
+        self.assertFalse(source_execution_proof(camera_callbacks)["admitted"])
+        self.assertTrue(source_is_scene_only(
+            'from noon import MovingCameraScene\n'
+            'class Example(MovingCameraScene):\n'
+            '    def construct(self): self.wait(0.1)\n'))
+
+        unsafe_sources = (
+            'from noon import *\nMovingCameraScene = Scene\n'
+            'class Example(MovingCameraScene):\n    def construct(self): pass\n',
+            'from manim import MovingCameraScene\n'
+            'class Example(MovingCameraScene):\n    def construct(self): pass\n',
+            'from manim import *\n'
+            'class Example(MovingCameraScene):\n    def construct(self): pass\n',
+            'from noon import MovingCameraScene as CameraScene\n'
+            'class Example(CameraScene):\n    def construct(self): pass\n',
+            'from noon import *\nclass Example(MovingCameraScene):\n'
+            '    def construct(self): pass\n    def add(self): pass\n',
+            'from noon import *\nclass Example(MovingCameraScene):\n'
+            '    def __init__(self): pass\n    def construct(self): pass\n',
+            'from noon import *\nclass Example(MovingCameraScene):\n    pass\n',
+        )
+        for source in unsafe_sources:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
     def test_coordinate_plot_uses_only_preparation_time_scalar_math(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_coordinate_plotting.py"
@@ -298,7 +328,6 @@ class Example(Scene):
             ('print = None\n', "unproven_binding", 1),
             ('from noon import *\nversion = 3\n', "unproven_wildcard_binding", 2),
             ('from noon import *\nvalues = [1]\nvalues[0] = 2\n', "unproven_ownership", 3),
-            ('from noon import *\nclass Example(MovingCameraScene):\n    pass\n', "unsupported_class_contract", 2),
         ):
             with self.subTest(source=source):
                 reason = source_execution_proof(source)["reason"]

@@ -39,12 +39,12 @@ _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
-ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene
+ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
-ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur GlowPulse Dissolve
+ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve
 """.split())
 _SOURCE_MAPPED_ANIMATION_FACTORIES = frozenset("FadeIn FadeOut".split())
 _SOURCE_FUNCTIONS = frozenset("""
@@ -70,7 +70,7 @@ _SOURCE_MEMBERS = frozenset("""
 add remove clear play wait on_click set_drag_targets next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
-set_fill set_stroke set_color set_opacity set_z_index set_glow remove_glow set_effect
+set_fill set_stroke set_color set_opacity set_emission set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value
 set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
 plot plot_samples
@@ -83,6 +83,7 @@ _SOURCE_SPATIAL_MEMBERS = frozenset("""
 set_camera_orientation move_camera point_light add_world_mobjects
 add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
 """.split())
+_SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
 _SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
@@ -1072,6 +1073,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                 or not isinstance(node.bases[0], ast.Name)):
             raise _OpaqueSource(node, "unsupported_class_contract")
         spatial = node.bases[0].id == "ThreeDScene"
+        moving_camera = node.bases[0].id == "MovingCameraScene"
         if spatial:
             if not self._trusted_three_d_scene_base():
                 raise _OpaqueSource(node, "unsupported_class_contract")
@@ -1086,6 +1088,15 @@ class _SceneOnlySource(ast.NodeVisitor):
             for member in methods:
                 if member.name == "__init__":
                     self._validate_three_d_super_init(member)
+        elif moving_camera:
+            if not self._trusted_moving_camera_scene_base():
+                raise _OpaqueSource(node, "unsupported_class_contract")
+            methods = [member for member in node.body
+                       if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            if (len(methods) != 1 or not isinstance(methods[0], ast.FunctionDef)
+                    or methods[0].name != "construct"
+                    or not self._simple_moving_camera_construct(methods[0])):
+                raise _OpaqueSource(node, "unsupported_class_contract")
         elif node.bases[0].id != "Scene":
             raise _OpaqueSource(node, "unsupported_class_contract")
         self.visit(node.bases[0])
@@ -1099,6 +1110,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         if spatial:
             self.members = self.members | _SOURCE_SPATIAL_MEMBERS
             self.scopes[0] = self.scopes[0] | _SOURCE_SPATIAL_CONSTRUCTORS
+        elif moving_camera:
+            self.members = self.members | _SOURCE_MOVING_CAMERA_MEMBERS
         try:
             for member in node.body:
                 if spatial and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
@@ -1127,6 +1140,30 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and self.module_binding_counts.get("ThreeDScene") == 1
                 and any(alias.name == "ThreeDScene" and alias.asname is None
                         for alias in origin.names))
+
+    def _trusted_moving_camera_scene_base(self):
+        name = "MovingCameraScene"
+        if any(name in scope for scope in self.scopes[1:]):
+            return False
+        origin = self.module_binding_locations.get(name)
+        if origin is None:
+            return (name in self.scopes[0]
+                    and any(isinstance(imported, ast.ImportFrom) and imported.module == "noon"
+                            and any(alias.name == "*" for alias in imported.names)
+                            for imported in self.module_imports))
+        return (origin in self.module_imports and isinstance(origin, ast.ImportFrom)
+                and origin.module == "noon"
+                and self.module_binding_counts.get(name) == 1
+                and any(alias.name == name and alias.asname is None for alias in origin.names))
+
+    @staticmethod
+    def _simple_moving_camera_construct(node):
+        return (not node.decorator_list and node.returns is None
+                and not getattr(node, "type_params", ()) and not node.args.posonlyargs
+                and len(node.args.args) == 1 and node.args.args[0].arg == "self"
+                and not node.args.args[0].annotation and not node.args.defaults
+                and not node.args.kwonlyargs and not node.args.kw_defaults
+                and node.args.vararg is None and node.args.kwarg is None)
 
     @staticmethod
     def _simple_three_d_construct(node):
