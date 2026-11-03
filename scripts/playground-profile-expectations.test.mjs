@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   SHOWCASE_PROFILE_EXPECTATIONS,
+  evaluateShowcaseDiagnostics,
   validateShowcaseDiagnostics,
   validateShowcaseInventory,
 } from './playground-profile-expectations.mjs';
@@ -27,7 +28,7 @@ function diagnosticsFor(expected) {
     reason: expected.dispositionKind === 'callback' ? { code: 'host_callbacks' } : undefined,
   }];
   if (expected.dispositionKind === 'input-handoff') events.push({ sequence: events.length, stage: 'profile-change',
-    profile: 'observed', contextId, continuationGeneration: 4, preparedFrontier: 2, time: 2,
+    profile: 'observed', contextId, continuationGeneration: 4, preparedFrontier: 3, time: 2,
     boundaryValidated: true, reason: { code: 'native_input' } });
   if (expected.disposition === 'looped' || expected.disposition === 'finite-complete') events.push(
     { sequence: events.length, stage: 'source-complete', contextId },
@@ -47,6 +48,10 @@ test('inventory binds all 33 unchanged showcase IDs, paths and exact source byte
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.attachedProfile === 'immutable').length, 1);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'callback' ||
     row.dispositionKind === 'input-handoff').length, 4);
+  assert.ok(SHOWCASE_PROFILE_EXPECTATIONS.every(row => row.owner && row.seekRangePolicy && row.audioPolicy && row.inputPolicy));
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-background-music').audioPolicy, 'authored-audio');
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-pointer-selection').inputPolicy, 'selection-inspection');
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-translation-drag').inputPolicy, 'native-input-handoff');
   validateShowcaseInventory(manifest.entries, readSource);
 });
 
@@ -105,6 +110,23 @@ test('diagnostics reject dropped events, missing disposition, or missing command
   assert.throws(() => validateShowcaseDiagnostics(expected, noWrap), /completed wrap/);
 });
 
+test('baseline diagnostics report failures without converting them into target expectations', () => {
+  const ordinary = SHOWCASE_PROFILE_EXPECTATIONS[0];
+  const lateFallback = diagnosticsFor(ordinary);
+  lateFallback.events.splice(1, 0, { sequence: 1, stage: 'profile-change', profile: 'observed',
+    contextId: lateFallback.events[0].contextId, reason: { code: 'host_effects' } });
+  lateFallback.events.forEach((event, index) => { event.sequence = index; });
+  assert.equal(evaluateShowcaseDiagnostics(ordinary, lateFallback).status, 'failed');
+
+  const immutable = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.attachedProfile === 'immutable');
+  const currentTrace = diagnosticsFor({ ...immutable, disposition: 'finite-complete' });
+  currentTrace.events.at(-1).disposition = 'looped';
+  const report = evaluateShowcaseDiagnostics(immutable, currentTrace);
+  assert.equal(report.status, 'unresolved');
+  assert.equal(report.observed.disposition, 'looped', 'baseline report should preserve observed policy without adopting it');
+  assert.equal(immutable.disposition, null, 'baseline observations must not freeze the unresolved immutable policy');
+});
+
 test('completed callback dispositions expose no transport commands', () => {
   const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.dispositionKind === 'callback');
   const diagnostics = diagnosticsFor(expected);
@@ -124,7 +146,11 @@ test('translation drag requires the original native-input transition', () => {
 
   const guessedBoundary = diagnosticsFor(expected);
   guessedBoundary.events[1].boundaryValidated = false;
-  assert.throws(() => validateShowcaseDiagnostics(expected, guessedBoundary), /validated frontier evidence/);
+  assert.throws(() => validateShowcaseDiagnostics(expected, guessedBoundary), /selected-prefix sample/);
+
+  const fabricatedFrontier = diagnosticsFor(expected);
+  fabricatedFrontier.events[1].time = fabricatedFrontier.events[1].preparedFrontier;
+  assert.throws(() => validateShowcaseDiagnostics(expected, fabricatedFrontier), /selected-prefix sample/);
 
   const replacedSource = diagnosticsFor(expected);
   replacedSource.events[1].continuationGeneration++;

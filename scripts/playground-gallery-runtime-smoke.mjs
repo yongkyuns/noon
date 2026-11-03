@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,11 +11,14 @@ import { createBrowserFailureTrace, createNativeWebKitEvidence } from './playgro
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
-import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
+import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryShardFromEnvironment, includeShowcaseCatalog, shardGalleryEntries } from './gallery-shards.mjs';
+import { evaluateShowcaseDiagnostics, SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
 const profile = process.env.NOON_PLAYGROUND_PROFILE ?? 'mobile-dpr2';
+const profileGateMode = process.env.NOON_SHOWCASE_PROFILE_GATE ?? 'baseline';
+assert.ok(['baseline', 'strict'].includes(profileGateMode), 'NOON_SHOWCASE_PROFILE_GATE must be baseline or strict');
 const port = Number(process.env.NOON_GALLERY_PORT ?? 4197);
 const external = process.env.NOON_GALLERY_BASE;
 const base = external ?? `http://127.0.0.1:${port}/web/`;
@@ -81,12 +85,18 @@ try {
   const revision = external ? await json(`build-info.json?t=${Date.now()}`) : null;
   if (process.env.NOON_GALLERY_REVISION) assert.equal(revision?.commit, process.env.NOON_GALLERY_REVISION);
   const manifests = await Promise.all(galleryManifestPaths.map(relative => json(relative)));
+  const showcaseManifest = manifests[3];
+  validateShowcaseInventory(showcaseManifest.entries,
+    relative => readFileSync(path.join(root, 'web', relative)));
   const entries = galleryEntriesFromManifests(manifests);
   const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
   if (selectedIds) for (const id of selectedIds) {
     assert.ok(entries.some(entry => entry.id === id), "unknown gallery case: " + id);
   }
-  const selectedPool = selectedIds ? entries.filter(entry => selectedIds.includes(entry.id)) : entries;
+  assert.ok(!(profileGateMode === 'strict' && selectedIds),
+    'strict showcase qualification requires the complete unfiltered gallery pool');
+  const selectedPool = selectedIds ? entries.filter(entry => selectedIds.includes(entry.id))
+    : profileGateMode === 'strict' ? includeShowcaseCatalog(entries, showcaseManifest.entries) : entries;
   const shard = galleryShardFromEnvironment(process.env);
   const selectedEntries = shard ? shardGalleryEntries(selectedPool, shard.index, shard.count) : selectedPool;
   assert.ok(selectedEntries.length > 0, "gallery selection is empty");
@@ -96,8 +106,14 @@ try {
     browser: browserName,
     profile,
     shard,
+    profileGateMode,
     sourceCaseCount: entries.length,
+    showcaseCatalog: SHOWCASE_PROFILE_EXPECTATIONS.map(({ id, path: sourcePath, sha256 }) =>
+      ({ id, path: sourcePath, sha256 })),
     selectedCaseIds: selectedEntries.map(entry => entry.id),
+    strictShowcaseCaseIds: profileGateMode === 'strict'
+      ? selectedEntries.filter(entry => SHOWCASE_PROFILE_EXPECTATIONS.some(row => row.id === entry.id)).map(entry => entry.id)
+      : [],
     expectedCases: queue.map(({ entry, noJspi }) => ({ id: entry.id, noJspi })),
   }));
   console.log("Gallery case inventory:", selectedEntries.length, "cases", queue.length, "executions");
@@ -167,7 +183,10 @@ try {
     page.setDefaultTimeout(10000);
     const trace = createBrowserFailureTrace();
     const detachTrace = trace.attach(caseBrowser, context, page);
-    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [], presentations: [] };
+    const expectedProfile = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === entry.id) ?? null;
+    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(),
+      ...(expectedProfile ? { source: { path: expectedProfile.path, sha256: expectedProfile.sha256 } } : {}),
+      errors: [], failedRequests: [], samples: [], presentations: [] };
     const observedPublications = new Set();
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     const native = createNativeWebKitEvidence({
@@ -352,6 +371,26 @@ try {
           if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
             `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
           if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
+          if (expectedProfile) {
+            if (profileGateMode === 'strict') {
+              await page.waitForFunction(exampleId => {
+                const diagnostics = window.__noonExampleGallery?.executionDiagnostics;
+                return diagnostics?.context?.exampleId === exampleId &&
+                  Array.isArray(diagnostics.events) && diagnostics.events.some(event => event.stage === 'disposition');
+              }, entry.id, { timeout: 150000 });
+            }
+            result.executionDiagnostics = await page.evaluate(() =>
+              window.__noonExampleGallery?.executionDiagnostics ?? null);
+            result.profileGate = {
+              mode: profileGateMode,
+              ...evaluateShowcaseDiagnostics(expectedProfile, result.executionDiagnostics),
+            };
+            if (profileGateMode === 'strict') {
+              validateShowcaseDiagnostics(expectedProfile, result.executionDiagnostics);
+              result.profileGate.status = 'matched';
+              delete result.profileGate.reason;
+            }
+          }
           assert.deepEqual(result.errors, []);
           if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
         })(),
@@ -382,6 +421,17 @@ try {
       result.failureDiagnostics.nativeProcessSnapshots = native.snapshots();
     } finally {
       clearTimeout(caseTimer);
+      if (expectedProfile && !Object.hasOwn(result, 'executionDiagnostics')) {
+        const snapshot = await Promise.race([
+          page.evaluate(() => window.__noonExampleGallery?.executionDiagnostics ?? null),
+          new Promise(resolve => setTimeout(() => resolve(null), 1000)),
+        ]).catch(() => null);
+        result.executionDiagnostics = snapshot;
+        result.profileGate ??= {
+          mode: profileGateMode,
+          ...evaluateShowcaseDiagnostics(expectedProfile, snapshot),
+        };
+      }
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
       result.browserTrace = trace.snapshot();
       detachTrace();

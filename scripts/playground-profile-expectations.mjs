@@ -46,6 +46,7 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
     id,
     path: `python/examples/${file}`,
     sha256,
+    owner: 'W8 catalog qualification',
     requestedProfile: 'incremental',
     attachedProfile: profile,
     dispositionKind,
@@ -53,6 +54,13 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
       : dispositionKind === 'immutable' ? 'coordinator-unresolved'
         : dispositionKind === 'callback' ? 'observed-nonreplayable' : 'native-input-handoff',
     requiredDomains: Object.freeze(requiredDomains),
+    seekRangePolicy: dispositionKind === 'callback' ? 'unavailable'
+      : dispositionKind === 'immutable' ? 'closed-inclusive'
+        : dispositionKind === 'input-handoff' ? 'open-exclusive-to-unavailable'
+          : 'open-exclusive-to-closed-inclusive',
+    audioPolicy: requiredDomains.includes('audio') ? 'authored-audio' : 'none',
+    inputPolicy: id === 'showcase-translation-drag' ? 'native-input-handoff'
+      : id === 'showcase-pointer-selection' ? 'selection-inspection' : 'none',
     capabilities: Object.freeze({
       attachedCommands: dispositionKind === 'callback' ? initialObservedCommands : ordinaryCommands,
       dispositionCommands: dispositionKind === 'ordinary' || dispositionKind === 'immutable' ? ordinaryCommands : [],
@@ -72,6 +80,32 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
     disposition,
   }),
 ));
+
+// Seek/input policy and owner are expectations for the relevant W5/W6 oracles;
+// an execution trace alone does not prove range readiness or semantic domains.
+
+export function evaluateShowcaseDiagnostics(expected, diagnostics) {
+  if (expected.disposition === null) {
+    const events = diagnostics?.events ?? [];
+    const terminal = events.filter(event => event.stage === 'disposition').at(-1);
+    return {
+      status: 'unresolved',
+      observed: {
+        attachedProfiles: events.filter(event => ['attached', 'profile-change'].includes(event.stage))
+          .map(event => event.profile),
+        lifecycleStages: events.filter(event => ['source-complete', 'terminal-adopted', 'disposition'].includes(event.stage))
+          .map(event => event.stage),
+        disposition: terminal?.disposition ?? 'missing',
+        droppedEvents: diagnostics?.droppedEvents ?? null,
+      },
+    };
+  }
+  try {
+    return { status: 'observed-match', result: validateShowcaseDiagnostics(expected, diagnostics) };
+  } catch (error) {
+    return { status: 'failed', reason: String(error) };
+  }
+}
 
 export function validateShowcaseInventory(manifestEntries, readSource) {
   const actual = new Map(manifestEntries.map(entry => [entry.id, entry]));
@@ -120,8 +154,8 @@ export function validateShowcaseDiagnostics(expected, diagnostics) {
     assert.ok(handoff && handoff.reason?.code === 'native_input',
       `${expected.id}: native-input handoff was not observed`);
     assert.ok(handoff.boundaryValidated === true && Number.isFinite(handoff.preparedFrontier) &&
-      Number.isFinite(handoff.time) && handoff.time >= handoff.preparedFrontier,
-    `${expected.id}: native-input handoff lacks validated frontier evidence`);
+      Number.isFinite(handoff.time) && handoff.time >= 0 && handoff.time < handoff.preparedFrontier,
+    `${expected.id}: native-input handoff lacks a validated selected-prefix sample`);
     assert.ok(attachment.contextId != null && handoff.contextId === attachment.contextId &&
       attachment.continuationGeneration != null &&
       handoff.continuationGeneration === attachment.continuationGeneration,

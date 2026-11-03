@@ -46,6 +46,15 @@ export function galleryEntriesFromManifests(manifests) {
   return entries;
 }
 
+export function includeShowcaseCatalog(entries, showcaseEntries) {
+  const ids = new Set(entries.map(entry => entry.id));
+  assert.equal(ids.size, entries.length, "gallery inventory contains duplicate IDs");
+  const showcaseIds = new Set(showcaseEntries.map(entry => entry.id));
+  assert.equal(showcaseIds.size, showcaseEntries.length, "showcase catalog contains duplicate IDs");
+  return [...entries, ...showcaseEntries.filter(entry => !ids.has(entry.id))
+    .map(entry => ({ ...entry, expected_duration: entry.duration }))];
+}
+
 // Preserve the original case ordering: first the regular inventory, then
 // portable no-JSPI controls on Chromium and WebKit only.
 export function galleryCaseQueue(entries, browserName) {

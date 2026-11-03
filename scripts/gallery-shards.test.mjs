@@ -8,8 +8,10 @@ import {
   galleryEntriesFromManifests,
   galleryManifestPaths,
   galleryShardFromEnvironment,
+  includeShowcaseCatalog,
   shardGalleryEntries,
 } from "./gallery-shards.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const manifests = await Promise.all(galleryManifestPaths.map(async path =>
   JSON.parse(await readFile(new URL("../web/" + path, import.meta.url), "utf8"))
@@ -48,6 +50,19 @@ test("every current gallery entry and no-JSPI control is covered exactly once pe
         browser + ": portable control mismatch for " + id);
     }
   }
+});
+
+test("strict showcase coverage adds all 33 catalog entries to the existing shard pool exactly once", () => {
+  const strictEntries = includeShowcaseCatalog(entries, manifests[3].entries);
+  const showcaseIds = new Set(SHOWCASE_PROFILE_EXPECTATIONS.map(row => row.id));
+  for (const browser of ["chromium", "firefox", "webkit"]) {
+    const shards = Array.from({ length: shardCount }, (_, index) =>
+      shardGalleryEntries(strictEntries, index, shardCount));
+    const actual = shards.flatMap(shard => shard.filter(entry => showcaseIds.has(entry.id)))
+      .map(entry => entry.id).sort();
+    assert.deepEqual(actual, [...showcaseIds].sort(), browser + ": strict showcase coverage omitted or duplicated an entry");
+  }
+  assert.equal(strictEntries.filter(entry => showcaseIds.has(entry.id)).length, 33);
 });
 
 test("shard assignment is stable regardless of manifest order", () => {
