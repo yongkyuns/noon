@@ -3213,6 +3213,7 @@ test("finite audio prepares silently and anchors resume/seek only after matching
     assert.equal(playing.audioAnchor.playing, true);
     assert.equal(playing.audioAnchor.time, 0);
     assert.ok(Number.isFinite(playing.audioAnchor.sampledEpochMs));
+    assert.ok(playing.commandTiming.presentationSettledEpochMs >= playing.commandTiming.acceptedEpochMs);
     const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
     settled = false;
     const seeking = request(f.control.port2, "seek", 2, { time: 1.25 }).then(result => { settled = true; return result; });
@@ -3224,6 +3225,7 @@ test("finite audio prepares silently and anchors resume/seek only after matching
     const sought = await seeking;
     assert.equal(sought.audioAnchor.time, 1.25);
     assert.equal(sought.audioAnchor.playing, true);
+    assert.ok(sought.commandTiming.presentationSettledEpochMs >= sought.commandTiming.acceptedEpochMs);
     assert.equal(f.stats().created, 1, "the original player remains sole execution owner");
   } finally { endpoint?.stop(); f.close(); }
 });
@@ -3508,6 +3510,7 @@ test("prepared execution publishes admitted Rust cues and waits for section pres
     present(f.render.port2, delta);
     const result = await seeking;
     assert.equal(result.time, 0.75);
+    assert.ok(result.commandTiming.presentationSettledEpochMs >= result.commandTiming.acceptedEpochMs);
 
     noChangeProof = JSON.stringify({ ...currentPublication, time: 0 });
     const unchanged = await request(f.control.port2, "seek_section", 2, { previous: false });

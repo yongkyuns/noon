@@ -309,6 +309,26 @@ export async function attachSemanticEngine(
     pendingPresentation.promise = promise;
     return promise;
   };
+  const settlePreparedControlPresentation = async (publication, selectedTime, command = "control") => {
+    const noChangeProof = publication === null
+      ? JSON.parse(player.takePreparedNoChangePresentationJson() ?? "null") : null;
+    const proofMatches = publication !== null || (noChangeProof !== null &&
+      noChangeProof.session === lastSentPublication?.session &&
+      noChangeProof.sequence === lastSentPublication?.sequence &&
+      noChangeProof.time === selectedTime);
+    if (!proofMatches) {
+      throw new Error(`prepared no-change ${command} lacks a matching Rust presentation proof`);
+    }
+    const presented = await awaitPresentation(publication);
+    if (presented === null || !Number.isFinite(presented.time) ||
+        (publication !== null && presented.time !== selectedTime)) {
+      throw new Error(`prepared ${command} did not receive a matching displayed-time receipt`);
+    }
+    return {
+      session: presented.session, sequence: presented.sequence, time: selectedTime,
+      unchanged: publication === null,
+    };
+  };
   const notePresentedPublication = (publication) => {
     if (!publication || !Number.isSafeInteger(publication.session) ||
         publication.session < 0 || !Number.isSafeInteger(publication.sequence) ||
@@ -1070,6 +1090,7 @@ export async function attachSemanticEngine(
       let sourceCompleted;
       let pointerInputAccepted;
       let sampleTiming = null;
+      let commandTiming = null;
       let audioAnchor;
       let presentationReceipt = null;
       let noTargetSectionQuery = false;
@@ -1114,7 +1135,15 @@ export async function attachSemanticEngine(
             if (prepared !== null) {
               if (!preparedClockAdmitted) player.setPreparedPlaying(false);
               else player.pausePreparedAt(performance.now());
-              drainAndSendDelta();
+              const acceptedEpochMs = performance.now();
+              const publication = drainAndSendDelta();
+              presentationReceipt = await settlePreparedControlPresentation(
+                publication, player.preparedTime(),
+              );
+              commandTiming = {
+                acceptedEpochMs,
+                presentationSettledEpochMs: performance.now(),
+              };
               observeExecutionWake(performance.now(), true);
               break;
             }
@@ -1130,8 +1159,13 @@ export async function attachSemanticEngine(
               if (time > player.time()) await advanceToAuthoredTime(time);
             }
             player.pause();
+            const acceptedEpochMs = performance.now();
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else observeExecutionWake(performance.now(), true);
+            if (hasAudio) {
+              await awaitPresentation(null);
+              commandTiming = { acceptedEpochMs, presentationSettledEpochMs: performance.now() };
+            }
             break;
           }
           case "resume": {
@@ -1148,6 +1182,20 @@ export async function attachSemanticEngine(
             }
             if (prepared !== null) player.setPreparedPlaying(true);
             else player.resume();
+            const acceptedEpochMs = performance.now();
+            if (prepared !== null) {
+              const publication = drainAndSendDelta();
+              presentationReceipt = await settlePreparedControlPresentation(
+                publication, player.preparedTime(),
+              );
+              commandTiming = {
+                acceptedEpochMs,
+                presentationSettledEpochMs: performance.now(),
+              };
+            } else if (hasAudio) {
+              await awaitPresentation(null);
+              commandTiming = { acceptedEpochMs, presentationSettledEpochMs: performance.now() };
+            }
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else if (!hasAudio) observeExecutionWake(performance.now(), true);
             break;
@@ -1180,30 +1228,22 @@ export async function attachSemanticEngine(
             const delta = message.type === "seek_section"
               ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
+            const acceptedEpochMs = performance.now();
             const publication = send(delta);
             if (prepared !== null) {
               const selectedTime = player.preparedTime();
-              const noChangeProof = publication === null
-                ? JSON.parse(player.takePreparedNoChangePresentationJson() ?? "null") : null;
-              const proofMatches = publication !== null || (noChangeProof !== null &&
-                noChangeProof.session === lastSentPublication?.session &&
-                noChangeProof.sequence === lastSentPublication?.sequence &&
-                noChangeProof.time === selectedTime);
-              if (!proofMatches) {
-                throw new Error("prepared no-change seek lacks a matching Rust presentation proof");
-              }
-              const presented = await awaitPresentation(publication);
-              if (presented === null || !Number.isFinite(presented.time) ||
-                  (publication !== null && presented.time !== selectedTime)) {
-                throw new Error("prepared seek did not receive a matching displayed-time receipt");
-              }
-              presentationReceipt = {
-                session: presented.session, sequence: presented.sequence, time: selectedTime,
-                unchanged: publication === null,
+              presentationReceipt = await settlePreparedControlPresentation(publication, selectedTime, "seek");
+              commandTiming = {
+                acceptedEpochMs,
+                presentationSettledEpochMs: performance.now(),
               };
               if (playing) player.setPreparedPlaying(true);
             } else if (hasAudio) {
               await awaitPresentation(publication);
+              commandTiming = {
+                acceptedEpochMs,
+                presentationSettledEpochMs: performance.now(),
+              };
               if (playing) player.resume();
             } else observeExecutionWake(performance.now());
             break;
@@ -1330,6 +1370,7 @@ export async function attachSemanticEngine(
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
           ...(sampleTiming === null ? {} : { sampleTiming }),
+          ...(commandTiming === null ? {} : { commandTiming }),
           ...(audioAnchor === undefined ? {} : { audioAnchor }),
           ...(presentationReceipt === null ? {} : { presentationReceipt }),
           ...(finiteExport === undefined ? {} : { finiteExport }),

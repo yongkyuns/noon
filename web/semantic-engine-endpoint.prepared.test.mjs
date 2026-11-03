@@ -56,7 +56,8 @@ function fixture(mode = "transferable", options = {}) {
     seekDeltaJson,
     preparedTime: () => time,
     takePreparedNoChangePresentationJson() {
-      const proof = noChangeProof; noChangeProof = null;
+      const proof = noChangeProof ?? { session: 7, sequence: sequence - 1, time };
+      noChangeProof = null;
       return proof === null ? null : JSON.stringify(proof);
     },
     preparedFrontier: () => frontier,
@@ -72,8 +73,12 @@ function fixture(mode = "transferable", options = {}) {
     preparedPlaybackTimeAt(wallTime) { record("observe-time", wallTime); return observation ?? time; },
     pausePreparedAt(wallTime) {
       record("pause-at", wallTime); time = observation ?? time; playing = false;
+      noChangeProof = { session: 7, sequence: sequence - 1, time };
     },
-    setPreparedPlaying(value) { record("playing", value); playing = value; },
+    setPreparedPlaying(value) {
+      record("playing", value); playing = value;
+      noChangeProof = { session: 7, sequence: sequence - 1, time };
+    },
     executionWake(wallTime) {
       record("wake", wallTime);
       return { cadence: playing && !buffering ? "animation_frame" : "idle", timerAfterMilliseconds: null };
@@ -223,12 +228,24 @@ for (const mode of ["transferable", "shared"]) {
       assert.equal(f.count("observe-time"), 0);
       assert.equal(f.count("tick"), 0);
       assert.equal(f.count("wake"), 0, "transport consumption and future delivery do not start a clock");
-      assert.equal((await f.request("pause")).playing, false);
-      assert.equal(f.count("pause-at"), 0, "cold pause cannot observe wall time");
-      assert.equal((await f.request("resume")).playing, true);
-      assert.equal(f.count("wake"), 0);
+      const pausing = f.request("pause");
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(f.replies.some(reply => reply.type === "pause"), false,
+        "prepared pause waits for the cached initial picture's matching receipt");
       await f.present();
-      assert.equal(f.count("wake"), 1);
+      const paused = await pausing;
+      assert.equal(paused.playing, false);
+      assert.ok(paused.commandTiming.presentationSettledEpochMs >= paused.commandTiming.acceptedEpochMs);
+      assert.deepEqual(paused.presentationReceipt, {
+        session: 7, sequence: f.deltas[0].sequence, time: 0, unchanged: true,
+      });
+      assert.equal(f.count("pause-at"), 0, "cold pause cannot observe wall time");
+      const resumed = await f.request("resume");
+      assert.equal(resumed.playing, true);
+      assert.ok(resumed.commandTiming.presentationSettledEpochMs >= resumed.commandTiming.acceptedEpochMs);
+      assert.deepEqual(resumed.presentationReceipt, paused.presentationReceipt,
+        "resume reuses the already-presented cached frame without forcing a render");
+      assert.ok(f.count("wake") >= 1, "the matching presentation admits subsequent source wakes");
       f.tick(999_999_999);
       await f.when(() => f.count("tick") === 1);
       assert.notEqual(f.calls.find(call => call[0] === "tick")[1], 999_999_999,
