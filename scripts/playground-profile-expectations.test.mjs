@@ -22,18 +22,18 @@ function diagnosticsFor(expected) {
   const dispositionCapabilities = { commands: [...expected.capabilities.dispositionCommands],
     replay: expected.capabilities.replayAtDisposition,
     audio: expected.capabilities.audio, sections: expected.capabilities.sections };
-  const events = [{ sequence: 1, stage: 'attached', profile: expected.attachedProfile, contextId,
+  const events = [{ sequence: 0, stage: 'attached', profile: expected.attachedProfile, contextId,
     continuationGeneration: 4, capabilities: attachedCapabilities,
     reason: expected.dispositionKind === 'callback' ? { code: 'host_callbacks' } : undefined,
   }];
-  if (expected.dispositionKind === 'input-handoff') events.push({ sequence: 2, stage: 'profile-change',
+  if (expected.dispositionKind === 'input-handoff') events.push({ sequence: events.length, stage: 'profile-change',
     profile: 'observed', contextId, continuationGeneration: 4, preparedFrontier: 2, time: 2,
     boundaryValidated: true, reason: { code: 'native_input' } });
   if (expected.disposition === 'looped' || expected.disposition === 'finite-complete') events.push(
-    { sequence: events.length + 1, stage: 'source-complete', contextId },
-    { sequence: events.length + 2, stage: 'terminal-adopted', contextId },
+    { sequence: events.length, stage: 'source-complete', contextId },
+    { sequence: events.length + 1, stage: 'terminal-adopted', contextId },
   );
-  events.push({ sequence: events.length + 1, stage: 'disposition', disposition: expected.disposition,
+  events.push({ sequence: events.length, stage: 'disposition', disposition: expected.disposition,
     contextId, capabilities: dispositionCapabilities,
     ...(expected.disposition === 'looped' ? { loopCount: 1 } : {}) });
   return { schemaVersion: 1, interpreterGeneration: 3, runRequestId: 17,
@@ -72,9 +72,9 @@ test('diagnostics reject unexpected late fallback and requested-versus-attached 
   const expected = SHOWCASE_PROFILE_EXPECTATIONS[0];
   const fallback = diagnosticsFor(expected);
   const contextId = fallback.events[0].contextId;
-  fallback.events.splice(1, 0, { sequence: 2, stage: 'profile-change', profile: 'observed',
+  fallback.events.splice(1, 0, { sequence: 1, stage: 'profile-change', profile: 'observed',
     contextId, reason: { code: 'host_effects' } });
-  fallback.events.forEach((event, index) => { event.sequence = index + 1; });
+  fallback.events.forEach((event, index) => { event.sequence = index; });
   assert.throws(() => validateShowcaseDiagnostics(expected, fallback), /unexpected profile transition/);
 
   const wrongAttachment = diagnosticsFor(expected);
@@ -103,6 +103,17 @@ test('diagnostics reject dropped events, missing disposition, or missing command
   const noWrap = diagnosticsFor(expected);
   delete noWrap.events.at(-1).loopCount;
   assert.throws(() => validateShowcaseDiagnostics(expected, noWrap), /completed wrap/);
+});
+
+test('completed callback dispositions expose no transport commands', () => {
+  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.dispositionKind === 'callback');
+  const diagnostics = diagnosticsFor(expected);
+  diagnostics.events.at(-1).capabilities.commands = ['seek', 'restart'];
+  assert.throws(() => validateShowcaseDiagnostics(expected, diagnostics), /nonreplayable disposition/);
+
+  const missingCapabilityList = diagnosticsFor(expected);
+  delete missingCapabilityList.events.at(-1).capabilities.commands;
+  assert.throws(() => validateShowcaseDiagnostics(expected, missingCapabilityList), /must be explicit/);
 });
 
 test('translation drag requires the original native-input transition', () => {
