@@ -250,6 +250,8 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
             | PreparedSourceStatus::Failed
             | PreparedSourceStatus::Cancelled
             | PreparedSourceStatus::Transferred => return Ok(false),
+            PreparedSourceStatus::PreparingResources
+            | PreparedSourceStatus::ResourcePublicationPending(_) => return Ok(false),
             PreparedSourceStatus::ExecutionRequired(_)
                 if self.reader.is_some() && !self.buffering =>
             {
@@ -377,7 +379,7 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
     pub fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
         match &self.source {
             Source::Observed(program) => program.pending_effect_programs(),
-            _ => None,
+            Source::Preparing(source) => source.pending_effect_programs(),
         }
     }
     pub fn publish_prepared_effects(&mut self) -> Result<(), PlaybackProgramError<C::Error>> {
@@ -386,7 +388,28 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
                 .publish_prepared_effects()
                 .map(|_| ())
                 .map_err(PlaybackProgramError::Program),
-            _ => Err(PlaybackProgramError::Unavailable),
+            Source::Preparing(source) => source
+                .publish_prepared_effects()
+                .map_err(PlaybackProgramError::Preparation),
+        }
+    }
+    /// Resource preparation for the retained producer is distinct from taking
+    /// the displayed reader's renderer publication or acknowledging presentation.
+    pub fn take_effect_resource_publication(&mut self) -> Option<RendererPublication<'_>> {
+        match &mut self.source {
+            Source::Preparing(source) => source.take_effect_resource_publication(),
+            Source::Observed(_) => None,
+        }
+    }
+    pub fn admit_effect_resource_publication(
+        &mut self,
+        publication: PublicationContext,
+    ) -> Result<(), PlaybackProgramError<C::Error>> {
+        match &mut self.source {
+            Source::Preparing(source) => source
+                .admit_effect_resource_publication(publication)
+                .map_err(PlaybackProgramError::Preparation),
+            Source::Observed(_) => Err(PlaybackProgramError::Unavailable),
         }
     }
     pub fn admit_publication(

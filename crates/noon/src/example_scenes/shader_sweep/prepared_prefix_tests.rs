@@ -152,3 +152,40 @@ fn shader_sweep_prepared_history_matches_source_and_pins_shader_versions() {
         assert!(Arc::ptr_eq(&right_module, &shader_module(&right)));
     }
 }
+
+#[test]
+fn cancelling_late_resource_preparation_keeps_the_delivered_reader_usable() {
+    let mut source = late_program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::ReaderReady
+    );
+    let mut reader = source.take_reader().unwrap();
+    reader.seek(0.25).unwrap();
+    let baseline = reader.frame().clone();
+
+    loop {
+        match source.prepare_next().unwrap() {
+            PreparedSourceStatus::Ready => {}
+            PreparedSourceStatus::BatchReady => {
+                reader.append(source.take_batch().unwrap()).unwrap();
+                assert_eq!(reader.frame(), &baseline);
+            }
+            PreparedSourceStatus::PreparingResources => break,
+            status => panic!("unexpected late shader status: {status:?}"),
+        }
+    }
+    assert!(source.pending_effect_programs().is_some());
+    source.cancel();
+    assert_eq!(source.status(), PreparedSourceStatus::Cancelled);
+    assert!(source.pending_effect_programs().is_none());
+    assert!(source.publish_prepared_effects().is_err());
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::Cancelled
+    );
+    assert_eq!(reader.frame(), &baseline);
+}

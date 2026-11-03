@@ -6,6 +6,66 @@ use std::{
     rc::Rc,
 };
 
+#[test]
+fn late_shader_resources_pause_the_prepared_source_without_reader_handoff() {
+    let program = crate::example_scenes::shader_sweep::late_program().unwrap();
+    let mut player = program.into_playback().unwrap();
+    let mut callbacks = RustHostCallbackTable::new();
+    player.prepare_ready(&mut callbacks).unwrap();
+    assert!(player.presentation_ready());
+    player.advance_to(&mut callbacks, 0.25).unwrap();
+    let baseline = player.session().unwrap().frame().clone();
+    let identity = player.session().unwrap().runtime_identity();
+
+    // The first segment is retained, then the same source reaches its late
+    // shader attachment and waits for trusted resources instead of handoff.
+    for _ in 0..4 {
+        player.prepare_ready(&mut callbacks).unwrap();
+        if player.pending_effect_programs().is_some() {
+            break;
+        }
+    }
+    let pending = player
+        .pending_effect_programs()
+        .expect("late shader programs remain on prepared source");
+    assert_eq!(pending.len(), 2);
+    assert_eq!(player.session().unwrap().frame(), &baseline);
+    assert_eq!(player.session().unwrap().runtime_identity(), identity);
+
+    // Polling while the host compiles resources cannot rerun the continuation or
+    // transfer it to observed execution.
+    for _ in 0..2 {
+        assert!(!player.prepare_ready(&mut callbacks).unwrap());
+        assert_eq!(player.pending_effect_programs().unwrap().len(), 2);
+        assert_eq!(player.session().unwrap().frame(), &baseline);
+    }
+    player.publish_prepared_effects().unwrap();
+    assert!(!player.prepare_until(&mut callbacks, 6.5).unwrap());
+    assert_eq!(player.session().unwrap().frame(), &baseline);
+    let publication = player
+        .take_effect_resource_publication()
+        .expect("source resource publication is separate from reader display");
+    let context = publication.context();
+    drop(publication);
+    assert_eq!(player.session().unwrap().frame(), &baseline);
+    assert!(player
+        .admit_effect_resource_publication(Default::default())
+        .is_err());
+    player.admit_effect_resource_publication(context).unwrap();
+    assert_eq!(player.session().unwrap().runtime_identity(), identity);
+
+    // Normal producer work now continues on the same retained owner.
+    for _ in 0..32 {
+        player.prepare_until(&mut callbacks, 6.5).unwrap();
+        if player.end_time().is_some() {
+            break;
+        }
+    }
+    assert_eq!(player.end_time(), Some(6.0));
+    assert_eq!(player.session().unwrap().runtime_identity(), identity);
+    assert_eq!(player.session().unwrap().frame(), &baseline);
+}
+
 struct Pure {
     target: Mobject,
     calls: Rc<Cell<usize>>,
