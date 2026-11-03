@@ -409,6 +409,44 @@ class SourceEffectsTests(unittest.TestCase):
              '        group = VGroup(Square())\n'
              '        self.play(LaggedStartMap(FadeIn, group, self.wait))\n',
              'unproven_callback_argument', 'self.wait'),
+            ('from noon import *\nfactory = LaggedStartMap\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(factory(FadeIn, group, arg_creator=self.wait))\n',
+             'unproven_callback_factory', 'LaggedStartMap'),
+            ('from noon import *\nfactory = LaggedStartMap\nwrapped = factory\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(wrapped(FadeIn, group, arg_creator=self.play))\n',
+             'unproven_callback_factory', 'LaggedStartMap'),
+            ('from noon import LaggedStartMap as Make\nfrom noon import *\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(Make(FadeIn, group, arg_creator=self.wait))\n',
+             'unproven_callback_factory', 'from noon import LaggedStartMap as Make'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(LaggedStartMap, group))\n',
+             'unproven_callback_factory', 'LaggedStartMap'),
+            ('from noon import *\nanimation_factory = FadeIn\n'
+             'def helper(animation_factory, group):\n'
+             '    return LaggedStartMap(animation_factory, group, '
+             'arg_creator=lambda member: (member,))\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(helper(self.wait, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(*[FadeIn, group]))\n',
+             'unproven_callback_arguments', 'LaggedStartMap(*[FadeIn, group])'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(self.wait, group))\n',
+             'unproven_callback_factory', 'self.wait'),
             ('from noon import *\nclass Example(Scene):\n'
              '    def construct(self):\n'
              '        group = VGroup(Square())\n'
