@@ -44,6 +44,7 @@ TransformMatchingShapes
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
 ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur GlowPulse
 """.split())
+_SOURCE_MAPPED_ANIMATION_FACTORIES = frozenset("FadeIn FadeOut".split())
 _SOURCE_FUNCTIONS = frozenset("""
 linear smooth rush_into rush_from there_and_back color_from_hex interpolate_color
 always_redraw
@@ -114,9 +115,9 @@ def _inert_factory_aliases(tree):
                     assignments[target.id] = node.value if isinstance(node.value, ast.Name) else None
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             assignments[node.target.id] = node.value if isinstance(node.value, ast.Name) else None
-    return frozenset(name for name, value in assignments.items()
-                     if stores.get(name) == 1 and value is not None
-                     and value.id in _SOURCE_CONSTRUCTORS)
+    return {name: value.id for name, value in assignments.items()
+            if stores.get(name) == 1 and value is not None
+            and value.id in _SOURCE_MAPPED_ANIMATION_FACTORIES}
 
 
 class _SourceBindings(ast.NodeVisitor):
@@ -197,7 +198,7 @@ class _SourceBindings(ast.NodeVisitor):
 
 class _SceneOnlySource(ast.NodeVisitor):
     def __init__(self, tree, star_exports):
-        self.inert_factory_aliases = _inert_factory_aliases(tree)
+        factory_aliases = _inert_factory_aliases(tree)
         self.admitted_lagged_map_loads = set()
         bindings = _SourceBindings()
         for node in tree.body:
@@ -210,6 +211,10 @@ class _SceneOnlySource(ast.NodeVisitor):
             name = next(name for name in bindings.locations if name in blocked)
             raise _OpaqueSource(bindings.locations[name], "unproven_binding")
         self.module_bindings = bindings.names
+        self.inert_factory_aliases = {
+            alias: target for alias, target in factory_aliases.items()
+            if target not in self.module_bindings
+        }
         noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
         imported = frozenset().union(*star_exports.values())
         conflicts = (imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})
@@ -278,9 +283,11 @@ class _SceneOnlySource(ast.NodeVisitor):
             for factory in factories:
                 if not isinstance(factory, ast.Name):
                     raise _OpaqueSource(factory, "unproven_callback_factory")
+                if factory.id == "Code":
+                    continue  # Preserve its more specific resource-reference proof failure.
                 if factory.id == "LaggedStartMap":
                     raise _OpaqueSource(factory, "unproven_callback_factory")
-                direct_constructor = factory.id in _SOURCE_CONSTRUCTORS and (
+                direct_constructor = factory.id in _SOURCE_MAPPED_ANIMATION_FACTORIES and (
                     factory.id not in self.module_bindings
                     and not any(factory.id in scope for scope in self.scopes[1:])
                 )

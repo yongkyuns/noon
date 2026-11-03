@@ -448,6 +448,23 @@ class SourceEffectsTests(unittest.TestCase):
              '        self.play(LaggedStartMap(self.wait, group))\n',
              'unproven_callback_factory', 'self.wait'),
             ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self, LaggedStartMap):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group))\n',
+             'unproven_shadowed_constructor', 'LaggedStartMap'),
+            ('from noon import *\n'
+             'def FadeIn(member):\n    member.wait(0.1)\n    return Circle()\n'
+             'animation_factory = FadeIn\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(animation_factory, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(Scene, group))\n',
+             'unproven_callback_factory', 'Scene'),
+            ('from noon import *\nclass Example(Scene):\n'
              '    def construct(self):\n'
              '        group = VGroup(Square())\n'
              '        animation_factory = self.play\n'
