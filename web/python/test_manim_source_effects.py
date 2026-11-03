@@ -23,6 +23,20 @@ class SourceEffectsTests(unittest.TestCase):
         self.assertFalse(proof["admitted"])
         self.assertEqual(proof["reason"]["code"], "unknown_name")
 
+    def test_text_math_showcase_uses_shared_native_text_and_typst_resources(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_text_math.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        for constructor in ("MathTex", "prepare_latex"):
+            with self.subTest(constructor=constructor):
+                proof = source_execution_proof(
+                    f"from noon import *\n{constructor}('x')\n"
+                )
+                self.assertFalse(proof["admitted"])
+                self.assertEqual(proof["reason"]["code"], "unknown_name")
+
     def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_ordered_reveal.py"

@@ -36,7 +36,7 @@ MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
 # Unknown dispatch, descriptors and source hooks keep observed execution.
 _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
-Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text Code MathTypst
+Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
