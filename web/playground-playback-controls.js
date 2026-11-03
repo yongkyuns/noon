@@ -1007,7 +1007,9 @@ function validatePreparedState(state) {
   const { time, preparedFrontier, durationSeconds, buffering, seekRange } = state;
   const rangeValid = seekRange === null || (seekRange !== undefined &&
     Number.isFinite(seekRange.start) && seekRange.start >= 0 &&
-    Number.isFinite(seekRange.end) && seekRange.end >= seekRange.start);
+    Number.isFinite(seekRange.end) && seekRange.end >= seekRange.start &&
+    seekRange.end <= preparedFrontier &&
+    (durationSeconds === null ? seekRange.end < preparedFrontier : seekRange.end === durationSeconds));
   if (state.preparedPlayback !== true || state.replaySupported !== true ||
       !Number.isFinite(preparedFrontier) || preparedFrontier < 0 ||
       (preparedFrontier === 0 && durationSeconds !== 0) ||

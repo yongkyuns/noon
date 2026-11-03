@@ -220,6 +220,7 @@ test("invalid prepared observations reject atomically without changing displayed
   for (const override of [
     { preparedPlayback: false }, { replaySupported: false }, { replaySupported: undefined },
     { preparedFrontier: NaN }, { preparedFrontier: Infinity }, { preparedFrontier: 0 },
+    { seekRange: { start: 0, end: 2 } }, { seekRange: { start: 0, end: 3 } },
     { time: 3 }, { time: NaN }, { time: -1 }, { playing: "true" },
     { durationSeconds: undefined }, { durationSeconds: NaN }, { durationSeconds: 1 },
     { buffering: undefined }, { buffering: "false" },
