@@ -21,6 +21,38 @@ class SourceEffectsTests(unittest.TestCase):
         self.assertFalse(source_is_scene_only(source.replace(
             "        model = axes.plot", "        factory = axes.plot\n        model = factory")))
 
+    def test_spatial_showcases_use_the_closed_three_d_scene_wrappers(self):
+        examples = Path(__file__).with_name("examples")
+        for filename in ("showcase_three_d_axes.py", "showcase_spatial_scene.py"):
+            with self.subTest(filename=filename):
+                self.assertEqual(source_execution_proof((examples / filename).read_text()),
+                                 {"admitted": True, "reason": None})
+
+        unsafe_sources = (
+            # A wildcard import cannot authorize a subsequently shadowed base.
+            ('from noon import *\nThreeDScene = Scene\n'
+             'class Example(ThreeDScene):\n    def construct(self): pass\n'),
+            ('from manim import ThreeDScene\nclass Example(ThreeDScene):\n'
+             '    def construct(self): pass\n'),
+            # Additional overrides could replace the wrapper's closed methods.
+            ('from noon import *\nclass Example(ThreeDScene):\n'
+             '    def construct(self): pass\n    def move_camera(self): pass\n'),
+            # Spatial constructors are callable only directly in the proven class.
+            ('from noon import *\nclass Example(ThreeDScene):\n'
+             '    def construct(self):\n        factory = Mesh3D.parametric\n'),
+            ('from noon import *\nclass Example(ThreeDScene):\n'
+             '    def construct(self):\n'
+             '        Mesh3D.parametric(lambda u, v: (self.wait(), v, 0), '
+             'u_range=(0, 1), v_range=(0, 1), resolution=(2, 2), '
+             'color=RED, point_lit=True)\n'),
+            # The same wrapper names are not enabled on ordinary Scene classes.
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        ThreeDAxes()\n'),
+        )
+        for source in unsafe_sources:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
     def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_shape_matching.py"

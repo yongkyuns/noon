@@ -22,6 +22,7 @@ import ast
 import builtins
 import copy
 import inspect
+import math
 import sys
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
@@ -38,7 +39,7 @@ _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
-ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes
+ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes
@@ -77,6 +78,16 @@ start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_co
 animate id width height radius append extend insert pop count index get keys values
 items update union intersection difference join split strip lower upper replace
 startswith endswith encode decode hex fromhex tobytes reverse sort
+""".split())
+_SOURCE_SPATIAL_MEMBERS = frozenset("""
+set_camera_orientation move_camera point_light add_world_mobjects
+add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
+""".split())
+_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
+_SOURCE_COLOR_CONSTANTS = frozenset("""
+BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
+GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
+PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GRAY GOLD TEAL MAROON
 """.split())
 _SOURCE_MODULES = {
     "math": frozenset("""
@@ -180,6 +191,7 @@ class _SceneOnlySource(ast.NodeVisitor):
     def __init__(self, tree, star_exports):
         self.admitted_lagged_map_loads = set()
         self.admitted_plot_loads = set()
+        self.admitted_spatial_constructor_loads = set()
         bindings = _SourceBindings()
         for node in tree.body:
             bindings.visit(node)
@@ -301,6 +313,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id == "LaggedStartMap"
                 and id(node) not in self.admitted_lagged_map_loads):
             raise _OpaqueSource(node, "unproven_callback_factory")
+        if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_SPATIAL_CONSTRUCTORS
+                and id(node) not in self.admitted_spatial_constructor_loads):
+            raise _OpaqueSource(node, "unproven_spatial_constructor")
         if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
             raise _OpaqueSource(node, "unknown_name")
 
@@ -746,6 +761,13 @@ class _SceneOnlySource(ast.NodeVisitor):
             if node.args or "code_string" not in keywords or "code_file" in keywords or None in keywords:
                 raise _OpaqueSource(node, "unproven_resource_input")
             self.admitted_code_loads.add(id(node.func))
+        if self._spatial_constructor_call(node):
+            if not self._valid_spatial_constructor_call(node):
+                raise _OpaqueSource(node, "unproven_spatial_constructor")
+            if isinstance(node.func, ast.Name):
+                self.admitted_spatial_constructor_loads.add(id(node.func))
+            else:
+                self.admitted_spatial_constructor_loads.add(id(node.func.value))
         self.generic_visit(node)
 
     def visit_Await(self, node):
@@ -765,6 +787,97 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(call, "unproven_resource_preparation")
             self.admitted_resource_preparation_loads.add(id(call.func))
         self.generic_visit(node)
+
+    @staticmethod
+    def _spatial_constructor_call(node):
+        return (isinstance(node.func, ast.Name) and node.func.id in _SOURCE_SPATIAL_CONSTRUCTORS
+                or isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "Mesh3D" and node.func.attr in {"sphere", "parametric"})
+
+    @classmethod
+    def _valid_spatial_constructor_call(cls, node):
+        if any(isinstance(arg, ast.Starred) for arg in node.args) or any(k.arg is None for k in node.keywords):
+            return False
+        if isinstance(node.func, ast.Name):
+            values = {keyword.arg: keyword.value for keyword in node.keywords}
+            if len(values) != len(node.keywords):
+                return False
+            if node.func.id == "ThreeDAxes":
+                return not node.args and not node.keywords
+            if node.func.id == "Typst":
+                return (len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
+                        and isinstance(node.args[0].value, str) and not node.keywords)
+            if node.func.id == "Dot3D":
+                point = values.get("point")
+                return (not node.args and set(values) <= {"point", "radius", "color", "stroke_width", "shade_in_3d"}
+                        and isinstance(point, ast.Call) and isinstance(point.func, ast.Attribute)
+                        and point.func.attr == "c2p" and isinstance(point.func.value, ast.Name)
+                        and len(point.args) == 3 and not point.keywords
+                        and all(cls._finite_number(arg) for arg in point.args)
+                        and "radius" in values and cls._finite_number(values["radius"])
+                        and "color" in values and cls._color_literal(values["color"])
+                        and ("stroke_width" not in values or cls._finite_number(values["stroke_width"]))
+                        and ("shade_in_3d" not in values or isinstance(values["shade_in_3d"], ast.Constant)
+                             and type(values["shade_in_3d"].value) is bool))
+            if node.func.id == "WorldTransformTo":
+                return (len(node.args) == 1 and isinstance(node.args[0], ast.Name)
+                        and set(values) <= {"translation", "rotation", "scale"}
+                        and all(cls._finite_tuple(value, 4 if name == "rotation" else 3)
+                                for name, value in values.items()))
+            return False
+        values = {keyword.arg: keyword.value for keyword in node.keywords}
+        if len(values) != len(node.keywords):
+            return False
+        if node.func.attr == "sphere":
+            return (not node.args and set(values) <= {"radius", "resolution", "color"}
+                    and ("radius" not in values or cls._finite_number(values["radius"]))
+                    and ("resolution" not in values or cls._finite_tuple(values["resolution"], 2, integers=True))
+                    and ("color" not in values or cls._color_literal(values["color"])))
+        if node.func.attr == "parametric":
+            function = node.args[0] if node.args else None
+            expected = {"u_range", "v_range", "resolution", "color", "point_lit"}
+            if (len(node.args) != 1 or not isinstance(function, ast.Lambda) or len(function.args.args) != 2
+                    or function.args.posonlyargs or function.args.kwonlyargs or function.args.defaults
+                    or function.args.vararg or function.args.kwarg or set(values) != expected
+                    or not cls._finite_tuple(values["u_range"], 2)
+                    or not cls._finite_tuple(values["v_range"], 2)
+                    or not cls._finite_tuple(values["resolution"], 2, integers=True)
+                    or not cls._color_literal(values["color"])
+                    or not isinstance(values["point_lit"], ast.Constant)
+                    or type(values["point_lit"].value) is not bool):
+                return False
+            parameters = {argument.arg for argument in function.args.args}
+            return (isinstance(function.body, ast.Tuple) and len(function.body.elts) == 3
+                    and all(cls._numeric_expression(item, parameters) for item in function.body.elts))
+        return False
+
+    @staticmethod
+    def _finite_number(node, *, integers=False):
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            return _SceneOnlySource._finite_number(node.operand, integers=integers)
+        return (isinstance(node, ast.Constant) and type(node.value) in ((int,) if integers else (int, float))
+                and (type(node.value) is not float or math.isfinite(node.value)))
+
+    @classmethod
+    def _finite_tuple(cls, node, length, *, integers=False):
+        return (isinstance(node, ast.Tuple) and len(node.elts) == length
+                and all(cls._finite_number(value, integers=integers) for value in node.elts))
+
+    @classmethod
+    def _color_literal(cls, node):
+        return (isinstance(node, ast.Name) and node.id in _SOURCE_COLOR_CONSTANTS
+                or isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "Color" and not node.keywords and len(node.args) in {3, 4}
+                and all(cls._finite_number(value) for value in node.args))
+
+    @classmethod
+    def _numeric_expression(cls, node, names):
+        if cls._finite_number(node) or isinstance(node, ast.Name) and node.id in names:
+            return True
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            return cls._numeric_expression(node.operand, names)
+        return (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow))
+                and cls._numeric_expression(node.left, names) and cls._numeric_expression(node.right, names))
 
     @staticmethod
     def _is_inert_arg_creator(node):
@@ -934,7 +1047,24 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def visit_ClassDef(self, node):
         if (node.decorator_list or node.keywords or getattr(node, "type_params", ()) or len(node.bases) != 1
-                or not isinstance(node.bases[0], ast.Name) or node.bases[0].id != "Scene"):
+                or not isinstance(node.bases[0], ast.Name)):
+            raise _OpaqueSource(node, "unsupported_class_contract")
+        spatial = node.bases[0].id == "ThreeDScene"
+        if spatial:
+            if not self._trusted_three_d_scene_base():
+                raise _OpaqueSource(node, "unsupported_class_contract")
+            methods = [member for member in node.body
+                       if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            if (any(member.name not in {"__init__", "construct"} for member in methods)
+                    or sum(member.name == "construct" for member in methods) > 1
+                    or sum(member.name == "__init__" for member in methods) > 1
+                    or any(member.name == "construct" and not self._simple_three_d_construct(member)
+                           for member in methods)):
+                raise _OpaqueSource(node, "unsupported_class_contract")
+            for member in methods:
+                if member.name == "__init__":
+                    self._validate_three_d_super_init(member)
+        elif node.bases[0].id != "Scene":
             raise _OpaqueSource(node, "unsupported_class_contract")
         self.visit(node.bases[0])
         if any(not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Expr, ast.Pass))
@@ -942,8 +1072,67 @@ class _SceneOnlySource(ast.NodeVisitor):
                for member in node.body):
             raise _OpaqueSource(node, "unsupported_class_contract")
         # Methods resolve module globals, not names in their class dictionary.
-        for member in node.body:
-            self.visit(member)
+        previous_members = self.members
+        previous_module_scope = self.scopes[0]
+        if spatial:
+            self.members = self.members | _SOURCE_SPATIAL_MEMBERS
+            self.scopes[0] = self.scopes[0] | _SOURCE_SPATIAL_CONSTRUCTORS
+        try:
+            for member in node.body:
+                if spatial and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                        and member.name == "__init__":
+                    continue
+                self.visit(member)
+        finally:
+            self.members = previous_members
+            self.scopes[0] = previous_module_scope
+
+    def _trusted_three_d_scene_base(self):
+        if any("ThreeDScene" in scope for scope in self.scopes[1:]):
+            return False
+        origin = self.module_binding_locations.get("ThreeDScene")
+        if origin is None:
+            return "ThreeDScene" in self.scopes[0]
+        return (origin in self.module_imports and isinstance(origin, ast.ImportFrom)
+                and origin.module == "noon"
+                and self.module_binding_counts.get("ThreeDScene") == 1
+                and any(alias.name == "ThreeDScene" and alias.asname is None
+                        for alias in origin.names))
+
+    @staticmethod
+    def _simple_three_d_construct(node):
+        return (not node.decorator_list and node.returns is None
+                and not getattr(node, "type_params", ()) and not node.args.posonlyargs
+                and len(node.args.args) == 1 and node.args.args[0].arg == "self"
+                and not node.args.args[0].annotation and not node.args.defaults
+                and not node.args.kwonlyargs and not node.args.kw_defaults
+                and node.args.vararg is None and node.args.kwarg is None)
+
+    @staticmethod
+    def _validate_three_d_super_init(node):
+        if (not isinstance(node, ast.FunctionDef) or node.decorator_list or node.returns is not None
+                or getattr(node, "type_params", ()) or node.args.posonlyargs
+                or len(node.args.args) != 1 or node.args.args[0].arg != "self"
+                or node.args.args[0].annotation or node.args.defaults or node.args.kwonlyargs
+                or node.args.kw_defaults or node.args.vararg or node.args.kwarg):
+            raise _OpaqueSource(node, "unsupported_class_contract")
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body = body[1:]
+        if len(body) != 1 or not isinstance(body[0], ast.Expr) or not isinstance(body[0].value, ast.Call):
+            raise _OpaqueSource(node, "unsupported_class_contract")
+        call = body[0].value
+        target = call.func
+        if (not isinstance(target, ast.Attribute) or target.attr != "__init__"
+                or not isinstance(target.value, ast.Call) or not isinstance(target.value.func, ast.Name)
+                or target.value.func.id != "super" or target.value.args or target.value.keywords
+                or call.args or any(keyword.arg not in {"near", "far"} for keyword in call.keywords)
+                or len({keyword.arg for keyword in call.keywords}) != len(call.keywords)
+                or any(not isinstance(keyword.value, ast.Constant)
+                       or type(keyword.value.value) not in (int, float)
+                       for keyword in call.keywords)):
+            raise _OpaqueSource(node, "unsupported_class_contract")
 
     def visit_Lambda(self, node):
         self.visit_FunctionDef(ast.copy_location(ast.FunctionDef(name="callback", args=node.args,
