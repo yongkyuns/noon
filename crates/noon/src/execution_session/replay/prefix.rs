@@ -47,6 +47,8 @@ fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
 #[cfg(test)]
 #[path = "camera_prefix_tests.rs"]
 mod camera_prefix_tests;
+#[path = "spatial_prefix_tests.rs"]
+mod spatial_prefix_tests;
 
 /// Shared engine reasons why the current source needs observed execution.
 /// These are capability metadata, not permission to speculate callback/input work.

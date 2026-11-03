@@ -75,34 +75,85 @@ fn camera_owner(object: &CompiledObject) -> bool {
         })
 }
 
+fn world_spatial_owner(object: &CompiledObject) -> bool {
+    object.live
+        && object.spatial.as_deref().is_some_and(|spatial| {
+            spatial.camera_projection.is_none()
+                && spatial.camera_profile.is_none()
+                && spatial.camera_motions.is_none()
+                && spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World
+                && spatial.spatial_anchor_family.is_none()
+                && spatial.fixed_orientation_center.is_none()
+                && spatial.cairo_path_appearance.is_none()
+        })
+}
+
+fn spatial_history_owner(object: &CompiledObject) -> bool {
+    camera_owner(object) || world_spatial_owner(object)
+}
+
+fn same_world_spatial_owner(before: &CompiledObject, after: &CompiledObject) -> bool {
+    world_spatial_owner(before)
+        && world_spatial_owner(after)
+        && before
+            .spatial
+            .as_deref()
+            .zip(after.spatial.as_deref())
+            .is_some_and(|(before, after)| {
+                before.material == after.material
+                    && before.point_light == after.point_light
+                    && before.draw_kind == after.draw_kind
+            })
+}
+
+fn local_channel_for_objects(
+    property: Property,
+    before: &CompiledObject,
+    after: &CompiledObject,
+) -> bool {
+    match property {
+        property if local_property(property) => before.spatial.is_none() && after.spatial.is_none(),
+        Property::WorldTransform => {
+            (camera_owner(before) && camera_owner(after)) || same_world_spatial_owner(before, after)
+        }
+        Property::CameraProfile => camera_owner(before) && camera_owner(after),
+        _ => false,
+    }
+}
+
 fn local_track_for_object(track: Option<&CompiledTrack>, object: Option<&CompiledObject>) -> bool {
     track.is_none_or(|track| {
-        let typed_camera_track = matches!(
+        let typed_spatial_track = matches!(
             track.property,
             Property::WorldTransform | Property::CameraProfile
-        ) && object.is_some_and(camera_owner)
-            && object.is_some_and(|object| {
-                crate::valid_compiled_track_for_spatial(
-                    track.property,
-                    &track.values,
-                    object.spatial.as_deref(),
-                )
-            })
-            && match (&track.property, &track.values) {
-                (Property::WorldTransform, TrackValues::WorldTransform { .. }) => true,
-                (
-                    Property::CameraProfile,
-                    TrackValues::CameraProfile {
-                        from,
-                        to,
-                        near,
-                        far,
-                    },
-                ) => from.camera(*near, *far).is_some() && to.camera(*near, *far).is_some(),
-                _ => false,
-            };
-        (local_property(track.property) || typed_camera_track)
-            && super::path_motion_command_count(&track.values) == 0
+        ) && object.is_some_and(|object| match track.property {
+            Property::WorldTransform => spatial_history_owner(object),
+            Property::CameraProfile => camera_owner(object),
+            _ => false,
+        }) && object.is_some_and(|object| {
+            crate::valid_compiled_track_for_spatial(
+                track.property,
+                &track.values,
+                object.spatial.as_deref(),
+            )
+        }) && match (&track.property, &track.values) {
+            (Property::WorldTransform, TrackValues::WorldTransform { .. }) => true,
+            (
+                Property::CameraProfile,
+                TrackValues::CameraProfile {
+                    from,
+                    to,
+                    near,
+                    far,
+                },
+            ) => from.camera(*near, *far).is_some() && to.camera(*near, *far).is_some(),
+            _ => false,
+        };
+        (if object.is_some_and(|object| object.spatial.is_some()) {
+            typed_spatial_track
+        } else {
+            local_property(track.property)
+        }) && super::path_motion_command_count(&track.values) == 0
     })
 }
 
@@ -181,7 +232,8 @@ fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
     object.live
         && object.id == physical.id
         && ((object.spatial.is_none() && physical.spatial.is_none())
-            || (camera_owner(object) && camera_owner(physical)))
+            || (camera_owner(object) && camera_owner(physical))
+            || same_world_spatial_owner(object, physical))
         && object
             .effects
             .as_ref()
@@ -213,17 +265,14 @@ impl CompiledScene {
             return false;
         }
         if !old.channels.iter().all(|channel| {
-            local_property(channel.property)
-                || matches!(
-                    channel.property,
-                    Property::WorldTransform | Property::CameraProfile
-                ) && old
-                    .rows
-                    .iter()
-                    .find(|row| row.index == channel.object_index)
-                    .and_then(|row| row.object.as_ref())
-                    .zip(self.objects.get(channel.object_index as usize))
-                    .is_some_and(|(before, after)| camera_owner(before) && camera_owner(after))
+            old.rows
+                .iter()
+                .find(|row| row.index == channel.object_index)
+                .and_then(|row| row.object.as_ref())
+                .zip(self.objects.get(channel.object_index as usize))
+                .is_some_and(|(before, after)| {
+                    local_channel_for_objects(channel.property, before, after)
+                })
         }) {
             return false;
         }
@@ -270,8 +319,9 @@ impl CompiledScene {
     /// write into earlier timestamps when a row is changed more than once.
     ///
     /// Ordinary 2D lifecycle/content/property changes and typed profile history
-    /// for the existing camera owner are admitted. Family transforms, path-motion,
-    /// and other spatial rows require separate qualification.
+    /// for camera and World-domain spatial owners are admitted. Family transforms,
+    /// path-motion, anchored composition and Cairo path bounds require separate
+    /// qualification.
     /// Append-only glyph plans travel through the existing immutable plan table.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry the bounded ordered Blur/Glow profile with optional
@@ -454,7 +504,7 @@ mod camera_prefix_tests {
     }
 
     #[test]
-    fn spatial_suffix_predicate_keeps_meshes_and_lights_outside_camera_slice() {
+    fn spatial_suffix_predicate_admits_world_objects_without_broadening_camera_roles() {
         let camera = object(true, false);
         let mesh = object(false, false);
         let light = object(false, true);
@@ -462,8 +512,32 @@ mod camera_prefix_tests {
         assert!(!camera_owner(&mesh));
         assert!(!camera_owner(&light));
         assert!(local_object(&camera, &camera));
-        assert!(!local_object(&mesh, &mesh));
-        assert!(!local_object(&light, &light));
+        assert!(world_spatial_owner(&mesh));
+        assert!(world_spatial_owner(&light));
+        assert!(local_object(&mesh, &mesh));
+        assert!(local_object(&light, &light));
+        let mut changed_material = mesh.clone();
+        changed_material.spatial.as_deref_mut().unwrap().material =
+            SemanticSpatialMaterial::CairoSurface;
+        assert!(!same_world_spatial_owner(&mesh, &changed_material));
+
+        let mut anchored = mesh.clone();
+        anchored.spatial.as_deref_mut().unwrap().composition_domain =
+            SemanticSpatialCompositionDomain::FixedOrientation;
+        assert!(!world_spatial_owner(&anchored));
+        let mut cairo_path = mesh.clone();
+        cairo_path
+            .spatial
+            .as_deref_mut()
+            .unwrap()
+            .cairo_path_appearance = Some(Box::new(crate::CompiledCairoPathAppearance {
+            sheen_factor: 0.5,
+            gradient_direction: None,
+            world_family_bounds: None,
+        }));
+        assert!(!world_spatial_owner(&cairo_path));
+        assert!(!local_object(&anchored, &anchored));
+        assert!(!local_object(&cairo_path, &cairo_path));
 
         let camera_track = CompiledTrack {
             id: TrackId::new(1),
@@ -479,8 +553,26 @@ mod camera_prefix_tests {
             reconciled: false,
         };
         assert!(local_track_for_object(Some(&camera_track), Some(&camera)));
-        assert!(!local_track_for_object(Some(&camera_track), Some(&mesh)));
-        assert!(!local_track_for_object(Some(&camera_track), Some(&light)));
+        assert!(local_track_for_object(Some(&camera_track), Some(&mesh)));
+        assert!(local_track_for_object(Some(&camera_track), Some(&light)));
+
+        let mut fill = camera_track.clone();
+        fill.property = Property::Fill;
+        fill.values = TrackValues::Color {
+            from: Some(noon_core::Color::WHITE),
+            to: Some(noon_core::Color::RED),
+        };
+        assert!(!local_track_for_object(Some(&fill), Some(&mesh)));
+        assert!(!local_track_for_object(Some(&fill), Some(&light)));
+        assert!(!local_channel_for_objects(Property::Fill, &light, &light));
+        assert!(!local_track_for_object(
+            Some(&camera_track),
+            Some(&anchored)
+        ));
+        assert!(!local_track_for_object(
+            Some(&camera_track),
+            Some(&cairo_path)
+        ));
     }
 
     #[test]
