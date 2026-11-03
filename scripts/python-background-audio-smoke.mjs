@@ -29,6 +29,13 @@ const entry = manifest.entries.find(entry => entry.id === "showcase-background-m
 assert.ok(entry);
 const source = await readFile(path.join(root, "web", entry.path));
 const fourierMusicPreview = await readFile(path.join(root, "scripts/fixtures/noon_fourier_music_preview.py"));
+const fourierEpicycles = await readFile(path.join(root, "scripts/fixtures/noon_fourier_epicycles.py"));
+const fourierWithAudio = Buffer.from(fourierEpicycles.toString().replace(
+  "        stages = [prepare_stage(frequencies, coefficients, offset, n) for n in TERM_COUNTS]",
+  "        stages = [prepare_stage(frequencies, coefficients, offset, n) for n in TERM_COUNTS]\n"
+  + "        self.audio(AudioSource.small_discovery(), duration=34.65, gain=0.5, fade_in=1.5, fade_out=2.5)",
+));
+assert.notEqual(fourierWithAudio.toString(), fourierEpicycles.toString(), "combined fixture adds only the documented soundtrack call");
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const json = value => `${JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2)}\n`;
 const report = {
@@ -222,9 +229,12 @@ try {
   await page.evaluate(async () => {
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
     const original = AuthoringExecutionClient.prototype.startSemanticExecution;
-    AuthoringExecutionClient.prototype.startSemanticExecution = function (...args) {
+    audioQualification.attachments = 0;
+    AuthoringExecutionClient.prototype.startSemanticExecution = async function (...args) {
+      const result = await original.apply(this, args);
       audioQualification.execution = this;
-      return original.apply(this, args);
+      audioQualification.attachments++;
+      return result;
     };
     const { WasmWorkerAudioOutput } = await import("./pkg/noon_web.js");
     const start = WasmWorkerAudioOutput.prototype.start;
@@ -649,6 +659,45 @@ class AudioWithOrdinaryPlay(Scene):
       voice: { node: firstVoice.node, firstStop: voiceStops[0].args[0], extendedStop: laterStops.at(-1).args[0] },
       displayedSceneBytes: shown.length,
     };
+  });
+
+  await record("original Fourier epicycles use the prepared visual source and retained native history", async () => {
+    assert.equal(hash(fourierEpicycles), "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9");
+    const beforeStarts = await page.evaluate(() => audioQualification.starts.length);
+    const beforeAttachments = await page.evaluate(() => audioQualification.attachments);
+    await page.evaluate(({ source, beforeAttachments }) => {
+      const editor = document.querySelector("#python-scene-source");
+      if (!(editor instanceof HTMLTextAreaElement)) throw new Error("ordinary Python editor is unavailable");
+      window.audioQualification.fourierRunError = null;
+      window.audioQualification.fourierRunStarted = false;
+      window.audioQualification.fourierBeforeAttachments = beforeAttachments;
+      editor.value = source;
+      window.__noonExampleGallery.run().catch(error => {
+        window.audioQualification.fourierRunError = String(error?.stack ?? error);
+      });
+      window.audioQualification.fourierRunStarted = true;
+    }, { source: fourierEpicycles.toString(), beforeAttachments });
+    await page.waitForFunction(() => {
+      if (window.audioQualification.fourierRunError) throw new Error(window.audioQualification.fourierRunError);
+      return window.audioQualification.fourierRunStarted
+        && window.__noonExampleGallery?.runInFlight === true;
+    }, null, { timeout: 90_000 });
+    await page.waitForFunction(async () => {
+      if (window.audioQualification.fourierRunError) throw new Error(window.audioQualification.fourierRunError);
+      if (audioQualification.attachments <= window.audioQualification.fourierBeforeAttachments) return false;
+      try {
+        const playback = await audioQualification.execution.state();
+        return playback.preparedPlayback === true || playback.sourceExecution === "observed";
+      } catch { return false; }
+    }, null, { timeout: 180_000 });
+    const initial = await state();
+    assert.equal(initial.starts.length, beforeStarts, "the visual-only source remains silent");
+    assert.equal(initial.transport.preparedPlayback, true, "the actual reader, not a final replay, owns playback");
+    assert.ok(initial.transport.preparedFrontier > initial.transport.time);
+    assert.equal(initial.transport.durationSeconds, null, "the open prefix is not reported as final duration");
+    const poster = await page.locator("#scene").screenshot();
+    assert.ok(poster.length > 0);
+    return { fixtureSha256: hash(fourierEpicycles), state: initial.transport, posterBytes: poster.length };
   });
 
   assert.deepEqual(report.browserErrors, [], "no uncaught browser/WASM errors");

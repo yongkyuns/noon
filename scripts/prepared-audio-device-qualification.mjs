@@ -156,12 +156,40 @@ try {
       "each restarted frontier has one live source while prior voices have ended");
   }
   await page.evaluate(() => audioTest.output.stop());
+  const collapsedInterval = await page.evaluate(() => {
+    // At 0.5, the immediately preceding representable Rust time leaves a
+    // positive interval that collapses after adding it to an aged device clock.
+    const sceneTime = 0.49999999999999994;
+    audioQualification.ageContextsBy(15);
+    const before = audioQualification.starts.length;
+    const sampled = performance.timeOrigin + performance.now();
+    audioTest.output.startUntil(23, sceneTime, 0.5, sampled, sampled);
+    const startsAtBoundary = audioQualification.starts.length;
+    audioTest.output.extendUntil(23, sceneTime, 0.6, sampled, sampled);
+    return { before, startsAtBoundary, sceneTime, frontier: 0.5 };
+  });
+  assert.equal(collapsedInterval.startsAtBoundary, collapsedInterval.before,
+    "a positive Rust interval that collapses on the device clock waits without creating a source");
+  await page.waitForFunction(count => audioQualification.starts.length > count,
+    collapsedInterval.before);
+  const resumed = await page.evaluate(before => ({
+    starts: audioQualification.starts.slice(before),
+    stops: audioQualification.stops,
+  }), collapsedInterval.before);
+  assert.equal(resumed.starts.length, 1,
+    "later history growth schedules exactly one voice when the interval becomes representable");
+  const resumedStop = resumed.stops.filter(stop => stop.node === resumed.starts[0].node && stop.args.length > 0).at(-1);
+  assert.ok(resumedStop && resumedStop.args[0] > resumed.starts[0].args[0],
+    "the resumed source receives a noncollapsed finite device interval");
+  await page.evaluate(() => audioTest.output.stop());
   console.log(JSON.stringify({ status: "passed", scope: "real-webaudio-open-prefix-bounds",
     preparation: { contexts: prepared.output.length, starts: prepared.starts.length },
     firstStop: firstStop.args[0], replacementStop: replacementStop.args[0],
     futureSourceStart: future.starts[1].args[0], futureSourceStop: secondStop.args[0],
     restartOffset: restarted.starts[3].args[1], roundoff: { startsAdded: roundoff.startsAdded },
-    repeatedFrontiers: 5 }, null, 2));
+    repeatedFrontiers: 5,
+    collapsedInterval: { sceneTime: collapsedInterval.sceneTime, frontier: collapsedInterval.frontier,
+      resumedSources: resumed.starts.length } }, null, 2));
 } finally {
   await browser?.close();
   await server.close();
