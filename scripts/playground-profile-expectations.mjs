@@ -125,6 +125,30 @@ export function showcaseAudioGestureReady({ expected, patchApplied, runInFlight,
     event.capabilities.commands?.includes('play')) === true;
 }
 
+export function validateGalleryRuntimeBuildIdentity(identity, { requireSourceRevision = false } = {}) {
+  assert.equal(identity?.schema, 1, 'served runtime build identity has an unsupported schema');
+  assert.match(identity.buildId ?? '', /^[0-9a-f]{64}$/, 'served runtime build identity has no build ID');
+  if (requireSourceRevision) {
+    assert.match(identity.sourceRevision ?? '', /^[0-9a-f]{40}$/, 'profile gate requires a clean packaged source revision');
+  } else {
+    assert.ok(identity.sourceRevision === null || /^[0-9a-f]{40}$/.test(identity.sourceRevision),
+      'served runtime build identity has an invalid source revision');
+  }
+  assert.deepEqual(Object.keys(identity.files ?? {}).sort(), ['glue', 'verifier', 'wasm', 'worker'],
+    'served runtime build identity has an incomplete file inventory');
+  const paths = { worker: './python-worker.js', wasm: './pkg/noon_web_bg.wasm',
+    glue: './pkg/noon_web.js', verifier: './runtime-build-verifier.js' };
+  for (const [name, file] of Object.entries(identity.files)) {
+    assert.match(file?.sha256 ?? '', /^[0-9a-f]{64}$/, 'served runtime build identity has an invalid file hash');
+    assert.equal(file.path, paths[name], `served runtime build identity has an invalid ${name} path`);
+  }
+  return identity;
+}
+
+export function assertGalleryRuntimeBuildIdentityUnchanged(before, after) {
+  assert.deepEqual(after, before, 'served runtime package identity changed during execution');
+}
+
 export function validateShowcaseInventory(manifestEntries, readSource) {
   const actual = new Map(manifestEntries.map(entry => [entry.id, entry]));
   assert.equal(actual.size, manifestEntries.length, 'showcase manifest contains duplicate IDs');

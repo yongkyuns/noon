@@ -12,7 +12,7 @@ import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryPoolForProfileGate, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
-import { evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, showcaseAudioGestureReady, SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
+import { assertGalleryRuntimeBuildIdentityUnchanged, evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, showcaseAudioGestureReady, SHOWCASE_PROFILE_EXPECTATIONS, validateGalleryRuntimeBuildIdentity, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
@@ -90,6 +90,11 @@ try {
   const workerResponse = await fetch(new URL('python-worker.js', base), { signal: AbortSignal.timeout(20000) });
   assert.ok(workerResponse.ok, 'gallery worker source is unavailable');
   runtimeCache = createPyodideResourceCache(await workerResponse.text());
+  const servedRuntimeBuildIdentity = await json(`runtime-build-identity.json?t=${Date.now()}`);
+  await writeFile(path.join(artifacts, 'runtime-build-identity.json'), stringify(servedRuntimeBuildIdentity));
+  const runtimeBuildIdentity = validateGalleryRuntimeBuildIdentity(servedRuntimeBuildIdentity, {
+    requireSourceRevision: profileGateMode !== 'disabled',
+  });
   const revision = external ? await json(`build-info.json?t=${Date.now()}`) : null;
   if (process.env.NOON_GALLERY_REVISION) assert.equal(revision?.commit, process.env.NOON_GALLERY_REVISION);
   const manifests = await Promise.all(galleryManifestPaths.map(relative => json(relative)));
@@ -113,6 +118,8 @@ try {
     profile,
     shard,
     profileGateMode,
+    runtimeBuildId: runtimeBuildIdentity.buildId,
+    runtimeSourceRevision: runtimeBuildIdentity.sourceRevision,
     sourceCaseCount: entries.length,
     profileGateScope: profileGateMode === 'disabled' ? 'disabled'
       : selectedIds ? 'focused' : 'full-catalog',
@@ -194,6 +201,7 @@ try {
     const expectedProfile = profileGateMode === 'disabled' ? null
       : SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === entry.id) ?? null;
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(),
+      runtimeBuildIdentity: { beforeBuildId: runtimeBuildIdentity.buildId, afterBuildId: null, unchanged: false },
       ...(expectedProfile ? { source: { path: expectedProfile.path, sha256: expectedProfile.sha256 } } : {}),
       errors: [], failedRequests: [], samples: [], presentations: [] };
     let audioGestureIssued = false;
@@ -494,6 +502,25 @@ try {
           mode: profileGateMode,
           ...evaluateShowcaseDiagnostics(expectedProfile, snapshot),
         };
+      }
+      if (result.runtimeBuildIdentity.afterBuildId === null) {
+        let after = null;
+        try {
+          after = validateGalleryRuntimeBuildIdentity(
+            await json(`runtime-build-identity.json?t=${Date.now()}`), {
+              requireSourceRevision: profileGateMode !== 'disabled',
+            });
+          result.runtimeBuildIdentity.afterBuildId = after.buildId;
+          assertGalleryRuntimeBuildIdentityUnchanged(runtimeBuildIdentity, after);
+          result.runtimeBuildIdentity.unchanged = true;
+        } catch (error) {
+          if (after !== null) result.runtimeBuildIdentity.after = after;
+          result.runtimeBuildIdentity.afterError = String(error);
+          result.outcome = 'fail';
+          result.failure = result.failure
+            ? `${result.failure}; runtime identity check: ${String(error)}`
+            : `runtime identity check: ${String(error)}`;
+        }
       }
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
       result.browserTrace = trace.snapshot();

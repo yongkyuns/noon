@@ -5,10 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
+  assertGalleryRuntimeBuildIdentityUnchanged,
   SHOWCASE_PROFILE_EXPECTATIONS,
   evaluateShowcaseDiagnostics,
   galleryCaseLifecycleReady,
   showcaseAudioGestureReady,
+  validateGalleryRuntimeBuildIdentity,
   validateShowcaseDiagnostics,
   validateShowcaseInventory,
 } from './playground-profile-expectations.mjs';
@@ -60,6 +62,25 @@ test('inventory binds all 33 unchanged showcase IDs, paths and exact source byte
 test('inventory rejects a missing case and a changed source hash', () => {
   assert.throws(() => validateShowcaseInventory(manifest.entries.slice(1), readSource), /catalog IDs differ/);
   assert.throws(() => validateShowcaseInventory(manifest.entries, () => Buffer.from('changed bytes')), /source hash changed/);
+});
+
+test('runtime package identity records clean source revision and file hashes for profile gating', () => {
+  const identity = { schema: 1, sourceRevision: 'a'.repeat(40), buildId: 'b'.repeat(64), files: {
+    worker: { path: './python-worker.js', sha256: 'c'.repeat(64) },
+    wasm: { path: './pkg/noon_web_bg.wasm', sha256: 'd'.repeat(64) },
+    glue: { path: './pkg/noon_web.js', sha256: 'e'.repeat(64) },
+    verifier: { path: './runtime-build-verifier.js', sha256: 'f'.repeat(64) },
+  } };
+  assert.equal(validateGalleryRuntimeBuildIdentity(identity, { requireSourceRevision: true }), identity);
+  assert.throws(() => validateGalleryRuntimeBuildIdentity({ ...identity, sourceRevision: null },
+    { requireSourceRevision: true }), /clean packaged source revision/);
+  assert.throws(() => validateGalleryRuntimeBuildIdentity({ ...identity, files: {
+    ...identity.files, worker: { ...identity.files.worker, sha256: 'short' },
+  } }), /invalid file hash/);
+  assert.equal(assertGalleryRuntimeBuildIdentityUnchanged(identity, structuredClone(identity)), undefined);
+  const replacedPackage = structuredClone(identity);
+  replacedPackage.files.wasm.sha256 = 'f'.repeat(64);
+  assert.throws(() => assertGalleryRuntimeBuildIdentityUnchanged(identity, replacedPackage), /identity changed/);
 });
 
 test('diagnostics accept actual profile attachment and required capabilities', () => {
