@@ -411,7 +411,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         source = node.args[0]
         source_text = (source.value if isinstance(source, ast.Constant) and type(source.value) is str
                        else self.shader_source_constants.get(source.id)
-                       if isinstance(source, ast.Name) else None)
+                       if isinstance(source, ast.Name)
+                       and not any(source.id in scope for scope in self.scopes[1:]) else None)
         if source_text is None or not source_text.strip() or len(source_text.encode("utf-8")) > 1024 * 1024:
             raise _OpaqueSource(source, "unproven_shader_source")
         values = {keyword.arg: keyword.value for keyword in node.keywords}

@@ -340,6 +340,10 @@ class Example(Scene):
         ''')))
 
         unsafe_sources = (
+            'from noon import *\nSOURCE = "fn shade() {}"\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        SOURCE = context\n'
+            '        program = WgslEffectProgram(SOURCE, parameters=[])\n',
             'from noon import *\nclass Example(Scene):\n'
             '    def construct(self):\n'
             '        program = WgslEffectProgram(open("shader.wgsl").read(), parameters=[])\n',
