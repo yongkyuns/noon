@@ -226,6 +226,56 @@ fn history_payload_bootstrap_charges_the_initial_supported_effect_stack() {
 }
 
 #[test]
+fn history_payload_charges_an_immutable_initial_backdrop_blur() {
+    use noon_compile::{CompiledEffect, CompiledEffectStack};
+    use noon_core::{BackdropBlur, EffectDefinition, SemanticNodeId};
+
+    let mut row = object(0);
+    row.effects = Some(Arc::new(
+        CompiledEffectStack::new([CompiledEffect {
+            attachment: SemanticNodeId::new(19, 1),
+            definition: EffectDefinition::BackdropBlur(BackdropBlur::default()),
+        }])
+        .unwrap(),
+    ));
+    let compiled = CompiledScene::compile_objects(vec![row], &[]).unwrap();
+    let baseline_effect_bytes = compiled.prefix_effect_payload_bytes().unwrap();
+    assert!(baseline_effect_bytes > 0);
+
+    let mut source = SceneInstance::new(compiled);
+    source
+        .begin_replay_retention(ReplayLimits {
+            revisions: 16,
+            payloads: 256,
+        })
+        .unwrap();
+    source.advance_to(1.0).unwrap();
+    assert!(matches!(
+        source.create_prefix_projection_with_budgets(0, 0),
+        Err(PrefixError::HistoryPayloadBudgetExceeded {
+            retained_bytes: 0,
+            additional_bytes,
+            limit_bytes: 0,
+        }) if additional_bytes == baseline_effect_bytes
+    ));
+    let (publisher, runtime, receiver) = source
+        .create_prefix_projection_with_budgets(0, baseline_effect_bytes)
+        .unwrap();
+    assert_eq!(
+        publisher.extracted_history_payload_bytes(),
+        baseline_effect_bytes
+    );
+    assert_eq!(
+        receiver.retained_history_payload_bytes(),
+        baseline_effect_bytes
+    );
+    assert_eq!(
+        runtime.frame().objects[0].effects.as_ref().unwrap().len(),
+        1
+    );
+}
+
+#[test]
 fn history_payload_bootstrap_charges_composed_member_order() {
     use noon_core::{ComposedSource, ObjectContentRef};
 

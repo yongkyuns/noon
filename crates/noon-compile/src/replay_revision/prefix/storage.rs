@@ -27,17 +27,14 @@ fn row_geometry_bytes(row: &CompiledObject) -> Option<usize> {
     row.content.geometry().map_or(Some(0), geometry_bytes)
 }
 
-/// Logical inline bytes for one immutable supported effect-stack payload. Arc
-/// aliases are charged at each row reference; allocator metadata, renderer
-/// working storage, and unsupported effect programs/resources are excluded.
+/// Logical bytes for one immutable effect-stack payload. Arc aliases are
+/// charged at each row reference; allocator metadata, renderer working storage,
+/// compiled GPU programs and other renderer allocations remain excluded.
 fn effect_stack_bytes(row: &CompiledObject) -> Option<usize> {
     let Some(stack) = row.effects.as_deref() else {
         return Some(0);
     };
-    if !super::local_effect_stack(stack) {
-        return Some(0);
-    }
-    std::mem::size_of::<crate::CompiledEffectStack>()
+    let mut bytes = std::mem::size_of::<crate::CompiledEffectStack>()
         .checked_add(
             stack
                 .attachments()
@@ -49,7 +46,39 @@ fn effect_stack_bytes(row: &CompiledObject) -> Option<usize> {
                 .definitions()
                 .len()
                 .checked_mul(std::mem::size_of::<noon_core::EffectDefinition>())?,
-        )
+        )?;
+    for definition in stack.definitions() {
+        let Some(shader) = definition.as_shader() else {
+            continue;
+        };
+        let schema = shader.program().schema();
+        let schema_bytes = schema
+            .parameters
+            .len()
+            .checked_mul(std::mem::size_of::<noon_core::ShaderParameterDefinition>())?
+            .checked_add(
+                schema
+                    .parameters
+                    .iter()
+                    .try_fold(0usize, |total, parameter| {
+                        total.checked_add(parameter.name.len())
+                    })?,
+            )?;
+        let shader_bytes = shader
+            .program()
+            .module()
+            .len()
+            .checked_add(std::mem::size_of::<noon_core::ShaderSchema>())?
+            .checked_add(schema_bytes)?
+            .checked_add(
+                shader
+                    .values()
+                    .len()
+                    .checked_mul(std::mem::size_of::<noon_core::ShaderValue>())?,
+            )?;
+        bytes = bytes.checked_add(shader_bytes)?;
+    }
+    Some(bytes)
 }
 
 /// Logical bytes for one immutable composed membership plan. Arc aliases are
@@ -123,9 +152,10 @@ impl CompiledScene {
         Some(())
     }
 
-    /// Logical closure bytes for supported immutable stacks in the current
+    /// Logical closure bytes for immutable effect stacks in the current
     /// projection. One charge per row reference; shared `Arc`s are intentionally
-    /// not deduplicated because this is a conservative retained-history charge.
+    /// not deduplicated. This does not imply temporal prefix support for every
+    /// definition in the stack.
     pub fn prefix_effect_payload_bytes(&self) -> Option<usize> {
         self.objects.iter().try_fold(0usize, |total, row| {
             total.checked_add(effect_stack_bytes(row)?)
