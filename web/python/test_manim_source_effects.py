@@ -459,6 +459,13 @@ class SourceEffectsTests(unittest.TestCase):
              '        group = VGroup(Square())\n'
              '        self.play(LaggedStartMap(animation_factory, group))\n',
              'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\nanimation_factory = FadeIn\n'
+             'match {"x": ValueTracker}:\n'
+             '    case {"x": animation_factory}:\n        pass\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(animation_factory, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
             ('from noon import *\nclass Example(Scene):\n'
              '    def construct(self):\n'
              '        group = VGroup(Square())\n'

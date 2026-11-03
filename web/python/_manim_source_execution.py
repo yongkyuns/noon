@@ -104,6 +104,12 @@ def _inert_factory_aliases(tree):
             stores[node.arg] = stores.get(node.arg, 0) + 1
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             stores[node.name] = stores.get(node.name, 0) + 1
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            stores[node.name] = stores.get(node.name, 0) + 1
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            stores[node.name] = stores.get(node.name, 0) + 1
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            stores[node.rest] = stores.get(node.rest, 0) + 1
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 if alias.name != "*":
