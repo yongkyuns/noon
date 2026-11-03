@@ -95,6 +95,22 @@ class SourceEffectsTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertFalse(source_execution_proof(source)["admitted"])
 
+    def test_procedural_paint_examples_use_resource_free_rust_values(self):
+        examples = Path(__file__).with_name("examples")
+        for name in ("radial_gradient.py", "noise_paint.py", "hatch_paint.py"):
+            with self.subTest(name=name):
+                source = examples.joinpath(name).read_text()
+                self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        external_image = source_execution_proof(
+            'from noon import ImagePaint\n'
+            'class Example(Scene):\n'
+            '    def construct(self):\n'
+            '        paint = ImagePaint("https://example.test/texture.png")\n'
+        )
+        self.assertFalse(external_image["admitted"])
+        self.assertEqual(external_image["reason"]["code"], "unsupported_import")
+
     def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_ordered_reveal.py"
