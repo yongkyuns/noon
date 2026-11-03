@@ -23,10 +23,12 @@ class PreparedGallery(Scene):
         events.append("start")
         target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
         self.add(target)
+        self.next_section("Start")
         self.wait(0)
         self.wait(30)
         assert events == ["start"]
         events.append("first")
+        self.next_section("Motion")
         self.play(target.animate.shift(2 * RIGHT), run_time=1, rate_func=linear)
         assert abs(target.get_center()[0] - 2) < 1e-6
         assert events == ["start", "first"]
@@ -34,6 +36,7 @@ class PreparedGallery(Scene):
         self.wait(30)
         assert events == ["start", "first", "moved"]
         target.shift(RIGHT)
+        self.next_section("End")
 `;
 const failureSource = source.slice(0, source.indexOf("        self.play(")) +
   '        raise RuntimeError("intentional gallery source failure")\n';
@@ -282,6 +285,9 @@ try {
         assert.equal(metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
         assert.equal(await page.evaluate(() => __noonExampleGallery.transportMode), transport);
         entry.checks.push("actual-gallery-prepared-start", "source-does-not-lock-controls-or-gallery");
+        const cueValues = () => page.locator(".playback-section-names option").evaluateAll(options =>
+          options.map(option => option.value));
+        assert.deepEqual(await cueValues(), ["", "0"], "future cues must stay hidden");
         if (backend === "webgpu") {
           await holdTimelineDuringGrowth(page, transport === "shared");
           entry.checks.push(`${transport === "shared" ? "touch" : "mouse"}-held-range-and-focus-survive-growth`,
@@ -333,7 +339,16 @@ try {
         await recoverGpu("open");
         assert.equal(sourceInvocations, 1);
         await page.evaluate(() => { globalThis.originalGalleryCanvas = document.querySelector("#scene"); });
-        await seekOpen(page, 29.5, 31); await seekOpen(page, 30.5, 61); await seekOpen(page, 60.5);
+        await seekOpen(page, 29.5, 31); await seekOpen(page, 30.5, 61);
+        assert.deepEqual(await cueValues(), ["", "0", "1"]);
+        await page.locator(".playback-previous-section").click();
+        await page.waitForFunction(() => {
+          const controls = document.querySelector(".playback-controls");
+          return controls?.dataset.busy === "false" && controls.dataset.elapsedSeconds === "30";
+        });
+        assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "false");
+        assert.equal(await page.locator(".playback-next-section").isDisabled(), true);
+        await seekOpen(page, 60.5);
         await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
           document.querySelector(".playback-controls")?.dataset.durationKnown === "true");
         assert.equal(await page.locator(".playback-scrubber").getAttribute("max"), "61");
@@ -341,6 +356,13 @@ try {
         assert.equal(await page.evaluate(() => originalGalleryCanvas === document.querySelector("#scene")), true);
         assert.deepEqual(await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.reconciliations), []);
         entry.checks.push("terminal-adoption-keeps-reader-and-pause", "no-completion-reconciliation");
+        assert.deepEqual(await cueValues(), ["", "0", "1", "2"]);
+        await page.locator(".playback-section-names").selectOption("2");
+        await page.waitForFunction(() => {
+          const controls = document.querySelector(".playback-controls");
+          return controls?.dataset.busy === "false" && controls.dataset.elapsedSeconds === "61";
+        });
+        entry.checks.push("cues-follow-prefix-and-terminal-adoption", "cue-seek-preserves-pause-and-source");
         await seekSealed(page, 61);
         assert.equal(baseline.equals(await pixels(page, `${backend}-${transport}-terminal`)), false);
         await seekSealed(page, 5);

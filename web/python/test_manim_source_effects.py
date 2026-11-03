@@ -148,10 +148,8 @@ class SourceEffectsTests(unittest.TestCase):
                 self.assertEqual(reason["code"], code)
                 self.assertEqual(reason["span"]["line"], line)
 
-    def test_lesson_navigation_retains_observed_source_until_completed_replay(self):
-        # Prefix transport does not carry navigation metadata; ordinary source
-        # execution still compiles its barriers and retains completed replay.
-        self.assertFalse(source_is_scene_only(dedent('''
+    def test_lesson_navigation_uses_the_shared_prepared_cue_contract(self):
+        self.assertTrue(source_is_scene_only(dedent('''
             from noon import *
             class Example(Scene):
                 def construct(self):

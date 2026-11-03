@@ -61,10 +61,8 @@ abs all any bool bytes bytearray dict divmod enumerate filter float frozenset in
 isinstance len list map max min next range reversed round set slice sorted str
 sum tuple zip ValueError RuntimeError
 """.split())
-# Section navigation is portable, but absent from prefix metadata. Keep its
-# source observed until ordinary completed replay can expose the final cues.
 _SOURCE_MEMBERS = frozenset("""
-add remove clear play wait on_click set_drag_targets
+add remove clear play wait on_click set_drag_targets next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_z_index set_glow remove_glow set_effect
