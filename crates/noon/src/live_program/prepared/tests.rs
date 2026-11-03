@@ -404,6 +404,93 @@ fn cooperative_source_demand_sleeps_at_frontier_and_admits_only_one_unknown_segm
 }
 
 #[test]
+fn affine_lifecycle_prefix_preserves_intro_removal_rewind_and_future_isolation() {
+    let program = crate::example_scenes::ordinary_affine_lifecycle_program().unwrap();
+    let mut source = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    let object_id = reader.frame().objects[0].id;
+
+    reader.seek(0.5).unwrap();
+    let intro_frame = reader.frame().clone();
+    let intro_index = intro_frame
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(intro_frame.is_present(intro_index));
+    assert!(intro_frame.objects[intro_index].transform.scale.x > 0.0);
+    assert!(intro_frame.objects[intro_index].transform.scale.x < 1.0);
+
+    // Appending the removal suffix must not rewrite a reader on its earlier
+    // introduction sample or change the historical publication identity.
+    let intro_publication = reader.publication_context();
+    assert_eq!(
+        source.prepare_until(1.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(reader.frame(), &intro_frame);
+    assert_eq!(reader.publication_context(), intro_publication);
+
+    reader.seek(1.0).unwrap();
+    let boundary = reader.frame();
+    let boundary_index = boundary
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(boundary.is_present(boundary_index));
+    assert_eq!(boundary.objects[boundary_index].transform.scale.x, 1.0);
+
+    reader.seek(1.5).unwrap();
+    let removal = reader.frame();
+    let removal_index = removal
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(removal.is_present(removal_index));
+    assert!(removal.objects[removal_index].transform.scale.x > 0.0);
+    assert!(removal.objects[removal_index].transform.scale.x < 1.0);
+
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    reader.seek(2.0).unwrap();
+    let terminal = reader.frame();
+    let terminal_index = terminal
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(!terminal.is_present(terminal_index));
+
+    // The same semantic identity re-enters when explicitly rewinding to its
+    // original introduction history; future publication did not replace it.
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.frame(), &intro_frame);
+    assert_eq!(reader.frame().objects[intro_index].id, object_id);
+}
+
+#[test]
 fn cooperative_source_invalid_demand_is_atomic_before_and_after_output() {
     let (mut source, calls, _) = fixture(false, false, None, ReplayLimits::default());
     for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
