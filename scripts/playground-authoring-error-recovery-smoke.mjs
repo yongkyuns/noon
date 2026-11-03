@@ -189,6 +189,12 @@ function assertRunEvidence(evidence, beforeCount, source, observed, previousRunG
   return { run, ready, proof: decision };
 }
 
+function captureRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration) {
+  const { run, ready, proof } = assertRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration);
+  return { run: { workerId: run.workerId, requestId: run.requestId,
+    sequence: run.sequence, sourceLength: run.source.length }, ready, proof };
+}
+
 async function assertDraftOnly(page, before, expectedSource) {
   const after = await snapshot(page);
   const evidence = await workerEvidence(page);
@@ -386,9 +392,7 @@ async function runEditedSource(page, options) {
     before.runs.length, { timeout: 30_000 });
   const result = await waitForRunResult(page, { ...options, runGenerationUnchanged: String(generationBefore) });
   const evidence = await workerEvidence(page);
-  const { run, ready, proof } = assertRunEvidence(evidence, before.runs.length, source, result, generationBefore);
-  result.runEvidence = { run: { workerId: run.workerId, requestId: run.requestId,
-    sequence: run.sequence, sourceLength: run.source.length }, ready, proof };
+  result.runEvidence = captureRunEvidence(evidence, before.runs.length, source, result, generationBefore);
   return result;
 }
 
@@ -415,25 +419,10 @@ async function selectGalleryExample(page, id, title) {
   String(beforeState.executionDiagnostics?.context?.runGeneration ?? 0), { timeout: 120_000 });
   const result = await snapshot(page);
   const evidence = await workerEvidence(page);
-  const run = evidence.runs.at(-1);
   assert.equal(evidence.runs.length, before.runs.length + 1, "gallery Run must submit source exactly once");
-  assert.equal(Number(result.runRequestId), run.requestId);
-  assert.equal(Number(result.interpreterGeneration) >= 0, true);
-  assert.equal(result.executionDiagnostics.context.exampleId, result.exampleId);
-  assert.equal(Number(result.executionDiagnostics.context.runGeneration), Number(result.runGeneration));
-  assert.equal(result.executionDiagnostics.requestedProfile, run.preparedPlayback ? "incremental" : "observed");
-  const messages = evidence.workers.filter(message => message.workerId === run.workerId &&
-    message.requestId === run.requestId);
-  const ready = evidence.workers.find(message => message.workerId === run.workerId && message.type === "ready");
-  const proof = messages.find(message => message.type === "execution_diagnostic" &&
-    ["source-proof", "interpreter-trust"].includes(message.event?.stage));
-  const settled = messages.find(message => message.type === "result" || message.type === "error");
-  assert.ok(ready && ready.libraryTrust === "pristine" && ready.sequence < run.sequence);
-  assert.ok(proof && proof.sequence > run.sequence && settled && proof.sequence < settled.sequence);
-  assert.equal(await page.evaluate(() => document.querySelector("#python-scene-source").value), run.source,
-    "gallery Run must capture the selected example's source bytes");
-  result.runEvidence = { run: { workerId: run.workerId, requestId: run.requestId,
-    sequence: run.sequence, sourceLength: run.source.length }, ready, proof };
+  const source = await page.evaluate(() => document.querySelector("#python-scene-source").value);
+  result.runEvidence = captureRunEvidence(evidence, before.runs.length, source, result,
+    Number(beforeState.executionDiagnostics?.context?.runGeneration ?? 0));
   return result;
 }
 
@@ -552,12 +541,22 @@ try {
   const draftBaseline = await snapshot(page);
   const canonicalSource = await page.evaluate(() => document.querySelector("#python-scene-source").value);
   phase = "draft-only-ime-reset";
-  await page.evaluate(() => document.querySelector("#python-scene-source").dispatchEvent(
-    new CompositionEvent("compositionstart", { bubbles: true })));
+  await page.evaluate(() => {
+    const source = document.querySelector("#python-scene-source");
+    window.__recoveryCompositionEvents = [];
+    source.addEventListener("compositionstart", () => window.__recoveryCompositionEvents.push("start"));
+    source.addEventListener("compositionend", () => window.__recoveryCompositionEvents.push("end"));
+    document.querySelector("#scene-editor-panel .cm-content").dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }));
+  });
+  assert.deepEqual(await page.evaluate(() => window.__recoveryCompositionEvents), ["start"],
+    "visible CodeMirror IME start must reach the source lifecycle listener");
   await setEditorSource(page, SOURCES.twoObjects);
   let edited = await assertDraftOnly(page, draftBaseline, SOURCES.twoObjects);
-  await page.evaluate(() => document.querySelector("#python-scene-source").dispatchEvent(
+  await page.evaluate(() => document.querySelector("#scene-editor-panel .cm-content").dispatchEvent(
     new CompositionEvent("compositionend", { bubbles: true })));
+  assert.deepEqual(await page.evaluate(() => window.__recoveryCompositionEvents), ["start", "end"],
+    "visible CodeMirror IME end must be forwarded");
   edited = await assertDraftOnly(page, draftBaseline, SOURCES.twoObjects);
   assert.equal(edited.draftState, "unapplied");
   assert.match(edited.draftText, /draft not applied.*Run to apply/);
