@@ -118,7 +118,6 @@ mod wasm {
         source: AudioBufferSourceNode,
         gain: GainNode,
         clip: noon_core::SemanticNodeId,
-        authored_end: Option<f64>,
         scheduled_end: f64,
     }
 
@@ -142,17 +141,37 @@ mod wasm {
     }
 
     impl DeviceGraph {
+        fn clear_retirement_observer(&mut self) {
+            if self.ended.take().is_some() {
+                if let Some(voice) = self.voices.get(self.last_voice) {
+                    AudioScheduledSourceNode::set_onended(voice.source.as_ref(), None);
+                }
+            }
+        }
+
+        fn retain_active_voices(&mut self, now: f64) {
+            self.clear_retirement_observer();
+            self.voices.retain(|voice| voice.scheduled_end > now);
+            if let Some((last_voice, natural_end)) = self
+                .voices
+                .iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| left.scheduled_end.total_cmp(&right.scheduled_end))
+                .map(|(index, voice)| (index, voice.scheduled_end))
+            {
+                self.last_voice = last_voice;
+                self.natural_end = natural_end;
+            } else {
+                self.last_voice = 0;
+                self.natural_end = now;
+            }
+        }
+
         /// The latest-ending native source retires this one disposable graph.
         /// A weak slot reference and the browser node's own identity avoid a
         /// reference cycle, an extra generation, or a cleanup timer.
         fn observe_retirement(&mut self, retiring: &Rc<RefCell<Option<Self>>>) {
-            if self.ended.is_some() {
-                AudioScheduledSourceNode::set_onended(
-                    self.voices[self.last_voice].source.as_ref(),
-                    None,
-                );
-                self.ended = None;
-            }
+            self.clear_retirement_observer();
             let slot = Rc::downgrade(retiring);
             let ended = Closure::new(move |event: web_sys::Event| {
                 let Some(slot) = slot.upgrade() else {
@@ -185,10 +204,9 @@ mod wasm {
     impl Drop for DeviceGraph {
         fn drop(&mut self) {
             if self.ended.is_some() {
-                AudioScheduledSourceNode::set_onended(
-                    self.voices[self.last_voice].source.as_ref(),
-                    None,
-                );
+                if let Some(voice) = self.voices.get(self.last_voice) {
+                    AudioScheduledSourceNode::set_onended(voice.source.as_ref(), None);
+                }
             }
             self.bus.gain().set_value(0.0);
             let _ = self.bus.disconnect();
@@ -547,11 +565,16 @@ mod wasm {
             if self.graph.is_none() {
                 return self.start_prepared(prepared);
             }
+            let now = self.context.current_time();
+            let graph = self.graph.as_mut().unwrap();
+            graph.retain_active_voices(now);
+            if graph.voices.is_empty() {
+                self.graph = None;
+                return self.start_prepared(prepared);
+            }
             if prepared.is_empty() {
                 return Ok(());
             }
-            let now = self.context.current_time();
-            let graph = self.graph.as_mut().unwrap();
             for voice in prepared {
                 let start = device_time(now, voice.start_delay).map_err(js_error)?;
                 let end = device_time(start, voice.scheduled_duration).map_err(js_error)?;
@@ -560,11 +583,11 @@ mod wasm {
                         "audio interval is too short for the current Web Audio clock",
                     ));
                 }
-                if let Some(device) = graph.voices.iter_mut().find(|device| {
-                    device.clip == voice.clip
-                        && device.authored_end == voice.authored_end
-                        && device.scheduled_end > now
-                }) {
+                if let Some(device) = graph
+                    .voices
+                    .iter_mut()
+                    .find(|device| device.clip == voice.clip && device.scheduled_end > now)
+                {
                     AudioScheduledSourceNode::stop_with_when(device.source.as_ref(), end)?;
                     device.scheduled_end = end;
                     continue;
@@ -594,7 +617,6 @@ mod wasm {
                     source,
                     gain,
                     clip: voice.clip,
-                    authored_end: voice.authored_end,
                     scheduled_end: end,
                 });
             }
@@ -634,7 +656,6 @@ mod wasm {
                     source,
                     gain,
                     clip: voice.clip,
-                    authored_end: voice.authored_end,
                     scheduled_end: 0.0,
                 });
                 let device = graph.voices.last().unwrap();

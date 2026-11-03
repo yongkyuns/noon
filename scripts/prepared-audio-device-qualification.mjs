@@ -108,11 +108,60 @@ try {
     "after a real buffer boundary, a new graph resumes from the fresh Rust clip offset");
   assert.equal(restarted.starts[4].args.length, 2,
     "a later clip is scheduled when its start enters the expanded prefix");
+
+  const roundoff = await page.evaluate(() => {
+    audioTest.output.stop();
+    const sampled = performance.timeOrigin + performance.now();
+    const before = audioQualification.starts.length;
+    audioTest.output.startUntil(23, 0, 0.15, sampled, sampled);
+    audioTest.output.extendUntil(23, 0, 0.3, sampled, sampled + 0.00001);
+    const node = audioQualification.starts.at(-1).node;
+    return {
+      startsAdded: audioQualification.starts.length - before,
+      node,
+      stops: audioQualification.stops.filter(stop => stop.node === node && stop.args.length > 0),
+    };
+  });
+  assert.equal(roundoff.startsAdded, 1,
+    "fractional Rust clock aging extends the same active clip instead of starting a duplicate");
+  assert.equal(roundoff.stops.filter(stop => stop.args.length > 0).length, 2,
+    "the fractional extension reschedules the same voice's pending stop");
+
+  await page.evaluate(() => audioTest.output.stop());
+  const initialCycleCount = await page.evaluate(() => {
+    const sampled = performance.timeOrigin + performance.now();
+    const before = audioQualification.starts.length;
+    audioTest.output.startUntil(23, 0, 0.1, sampled, sampled);
+    return before;
+  });
+  await page.waitForFunction(count => audioQualification.starts.length > count, initialCycleCount);
+  for (let boundary = 1; boundary <= 5; boundary++) {
+    const node = await page.evaluate(() => audioQualification.starts.at(-1).node);
+    await page.waitForFunction(sourceNode => audioQualification.ended.some(event => event.node === sourceNode), node);
+    const nextCount = await page.evaluate(() => audioQualification.starts.length);
+    await page.evaluate(boundaryIndex => {
+      const sampled = performance.timeOrigin + performance.now();
+      const sceneTime = boundaryIndex / 10;
+      audioTest.output.extendUntil(23, sceneTime, sceneTime + 0.1, sampled, sampled);
+    }, boundary);
+    await page.waitForFunction(count => audioQualification.starts.length > count, nextCount);
+    const bounded = await page.evaluate(() => ({
+      disconnects: audioQualification.disconnects.map(disconnect => disconnect.node),
+      ended: audioQualification.ended.map(event => event.node),
+      starts: audioQualification.starts.map(start => start.node),
+      node: audioQualification.starts.at(-1).node,
+    }));
+    assert.ok(bounded.disconnects.includes(node), "each resumed frontier disconnects its ended source");
+    assert.equal(bounded.starts.filter(startNode => !bounded.ended.includes(startNode)).length, 1,
+      "each restarted frontier has one live source while prior voices have ended");
+  }
+  await page.evaluate(() => audioTest.output.stop());
   console.log(JSON.stringify({ status: "passed", scope: "real-webaudio-open-prefix-bounds",
     preparation: { contexts: prepared.output.length, starts: prepared.starts.length },
     firstStop: firstStop.args[0], replacementStop: replacementStop.args[0],
     futureSourceStart: future.starts[1].args[0], futureSourceStop: secondStop.args[0],
-    restartOffset: restarted.starts[3].args[1] }, null, 2));
+    restartOffset: restarted.starts[3].args[1], roundoff: { startCount: roundoff.starts },
+    repeatedFrontiers: 5 }, null, 2));
 } finally {
   await browser?.close();
   await server.close();
