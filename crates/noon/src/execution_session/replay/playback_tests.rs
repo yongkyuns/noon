@@ -69,6 +69,111 @@ fn immutable_playback_admits_scalar_tracks_and_viewer_pointer_policy() {
 }
 
 #[test]
+fn prepared_reader_replays_deterministic_scalar_timeline() {
+    let (scene, _) = scalar_scene();
+    let mut session = scene.execution_session().unwrap();
+    let mut expected = scene.execution_session().unwrap();
+    assert!(session.supports_immutable_playback());
+    session.begin_replay_retention(Default::default()).unwrap();
+    assert_eq!(session.replay_stats().payloads_retained, 1);
+    let boundary = session.wait_segment(1.0).unwrap();
+    session.advance_to(boundary.end_time()).unwrap();
+
+    let (_, mut reader) = session.create_prepared_prefix(boundary).unwrap();
+    reader.seek(0.5).unwrap();
+    expected.seek(0.5).unwrap();
+    assert_eq!(reader.frame(), expected.frame());
+    assert_eq!(reader.frame().objects[0].transform.translation.x, 1.0);
+    reader.advance_to(0.75).unwrap();
+    expected.advance_to(0.75).unwrap();
+    assert_eq!(reader.frame(), expected.frame());
+}
+
+#[test]
+fn initial_scalar_schedule_counts_toward_retention_limit() {
+    let (scene, _) = scalar_scene();
+    let mut session = scene.execution_session().unwrap();
+    assert_eq!(
+        session.begin_replay_retention(noon_runtime::ReplayLimits {
+            revisions: 1,
+            payloads: 0,
+        }),
+        Err(noon_runtime::ReplayError::RetentionLimit)
+    );
+    assert!(!session.replay_scope_active());
+}
+
+#[test]
+fn prepared_reader_adopts_scalar_timeline_suffix_while_paused() {
+    let mut scene = Scene::new();
+    let circle = scene.circle(0.25).unwrap();
+    scene.add(&circle).unwrap();
+    let tracker = scene.value_tracker(0.0).unwrap();
+    let position = scene
+        .position_from_tracker(
+            &tracker,
+            SemanticVec3::new(1.0, 0.0, 0.0),
+            SemanticVec3::new(-2.0, 0.0, 0.0),
+        )
+        .unwrap();
+    scene.bind_position(&circle, &position).unwrap();
+
+    let mut source = scene.execution_session().unwrap();
+    source.begin_replay_retention(Default::default()).unwrap();
+    let first = source.wait_segment(1.0).unwrap();
+    source.advance_to(first.end_time()).unwrap();
+    let (mut publisher, mut reader) = source.create_prepared_prefix(first).unwrap();
+    let object = reader.frame().objects[0].id;
+    reader.seek(0.5).unwrap();
+    let paused = reader.frame().clone();
+    let publication = reader.publication_context();
+
+    let segment = scene
+        .live(&mut source)
+        .declare_and_activate_value_tracker(&tracker, 2.0, 2.0, RateFunction::Linear)
+        .unwrap();
+    {
+        let mut live = scene.live(&mut source);
+        live.advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        live.complete_segment(segment).unwrap();
+    }
+    let batch = source
+        .publish_prepared_prefix(segment, &mut publisher)
+        .unwrap();
+    reader.preflight_append(&batch).unwrap();
+    reader.append(batch).unwrap();
+    assert_eq!(
+        reader.frame(),
+        &paused,
+        "appending must not move the reader"
+    );
+    assert_eq!(reader.publication_context(), publication);
+
+    reader.seek(2.0).unwrap();
+    assert_eq!(reader.frame().objects[0].id, object);
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(-1.0, 0.0)
+    );
+    let query = reader.query_viewport(crate::Rect::new(
+        Vec2::new(-1.5, -0.5),
+        Vec2::new(-0.5, 0.5),
+    ));
+    assert_eq!(query.object_indices(), &[0]);
+
+    source.seal_replay().unwrap();
+    let terminal = source
+        .finish_prepared_prefix(segment, &mut publisher)
+        .unwrap();
+    assert!(terminal.is_terminal());
+    reader.append(terminal).unwrap();
+    reader.seek(3.0).unwrap();
+    assert_eq!(reader.frame().objects[0].id, object);
+    assert_eq!(reader.frame().objects[0].transform.translation, Vec2::ZERO);
+}
+
+#[test]
 fn finite_timeline_alone_does_not_admit_native_state_or_event_playback() {
     for event in [false, true] {
         let mut store = SemanticStore::new();
@@ -104,6 +209,10 @@ fn finite_timeline_alone_does_not_admit_native_state_or_event_playback() {
         assert_eq!(session.finite_timeline_end_time(), Some(0.0));
         assert!(!session.supports_immutable_playback());
         assert_eq!(session.finite_playback_end_time(), None);
+        assert_eq!(
+            session.source_execution_requirement(),
+            Some(super::SourceExecutionRequirement::NativeInput)
+        );
     }
 }
 

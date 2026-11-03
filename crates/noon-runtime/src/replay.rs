@@ -55,6 +55,7 @@ pub struct ReplayStats {
 struct Revision {
     time: f64,
     inverse: Option<CompiledReplayRevision>,
+    scalar_timeline_entries: usize,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct ReplayHistory {
@@ -96,6 +97,17 @@ impl SceneInstance {
     }
 
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
+        self.begin_replay_retention_with_initial_payloads(limits, 0)
+    }
+
+    /// Begin retention with source-owned immutable payloads already present in
+    /// the initial projection, such as its scalar timeline schedule.
+    #[doc(hidden)]
+    pub fn begin_replay_retention_with_initial_payloads(
+        &mut self,
+        limits: ReplayLimits,
+        initial_payloads: usize,
+    ) -> Result<(), ReplayError> {
         if self.replay_history.is_some() {
             return Err(ReplayError::AlreadyStarted);
         }
@@ -110,10 +122,9 @@ impl SceneInstance {
         if self.has_audio() {
             return Err(ReplayError::UnsupportedDomain);
         }
-        let unsupported = self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| reactive.has_property_bindings());
+        if initial_payloads > limits.payloads {
+            return Err(ReplayError::RetentionLimit);
+        }
         // Existing immutable family channels are already part of this scope's
         // initial projection and use the ordinary scheduler during replay.
         self.replay_history = Some(ReplayHistory {
@@ -122,14 +133,17 @@ impl SceneInstance {
             scope: std::sync::Arc::new(()),
             end: None,
             limits,
-            failure: unsupported.then_some(ReplayError::UnsupportedDomain),
+            failure: None,
             #[cfg(feature = "prepared-prefix")]
             inset_view_history: false,
             #[cfg(feature = "prepared-prefix")]
             last_non_prefix_revision: None,
             revisions: Vec::new(),
             applied: 0,
-            stats: ReplayStats::default(),
+            stats: ReplayStats {
+                payloads_retained: initial_payloads,
+                ..Default::default()
+            },
         });
         Ok(())
     }
@@ -188,7 +202,30 @@ impl SceneInstance {
             self.invalidate_replay_domain();
             return;
         }
-        self.retain_supported_replay_change(None, timeline.entries.len());
+        let cost = timeline.entries.len();
+        if cost == 0 {
+            return;
+        }
+        let Some(history) = self.replay_history.as_mut() else {
+            return;
+        };
+        if history.failure.is_some() || history.end.is_some() {
+            return;
+        }
+        if history.revisions.len() >= history.limits.revisions
+            || cost > history.limits.payloads.saturating_sub(history.stats.payloads_retained)
+        {
+            self.invalidate_replay(ReplayError::RetentionLimit);
+            return;
+        }
+        history.stats.payloads_retained += cost;
+        history.revisions.push(Revision {
+            time: self.frame.time,
+            inverse: None,
+            scalar_timeline_entries: cost,
+        });
+        history.applied = history.revisions.len();
+        history.stats.revisions_retained = history.revisions.len();
     }
 
     pub fn replay_stats(&self) -> ReplayStats {
@@ -203,13 +240,6 @@ impl SceneInstance {
             .ok_or(ReplayError::NotRecording)?;
         if let Some(error) = history.failure {
             return Err(error);
-        }
-        if self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| reactive.has_property_bindings())
-        {
-            return Err(ReplayError::UnsupportedDomain);
         }
         if history.end.is_some() {
             return Ok(());
@@ -340,6 +370,7 @@ impl SceneInstance {
         history.revisions.push(Revision {
             time: self.frame.time,
             inverse,
+            scalar_timeline_entries: 0,
         });
         history.applied = history.revisions.len();
         history.stats.revisions_retained = history.revisions.len();

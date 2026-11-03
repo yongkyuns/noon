@@ -136,9 +136,11 @@ impl PrefixReader {
     /// Observe delivery admission without consuming the batch or publishing its
     /// future targets. Slot work is proportional only to newly delivered rows.
     pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
-        let stats = self
-            .receiver
-            .preflight_append(&self.session.runtime, batch)?;
+        let stats = self.receiver.preflight_append_with_scalar_timeline(
+            &self.session.runtime,
+            batch,
+            &self.session.signal_timeline,
+        )?;
         if batch.required_object_capacity() > self.session.slots.reserved_object_capacity() {
             return Err(PrefixError::CapacityRequired {
                 object_slots: batch.required_object_capacity(),
@@ -156,7 +158,11 @@ impl PrefixReader {
     pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
         self.preflight_append(&batch)?;
         let new_objects: Vec<_> = batch.new_object_ids().collect();
-        let stats = self.receiver.append(&mut self.session.runtime, batch)?;
+        let stats = self.receiver.append_with_scalar_timeline(
+            &mut self.session.runtime,
+            batch,
+            &mut self.session.signal_timeline,
+        )?;
         apply_execution_slot_membership_changes(&mut self.session.slots, &[], &new_objects)
             .expect("same-owner prefix identity batch was preflighted before adoption");
         Ok(stats)

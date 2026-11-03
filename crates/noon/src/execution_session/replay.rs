@@ -56,7 +56,10 @@ impl ExecutionSession {
         {
             return Err(ReplayError::Incomplete);
         }
-        self.runtime.begin_replay_retention(limits)?;
+        self.runtime.begin_replay_retention_with_initial_payloads(
+            limits,
+            self.signal_timeline.entry_count(),
+        )?;
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()
             || self.translation_drag.has_targets()
