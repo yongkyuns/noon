@@ -290,7 +290,7 @@ class SourceEffectsTests(unittest.TestCase):
         examples = Path(__file__).parent / 'examples'
         for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py',
                      'showcase_gpu_glow.py', 'showcase_dynamic_scene.py',
-                     'manim_parity_stress_grid.py'):
+                     'manim_parity_stress_grid.py', 'showcase_layered_effects.py'):
             with self.subTest(name=name):
                 self.assertTrue(source_is_scene_only((examples / name).read_text()))
 

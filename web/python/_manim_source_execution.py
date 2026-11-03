@@ -42,7 +42,7 @@ ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedSta
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
-ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur GlowPulse
+ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur GlowPulse Dissolve
 """.split())
 _SOURCE_MAPPED_ANIMATION_FACTORIES = frozenset("FadeIn FadeOut".split())
 _SOURCE_FUNCTIONS = frozenset("""
@@ -66,7 +66,7 @@ _SOURCE_MEMBERS = frozenset("""
 add remove clear play wait on_click set_drag_targets
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
-set_fill set_stroke set_color set_opacity set_z_index set_glow remove_glow
+set_fill set_stroke set_color set_opacity set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value
 set_value increment_value copy become add_updater remove_updater clear_updaters
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
