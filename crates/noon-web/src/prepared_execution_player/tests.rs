@@ -158,6 +158,7 @@ fn prepared_sections_share_reader_admission_and_terminal_endpoint_rules() {
             .unwrap();
     }
     f.player.set_section_navigation(scene.section_navigation());
+    let _ = ready(&mut f.player);
 
     let sections: serde_json::Value = serde_json::from_str(&f.player.sections_json()).unwrap();
     assert_eq!(sections.as_array().unwrap().len(), 2);
@@ -209,6 +210,33 @@ fn prepared_sections_share_reader_admission_and_terminal_endpoint_rules() {
         4,
         "terminal endpoint cue becomes current only after terminal adoption",
     );
+}
+
+#[test]
+fn no_target_section_navigation_refreshes_the_current_no_change_receipt() {
+    let mut f = Fixture::new(722);
+    let (_, displayed) = ready(&mut f.player);
+    f.player.no_change_presentation = Some(PreparedNoChangePresentation {
+        session: displayed.session,
+        sequence: displayed.sequence,
+        time: 99.0,
+        publication_context: f.player.playback.reader.publication_context(),
+    });
+
+    assert!(f
+        .player
+        .seek_section_delta_json(false, f.player.prepared_time())
+        .unwrap()
+        .is_none());
+    let proof: serde_json::Value = serde_json::from_str(
+        &f.player
+            .take_prepared_no_change_presentation_json()
+            .expect("no-target command refreshes the Rust receipt"),
+    )
+    .unwrap();
+    assert_eq!(proof["session"], displayed.session);
+    assert_eq!(proof["sequence"], displayed.sequence);
+    assert_eq!(proof["time"], f.player.prepared_time());
 }
 
 #[test]

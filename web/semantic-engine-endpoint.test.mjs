@@ -3361,6 +3361,8 @@ test("silent execution publishes Rust cue metadata and forwards strict section n
 test("prepared execution publishes admitted Rust cues and waits for section presentation", async () => {
   const f = fixture("transferable", null, null, { initiallyPaused: true });
   const calls = [];
+  let currentPublication = null;
+  let noChangeProof = null;
   let preparedPlaying = false;
   f.player.setPreparedPlaying = value => { preparedPlaying = value; };
   f.player.preparedTime = () => f.player.time();
@@ -3379,10 +3381,22 @@ test("prepared execution publishes admitted Rust cues and waits for section pres
   f.player.sectionStateJson = time => JSON.stringify({ current: 0, previous: null, next: 1, observedTime: time });
   f.player.seekSectionDeltaJson = (previous, time) => {
     calls.push([previous, time]);
-    return f.player.seekDeltaJson(previous ? 0 : 0.75);
+    if (!previous && f.player.time() >= 0.75) {
+      noChangeProof = JSON.stringify({ ...currentPublication, time: f.player.time() });
+      return null;
+    }
+    const delta = f.player.seekDeltaJson(previous ? 0 : 0.75);
+    const publication = JSON.parse(delta);
+    currentPublication = { session: publication.session, sequence: publication.sequence };
+    noChangeProof = JSON.stringify({ ...currentPublication, time: 0 });
+    return delta;
   };
   f.player.sourceExecutionReady = () => false;
-  f.player.takePreparedNoChangePresentationJson = () => null;
+  f.player.takePreparedNoChangePresentationJson = () => {
+    const proof = noChangeProof;
+    noChangeProof = null;
+    return proof;
+  };
   f.player.setPreparedLoopDuration = () => {};
   f.player.stopSourcePreparation = () => {};
   f.player.free = () => {};
@@ -3410,6 +3424,16 @@ test("prepared execution publishes admitted Rust cues and waits for section pres
     present(f.render.port2, delta);
     const result = await seeking;
     assert.equal(result.time, 0.75);
+
+    noChangeProof = JSON.stringify({ ...currentPublication, time: 0 });
+    const unchanged = await request(f.control.port2, "seek_section", 2, { previous: false });
+    assert.deepEqual(calls, [[false, 0], [false, 0.75]]);
+    assert.deepEqual(unchanged.presentationReceipt, {
+      session: currentPublication.session,
+      sequence: currentPublication.sequence,
+      time: 0.75,
+      unchanged: true,
+    }, "a no-target command replaces a stale proof with the current displayed receipt");
   } finally { endpoint?.stop(); f.close(); }
 });
 

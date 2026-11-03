@@ -314,7 +314,10 @@ impl PreparedExecutionPlayer {
             .map(|(_, section)| section.time);
         match target {
             Some(time) => self.seek_delta_json(time),
-            None => Ok(None),
+            // The endpoint still needs a current Rust receipt for an unchanged
+            // selected frame. Drain through the ordinary publication path so
+            // stale proofs are cleared and pending renderer work is surfaced.
+            None => self.drain_delta_json(),
         }
     }
 
