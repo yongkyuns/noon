@@ -869,7 +869,7 @@ function createPreparedSourceDriver(run) {
         return;
       }
       const continuation = requirePreparedContinuation(run, run.continuation?.context, signal);
-      const descriptor = JSON.parse(resultJson)?.semantic_execution;
+      const result = JSON.parse(resultJson), descriptor = result?.semantic_execution;
       if (descriptor?.context_id !== continuation.contextId ||
           descriptor.continuation_generation !== continuation.generation) {
         throw new Error("prepared source must return its original context and continuation");
@@ -886,7 +886,7 @@ function createPreparedSourceDriver(run) {
       if (!continuation.preparedBootstrapObserved) {
         // All actual barriers were zero-duration. Only successful source cleanup
         // authorizes Rust to seal the final same-time edits at the exact endpoint.
-        if (JSON.parse(resultJson).duration !== 0) throw new Error("prepared source produced no readable interval");
+        if (result.duration !== 0) throw new Error("prepared source produced no readable interval");
         continuation.preparedSourceFinished = true;
         continuation.initialSourceReady.resolve();
         await continuation.preparedReady.promise;
@@ -907,6 +907,11 @@ function createPreparedSourceDriver(run) {
         continuation.terminal = true;
         return;
       }
+      // The bootstrap attachment knows only the first source barrier. Install
+      // the host's loop policy with the completed authored range before Rust
+      // adopts terminal history; an open prefix never gains a guessed period.
+      invokePreparedEngine(() => continuation.preparedPlayer.setPreparedLoopDuration(
+        continuation.loopPlayback && result.duration > 0 ? result.duration : undefined));
       if (!deliverPreparedSourcePrefix(continuation)) {
         throw new Error("prepared source did not deliver its explicit final endpoint");
       }
@@ -1515,6 +1520,7 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
   if (continuation.preparedAttachmentStarted) throw new Error("prepared source attachment is single-use");
   validatePreparedTransport(request);
   continuation.preparedAttachmentStarted = true;
+  continuation.loopPlayback = request.loopDurationSeconds != null;
   const run = activeAuthoringRun;
   const pendingAttachment = { stop() {} };
   entry.endpoints.add(pendingAttachment);
@@ -1582,6 +1588,7 @@ async function attachFinishedPreparedSemanticExecution(request, entry, pyodide) 
       if (entry.released) throw new Error("completed static source was released during attachment");
       return;
     }
+    invokePreparedEngine(() => player.setPreparedLoopDuration(request.loopDurationSeconds ?? undefined));
     const receiver = createPreparedReceiver(request, entry, null, player);
     player = null; // The receiver now owns cleanup, including failed setup.
     endpoint = await attachPreparedReceiver(request, entry, receiver, false);

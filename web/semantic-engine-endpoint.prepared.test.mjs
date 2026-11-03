@@ -27,6 +27,7 @@ function fixture(mode = "transferable", options = {}) {
     channel: "noon.execution.retained", protocol_version: 18, session: 7,
     sequence: sequence++, snapshot: sequence === 1, time, objects: [], padding: payloadPadding,
   });
+  let loopDuration = null;
   const player = {
     resourceBundleBytes() { record("resources"); return new Uint8Array([1]); },
     initialDeltaJson() { record("initial"); return json(); },
@@ -55,6 +56,10 @@ function fixture(mode = "transferable", options = {}) {
     preparedEndTime: () => end,
     preparedPlaying: () => playing,
     preparedBuffering: () => buffering,
+    preparedPlaybackStateJson: () => JSON.stringify({ time, frontier, end: end ?? null,
+      playing, buffering, completed: end === 0 || (end != null && loopDuration === null && time >= end),
+      advancing: playing && !buffering, loopDuration, loopCount: 0, loopError: null }),
+    setPreparedLoopDuration(value) { record("loop", value); loopDuration = value ?? null; },
     sourceExecutionReady: () => options.sourceExecutionRequired === true && buffering,
     preparedPlaybackTimeAt(wallTime) { record("observe-time", wallTime); return observation ?? time; },
     pausePreparedAt(wallTime) {
@@ -302,8 +307,11 @@ test("prepared pause commits Rust's static-wait sample and unsupported controls 
     assert.equal(paused.time, 0.75);
     assert.equal(paused.playing, false);
     assert.equal(f.count("pause-at"), 1);
+    const loop = await f.request("set_loop_duration", { loopDurationSeconds: 8 });
+    assert.equal(loop.loopDuration, 8);
+    assert.equal(loop.playing, false, "loop configuration preserves Pause");
     const mutations = f.calls.length;
-    for (const type of ["set_loop_duration", "advance_to", "sample_to_authored_time",
+    for (const type of ["advance_to", "sample_to_authored_time",
       "native_state_input", "native_event", "undo_translation_drag", "debug_frame"]) {
       const result = await f.request(type, { time: 2, loopDurationSeconds: 8 });
       assert.equal(result.type, "error"); assert.match(result.message, /prepared playback does not support/);

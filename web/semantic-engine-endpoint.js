@@ -30,7 +30,7 @@ const FINITE_EXPORT_CONTROLS = new Set([
   "finite_export_audio", "cancel_finite_export",
 ]);
 const PREPARED_PLAYBACK_CONTROLS = new Set([
-  "pause", "resume", "seek", "restart_playback", "browser_pointer_input",
+  "pause", "resume", "seek", "restart_playback", "set_loop_duration", "browser_pointer_input",
   "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
 ]);
 
@@ -331,16 +331,20 @@ export async function attachSemanticEngine(
   };
   const state = (type) => {
     if (prepared !== null && player !== null) {
+      const observation = JSON.parse(player.preparedPlaybackStateJson());
       return {
         type, preparedPlayback: true,
         // Cold initialization and command acknowledgements observe only the
         // coherent reader. Rust may project a sleeping wait after first display.
         time: type === "state" && preparedClockAdmitted
-          ? player.preparedPlaybackTimeAt(performance.now()) : player.preparedTime(),
-        playing: player.preparedPlaying(),
-        preparedFrontier: player.preparedFrontier(),
-        durationSeconds: player.preparedEndTime() ?? null,
-        buffering: player.preparedBuffering(),
+          ? player.preparedPlaybackTimeAt(performance.now()) : observation.time,
+        playing: observation.playing,
+        preparedFrontier: observation.frontier,
+        durationSeconds: observation.end,
+        buffering: observation.buffering,
+        completed: observation.completed, advancing: observation.advancing,
+        loopDuration: observation.loopDuration, loopCount: observation.loopCount,
+        loopError: observation.loopError,
         replaySupported: true, replayUnavailable: null,
         canUndoTranslationDrag: false, nextPatchSequence: "0",
       };
@@ -1054,7 +1058,8 @@ export async function attachSemanticEngine(
             break;
           }
           case "set_loop_duration":
-            player.setLoopDuration(message.loopDurationSeconds);
+            if (prepared !== null) player.setPreparedLoopDuration(message.loopDurationSeconds);
+            else player.setLoopDuration(message.loopDurationSeconds);
             observeExecutionWake(performance.now());
             break;
           case "seek":

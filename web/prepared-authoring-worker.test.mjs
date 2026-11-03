@@ -39,6 +39,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const player = {
     resetReceiver(session) { alive(); assert.ok(session > 3); events.push("reset-receiver"); },
     preparedPlaying: () => false,
+    setPreparedLoopDuration(value) { alive(); events.push(["loop", value]); },
     prepareSourceSegment(value) {
       if (late) { events.push("require-source"); return false; }
       alive(); trap("segment"); assert.equal(value, context); counters.segments++; pending = 4; events.push("segment");
@@ -199,7 +200,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   };
 }
 
-test("production source completes each barrier once, sleeps on Rust demand and seals after cleanup", async () => {
+for (const loopDurationSeconds of [null, 1]) test(`production source completes each barrier once and seals after cleanup (loop=${loopDurationSeconds})`, async () => {
   const h = host(); let statements = 0;
   const done = h.start(async api => {
     await api.awaitSemanticContinuation(h.context); statements++;
@@ -209,8 +210,10 @@ test("production source completes each barrier once, sleeps on Rust demand and s
   await microtasks();
   assert.equal(h.posts[0].semanticExecution.prepared_playback, true);
   const initial = h.tick();
-  await h.attach(); await initial;
+  await h.attach({ loopDurationSeconds }); await initial;
   assert.equal(h.counters.initial, 1);
+  assert.equal(h.events.some(event => Array.isArray(event) && event[0] === "loop"), false,
+    "the first barrier does not establish the loop period");
   assert.equal(statements, 0);
   assert.equal(h.tasks.size, 0);
   h.demand(false); assert.equal(h.tasks.size, 0);
@@ -226,6 +229,8 @@ test("production source completes each barrier once, sleeps on Rust demand and s
   assert.equal(h.counters.terminal, 1);
   assert.equal(h.counters.adopted, 2);
   assert.ok(h.events.indexOf("cleanup") < h.events.indexOf("terminal"));
+  assert.deepEqual(h.events.find(event => Array.isArray(event) && event[0] === "loop"), ["loop", loopDurationSeconds === null ? undefined : 2],
+    "gallery looping uses the completed authored duration, not the bootstrap duration");
   assert.equal(h.errors.length, 0);
   const result = h.posts.find(post => post.type === "result");
   assert.equal(JSON.parse(result.resultJson).semantic_execution.prepared_playback, true);
