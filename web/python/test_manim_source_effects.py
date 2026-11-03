@@ -269,6 +269,15 @@ class SourceEffectsTests(unittest.TestCase):
             source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
                            '    values = np.array([0])\n    values[0] = context.get("payload")\n'
                            '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    def mutate():\n        sampled.append(context.get("payload"))\n'
+                           '    mutate()\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    values = np.array([0])\n'
+                           '    def mutate():\n        values[0] = context.get("payload")\n'
+                           '    mutate()\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
             source.replace("from noon import *", "from noon import *\nVMobject = context.get('factory')", 1),
             source.replace("from noon import *", "from noon import *\nSVGMobject = context.get('factory')", 1),
             source.replace("    imported = SVGMobject.from_string(SVG_SOURCE, height=4)",

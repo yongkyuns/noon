@@ -492,7 +492,7 @@ def _safe_numpy_containers(body):
                 parents[child] = parent
 
     def closed_uses(name, permitted):
-        for node in _walk_scope(body):
+        for node in (node for statement in body for node in ast.walk(statement)):
             if not isinstance(node, ast.Name) or node.id != name:
                 continue
             parent = parents.get(node)
@@ -557,6 +557,31 @@ def _safe_numpy_containers(body):
             and closed_uses(sampled_name, sampled_use)):
         return set()
     return safe_lists
+
+
+def _nested_scope_references(body, arrays, numeric_containers):
+    if not arrays and not numeric_containers:
+        return False
+    parents = {}
+    for statement in body:
+        for parent in ast.walk(statement):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+    for statement in body:
+        for scope in ast.walk(statement):
+            if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                continue
+            for node in ast.walk(scope):
+                if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load):
+                    continue
+                if node.id in numeric_containers:
+                    return True
+                if node.id in arrays:
+                    parent = parents.get(node)
+                    if not (isinstance(parent, ast.Subscript) and parent.value is node
+                            and isinstance(parent.ctx, ast.Load)):
+                        return True
+    return False
 
 
 def _fresh_numpy_writes(body, arrays, array_functions, containers=(), module_literals=None, scalars=()):
@@ -2472,6 +2497,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.safe_callable_aliases.append(aliases)
         array_names = _array_names_in_body(body, array_parameters, self.numpy_array_functions,
                                            self.numpy_function_outputs)
+        if _nested_scope_references(body, array_names, self.numpy_safe_containers[-1]):
+            raise _OpaqueSource(None, "unproven_numpy_closure")
         self.numpy_array_names.append(array_names)
         self.owned_containers[-1].update(array_names - set(array_parameters))
         scalar_names = _numpy_scalar_names_in_body(
