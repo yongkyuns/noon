@@ -39,19 +39,22 @@ fn local_property(property: Property) -> bool {
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSeed
+            | Property::EffectShader(_)
     )
 }
 
-/// The bounded built-in history profile: optional Blur, then optional Glow,
-/// followed by optional stack-owned visibility NoiseDissolve; BackdropBlur may
-/// stand alone or own that trailing visibility attachment. Arbitrary stacks and
-/// shader programs remain outside this profile.
+/// Ordered Blur/Glow or BackdropBlur with optional owned visibility, or one
+/// standalone immutable shader with no authored-time or seed dependency.
 pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
-    use noon_core::EffectDefinition::{BackdropBlur, Blur, Glow, NoiseDissolve};
+    use noon_core::EffectDefinition::{BackdropBlur, Blur, Glow, NoiseDissolve, Shader};
 
     match (stack.definitions(), stack.visibility()) {
         ([], None) => true,
         ([BackdropBlur(_)], None) => true,
+        ([Shader(shader)], None) => {
+            !shader.program().schema().dependencies.authored_time
+                && !shader.program().schema().dependencies.seed
+        }
         ([Blur(_)], None) => true,
         ([Glow(_)], None) => true,
         ([Blur(_), Glow(_)], None) => true,
@@ -180,6 +183,7 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSeed
+            | Property::EffectShader(_)
     ) {
         return true;
     }
@@ -246,6 +250,28 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
                 .is_some_and(|visibility| visibility.attachment == *attachment)
                 && effect.definition.as_noise_dissolve().is_some()
         }
+        (
+            Property::EffectShader(index),
+            EffectTrackValue::Shader {
+                parameter: from_index,
+                value: from,
+            },
+            EffectTrackValue::Shader {
+                parameter: to_index,
+                value: to,
+            },
+        ) => effect.definition.as_shader().is_some_and(|shader| {
+            if *from_index != index || *to_index != index {
+                return false;
+            }
+            let Some(parameter) = shader.program().schema().parameters.get(usize::from(index))
+            else {
+                return false;
+            };
+            parameter.kind.is_continuous()
+                && parameter.kind.accepts(*from)
+                && parameter.kind.accepts(*to)
+        }),
         _ => false,
     }
 }
@@ -377,9 +403,9 @@ impl CompiledScene {
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry the bounded ordered Blur/Glow profile with optional
     /// trailing visibility NoiseDissolve, or BackdropBlur with optional trailing
-    /// visibility and typed radius tracks. Authored-view Bloom history is limited to the actual linear-HDR
-    /// camera owner and its typed radius, intensity and threshold channels. Other
-    /// effect definitions remain outside this suffix profile.
+    /// visibility and typed radius tracks. Authored-view Bloom requires its
+    /// linear-HDR camera owner and typed channels. Standalone shaders admit
+    /// typed continuous parameter tracks without time/seed dependencies.
     /// Ordering reconstruction visits only affected rows and their neighbours;
     /// it never clones/scans the full painter/family order.
     /// The caller must pass the complete, ordered suffix ending at this scene's
@@ -681,8 +707,10 @@ mod effect_profile_tests {
     use crate::{CompiledEffect, CompiledObject};
     use noon_core::{
         Blur, CompositionTimeMap, EffectDefinition, EffectTrackEndBehavior, EffectTrackValue,
-        GeometryRef, Glow, NoiseDissolve, ObjectId, RateFunction, SemanticNodeId, Style,
-        TrackTiming, TrackValues, Transform2D,
+        GeometryRef, Glow, NoiseDissolve, ObjectId, RateFunction, SemanticNodeId,
+        ShaderDependencies, ShaderEffect, ShaderParameterDefinition, ShaderParameterType,
+        ShaderProfile, ShaderSchema, ShaderUnit, ShaderValue, Style, TrackDefinition, TrackTiming,
+        TrackValues, Transform2D, WgslEffectProgram,
     };
     use std::sync::Arc;
 
@@ -707,6 +735,57 @@ mod effect_profile_tests {
             transform_geometry_plan: None,
             reconciled: false,
         }
+    }
+
+    fn shader_program(authored_time: bool, seed: bool) -> WgslEffectProgram {
+        let mut color = String::from("input.color.rgb * p.phase");
+        if authored_time {
+            color.push_str(" + vec3<f32>(input.time)");
+        }
+        if seed {
+            color.push_str(" + vec3<f32>(f32(input.seed))");
+        }
+        WgslEffectProgram::prepare(
+            ShaderSchema {
+                profile: ShaderProfile::PaintedPointwiseV1,
+                dependencies: ShaderDependencies {
+                    coordinates: noon_core::ShaderCoordinates::LocalNormalized,
+                    authored_time,
+                    seed,
+                },
+                parameters: vec![ShaderParameterDefinition {
+                    name: Arc::from("phase"),
+                    kind: ShaderParameterType::Scalar {
+                        range: 0.0..=1.0,
+                        unit: ShaderUnit::Unitless,
+                    },
+                    default: ShaderValue::Scalar(0.0),
+                }]
+                .into_boxed_slice(),
+            },
+            format!("fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> {{ return vec4<f32>({color}, 1.0); }}"),
+        )
+        .unwrap()
+    }
+
+    fn shader_track(
+        attachment: SemanticNodeId,
+        parameter: u8,
+        from: ShaderValue,
+        to: ShaderValue,
+    ) -> CompiledTrack {
+        effect_track(
+            Property::EffectShader(parameter),
+            attachment,
+            EffectTrackValue::Shader {
+                parameter,
+                value: from,
+            },
+            EffectTrackValue::Shader {
+                parameter,
+                value: to,
+            },
+        )
     }
 
     #[test]
@@ -786,5 +865,139 @@ mod effect_profile_tests {
             ),
             Some(&object),
         ));
+    }
+
+    #[test]
+    fn shader_history_retains_one_typed_parameter_track_and_rejects_mismatches() {
+        let program = shader_program(false, false);
+        let key = program.parameter("phase").unwrap();
+        let before_shader = ShaderEffect::new(program.clone());
+        let after_shader = before_shader
+            .with_parameter(&key, ShaderValue::Scalar(1.0))
+            .unwrap();
+        let attachment = SemanticNodeId::new(20, 1);
+        let effect = |shader| CompiledEffect {
+            attachment,
+            definition: EffectDefinition::Shader(shader),
+        };
+        let before_stack = CompiledEffectStack::new([effect(before_shader.clone())]).unwrap();
+        let after_stack = CompiledEffectStack::new([effect(after_shader.clone())]).unwrap();
+        let valid_track = shader_track(
+            attachment,
+            0,
+            ShaderValue::Scalar(0.0),
+            ShaderValue::Scalar(1.0),
+        );
+        let mut before_object = CompiledObject::new(
+            ObjectId::new(0),
+            GeometryRef::rectangle(2.0, 1.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        before_object.effects = Some(Arc::new(before_stack));
+        let mut after_object = before_object.clone();
+        after_object.effects = Some(Arc::new(after_stack));
+
+        assert!(local_effect_stack(after_object.effects.as_deref().unwrap()));
+        assert!(local_effect_track(&valid_track, Some(&before_object)));
+        let middle = match &valid_track.values {
+            TrackValues::Effect { from, to, .. } => from.sample_value(*to, 0.5).unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            middle,
+            EffectTrackValue::Shader {
+                parameter: 0,
+                value: ShaderValue::Scalar(0.5),
+            }
+        );
+
+        assert!(!local_effect_track(
+            &shader_track(
+                SemanticNodeId::new(21, 1),
+                0,
+                ShaderValue::Scalar(0.0),
+                ShaderValue::Scalar(1.0)
+            ),
+            Some(&before_object),
+        ));
+        assert!(!local_effect_track(
+            &shader_track(
+                attachment,
+                0,
+                ShaderValue::Color(noon_core::Color::WHITE),
+                ShaderValue::Color(noon_core::Color::BLACK)
+            ),
+            Some(&before_object),
+        ));
+        let mixed = CompiledEffectStack::new([
+            effect(before_shader.clone()),
+            CompiledEffect {
+                attachment: SemanticNodeId::new(22, 1),
+                definition: EffectDefinition::Glow(Glow::default()),
+            },
+        ])
+        .unwrap();
+        assert!(!local_effect_stack(&mixed));
+
+        for dependencies in [(true, false), (false, true)] {
+            assert!(!local_effect_stack(
+                &CompiledEffectStack::new([CompiledEffect {
+                    attachment,
+                    definition: EffectDefinition::Shader(ShaderEffect::new(shader_program(
+                        dependencies.0,
+                        dependencies.1
+                    ),)),
+                }])
+                .unwrap(),
+            ));
+        }
+
+        // The same immutable shader stack and track must survive a saved suffix
+        // and reconstruct its forward row without observing mutable source state.
+        let track_id = TrackId::new(5);
+        let mut old_object = before_object.clone();
+        old_object.id = ObjectId::new(0);
+        let source_track = TrackDefinition {
+            id: track_id,
+            object: ObjectId::new(0),
+            property: Property::EffectShader(0),
+            values: valid_track.values.clone(),
+            timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        };
+        let scene =
+            CompiledScene::compile_objects(vec![after_object.clone()], &[source_track]).unwrap();
+        let mut old = CompiledReplayRevision {
+            rows: vec![SavedRow {
+                index: 0,
+                object: Some(old_object),
+                order: None,
+            }],
+            inset_2d_view: None,
+            channels: vec![crate::CompiledChannelKey::effect(
+                0,
+                Property::EffectShader(0),
+                attachment,
+            )],
+            tracks: vec![(track_id, None)],
+            camera_motion_payloads: 0,
+            path_motion_commands: 0,
+            geometry_payload_bytes: 0,
+            effect_payload_bytes: 0,
+            composed_payload_bytes: 0,
+        };
+        scene.charge_prefix_revision_geometry(&mut old).unwrap();
+        assert!(old.effect_payload_bytes >= 2 * program.module().len());
+        assert!(scene.supports_prefix_revision(&old));
+        let forward = scene.forward_prefix_revisions(&[&old]).unwrap();
+        assert_eq!(forward.len(), 1);
+        let forwarded = forward[0].rows[0].object.as_ref().unwrap();
+        let forwarded_shader = forwarded.effects.as_ref().unwrap().get(attachment).unwrap();
+        assert_eq!(
+            forwarded_shader.definition.as_shader().unwrap().values(),
+            &[ShaderValue::Scalar(1.0)],
+        );
+        assert!(forward[0].tracks[0].1.is_some());
     }
 }
