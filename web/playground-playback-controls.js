@@ -12,7 +12,6 @@ export class PlaygroundPlaybackControls {
   #restartButton;
   #undoDragButton;
   #scrubber;
-  #preparedSeek;
   #timeOutput;
   #liveStatus;
   #audioControls;
@@ -116,24 +115,14 @@ export class PlaygroundPlaybackControls {
     this.#scrubber.step = "any";
     this.#scrubber.setAttribute("aria-label", "Animation playhead");
     this.#scrubber.addEventListener("input", this.#handleSeekInput);
-    // An open prefix has usable history but no total duration. Use an absolute
-    // seconds input instead of a percentage slider whose denominator keeps moving.
-    this.#preparedSeek = document.createElement("input");
-    this.#preparedSeek.type = "number";
-    this.#preparedSeek.className = "playback-prepared-seek";
-    this.#preparedSeek.min = "0";
-    this.#preparedSeek.step = "any";
-    this.#preparedSeek.setAttribute("aria-label", "Seek prepared history in seconds");
-    this.#preparedSeek.addEventListener("change", this.#handlePreparedSeek);
     this.#liveStatus = document.createElement("span");
     this.#liveStatus.className = "playback-live-status";
-    this.#liveStatus.textContent = "Duration pending";
     this.#liveStatus.setAttribute("role", "status");
     this.#liveStatus.setAttribute("aria-live", "polite");
     this.#sectionMarkers = document.createElement("fieldset");
     this.#sectionMarkers.className = "playback-section-markers";
     this.#sectionMarkers.setAttribute("aria-label", "Lesson key points");
-    timeline.append(this.#scrubber, this.#sectionMarkers, this.#preparedSeek, this.#liveStatus);
+    timeline.append(this.#scrubber, this.#sectionMarkers, this.#liveStatus);
 
     this.#timeOutput = document.createElement("output");
     this.#timeOutput.className = "playback-time";
@@ -334,7 +323,6 @@ export class PlaygroundPlaybackControls {
     this.#restartButton.removeEventListener("click", this.#handleRestart);
     this.#undoDragButton.removeEventListener("click", this.#handleUndoDrag);
     this.#scrubber.removeEventListener("input", this.#handleSeekInput);
-    this.#preparedSeek.removeEventListener("change", this.#handlePreparedSeek);
     this.#previousSection.removeEventListener("click", this.#handlePreviousSection);
     this.#nextSection.removeEventListener("click", this.#handleNextSection);
     this.#sectionNames.removeEventListener("change", this.#handleSectionJump);
@@ -385,24 +373,6 @@ export class PlaygroundPlaybackControls {
     });
   };
 
-  #handlePreparedSeek = () => {
-    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending ||
-        this.#preparedFrontier === null || this.#durationSeconds !== null) return;
-    const value = this.#preparedSeek.value.trim();
-    const target = value === "" ? NaN : Number(value);
-    if (!Number.isFinite(target) || target < 0 || target >= this.#preparedFrontier) {
-      this.#seekNotice = `Choose a time from 0 to before ${this.#preparedFrontier} s`;
-      this.#preparedSeek.value = String(this.#timeSeconds);
-      this.#render();
-      return;
-    }
-    // Never manufacture an epsilon/last-frame target at the still-open frontier.
-    // Rust revalidates the exact absolute request through the existing seek API.
-    this.#seekNotice = null;
-    this.#desiredSeek = target;
-    void this.#drainSeek();
-  };
-
   #handlePreviousSection = () => this.#handleSection(true);
   #handleNextSection = () => this.#handleSection(false);
   #handleSection(previous) {
@@ -442,9 +412,23 @@ export class PlaygroundPlaybackControls {
   };
 
   #handleSeekInput = () => {
-    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending ||
-        this.#durationSeconds === null) return;
-    const target = Number(this.#scrubber.value);
+    if (this.#destroyed || !this.#controllable || this.#externalBusy || this.#commandPending) return;
+    const value = this.#scrubber.value.trim();
+    const target = value === "" ? NaN : Number(value);
+    if (this.#durationSeconds === null) {
+      if (this.#preparedFrontier === null) return;
+      if (!Number.isFinite(target) || target < 0 || target >= this.#preparedFrontier) {
+        this.#seekNotice = `Choose a time before ${formatTime(this.#preparedFrontier)} s while loading`;
+        this.#render();
+        return;
+      }
+      // The growing rail represents available history, not a final duration.
+      // The open endpoint stays unavailable; never manufacture an epsilon seek.
+      this.#seekNotice = null;
+      this.#desiredSeek = target;
+      void this.#drainSeek();
+      return;
+    }
     if (!Number.isFinite(target)) return;
     const bounded = Math.min(Math.max(target, 0), this.#durationSeconds);
     // Browsers may serialize a range value to fewer digits than its max.
@@ -497,7 +481,6 @@ export class PlaygroundPlaybackControls {
       if (generation === this.#controlGeneration) {
         this.#desiredSeek = null;
         this.#timeSeconds = this.#confirmedTimeSeconds;
-        this.#preparedSeek.value = String(this.#timeSeconds);
         this.#renderTime();
         this.#reportError(error);
       }
@@ -531,19 +514,19 @@ export class PlaygroundPlaybackControls {
       !this.#controllable && !this.#forwardPlayback ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : this.#playing ? "Pause animation" : "Play animation",
     );
     const open = this.#preparedFrontier !== null && this.#durationSeconds === null;
-    this.#scrubber.hidden = !this.#controllable || open;
-    this.#preparedSeek.hidden = !this.#controllable || !open;
-    this.#preparedSeek.max = String(this.#preparedFrontier ?? 0);
-    this.#preparedSeek.title = open ? `Seek from 0 to before ${this.#preparedFrontier} seconds` : "";
+    this.#scrubber.hidden = false;
+    this.#scrubber.title = open
+      ? `Available history: before ${formatTime(this.#preparedFrontier)} seconds. More is loading.`
+      : !this.#controllable ? this.#root.title : "";
     this.#liveStatus.hidden = this.#controllable && !open;
     const status = this.#unavailableReason !== null ? "Replay unavailable" : open
-      ? this.#seekNotice ?? `${this.#buffering ? "Buffering · " : ""}Prepared before ${this.#preparedFrontier} s · total unknown`
-      : "Duration pending";
+      ? this.#seekNotice ?? (this.#buffering ? "Buffering…" : "Loading timeline…")
+      : this.#playing ? "Playing live" : "Live playback";
     if (this.#liveStatus.textContent !== status) {
       this.#liveStatus.textContent = status;
       this.#liveStatus.title = status;
     }
-    this.#scrubber.max = String(this.#durationSeconds ?? 1);
+    this.#scrubber.max = String(this.#controllable ? this.#durationSeconds ?? this.#preparedFrontier ?? 1 : 1);
     this.#undoDragButton.hidden = !this.#undoDragSupported || this.#preparedFrontier !== null;
     this.#root.dataset.undoSupport = String(!this.#undoDragButton.hidden);
     this.#root.dataset.buffering = String(this.#buffering);
@@ -591,17 +574,14 @@ export class PlaygroundPlaybackControls {
     const known = this.#controllable && this.#durationSeconds !== null;
     const time = known ? Math.min(this.#timeSeconds, this.#durationSeconds) : this.#timeSeconds;
     this.#root.dataset.elapsedSeconds = String(time);
-    // Keep the layout slot, but do not draw a percentage thumb before the total
-    // is known. Expanding a segment-sized range makes forward time jump back.
-    this.#scrubber.value = String(known ? Math.min(time, this.#durationSeconds) : 0);
-    // Polling must not overwrite an unfinished numeric edit. This value is only
-    // a proposed seek; the output remains the last observed engine time.
-    if (document.activeElement !== this.#preparedSeek) this.#preparedSeek.value = String(this.#desiredSeek ?? time);
+    this.#scrubber.value = String(this.#controllable ? time : 0);
     this.#scrubber.setAttribute(
       "aria-valuetext",
       known
         ? `${formatTime(time)} seconds of ${formatTime(this.#durationSeconds)} seconds`
-        : `${formatTime(time)} seconds elapsed · total duration not yet known`,
+        : this.#controllable && this.#preparedFrontier !== null
+          ? `${formatTime(time)} seconds, ${formatTime(this.#preparedFrontier)} seconds available, more loading`
+          : `${formatTime(time)} seconds elapsed · live playback`,
     );
     this.#timeOutput.value = known
       ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
@@ -618,9 +598,9 @@ export class PlaygroundPlaybackControls {
       (this.#controllable && this.#durationSeconds === 0);
     this.#restartButton.disabled = blockCommands;
     this.#undoDragButton.disabled = blockCommands || this.#preparedFrontier !== null || !this.#canUndoTranslationDrag;
-    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending || this.#durationSeconds === null || this.#durationSeconds === 0;
     // Buffering is reader readiness, not a command lock: pause and rewind stay usable.
-    this.#preparedSeek.disabled = !this.#controllable || this.#externalBusy || this.#commandPending;
+    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending ||
+      (this.#durationSeconds === null && this.#preparedFrontier === null) || this.#durationSeconds === 0;
     this.#previousSection.disabled = blockCommands || this.#sectionState?.previous === null;
     this.#nextSection.disabled = blockCommands || this.#sectionState?.next === null;
     this.#sectionNames.disabled = blockCommands;
@@ -733,7 +713,6 @@ function installStyles() {
     .playback-button:hover:not(:disabled) { background: #20283a; }
     .playback-button:focus-visible,
     .playback-scrubber:focus-visible,
-    .playback-prepared-seek:focus-visible,
     .playback-section-names:focus-visible,
     .playback-section-marker:focus-visible {
       outline: 2px solid var(--accent-strong);
@@ -751,17 +730,6 @@ function installStyles() {
       min-width: 0;
       accent-color: var(--accent);
       cursor: pointer;
-    }
-    .playback-prepared-seek {
-      box-sizing: border-box;
-      width: 100%;
-      min-width: 0;
-      border: 1px solid var(--border-strong);
-      border-radius: 0.4rem;
-      padding: 0.3rem 0.4rem;
-      background: #111722;
-      color: #dbe2ef;
-      font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     .playback-time {
       min-width: 6.2rem;

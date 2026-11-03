@@ -34,11 +34,11 @@ function fixture(initial = prepared()) {
   controls.observe(initial);
   const element = selector => preview.querySelector(selector);
   return { document, preview, controls, player, calls, errors,
-    range: element(".playback-scrubber"), input: element(".playback-prepared-seek"),
+    range: element(".playback-scrubber"),
     output: element(".playback-time"), status: element(".playback-live-status"),
     toggle: element(".playback-toggle"), restart: element(".playback-restart"),
     setState(next) { state = next; controls.observe(next); },
-    seek(value) { this.input.value = String(value); this.input.dispatchEvent(new Event("change")); },
+    seek(value) { this.range.value = String(value); this.range.dispatchEvent(new Event("input")); },
   };
 }
 function deferred() {
@@ -54,22 +54,20 @@ test("completed observed replay retires open-prefix controls without inventing a
   assert.equal(f.controls.durationSeconds, 2);
   assert.equal(f.range.hidden, false);
   assert.equal(f.range.disabled, false);
-  assert.equal(f.input.hidden, true);
   assert.equal(f.controls.element.dataset.buffering, "false");
   assert.deepEqual(f.errors, []);
 });
 
-test("open history permits controls without inventing a final duration or a percentage", async () => {
+test("open history keeps the timeline visible with its available range and unknown total", async () => {
   const f = fixture(prepared({ time: 3, preparedFrontier: 4 }));
   assert.equal(f.controls.durationSeconds, null);
   assert.equal(f.output.value, "3.00 / — s", "bootstrap duration must not clamp reader time");
-  assert.equal(f.range.hidden, true);
-  assert.equal(f.range.disabled, true);
-  assert.equal(f.input.hidden, false);
-  assert.equal(f.input.disabled, false);
-  assert.equal(f.input.type, "number");
-  assert.equal(f.input.max, "4");
-  assert.match(f.status.textContent, /Prepared before 4 s · total unknown/);
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.range.disabled, false);
+  assert.equal(f.range.type, "range");
+  assert.equal(f.range.max, "4");
+  assert.equal(f.status.textContent, "Loading timeline…");
+  assert.match(f.range.getAttribute("aria-valuetext"), /4.00 seconds available, more loading/);
   assert.equal(f.status.title, f.status.textContent);
   assert.equal(f.controls.element.dataset.durationKnown, "false");
   assert.equal(f.toggle.textContent, "Play");
@@ -86,7 +84,7 @@ test("buffering is not a command lock and pausing preserves the observed time", 
   assert.match(f.status.textContent, /^Buffering/);
   assert.equal(f.status.getAttribute("role"), "status");
   assert.equal(f.status.getAttribute("aria-live"), "polite");
-  for (const control of [f.toggle, f.restart, f.input]) assert.equal(control.disabled, false);
+  for (const control of [f.toggle, f.restart, f.range]) assert.equal(control.disabled, false);
   f.toggle.dispatchEvent(new Event("click")); await flush();
   assert.deepEqual(f.calls, [["pause", undefined]]);
   assert.equal(f.output.value, "0.50 / — s");
@@ -102,7 +100,8 @@ test("new history does not move the playhead, resume a pause or emit a command",
   assert.equal(f.output.value, "0.50 / — s");
   assert.equal(f.controls.element.dataset.buffering, "false");
   assert.equal(f.toggle.textContent, "Play");
-  assert.equal(f.input.max, "10");
+  assert.equal(f.range.max, "10");
+  assert.equal(f.range.value, "0.5");
   assert.deepEqual(f.calls, []);
 });
 
@@ -113,7 +112,7 @@ test("observed source handoff retires history controls and preserves forward pau
   assert.equal(f.controls.durationSeconds, null);
   assert.equal(f.controls.element.dataset.buffering, "false");
   assert.equal(f.controls.element.dataset.controllable, "false");
-  assert.equal(f.input.disabled, true);
+  assert.equal(f.range.disabled, true);
   assert.equal(f.restart.disabled, true);
   assert.equal(f.toggle.disabled, false);
   f.toggle.dispatchEvent(new Event("click")); await flush();
@@ -126,9 +125,9 @@ test("open boundary and invalid input never send a guessed last-frame or queued 
   const f = fixture();
   for (const value of [2, 3, -1, "", "NaN", "Infinity"]) {
     f.seek(value); await flush();
-    assert.equal(f.input.value, "0.5");
+    assert.equal(f.range.value, "0.5");
     assert.equal(f.output.value, "0.50 / — s");
-    assert.match(f.status.textContent, /before 2 s/);
+    assert.match(f.status.textContent, /before 2.00 s/);
   }
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.errors, []);
@@ -146,21 +145,16 @@ test("tiny positive prefixes still admit zero without inventing an epsilon endpo
   assert.deepEqual(f.calls, [["seek", 0]]);
 });
 
-test("numeric editing survives observations and only committed edits request seeks", async () => {
+test("native slider input seeks open history without waiting for a control swap", async () => {
   const f = fixture();
-  f.document.activeElement = f.input;
-  f.input.value = "1.25";
-  f.input.dispatchEvent(new Event("input"));
-  f.setState(prepared({ time: 0.75, preparedFrontier: 3 }));
-  assert.equal(f.input.value, "1.25");
-  assert.equal(f.output.value, "0.75 / — s");
-  assert.deepEqual(f.calls, []);
-  f.input.dispatchEvent(new Event("change")); await flush();
+  f.range.value = "1.25";
+  f.range.dispatchEvent(new Event("input")); await flush();
   assert.deepEqual(f.calls, [["seek", 1.25]]);
   assert.equal(f.output.value, "1.25 / — s");
+  assert.equal(f.range.value, "1.25");
 });
 
-test("adopted terminal metadata alone enables the full slider and exact endpoint", async () => {
+test("adopted terminal metadata keeps the same slider and enables its exact endpoint", async () => {
   const f = fixture();
   assert.throws(() => f.controls.setDuration(8), /adopted terminal history/);
   const end = 2.5999999999999996;
@@ -170,7 +164,6 @@ test("adopted terminal metadata alone enables the full slider and exact endpoint
   assert.equal(f.range.max, String(end));
   assert.equal(f.range.hidden, false);
   assert.equal(f.range.disabled, false);
-  assert.equal(f.input.hidden, true);
   assert.equal(f.status.hidden, true);
   assert.deepEqual(f.calls, [], "terminal adoption does not seek or restart");
   f.range.value = "2.6"; f.range.dispatchEvent(new Event("input")); await flush();
@@ -199,7 +192,7 @@ test("invalid prepared observations reject atomically without changing displayed
     assert.throws(() => f.controls.observe(prepared(override)), /state|boolean/);
     assert.equal(f.controls.durationSeconds, null);
     assert.equal(f.output.value, "0.50 / — s");
-    assert.equal(f.input.max, "2");
+    assert.equal(f.range.max, "2");
     assert.equal(f.controls.element.dataset.buffering, "false");
     assert.equal(f.toggle.textContent, "Play");
   }
@@ -227,7 +220,7 @@ test("failed prepared seeks restore confirmed time and surface the actual reject
   f.player.seek = async () => { throw new Error("reader retired"); };
   f.seek(1); await flush();
   assert.equal(f.output.value, "0.50 / — s");
-  assert.equal(f.input.value, "0.5");
+  assert.equal(f.range.value, "0.5");
   assert.equal(f.errors.length, 1);
   assert.match(f.errors[0].message, /reader retired/);
   assert.equal(f.controls.element.dataset.busy, "false");
@@ -248,7 +241,7 @@ test("coalesced seeks stay bounded and rejection restores the latest successful 
   assert.deepEqual(f.calls, [["seek", 1], ["seek", 2]]);
   second.reject(new Error("second seek failed")); await flush();
   assert.equal(f.output.value, "1.00 / — s");
-  assert.equal(f.input.value, "1");
+  assert.equal(f.range.value, "1");
   assert.equal(f.errors.length, 1);
 });
 
@@ -278,7 +271,7 @@ test("busy and capability retirement still invalidate pending prepared commands"
   delayed.reject(new Error("retired source")); await flush();
   assert.equal(f.output.value, "0.25 / — s");
   assert.deepEqual(f.errors, []);
-  assert.equal(f.input.disabled, false);
+  assert.equal(f.range.disabled, false);
 });
 
 test("destroyed prepared controls cannot mutate a replacement and remove readiness attributes", async () => {
@@ -299,7 +292,7 @@ test("destroyed prepared controls cannot mutate a replacement and remove readine
 test("explicit busy work disables prepared commands while mere source progress does not", async () => {
   const f = fixture();
   f.controls.setBusy(true);
-  for (const control of [f.input, f.toggle, f.restart]) assert.equal(control.disabled, true);
+  for (const control of [f.range, f.toggle, f.restart]) assert.equal(control.disabled, true);
   f.seek(1); f.toggle.dispatchEvent(new Event("click")); f.restart.dispatchEvent(new Event("click"));
   await flush(); assert.deepEqual(f.calls, []);
   f.controls.setBusy(false);
@@ -318,7 +311,7 @@ test("admitting prepared history clears a previous scene's audio controls", () =
   assert.equal(audio.hidden, true);
   assert.equal(f.toggle.textContent, "Play");
   assert.equal(f.controls.durationSeconds, null);
-  assert.equal(f.input.hidden, false);
+  assert.equal(f.range.hidden, false);
   assert.deepEqual(f.calls, []);
 });
 
@@ -332,7 +325,7 @@ for (const preparedPlayback of [false, true]) test(`completed static ${preparedP
   assert.equal(f.toggle.disabled, true);
   assert.equal(f.range.max, "0");
   assert.equal(f.range.disabled, true);
-  assert.equal(f.input.hidden, true);
+  assert.equal(f.range.hidden, false);
   assert.equal(f.restart.disabled, false);
   f.restart.click(); await flush();
   assert.deepEqual(f.calls, [["restartPlayback", undefined]]);

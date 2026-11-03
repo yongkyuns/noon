@@ -114,7 +114,7 @@ async function installFixture(page, evidence) {
 
 async function openReady(page, frontier = 30) {
   await page.waitForFunction(expected => {
-    const c = document.querySelector(".playback-controls"), seek = document.querySelector(".playback-prepared-seek");
+    const c = document.querySelector(".playback-controls"), seek = document.querySelector(".playback-scrubber");
     return c?.dataset.busy === "false" && c.dataset.durationKnown === "false" &&
       seek && !seek.hidden && !seek.disabled && Number(seek.max) === expected;
   }, frontier);
@@ -129,10 +129,10 @@ async function pause(page) {
   });
 }
 async function seekOpen(page, time, frontier = null) {
-  const field = page.locator(".playback-prepared-seek");
-  // Commit through native blur so a later button click cannot fire a second
-  // change event for the same edit and race its seek command.
-  await field.fill(String(time)); await field.press("Tab");
+  const field = page.locator(".playback-scrubber");
+  await field.evaluate((element, target) => {
+    element.value = String(target); element.dispatchEvent(new Event("input", { bubbles: true }));
+  }, time);
   await page.waitForFunction(t => {
     const c = document.querySelector(".playback-controls");
     return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t;

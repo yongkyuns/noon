@@ -100,11 +100,30 @@ class SourceEffectsTests(unittest.TestCase):
         ''')))
         self.assertFalse(source_is_scene_only('from noon import Code as __builtins__\n'))
 
-    def test_unchanged_basic_text_and_glow_gallery_use_the_closed_subset(self):
+    def test_unchanged_deterministic_gallery_sources_use_the_closed_subset(self):
         examples = Path(__file__).parent / 'examples'
-        for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py', 'showcase_gpu_glow.py'):
+        for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py', 'showcase_gpu_glow.py',
+                     'showcase_dynamic_scene.py'):
             with self.subTest(name=name):
                 self.assertTrue(source_is_scene_only((examples / name).read_text()))
+
+    def test_discard_assignment_does_not_admit_private_name_reads(self):
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    x, _ = divmod(7, 3)
+                    self.wait(x)
+        ''')))
+        for name in ('_', '__builtins__', '_noon_await_source_barrier'):
+            with self.subTest(name=name):
+                self.assertFalse(source_is_scene_only(dedent(f'''
+                    from noon import *
+                    class Example(Scene):
+                        def construct(self):
+                            x, _ = divmod(7, 3)
+                            self.wait({name})
+                ''')))
 
 
 if __name__ == '__main__':
