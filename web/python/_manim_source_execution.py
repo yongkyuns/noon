@@ -259,7 +259,7 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def _guarded_integer_parameters(self, body, parameters, bindings):
         shadowed = bindings.names | parameters | set().union(*self.scopes[1:])
-        if {"int", "isinstance"}.intersection(shadowed):
+        if {"int", "bool", "isinstance"}.intersection(shadowed):
             return set()
         if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
                 and isinstance(body[0].value.value, str)):
@@ -269,16 +269,23 @@ class _SceneOnlySource(ast.NodeVisitor):
             return set()
         test = body[0].test
         clauses = test.values if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or) else [test]
-        names = set()
+        bool_checks = set()
         for clause in clauses:
-            if not isinstance(clause, ast.UnaryOp) or not isinstance(clause.op, ast.Not):
-                continue
-            call = clause.operand
-            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "isinstance"
-                    and len(call.args) == 2 and not call.keywords and isinstance(call.args[0], ast.Name)
-                    and isinstance(call.args[1], ast.Name) and call.args[1].id == "int"):
-                names.add(call.args[0].id)
-        return names.intersection(parameters) - bindings.names
+            negated = isinstance(clause, ast.UnaryOp) and isinstance(clause.op, ast.Not)
+            call = clause.operand if negated else clause
+            if (not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name) or call.func.id != "isinstance"
+                    or len(call.args) != 2 or call.keywords or not isinstance(call.args[0], ast.Name)
+                    or not isinstance(call.args[1], ast.Name)):
+                return set()
+            name, kind = call.args[0].id, call.args[1].id
+            if name not in parameters or name in bindings.names:
+                return set()
+            if negated and kind == "int" and bool_checks.issubset({name}):
+                return {name}
+            if negated or kind != "bool":
+                return set()
+            bool_checks.add(name)
+        return set()
 
     def _scope(self, body, parameters=()):
         parameters = set(parameters)

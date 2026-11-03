@@ -172,6 +172,8 @@ class SourceEffectsTests(unittest.TestCase):
         self.assertTrue(source_is_scene_only(template %
             '    if isinstance(bins, bool) or not isinstance(bins, int) or bins < 1:\n        raise ValueError("bins")'))
         for guard in (
+            '    if bins < 1 or not isinstance(bins, int):\n        raise ValueError("bins")',
+            '    if bins.count() or not isinstance(bins, int):\n        raise ValueError("bins")',
             '    if not isinstance(bins, int) and bins < 1:\n        raise ValueError("bins")',
             '    if not isinstance(bins, int):\n        pass',
             '    if not isinstance(bins, int):\n        counts = [0] * bins\n        raise ValueError("bins")',
