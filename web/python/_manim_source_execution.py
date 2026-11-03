@@ -1825,6 +1825,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                             (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp, ast.DictComp))):
                         return False
             owned = set()
+            encoded_values = set()
             for node in ast.walk(function):
                 if (isinstance(node, ast.Assign) and len(node.targets) == 1
                         and isinstance(node.targets[0], (ast.Tuple, ast.List))
@@ -1834,20 +1835,23 @@ class _SceneOnlySource(ast.NodeVisitor):
                         if isinstance(target, ast.Name) and isinstance(
                                 value, (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp, ast.DictComp)):
                             owned.add(target.id)
-                if isinstance(node, ast.Assign) and len(node.targets) == 1:
-                    target = node.targets[0]
-                    value = node.value
-                    if isinstance(target, ast.Name) and (
-                            isinstance(value, (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp,
-                                               ast.DictComp))
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                        and isinstance(node.targets[0], ast.Name):
+                    target, value = node.targets[0], node.value
+                    if (isinstance(value, (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp, ast.DictComp))
                             or isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
-                            and (value.func.id == "bytearray" or value.func.id in self.module_import_functions
-                                 and self.module_import_functions[value.func.id] == ("array", "array"))
+                            and (value.func.id == "bytearray" or self.module_import_functions.get(value.func.id)
+                                 == ("array", "array"))
                             or isinstance(value, ast.BinOp) and any(
                                 isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
                                 and self.module_import_functions.get(child.func.id) == ("array", "array")
                                 for child in ast.walk(value))):
                         owned.add(target.id)
+                    if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                            and value.func.attr == "join" and isinstance(value.func.value, ast.Constant)
+                            and type(value.func.value.value) is bytes):
+                        encoded_values.add(target.id)
+            for node in ast.walk(function):
                 if isinstance(node, (ast.Global, ast.Nonlocal, ast.Delete, ast.With, ast.AsyncWith,
                                      ast.Try, ast.AsyncFor)):
                     return False
@@ -1892,6 +1896,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                     if (isinstance(node.value, ast.Name) and node.value.id in owned
                             or node.targets[0].id in owned and references_owned):
                         return False
+                    if isinstance(node.value, ast.Name) and node.value.id in encoded_values:
+                        return False
                 if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
                     if isinstance(node.value, ast.Name) and node.value.id in self.module_modules:
                         if node.value.id in local_names:
@@ -1912,6 +1918,25 @@ class _SceneOnlySource(ast.NodeVisitor):
                             return False
                         if not self._closed_module_data(node.id, active_data):
                             return False
+            for node in ast.walk(function):
+                if (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name)
+                        and node.target.id in encoded_values):
+                    return False
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id in local_functions
+                        and any(isinstance(value, ast.Name) and value.id in owned
+                                for arg in [*node.args, *(keyword.value for keyword in node.keywords)]
+                                for value in ast.walk(arg))):
+                    return False
+            for nested in (node for node in ast.walk(function)
+                           if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+                           and node is not function):
+                if any(isinstance(node, ast.Name) and node.id in owned | encoded_values
+                       for node in ast.walk(nested)):
+                    return False
+            for resource_name in encoded_values:
+                if bindings.binding_counts.get(resource_name) != 1:
+                    return False
             return all(
                 isinstance(node.value, ast.Name) and node.value.id in owned
                 for node in ast.walk(function)
@@ -2028,7 +2053,29 @@ class _SceneOnlySource(ast.NodeVisitor):
         if not any(isinstance(node, ast.Constant) and node.value == b"\x89PNG\r\n\x1a\n"
                    for node in returned):
             return False
-        calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)]
+        bindings = _SourceBindings()
+        for statement in function.body:
+            bindings.visit(statement)
+        scanlines = {
+            node.targets[0].id for node in ast.walk(function)
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "join" and isinstance(node.value.func.value, ast.Constant)
+            and type(node.value.func.value.value) is bytes
+        }
+        parents = {child: node for node in ast.walk(function) for child in ast.iter_child_nodes(node)}
+        for value in scanlines:
+            loads = [node for node in ast.walk(function) if isinstance(node, ast.Name)
+                     and node.id == value and isinstance(node.ctx, ast.Load)]
+            if bindings.binding_counts.get(value) != 1 or len(loads) != 1:
+                return False
+            parent = parents.get(loads[0])
+            while parent is not None and not isinstance(parent, ast.Call):
+                parent = parents.get(parent)
+            if (not isinstance(parent, ast.Call) or not parent.args or not isinstance(parent.func, ast.Attribute)
+                    or parent.func.attr != "compress" or parent.args[0] is not loads[0]):
+                return False
         chunk_names = {node.name for node in function.body if isinstance(node, ast.FunctionDef)}
         chunks = [node for node in returned if isinstance(node, ast.Call)
                   and isinstance(node.func, ast.Name) and node.func.id in chunk_names]
@@ -2129,7 +2176,54 @@ class _SceneOnlySource(ast.NodeVisitor):
                         for child in ast.walk(node))
                 for node in ast.walk(function)
             )
-            if (appends and allowed_loads and not mutated
+            append_loops = []
+            append_scopes = []
+            append_ancestors = []
+            for append in appends:
+                ancestors = []
+                parent = parents.get(append)
+                while parent is not None and parent is not function:
+                    ancestors.append(parent)
+                    parent = parents.get(parent)
+                append_loops.append([node for node in ancestors if isinstance(node, (ast.For, ast.While))])
+                append_ancestors.append(ancestors)
+                append_scopes.append(any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+                                         for node in ancestors))
+            checkpoint_guard = False
+            if len(appends) == 1 and len(append_loops[0]) == 1:
+                loop = append_loops[0][0]
+                if (isinstance(loop, ast.For) and isinstance(loop.target, (ast.Tuple, ast.List))
+                        and len(loop.target.elts) == 2 and isinstance(loop.target.elts[0], ast.Name)
+                        and isinstance(loop.iter, ast.Call) and isinstance(loop.iter.func, ast.Name)
+                        and loop.iter.func.id == "enumerate" and len(loop.iter.args) == 2
+                        and isinstance(loop.iter.args[1], ast.Constant) and loop.iter.args[1].value == 1
+                        and isinstance(loop.iter.args[0], ast.Call)
+                        and isinstance(loop.iter.args[0].func, ast.Name)
+                        and loop.iter.args[0].func.id == "zip" and len(loop.iter.args[0].args) == 2):
+                    counter = loop.target.elts[0].id
+                    checkpoint_guard = any(
+                        isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                        and isinstance(node.test.left, ast.Name) and node.test.left.id == counter
+                        and len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.In)
+                        and isinstance(node.test.comparators[0], ast.Name)
+                        and any(
+                            isinstance(assignment, ast.Assign) and len(assignment.targets) == 1
+                            and isinstance(assignment.targets[0], ast.Name)
+                            and assignment.targets[0].id == node.test.comparators[0].id
+                            and isinstance(assignment.value, ast.Call)
+                            and isinstance(assignment.value.func, ast.Name)
+                            and assignment.value.func.id == "set" and len(assignment.value.args) == 1
+                            and isinstance(assignment.value.args[0], ast.Name)
+                            and assignment.value.args[0].id in {
+                                arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
+                                                    *function.args.kwonlyargs]}
+                            and bindings.binding_counts.get(assignment.targets[0].id) == 1
+                            for assignment in ast.walk(function)
+                        )
+                        for node in append_ancestors[0]
+                    )
+            if (len(appends) == 1 and allowed_loads and not mutated and checkpoint_guard
+                    and not any(append_scopes)
                     and all(len(node.args) == 1 and not node.keywords and is_png_call(node.args[0])
                             for node in appends)):
                 return "tuple_png_list_numeric_tuple"

@@ -578,6 +578,42 @@ class Example(Scene):
             1,
         )
         self.assertFalse(source_execution_proof(oversized_image)["admitted"])
+        nested_growth = triangle.replace(
+            "snapshots = []",
+            "snapshots = []\n    def grow():\n"
+            "        snapshots.append(rgba_png(width, height, bytearray(width * height * 4)))\n"
+            "    grow()",
+            1,
+        )
+        self.assertFalse(source_execution_proof(nested_growth)["admitted"])
+        escaped_snapshot_list = triangle.replace(
+            "snapshots = []",
+            "snapshots = []\n    backup = snapshots",
+            1,
+        )
+        self.assertFalse(source_execution_proof(escaped_snapshot_list)["admitted"])
+        oversized_loop_growth = triangle.replace(
+            "            snapshots.append(rgba_png(width, height, rgba))",
+            "            snapshots.append(rgba_png(width, height, rgba))\n"
+            "            for extra in range(1_000_000):\n"
+            "                snapshots.append(rgba_png(width, height, rgba))",
+            1,
+        )
+        self.assertFalse(source_execution_proof(oversized_loop_growth)["admitted"])
+        nested_loop_growth = triangle.replace(
+            "            snapshots.append(rgba_png(width, height, rgba))",
+            "            for extra in range(1_000_000):\n"
+            "                snapshots.append(rgba_png(width, height, rgba))",
+            1,
+        )
+        self.assertFalse(source_execution_proof(nested_loop_growth)["admitted"])
+        growing_encoded_bytes = triangle.replace(
+            "    scanlines = b\"\".join(b\"\\0\" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))",
+            "    scanlines = b\"\".join(b\"\\0\" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))\n"
+            "    while True:\n        scanlines += b'x'\n        break",
+            1,
+        )
+        self.assertFalse(source_execution_proof(growing_encoded_bytes)["admitted"])
         external_png = triangle.replace(
             "ImageMobject(wood_texture(), height=8.0, resampling_algorithm=\"bilinear\")",
             "ImageMobject(open('image.png', 'rb').read(), height=8.0, resampling_algorithm=\"bilinear\")",
