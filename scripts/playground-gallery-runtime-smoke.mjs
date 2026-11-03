@@ -10,6 +10,7 @@ import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReport
 import { createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
+import { seekPausedGallery, waitForPublishedGalleryFrame } from './showcase-playback.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryPoolForProfileGate, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
 import { assertGalleryRuntimeBuildIdentityUnchanged, evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, showcaseAudioGestureReady, SHOWCASE_PROFILE_EXPECTATIONS, validateGalleryRuntimeBuildIdentity, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
@@ -448,7 +449,17 @@ try {
           assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
           if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
             `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
-          if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
+          if (entry.expected_object_count != null) {
+            // The lifecycle sample can be the opening picture of the next loop.
+            // Inspect the closed endpoint separately through normal controls.
+            let endpointMetrics = metrics;
+            if (result.state.playback?.controllable === 'true' && result.authoredDuration > 0) {
+              const time = await seekPausedGallery(page, result.authoredDuration);
+              endpointMetrics = await waitForPublishedGalleryFrame(page, time, result.authoredDuration);
+              result.terminalInspection = { time, metrics: endpointMetrics };
+            }
+            assert.equal(endpointMetrics.metrics.objectCount, entry.expected_object_count);
+          }
           if (expectedProfile) {
             result.executionDiagnostics = result.state?.executionDiagnostics ?? await page.evaluate(() =>
               window.__noonExampleGallery?.executionDiagnostics ?? null);
