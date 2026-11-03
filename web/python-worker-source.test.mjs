@@ -717,7 +717,7 @@ test("a trapped host never publishes late success or request errors", () => {
   const posted = [];
   const dispatch = new Function("self", `
     const AUTHORING_CHANNEL = "noon.authoring";
-    const AUTHORING_PROTOCOL_VERSION = 7;
+    const AUTHORING_PROTOCOL_VERSION = 8;
     let fatalAuthoringFailure = false;
     ${source.slice(source.indexOf('function post(type,'), source.indexOf('function isRecord(value)'))}
     return { post, fail: () => { fatalAuthoringFailure = true; } };

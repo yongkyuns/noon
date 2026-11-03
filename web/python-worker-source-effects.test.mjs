@@ -6,8 +6,8 @@ const source = await readFile(new URL("./python-worker.source.js", import.meta.u
 const begin = source.indexOf("async function runAuthoringSource("), end = source.indexOf("async function runCanonicalCallbackPhase", begin);
 assert.ok(begin >= 0 && end > begin);
 function worker() {
-  const events = [];
-  const run = new Function("withAuthoringDiagnostics", "prepareAuthoringDependencies", "diagnosedHostCode", `
+  const events = [], diagnostics = [];
+  const run = new Function("withAuthoringDiagnostics", "prepareAuthoringDependencies", "diagnosedHostCode", "isRecord", "post", `
     let activeAuthoringRun = null, authoringLibrariesPristine = true;
     ${source.slice(begin, end)}
     return async (pyodide, preparedPlayback) => {
@@ -16,12 +16,17 @@ function worker() {
       return activeAuthoringRun.sourceSceneOnly;
     };
   `)(async (_pyodide, _source, _context, _id, execute) => execute({}),
-    async () => { events.push("dependencies"); }, value => value);
+    async () => { events.push("dependencies"); }, value => value,
+    value => value !== null && typeof value === "object" && !Array.isArray(value),
+    (type, value) => diagnostics.push({ type, ...value }));
   const pyodide = proof => ({
-    runPython(code) { assert.match(code, /source_is_scene_only\(__noon_source\)/); events.push("proof"); return proof; },
+    runPython(code) {
+      assert.match(code, /source_execution_proof\(__noon_source\)/); events.push("proof");
+      return JSON.stringify({ admitted: proof, reason: proof ? null : { code: "unknown_name", span: null } });
+    },
     async runPythonAsync() { events.push("source"); return "result"; },
   });
-  return { events, run: (proof, prepared = true) => run(pyodide(proof), prepared) };
+  return { events, diagnostics, run: (proof, prepared = true) => run(pyodide(proof), prepared) };
 }
 
 test("source effects are checked before dependencies or source execute", async () => {
@@ -38,11 +43,14 @@ test("an opaque run permanently prevents proof against mutated library state", a
     assert.equal(await h.run(true), false);
     assert.equal(h.events.filter(event => event === "proof").length, 1);
     assert.equal(h.events.filter(event => event === "source").length, 2, "no source retry or reconstruction");
+    assert.deepEqual(h.diagnostics.map(event => event.libraryTrust), ["tainted", "tainted"]);
+    assert.deepEqual(h.diagnostics.map(event => event.event.stage), ["source-proof", "interpreter-trust"]);
+    assert.equal(h.diagnostics[1].event.reason.code, "interpreter_tainted");
   }
 });
 
 test("malformed proof cannot admit source or load its dependencies", async () => {
   const h = worker();
-  await assert.rejects(h.run("scene-only"), /proof must be a boolean/);
+  await assert.rejects(h.run("scene-only"), /proof must contain admission/);
   assert.deepEqual(h.events, ["proof"]);
 });

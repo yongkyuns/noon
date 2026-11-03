@@ -2,10 +2,46 @@ import unittest
 from pathlib import Path
 from textwrap import dedent
 
-from _manim_source_execution import source_is_scene_only
+from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_source_proof_reports_the_rejected_construct_and_exact_span(self):
+        for expression, code, construct in (
+            ('print("effect")', "unknown_name", "print"),
+            ('circle.set_x(1)', "unsupported_member", "circle.set_x"),
+            ('Code(code_file="input.py")', "unproven_resource_input", 'Code(code_file="input.py")'),
+            ('__builtins__', "private_name", "__builtins__"),
+        ):
+            with self.subTest(expression=expression):
+                source = f'from noon import *\ncircle = Circle()\n{expression}\n'
+                proof = source_execution_proof(source)
+                self.assertFalse(proof["admitted"])
+                reason = proof["reason"]
+                self.assertEqual(reason["code"], code)
+                span = reason["span"]
+                self.assertEqual(span["line"], 3)
+                self.assertEqual(span["endLine"], 3)
+                self.assertEqual(source.splitlines()[2].encode()[span["column"]:span["endColumn"]].decode(), construct)
+        self.assertEqual(source_execution_proof('from noon import *\nCircle()'),
+                         {"admitted": True, "reason": None})
+        syntax = source_execution_proof('π =\n')["reason"]
+        self.assertEqual(syntax["code"], "invalid_syntax")
+        self.assertEqual(syntax["span"]["line"], 1)
+        self.assertGreaterEqual(syntax["span"]["column"], len('π'.encode()))
+
+    def test_module_binding_and_owned_write_failures_keep_their_origin(self):
+        for source, code, line in (
+            ('print = None\n', "unproven_binding", 1),
+            ('from noon import *\nversion = 3\n', "unproven_wildcard_binding", 2),
+            ('from noon import *\nvalues = [1]\nvalues[0] = 2\n', "unproven_ownership", 3),
+            ('from noon import *\nclass Example(MovingCameraScene):\n    pass\n', "unsupported_class_contract", 2),
+        ):
+            with self.subTest(source=source):
+                reason = source_execution_proof(source)["reason"]
+                self.assertEqual(reason["code"], code)
+                self.assertEqual(reason["span"]["line"], line)
+
     def test_lesson_navigation_retains_observed_source_until_completed_replay(self):
         # Prefix transport does not carry navigation metadata; ordinary source
         # execution still compiles its barriers and retains completed replay.

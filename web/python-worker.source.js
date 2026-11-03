@@ -50,7 +50,7 @@ import { withAuthoringDiagnostics, diagnosedHostCode, authoringDiagnosticPayload
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 7;
+const AUTHORING_PROTOCOL_VERSION = 8;
 const AUTHORING_STARTUP_METRICS_VERSION = 2;
 const moduleGraphReadyAt = performance.now();
 const authoringMilestones = {
@@ -73,7 +73,7 @@ let fatalAuthoringFailure = false;
 pyodidePromise
   .then(() => {
     authoringMilestones.authoringWorkerReadyAtMs = performance.now();
-    post("ready");
+    post("ready", { libraryTrust: "pristine" });
   })
   .catch(failAuthoringWorker);
 
@@ -1756,13 +1756,22 @@ _manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
 async function runAuthoringSource(pyodide, source, context, requestId) {
   return withAuthoringDiagnostics(pyodide, source, context, requestId, async (globals) => {
     const run = activeAuthoringRun;
-    const sceneOnly = authoringLibrariesPristine && pyodide.runPython(`
-from _manim_source_execution import source_is_scene_only
-source_is_scene_only(__noon_source)
-`, { globals });
-    if (typeof sceneOnly !== "boolean") throw new TypeError("source effect proof must be a boolean");
+    const proof = authoringLibrariesPristine ? JSON.parse(pyodide.runPython(`
+import json
+from _manim_source_execution import source_execution_proof
+json.dumps(source_execution_proof(__noon_source))
+`, { globals })) : { admitted: false, reason: { code: "interpreter_tainted", span: null } };
+    if (!isRecord(proof) || typeof proof.admitted !== "boolean" ||
+        (proof.admitted ? proof.reason !== null : !isRecord(proof.reason) || typeof proof.reason.code !== "string")) {
+      throw new TypeError("source effect proof must contain admission and its reason");
+    }
+    const sceneOnly = proof.admitted;
     authoringLibrariesPristine &&= sceneOnly;
     run.sourceSceneOnly = sceneOnly;
+    post("execution_diagnostic", { requestId,
+      libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted",
+      event: { stage: proof.reason?.code === "interpreter_tainted" ? "interpreter-trust" : "source-proof", ...proof },
+    });
     await prepareAuthoringDependencies(pyodide, source);
     return pyodide.runPythonAsync(diagnosedHostCode(`
 import json

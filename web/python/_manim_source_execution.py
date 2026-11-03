@@ -85,29 +85,39 @@ _SOURCE_MODULES = {
 
 
 class _OpaqueSource(Exception):
-    pass
+    def __init__(self, node=None, reason="unproven_source"):
+        self.node = node
+        self.reason = reason
 
 
 class _SourceBindings(ast.NodeVisitor):
     """Lexical bindings only; nested functions/classes/comprehensions own theirs."""
     def __init__(self):
         self.names = set()
+        self.locations = {}
 
     def visit_Name(self, node):
         if isinstance(node.ctx, ast.Store):
             self.names.add(node.id)
+            self.locations.setdefault(node.id, node)
 
     def visit_FunctionDef(self, node):
         self.names.add(node.name)
+        self.locations.setdefault(node.name, node)
 
     visit_AsyncFunctionDef = visit_FunctionDef
     visit_ClassDef = visit_FunctionDef
 
     def visit_Import(self, node):
         self.names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        for alias in node.names:
+            self.locations.setdefault(alias.asname or alias.name.split(".")[0], node)
 
     def visit_ImportFrom(self, node):
         self.names.update(alias.asname or alias.name for alias in node.names if alias.name != "*")
+        for alias in node.names:
+            if alias.name != "*":
+                self.locations.setdefault(alias.asname or alias.name, node)
 
     def visit_ListComp(self, node):
         pass
@@ -121,15 +131,23 @@ class _SceneOnlySource(ast.NodeVisitor):
         for node in tree.body:
             bindings.visit(node)
         # A later module binding must not make an earlier builtin call look safe.
-        if (bindings.names.intersection(vars(builtins))
-                or any(name.startswith("_") for name in bindings.names)):
-            raise _OpaqueSource()
+        blocked = bindings.names.intersection(vars(builtins)) | {
+            name for name in bindings.names if name.startswith("_")
+        }
+        if blocked:
+            name = next(name for name in bindings.locations if name in blocked)
+            raise _OpaqueSource(bindings.locations[name], "unproven_binding")
         noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
         imported = frozenset().union(*star_exports.values())
-        if ((imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})):
+        conflicts = (imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})
+        if conflicts:
             # A later assignment must not bless an earlier name supplied by an
             # opaque wildcard export (e.g. noon.version, which reads metadata).
-            raise _OpaqueSource()
+            name = next((name for name in bindings.locations if name in conflicts), None)
+            origin = bindings.locations[name] if name is not None else next(
+                node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+                and node.module in star_exports and any(alias.name == "*" for alias in node.names))
+            raise _OpaqueSource(origin, "unproven_wildcard_binding")
         self.scopes = [bindings.names | {"context", "__name__"} | _SOURCE_BUILTINS]
         self.members = _SOURCE_MEMBERS | frozenset().union(*_SOURCE_MODULES.values())
         # Constructor aliases and wildcard exports are proven only for direct
@@ -142,17 +160,25 @@ class _SceneOnlySource(ast.NodeVisitor):
         }
         self.admitted_code_loads = set()
 
+    def visit(self, node):
+        try:
+            return super().visit(node)
+        except _OpaqueSource as error:
+            if error.node is None:
+                error.node = node
+            raise
+
     def visit_Name(self, node):
         # exec/eval installs __builtins__ before user module assignments. A
         # later binding cannot turn that intrinsic (or compiler helpers) into
         # owned data. __name__ is the one explicit string in our namespace.
         if node.id.startswith("_") and node.id != "__name__":
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "private_name")
         if (isinstance(node.ctx, ast.Load) and node.id in self.code_constructors
                 and id(node) not in self.admitted_code_loads):
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unproven_resource_reference")
         if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unknown_name")
 
     def visit_Call(self, node):
         # Code(code_file=...) reads the host filesystem. Only the explicit
@@ -161,29 +187,29 @@ class _SceneOnlySource(ast.NodeVisitor):
         if isinstance(node.func, ast.Name) and node.func.id in self.code_constructors:
             keywords = {keyword.arg for keyword in node.keywords}
             if node.args or "code_string" not in keywords or "code_file" in keywords or None in keywords:
-                raise _OpaqueSource()
+                raise _OpaqueSource(node, "unproven_resource_input")
             self.admitted_code_loads.add(id(node.func))
         self.generic_visit(node)
 
     def visit_Attribute(self, node):
         if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unsupported_member" if isinstance(node.ctx, ast.Load) else "unproven_member_write")
         self.visit(node.value)
 
     def visit_Import(self, node):
         if node not in self.module_imports or len(self.scopes) != 1 or any(alias.name not in _SOURCE_MODULES for alias in node.names):
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unsupported_import")
 
     def visit_ImportFrom(self, node):
         if node not in self.module_imports or len(self.scopes) != 1 or node.level:
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unsupported_import")
         noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
         allowed = noon_names if node.module in {"noon", "manim"} else _SOURCE_MODULES.get(node.module, ())
         for alias in node.names:
             if alias.name == "*" and node.module in {"noon", "manim"}:
                 self.scopes[0].update(noon_names)
             elif alias.name not in allowed:
-                raise _OpaqueSource()
+                raise _OpaqueSource(node, "unsupported_import")
 
     def _scope(self, body, parameters=()):
         bindings = _SourceBindings()
@@ -198,10 +224,10 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         if node.name.startswith("_") or node.decorator_list or node.returns or getattr(node, "type_params", ()):
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unproven_function_contract")
         arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
         if any(argument.annotation for argument in arguments) or node.args.vararg or node.args.kwarg:
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unproven_function_contract")
         for value in [*node.args.defaults, *filter(None, node.args.kw_defaults)]:
             self.visit(value)
         self._scope(node.body, (argument.arg for argument in arguments))
@@ -211,19 +237,19 @@ class _SceneOnlySource(ast.NodeVisitor):
     def visit_ClassDef(self, node):
         if (node.decorator_list or node.keywords or getattr(node, "type_params", ()) or len(node.bases) != 1
                 or not isinstance(node.bases[0], ast.Name) or node.bases[0].id != "Scene"):
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unsupported_class_contract")
         self.visit(node.bases[0])
         if any(not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Expr, ast.Pass))
                or isinstance(member, ast.Expr) and not isinstance(member.value, ast.Constant)
                for member in node.body):
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unsupported_class_contract")
         # Methods resolve module globals, not names in their class dictionary.
         for member in node.body:
             self.visit(member)
 
     def visit_Lambda(self, node):
-        self.visit_FunctionDef(ast.FunctionDef(name="callback", args=node.args,
-            body=[ast.Expr(value=node.body)], decorator_list=[], returns=None))
+        self.visit_FunctionDef(ast.copy_location(ast.FunctionDef(name="callback", args=node.args,
+            body=[ast.Expr(value=node.body)], decorator_list=[], returns=None), node))
 
     def _comprehension(self, node):
         self.scopes.append(set())
@@ -246,17 +272,17 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def visit_Subscript(self, node):
         if not isinstance(node.ctx, ast.Load):
-            raise _OpaqueSource()
+            raise _OpaqueSource(node, "unproven_ownership")
         self.generic_visit(node)
 
     def _opaque(self, node):
-        raise _OpaqueSource()
+        raise _OpaqueSource(node, "unproven_scope_effect")
 
     visit_Global = visit_Nonlocal = visit_With = visit_AsyncWith = _opaque
     visit_Delete = visit_NamedExpr = _opaque
 
 
-def source_is_scene_only(source: str) -> bool:
+def source_execution_proof(source: str) -> dict:
     """Prove a closed trusted-API subset; unknown Python remains opaque.
 
     This assumes a pristine interpreter (or only preceding proven sources).
@@ -274,12 +300,41 @@ def source_is_scene_only(source: str) -> bool:
                     import noon
                 module = sys.modules.get(node.module)
                 if module is None or not isinstance(getattr(module, "__all__", None), (list, tuple)):
-                    return False
+                    raise _OpaqueSource(node, "unproven_wildcard_exports")
                 exports[node.module] = frozenset(module.__all__)
         _SceneOnlySource(tree, exports).visit(tree)
-        return True
-    except (_OpaqueSource, SyntaxError, RecursionError):
-        return False
+        return {"admitted": True, "reason": None}
+    except _OpaqueSource as error:
+        node = error.node
+        # AST columns are zero-based UTF-8 offsets; lines are one-based.
+        span = None if node is None or not hasattr(node, "lineno") else {
+            "line": node.lineno, "column": node.col_offset,
+            "endLine": node.end_lineno, "endColumn": node.end_col_offset,
+        }
+        return {"admitted": False, "reason": {
+            "code": error.reason, "construct": type(node).__name__ if node else None,
+            "span": span,
+        }}
+    except SyntaxError as error:
+        lines = source.splitlines()
+        line, end_line = error.lineno or 1, error.end_lineno or error.lineno or 1
+        text = lines[line - 1] if line <= len(lines) else ""
+        end_text = lines[end_line - 1] if end_line <= len(lines) else ""
+        column = len(text[:max(0, (error.offset or 1) - 1)].encode())
+        end_column = len(end_text[:max(0, (error.end_offset or error.offset or 1) - 1)].encode())
+        return {"admitted": False, "reason": {
+            "code": "invalid_syntax", "span": {"line": line, "column": column,
+                "endLine": end_line, "endColumn": max(column, end_column) if line == end_line else end_column},
+        }}
+    except RecursionError:
+        return {"admitted": False, "reason": {
+            "code": "source_depth_limit",
+            "span": None,
+        }}
+
+
+def source_is_scene_only(source: str) -> bool:
+    return source_execution_proof(source)["admitted"]
 RESOURCE_BARRIER_METHODS = frozenset({
     "add_effect", "add", "add_foreground_mobject", "add_foreground_mobjects",
     "bring_to_front", "bring_to_back", "replace",

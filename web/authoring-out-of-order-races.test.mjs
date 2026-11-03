@@ -161,6 +161,8 @@ test("playground freshness admits only the newest result under seeded out-of-ord
     pendingRequests: 0,
     staleResponses: 0,
     terminated: false,
+    interpreterGeneration: client.interpreterGeneration,
+    libraryTrust: "unknown",
   });
 });
 

@@ -19,7 +19,8 @@ let authoringLibrariesPristine = false;
 ${source.slice(start, end)}
 return { prepareAuthoringDependencies, runAuthoringSource };
 })()`,
-  { diagnosedHostCode, withAuthoringDiagnostics },
+  { diagnosedHostCode, withAuthoringDiagnostics, post() {},
+    isRecord: value => value !== null && typeof value === "object" && !Array.isArray(value) },
 );
 
 function interpreter({ compile, load, execute, requiredPackages = [], missingPackages } = {}) {

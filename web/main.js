@@ -1784,6 +1784,9 @@ try {
     get runPhaseMetrics() {
       return latestRunPhaseMetrics;
     },
+    get executionDiagnostics() {
+      return authoringClient?.executionDiagnostics ?? null;
+    },
     async select(id) {
       return selectExample(id, { run: true, updateUrl: true });
     },

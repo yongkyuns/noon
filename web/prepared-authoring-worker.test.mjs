@@ -109,7 +109,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     return endpoint;
   };
   api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
-    const AUTHORING_CHANNEL = "noon.authoring", AUTHORING_PROTOCOL_VERSION = 7;
+    const AUTHORING_CHANNEL = "noon.authoring", AUTHORING_PROTOCOL_VERSION = 8;
     const pyodidePromise = Promise.resolve({}), semanticContexts = new Map();
     let nextSemanticContext = 0, nextContinuationGeneration = 1, activeAuthoringRun = null;
     let fatalAuthoringFailure = false;
@@ -131,7 +131,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     setTimeout(callback) { const id = ++taskId; tasks.set(id, callback); return id; },
     clearTimeout(id) { tasks.delete(id); },
   }), () => execute(api), attachSemanticEngine, posts, errors);
-  const envelope = (type, fields) => ({ channel: "noon.authoring", protocolVersion: 7, type, ...fields });
+  const envelope = (type, fields) => ({ channel: "noon.authoring", protocolVersion: 8, type, ...fields });
   const continuationRequest = (type, fields = {}) => {
     const registration = posts.findLast(post => post.type === "semantic_continuation_registered");
     return envelope(type, { requestId: 2, contextId: registration.semanticExecution.context_id,
@@ -331,7 +331,7 @@ test("endpoint stop retires its source token after an earlier active-source rele
   const done = h.start(async api => { await api.awaitSemanticContinuation(h.context); return h.result(); });
   await microtasks(); const initial = h.tick(); await h.attach(); await initial;
   const contextId = h.run().continuation.contextId;
-  await h.handleContinuationControl({ channel: "noon.authoring", protocolVersion: 7,
+  await h.handleContinuationControl({ channel: "noon.authoring", protocolVersion: 8,
     type: "release_semantic_execution", requestId: 9, contextId });
   assert.match(String(h.errors[0].error), /cannot release an active/);
   assert.equal(h.contexts.has(contextId), true);
