@@ -6,8 +6,8 @@ use noon_core::{EffectDefinition, EffectTrackValue};
 mod tests {
     use super::*;
     use noon_core::{
-        BackdropBlur, Blur, EffectRadius, EffectTrackEndBehavior, EffectUpdate, NoiseDissolve, Pixels,
-        SemanticNodeId,
+        BackdropBlur, Blur, EffectRadius, EffectTrackEndBehavior, EffectUpdate, NoiseDissolve,
+        Pixels, SemanticNodeId,
     };
     use std::sync::Arc;
 

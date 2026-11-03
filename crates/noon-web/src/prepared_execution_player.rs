@@ -20,14 +20,7 @@ struct PreparedPresentationIdentity {
     sequence: u64,
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PreparedNoChangePresentation {
-    session: u32,
-    sequence: u64,
-    time: f64,
-    publication_context: noon_core::PublicationContext,
-}
+use crate::retained_family_execution_encoder::NoChangePresentation as PreparedNoChangePresentation;
 
 pub(crate) mod source;
 use source::SourceDelivery;

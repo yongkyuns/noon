@@ -9,6 +9,41 @@ use noon_core::{
 };
 
 #[test]
+fn observed_no_change_samples_name_the_exact_prior_publication_once() {
+    let mut scene = noon::Scene::new();
+    let circle = scene.circle(0.5).unwrap();
+    scene.add(&circle).unwrap();
+    let mut player =
+        SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 120)
+            .unwrap();
+    assert!(player.take_no_change_presentation_json().is_none());
+    let initial: serde_json::Value =
+        serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
+    assert!(player.tick_delta_json(0.0).unwrap().is_none());
+    assert!(player.tick_delta_json(500.0).unwrap().is_none());
+    let proof: serde_json::Value =
+        serde_json::from_str(&player.take_no_change_presentation_json().unwrap()).unwrap();
+    assert_eq!(proof["session"], initial["session"]);
+    assert_eq!(proof["sequence"], initial["sequence"]);
+    assert_eq!(proof["time"], player.time());
+    assert_eq!(player.time(), 0.5);
+    assert!(player.take_no_change_presentation_json().is_none());
+
+    assert!(player.drain_delta_json().unwrap().is_none());
+    assert!(player.seek_delta_json(f64::NAN).is_err());
+    assert!(player.take_no_change_presentation_json().is_none());
+    assert!(player.drain_delta_json().unwrap().is_none());
+    player.rebind_transport(2.0, 121).unwrap();
+    assert!(player.take_no_change_presentation_json().is_none());
+    player.initial_delta_json().unwrap();
+    assert!(player.drain_delta_json().unwrap().is_none());
+    let rebound: serde_json::Value =
+        serde_json::from_str(&player.take_no_change_presentation_json().unwrap()).unwrap();
+    assert_eq!(rebound["session"], 121);
+    assert_eq!(rebound["sequence"], 0);
+}
+
+#[test]
 fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(0.5).unwrap();
@@ -3732,6 +3767,7 @@ fn invalid_controls_leave_the_clock_frame_and_delta_sequence_unchanged() {
     assert_eq!(player.time(), 0.0);
     let delta: RetainedExecutionDeltaEnvelope =
         serde_json::from_str(&player.seek_delta_json(0.5).unwrap().unwrap()).unwrap();
+    assert!(player.take_no_change_presentation_json().is_none());
     assert_eq!(delta.sequence, 1);
     assert_eq!(delta.objects[0].transform.translation.x, 4.0);
 }

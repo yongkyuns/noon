@@ -30,6 +30,7 @@ const expectedJavascriptSurface = [
   "export class WasmWorkerAudioOutput",
   "audioResourceBundleBytes(",
   "audioAnchorJson(",
+  "takeNoChangePresentationJson(",
   "finiteAudioDuration(",
   "freshFiniteSourceDuration(",
   "finiteSourceProbeJson(",
@@ -357,6 +358,7 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "takeNoChangePresentationJson(): string | undefined",
   "requiresContentBoundary(): boolean",
   "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
   "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",
