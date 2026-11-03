@@ -1545,7 +1545,12 @@ export async function attachSemanticEngine(
         if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) throw new Error("invalid engine request ID");
         if (message.type === "state") { post({ requestId: message.requestId, ...state("state"), sceneJson: null }); return; }
         if (message.type === "metrics") {
-          post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
+          post({ requestId: message.requestId, type: "metrics", metrics: {
+            host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 },
+            ...(prepared === null ? {} : {
+              preparedRetention: JSON.parse(player.preparedRetentionMetricsJson()),
+            }),
+          } });
           return;
         }
         if (receiverFailed) throw new Error("prepared receiver failed; replace the receiver before further controls");

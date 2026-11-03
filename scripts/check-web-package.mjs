@@ -31,6 +31,7 @@ const expectedJavascriptSurface = [
   "audioResourceBundleBytes(",
   "audioAnchorJson(",
   "takeNoChangePresentationJson(",
+  "preparedRetentionMetricsJson(",
   "finiteAudioDuration(",
   "freshFiniteSourceDuration(",
   "finiteSourceProbeJson(",
@@ -359,6 +360,7 @@ const expectedJavascriptSurface = [
 ];
 const expectedTypeSurface = [
   "takeNoChangePresentationJson(): string | undefined",
+  "preparedRetentionMetricsJson(): string",
   "requiresContentBoundary(): boolean",
   "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
   "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",

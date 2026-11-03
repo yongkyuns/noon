@@ -99,6 +99,9 @@ impl PrefixReader {
     pub fn retained_resource_bytes(&self) -> usize {
         self.receiver.retained_resource_bytes()
     }
+    pub fn retained_history_payload_bytes(&self) -> usize {
+        self.receiver.retained_history_payload_bytes()
+    }
     pub fn resource_budget_bytes(&self) -> usize {
         self.receiver.resource_budget_bytes()
     }

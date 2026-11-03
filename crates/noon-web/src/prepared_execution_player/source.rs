@@ -38,6 +38,36 @@ pub(super) struct SourceDelivery {
 }
 
 impl PreparedExecutionPlayer {
+    /// Existing logical prefix charges, not additive allocation or total-memory
+    /// measurements. Source history, scalar schedules, interpreter/JS heaps, WASM
+    /// capacity and renderer/GPU ownership require separate observations.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedRetentionMetricsJson))]
+    pub fn prepared_retention_metrics_json(&self) -> String {
+        let reader = &self.playback.reader;
+        let stats = reader.replay_stats();
+        let source = self.source.as_ref();
+        let pending = source.and_then(|source| source.pending.as_ref());
+        serde_json::json!({
+            "reader": {
+                "historyPayloadBytes": reader.retained_history_payload_bytes(),
+                "resourceBytes": reader.retained_resource_bytes(),
+                "resourceBudgetBytes": reader.resource_budget_bytes(),
+                "revisions": stats.revisions_retained,
+                "payloads": stats.payloads_retained,
+            },
+            "extracted": source.map(|source| serde_json::json!({
+                "historyPayloadBytes": source.publisher.extracted_history_payload_bytes(),
+                "resourceBytes": source.publisher.extracted_resource_bytes(),
+            })),
+            "pending": {
+                "batches": usize::from(pending.is_some()),
+                "historyPayloadBytes": pending.map_or(0, PrefixBatch::history_payload_bytes),
+                "resourceBytes": pending.map_or(0, PrefixBatch::resource_bytes),
+            },
+        })
+        .to_string()
+    }
+
     /// Bootstrap only after the interpreter's actual first segment is complete.
     /// The canonical source keeps its existing live player and semantic store.
     pub fn from_completed_source(

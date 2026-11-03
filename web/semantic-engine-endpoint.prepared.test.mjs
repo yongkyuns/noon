@@ -37,6 +37,7 @@ function fixture(mode = "transferable", options = {}) {
   };
   const player = {
     sectionsJson: () => "[]",
+    preparedRetentionMetricsJson: () => '{"pending":{"batches":1}}',
     resourceBundleBytes() { record("resources"); return new Uint8Array([1]); },
     initialDeltaJson() { record("initial"); return json(); },
     drainDeltaTransportJson() {
@@ -426,6 +427,9 @@ test("prepared pause commits Rust's static-wait sample and unsupported controls 
   try {
     await f.attach(); f.acknowledge(); await f.present();
     f.observe(0.75);
+    const calls = f.calls.length;
+    assert.deepEqual((await f.request("metrics")).metrics.preparedRetention, { pending: { batches: 1 } });
+    assert.equal(f.calls.length, calls, "metrics cannot drain or advance the reader");
     assert.equal((await f.request("state")).time, 0.75);
     const paused = await f.request("pause");
     assert.equal(paused.time, 0.75);

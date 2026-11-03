@@ -82,6 +82,37 @@ fn prepared_player_exposes_its_retained_source_requirement() {
 }
 
 #[test]
+fn retention_metrics_distinguish_pending_extraction_from_adopted_charges() {
+    let mut player = staged_player(934, false);
+    let read = |player: &PreparedExecutionPlayer| {
+        serde_json::from_str::<serde_json::Value>(&player.prepared_retention_metrics_json())
+            .unwrap()
+    };
+    let before = read(&player);
+    assert_eq!(before["pending"]["batches"], 1);
+    assert!(before["pending"]["resourceBytes"].as_u64().unwrap() > 0);
+    assert_eq!(
+        before,
+        read(&player),
+        "observation cannot adopt or drain history"
+    );
+    player.reserve_source_prefix_capacity().unwrap();
+    player.deliver_source_prefix().unwrap();
+    let after = read(&player);
+    assert_eq!(after["pending"]["batches"], 0);
+    assert_eq!(after["pending"]["resourceBytes"], 0);
+    assert_eq!(after["extracted"], before["extracted"]);
+    assert_eq!(
+        after["reader"]["resourceBytes"],
+        before["extracted"]["resourceBytes"]
+    );
+    assert_eq!(
+        after["reader"]["historyPayloadBytes"],
+        before["extracted"]["historyPayloadBytes"]
+    );
+}
+
+#[test]
 fn staged_cues_follow_only_their_adopted_prefix_and_failed_adoption_keeps_old_cues() {
     let mut player = staged_player(931, false);
     player.set_section_navigation(navigation(&[("Start", 0.0)]));
