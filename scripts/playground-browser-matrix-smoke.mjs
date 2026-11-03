@@ -4,11 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
-import { collectWebKitCrashReports, playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { collectWebKitCrashReports, playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from "./playground-browser-failure-evidence.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseDiagnostics } from "./playground-profile-expectations.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
@@ -276,14 +277,33 @@ async function runShowcaseFromPublicUi(page, exampleId) {
     `FPS must be visible below the canvas: ${JSON.stringify(visibility)}`);
   await page.screenshot({ path: path.join(artifactDir, "fps-running.png"), fullPage: true });
   await waitForAppliedScene(page, exampleId, 180_000);
-  await page.waitForFunction(duration => {
+  const terminalHold = denseShowcase.still_intervals.find(([, end]) => end === denseShowcase.duration);
+  assert.ok(terminalHold, "dense first-pass oracle needs its declared terminal hold");
+  await waitForBrowserObservation(page, async ({ duration, holdStart }) => {
     const controls = document.querySelector(".playback-controls")?.dataset;
-    return controls?.busy === "false" &&
-      Math.abs(Number(controls.elapsedSeconds) - duration) < 1e-7;
-  }, denseShowcase.duration, { timeout: 180_000 });
-  const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-  const authoredTime = Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"));
-  return { runtime: await runtimeSnapshot(page), metrics, sourceFps, authoredTime };
+    const gallery = window.__noonExampleGallery;
+    const diagnostics = gallery.executionDiagnostics;
+    const looped = diagnostics?.events?.some(event => event.stage === "disposition" && event.disposition === "looped");
+    // Capture the natural terminal picture before the first wrap. A looping
+    // clock need not expose its exact endpoint to a DOM polling task.
+    if (!looped && !window.__matrixFirstPass && controls?.busy === "false" &&
+        controls.durationKnown === "true" && Number(controls.elapsedSeconds) >= holdStart) {
+      const metrics = await gallery.executionMetrics();
+      if (metrics?.metrics?.time >= holdStart && metrics.metrics.time <= duration &&
+          metrics.metrics.needsPresent === false && metrics.metrics.bufferedDeltas === 0) {
+        window.__matrixFirstPass = { metrics, authoredTime: Number(document.querySelector(".playback-scrubber").max) };
+      }
+    }
+    return looped;
+  }, { duration: denseShowcase.duration, holdStart: terminalHold[0] }, { timeout: 180_000 });
+  const { firstPass, diagnostics } = await page.evaluate(() => {
+    const firstPass = window.__matrixFirstPass;
+    delete window.__matrixFirstPass;
+    return { firstPass, diagnostics: window.__noonExampleGallery.executionDiagnostics };
+  });
+  assert.ok(firstPass, "first traversal never presented its terminal hold before wrapping");
+  validateShowcaseDiagnostics(SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId), diagnostics);
+  return { runtime: await runtimeSnapshot(page), ...firstPass, diagnostics, sourceFps };
 }
 
 async function completeShowcasePlayback(page, replayLoops) {

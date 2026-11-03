@@ -113,12 +113,16 @@ async function installFixture(page, evidence) {
 }
 
 async function openReady(page, frontier = 30) {
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, frontier);
+  bits.setBigUint64(0, bits.getBigUint64(0) - 1n);
+  const selectableEnd = bits.getFloat64(0);
   await page.waitForFunction(expected => {
     const c = document.querySelector(".playback-controls"), seek = document.querySelector(".playback-scrubber");
     return c?.dataset.busy === "false" && c.dataset.durationKnown === "false" &&
-      seek && !seek.disabled && Number(seek.max) < expected &&
+      seek && !seek.disabled && Number(seek.max) === expected &&
       c.querySelector(".playback-live-status")?.textContent.includes("Available history:");
-  }, frontier);
+  }, selectableEnd);
 }
 async function pause(page) {
   if (await page.locator(".playback-controls").getAttribute("data-playing") === "true") {
