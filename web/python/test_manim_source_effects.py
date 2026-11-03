@@ -71,6 +71,56 @@ class SourceEffectsTests(unittest.TestCase):
                     self.wait(1)
         ''')))
 
+    def test_divmod_is_an_ordinary_builtin_with_module_rebinding_rejected(self):
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    row, column = divmod(17, 4)
+                    self.wait(row + column)
+        ''')))
+        for source, code in (
+            ('from noon import *\ndivmod = print\n', "unproven_binding"),
+            ('from noon import *\nfrom math import divmod\n', "unproven_binding"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        divmod = print\n', "unknown_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        divide = print\n        divide(17, 4)\n',
+             "unknown_name"),
+        ):
+            with self.subTest(source=source):
+                proof = source_execution_proof(source)
+                self.assertFalse(proof["admitted"])
+                self.assertEqual(proof["reason"]["code"], code)
+
+    def test_discard_store_is_local_and_never_read_or_mutated(self):
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    quotient, _ = divmod(17, 4)
+                    self.wait(quotient)
+        ''')))
+        for source, code in (
+            ('from noon import *\n_ = 1\n', "unproven_binding"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        _ = 1\n        self.wait(_)\n', "private_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        _other = 1\n', "private_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        _ += 1\n', "private_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        values = [1]\n        values[0] = 2\n',
+             "unproven_ownership"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        values = [1]\n        alias = values\n'
+             '        alias[0] = 2\n', "unproven_ownership"),
+        ):
+            with self.subTest(source=source):
+                proof = source_execution_proof(source)
+                self.assertFalse(proof["admitted"])
+                self.assertEqual(proof["reason"]["code"], code)
+
     def test_unknown_host_work_and_dispatch_cannot_be_proven(self):
         for statement in (
             'print("external work")', 'sink = print; sink("external work")',
@@ -136,9 +186,10 @@ class SourceEffectsTests(unittest.TestCase):
         ''')))
         self.assertFalse(source_is_scene_only('from noon import Code as __builtins__\n'))
 
-    def test_unchanged_basic_text_and_glow_gallery_use_the_closed_subset(self):
+    def test_unchanged_scene_gallery_sources_use_the_closed_subset(self):
         examples = Path(__file__).parent / 'examples'
-        for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py', 'showcase_gpu_glow.py'):
+        for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py',
+                     'showcase_gpu_glow.py', 'showcase_dynamic_scene.py'):
             with self.subTest(name=name):
                 self.assertTrue(source_is_scene_only((examples / name).read_text()))
 

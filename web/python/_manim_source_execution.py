@@ -52,7 +52,7 @@ PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GRAY GOLD TEAL MAROON
 UP DOWN LEFT RIGHT IN OUT ORIGIN UL UR DL DR PI TAU DEGREES
 """.split())
 _SOURCE_BUILTINS = frozenset("""
-abs all any bool bytes bytearray dict enumerate filter float frozenset int
+abs all any bool bytes bytearray dict divmod enumerate filter float frozenset int
 isinstance len list map max min next range reversed round set slice sorted str
 sum tuple zip ValueError RuntimeError
 """.split())
@@ -171,8 +171,12 @@ class _SceneOnlySource(ast.NodeVisitor):
     def visit_Name(self, node):
         # exec/eval installs __builtins__ before user module assignments. A
         # later binding cannot turn that intrinsic (or compiler helpers) into
-        # owned data. __name__ is the one explicit string in our namespace.
-        if node.id.startswith("_") and node.id != "__name__":
+        # owned data. __name__ is the one explicit string in our namespace;
+        # a local discard target is permitted only as a write, never a read.
+        local_discard_store = (
+            node.id == "_" and isinstance(node.ctx, ast.Store) and len(self.scopes) > 1
+        )
+        if node.id.startswith("_") and node.id != "__name__" and not local_discard_store:
             raise _OpaqueSource(node, "private_name")
         if (isinstance(node.ctx, ast.Load) and node.id in self.code_constructors
                 and id(node) not in self.admitted_code_loads):
@@ -273,6 +277,11 @@ class _SceneOnlySource(ast.NodeVisitor):
     def visit_Subscript(self, node):
         if not isinstance(node.ctx, ast.Load):
             raise _OpaqueSource(node, "unproven_ownership")
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node):
+        if isinstance(node.target, ast.Name) and node.target.id == "_":
+            raise _OpaqueSource(node.target, "private_name")
         self.generic_visit(node)
 
     def _opaque(self, node):
