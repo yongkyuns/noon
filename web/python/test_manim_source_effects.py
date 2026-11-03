@@ -187,6 +187,13 @@ class SourceEffectsTests(unittest.TestCase):
             with self.subTest(source=unsafe):
                 self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
+    def test_audio_option_proof_rejects_integer_literals_outside_device_range_without_raising(self):
+        duration = str(10**1000)
+        source = ("from noon import *\nclass Example(Scene):\n"
+                  "    def construct(self):\n"
+                  f"        self.audio(AudioSource.small_discovery(), duration={duration})\n")
+        self.assertFalse(source_execution_proof(source)["admitted"])
+
     def test_svg_from_string_is_in_memory_and_path_queries_are_read_only(self):
         source = dedent('''
             from noon import *

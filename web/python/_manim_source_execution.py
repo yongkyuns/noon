@@ -268,6 +268,15 @@ def _static_numpy_literal(node):
     return False
 
 
+def _finite_source_number(value):
+    if type(value) is int:
+        try:
+            value = float(value)
+        except OverflowError:
+            return False
+    return type(value) is float and math.isfinite(value)
+
+
 def _numpy_numeric_expression(node, arrays, containers, module_literals, local=()):
     if _static_numpy_literal(node):
         return True
@@ -2425,7 +2434,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                 valid = isinstance(value, ast.Constant) and type(value.value) is bool
             else:
                 valid = (isinstance(value, ast.Constant) and type(value.value) in (int, float)
-                         and math.isfinite(value.value) and value.value > 0)
+                         and _finite_source_number(value.value) and value.value > 0)
             if not valid:
                 raise _OpaqueSource(value, "unproven_svg_option")
             options[keyword.arg] = value.value
@@ -2883,7 +2892,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                         valid = isinstance(value, ast.Constant) and type(value.value) is bool
                     else:
                         valid = (isinstance(value, ast.Constant) and type(value.value) in (int, float)
-                                 and math.isfinite(value.value))
+                                 and _finite_source_number(value.value))
                     if not valid:
                         raise _OpaqueSource(value, "unproven_audio_option")
                     options[keyword.arg] = value.value
