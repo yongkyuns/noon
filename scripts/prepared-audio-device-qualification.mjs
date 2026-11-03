@@ -160,7 +160,7 @@ try {
     preparation: { contexts: prepared.output.length, starts: prepared.starts.length },
     firstStop: firstStop.args[0], replacementStop: replacementStop.args[0],
     futureSourceStart: future.starts[1].args[0], futureSourceStop: secondStop.args[0],
-    restartOffset: restarted.starts[3].args[1], roundoff: { startCount: roundoff.starts },
+    restartOffset: restarted.starts[3].args[1], roundoff: { startsAdded: roundoff.startsAdded },
     repeatedFrontiers: 5 }, null, 2));
 } finally {
   await browser?.close();
