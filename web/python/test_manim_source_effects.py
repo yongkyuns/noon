@@ -2,11 +2,23 @@ import unittest
 from hashlib import sha256
 from pathlib import Path
 from textwrap import dedent
+from unittest.mock import patch
 
 from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_canonical_numpy_import_replaces_the_optional_wildcard_namespace(self):
+        import noon
+        source = Path(__file__).parents[2].joinpath("scripts/fixtures/noon_fourier_epicycles.py").read_text()
+        with patch.object(noon, "__all__", [*noon.__all__, "np"]):
+            self.assertTrue(source_is_scene_only(source))
+            for replacement in ("np = context.get('module')", "import numpy as other",
+                                "import numpy as np\nnp = context.get('module')",
+                                "early = np.array([1])\nimport numpy as np"):
+                with self.subTest(replacement=replacement):
+                    self.assertFalse(source_is_scene_only(source.replace("import numpy as np", replacement, 1)))
+
     def test_linear_scene_requires_closed_base_initializer_and_text(self):
         source = Path(__file__).with_name("examples").joinpath("showcase_linear_algebra.py").read_text()
         self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})

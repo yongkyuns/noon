@@ -1294,6 +1294,10 @@ class _SceneOnlySource(ast.NodeVisitor):
                       | _SOURCE_SHADER_CONSTRUCTORS | _SOURCE_TYPED_PAINT_CONSTRUCTORS)
         imported = frozenset().union(*star_exports.values())
         conflicts = (imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})
+        # Optional namespace installation can export np before this source's
+        # explicit canonical import replaces it. Other rebinding stays opaque.
+        if self._canonical_numpy_import(bindings.locations.get("np")):
+            conflicts -= {"np"}
         if conflicts:
             # A later assignment must not bless an earlier name supplied by an
             # opaque wildcard export (e.g. noon.version, which reads metadata).
@@ -2684,13 +2688,17 @@ class _SceneOnlySource(ast.NodeVisitor):
 
         return scalar(node.body)
 
+    def _canonical_numpy_import(self, node):
+        return (isinstance(node, ast.Import) and len(node.names) == 1
+                and node.names[0].name == "numpy" and node.names[0].asname == "np"
+                and self.module_binding_counts.get("np") == 1
+                and self.module_binding_locations.get("np") is node)
+
     def visit_Import(self, node):
         if node not in self.module_imports or len(self.scopes) != 1:
             raise _OpaqueSource(node, "unsupported_import")
         if any(alias.name == "numpy" for alias in node.names):
-            if (len(node.names) != 1 or node.names[0].name != "numpy" or node.names[0].asname != "np"
-                    or self.module_binding_counts.get("np") != 1
-                    or self.module_binding_locations.get("np") is not node):
+            if not self._canonical_numpy_import(node):
                 raise _OpaqueSource(node, "unsupported_import")
             self.numpy_import = node
         elif any(alias.name not in _SOURCE_MODULES for alias in node.names):
