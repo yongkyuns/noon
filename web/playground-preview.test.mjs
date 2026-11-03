@@ -171,10 +171,10 @@ for (const action of ["clear", "accept", "dispose"]) {
   }
 }
 
-// Execute the real profile/retirement helpers with the edit boundary. A stubbed
+// Execute the real profile/retirement helpers with explicit Run replacement. A stubbed
 // profile predicate would hide the difference between an ordinary warm renderer
 // and a prepared reader that must be retired before another source is authored.
-async function editBoundaryFixture({ prepared = false, pause = Promise.resolve() } = {}) {
+async function runReplacementBoundaryFixture({ prepared = false, pause = Promise.resolve() } = {}) {
   const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
   const section = (first, next) => {
     const start = main.indexOf(first);
@@ -244,8 +244,8 @@ function assertStopped(context) {
   assert.equal(context.status.dataset.playbackPlaying, "false");
 }
 
-for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"} edit freezes pixels before pausing and retains the renderer`, async () => {
-  const f = await editBoundaryFixture({ prepared });
+for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"} Run replacement freezes pixels before pausing and retains the renderer`, async () => {
+  const f = await runReplacementBoundaryFixture({ prepared });
   await f.stop();
   assert.deepEqual(f.order, ["snapshot", "pause"]);
   assert.equal(f.canvas.style.visibility, "hidden");
@@ -261,7 +261,7 @@ for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"
 });
 
 test("another reader's prepared identity cannot retire the ordinary active renderer", async () => {
-  const f = await editBoundaryFixture();
+  const f = await runReplacementBoundaryFixture();
   const foreign = {};
   f.context.preparedPlaybackPlayer = foreign;
   await f.stop();
@@ -272,7 +272,7 @@ test("another reader's prepared identity cannot retire the ordinary active rende
 });
 
 test("a failed completed renderer is frozen and retired rather than paused", async () => {
-  const f = await editBoundaryFixture();
+  const f = await runReplacementBoundaryFixture();
   f.context.playerNeedsRestart = true;
   await f.stop();
   assert.deepEqual(f.order, ["snapshot", "terminate", "destroy-controls"]);
@@ -282,9 +282,9 @@ test("a failed completed renderer is frozen and retired rather than paused", asy
   assert.equal(f.counts().authoringTerminated, 0);
 });
 
-test("repeated edits share the actual pending pause without recapturing pixels", async () => {
+test("repeated explicit Runs share the actual pending pause without recapturing pixels", async () => {
   const pause = deferred();
-  const f = await editBoundaryFixture({ pause: pause.promise });
+  const f = await runReplacementBoundaryFixture({ pause: pause.promise });
   const first = f.stop(), second = f.stop();
   assert.equal(second, first);
   assert.deepEqual(f.order, ["snapshot", "pause"]);
@@ -293,7 +293,7 @@ test("repeated edits share the actual pending pause without recapturing pixels",
   let settled = false;
   void first.then(() => { settled = true; });
   await flush();
-  assert.equal(settled, false, "edit stop must await the real pause acknowledgement");
+  assert.equal(settled, false, "Run replacement must await the real pause acknowledgement");
   pause.resolve(); await first;
   assert.equal(settled, true);
   assert.equal(f.context.player, f.retained);
@@ -302,7 +302,7 @@ test("repeated edits share the actual pending pause without recapturing pixels",
 for (const replaced of [false, true]) {
   test(`late pause rejection retires only the original renderer (replaced=${replaced})`, async () => {
     const pause = deferred();
-    const f = await editBoundaryFixture({ pause: pause.promise });
+    const f = await runReplacementBoundaryFixture({ pause: pause.promise });
     const stopping = f.stop();
     const successor = { canvas: { style: {} } }, successorControls = {};
     if (replaced) {

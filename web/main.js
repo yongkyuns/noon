@@ -464,8 +464,7 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
   const time = playbackState?.time;
   const playing = playbackState?.playing === true;
   if (playbackState?.preparedPlayback === true) {
-    const end = playbackState.durationSeconds;
-    if (Number.isFinite(end) && time >= end) return { label: "Finished", state: "ready" };
+    if (playbackState.completed === true) return { label: "Finished", state: "ready" };
     if (!playing) return { label: "Paused", state: "ready" };
     if (playbackState.buffering) return { label: "Buffering", state: "running" };
     return { label: "Playing", state: "running" };

@@ -74,7 +74,10 @@ test("source-owned first pass keeps playback controls unavailable until replay i
     /updatePlaybackControls\(\{\s*supported: result\.preparedPlayback === true,[\s\S]*?Python source continuing/,
   );
   assert.match(runScene, /continuationGeneration: null,[\s\S]*?updatePlaybackControls\(\{\s*supported: result\.replaySupported !== false,/);
-  assert.match(runScene, /patchStatus\.dataset\.runGeneration = String\(runToken\.runGeneration\)/);
+  const patchStatusStart = main.indexOf("function setRunPatchStatus(");
+  const patchStatusEnd = main.indexOf("async function applyExampleInteraction(", patchStatusStart);
+  assert.match(main.slice(patchStatusStart, patchStatusEnd),
+    /patchStatus\.dataset\.runGeneration = String\(runToken\.runGeneration\)/);
 });
 
 test("source-owned playback reports Playing even when the attached runtime is paused", () => {

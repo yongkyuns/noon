@@ -97,7 +97,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
         calls.push(["attach", descriptor]); this.options = options;
         this.status = descriptor.preparedPlayback ? {
           preparedPlayback: env.initialPrepared, time: 0.25, playing: false,
-          preparedFrontier: 1, durationSeconds: null, buffering: false,
+          preparedFrontier: 1, durationSeconds: null, buffering: false, completed: false,
           canUndoTranslationDrag: false, replaySupported: true,
         } : { time: 0, playing: true, replaySupported: true };
         if (env.observedExecution) this.status = {
@@ -123,7 +123,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
         assert.notEqual(this.status?.preparedPlayback, true, "cannot reconcile an unretired prepared reader");
         this.status = descriptor.preparedPlayback ? {
           preparedPlayback: env.initialPrepared, time: 0.25, playing: false,
-          preparedFrontier: 1, durationSeconds: null, buffering: false,
+          preparedFrontier: 1, durationSeconds: null, buffering: false, completed: false,
           canUndoTranslationDrag: false, replaySupported: true,
         } : { time: 0, playing: true, replaySupported: true };
         return { ...this.status };
@@ -513,7 +513,7 @@ for (const options of [{ preparedPlayback: "yes" }, { preparationLookaheadSecond
   });
 }
 
-test("prepared status follows buffering, user pause and exact terminal time, not source liveness", async () => {
+test("prepared status follows Rust completion, buffering and user pause", async () => {
   const f = fixture(), { promise } = await f.start(); await f.register();
   const runtime = f.inspect().player;
   assert.equal(f.env.status.dataset.playbackPhase, "paused");
@@ -521,8 +521,9 @@ test("prepared status follows buffering, user pause and exact terminal time, not
     [{ time: 0.5, playing: true, buffering: false }, "playing"],
     [{ playing: true, buffering: true }, "buffering"],
     [{ playing: false, buffering: true }, "paused"],
-    [{ time: 3.9999, durationSeconds: 4, preparedFrontier: 4, playing: true, buffering: false }, "playing"],
-    [{ time: 4 }, "finished"],
+    [{ time: 4, durationSeconds: 4, preparedFrontier: 4, playing: true, buffering: false, completed: false }, "playing"],
+    [{ playing: false, completed: false }, "paused"],
+    [{ completed: true, playing: false }, "finished"],
   ]) {
     Object.assign(runtime.status, updates); await f.updateWorkerMetrics();
     assert.equal(f.env.status.dataset.playbackPhase, phase);
