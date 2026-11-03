@@ -263,6 +263,52 @@ class SourceEffectsTests(unittest.TestCase):
                   "    return value.real\n")
         self.assertFalse(source_execution_proof(shadow)["admitted"])
 
+    def test_numpy_array_provenance_rejects_external_inputs_rebinds_and_shadowed_helpers(self):
+        unsafe = (
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        values = np.asarray(context.get("payload"))\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(samples): return samples.real\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            '        helper(np.array([1]))\n        helper(context)\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        values = np.array([1])\n'
+            '        values = context\n        result = np.sum(values)\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(samples): return samples.real\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            '        helper = context.get("callback")\n'
+            '        result = helper(np.array([1]))\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        callback = context.get("callback")\n'
+            '        result = callback(np.array([1]))\n',
+            'import numpy as np\n'
+            'def mutate(values):\n    view = np.asarray(values)\n    view[0] = 2\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        result = np.concatenate(context.get("arrays"))\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        result = np.linspace(context.get("start"), 1, 3)\n',
+            'import numpy as np\n'
+            'def helper(context):\n'
+            '    values = [context.get("payload")]\n'
+            '    return np.array([float(value) for value in values])\n',
+            'from noon import *\nimport numpy as np\n'
+            'SVG_SOURCE = "<svg/>"\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        imported = SVGMobject.from_string(SVG_SOURCE)\n'
+            '        contours = []\n'
+            '        for member in imported.family_members_with_points():\n'
+            '            for control_points in member.get_subpaths():\n'
+            '                contours.append(VMobject().set_points(control_points))\n'
+            '                contours.append(context.get("payload"))\n'
+            '        contours.sort()\n        path = contours[0]\n'
+            '        sampled = [path.point_from_proportion(t) for t in np.linspace(0, 1, 3)]\n'
+            '        values = np.array([float(point[0]) for point in sampled])\n',
+        )
+        for source in unsafe:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
     def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_shape_matching.py"
