@@ -2204,7 +2204,10 @@ class _SceneOnlySource(ast.NodeVisitor):
             if name in {"VMobject", "SVGMobject"} and (
                     name in self.module_bindings or any(name in scope for scope in self.scopes[1:])):
                 raise _OpaqueSource(node.func, "unproven_shadowed_svg_constructor")
-            safe_direct = (name in _SOURCE_BUILTINS | _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS
+            safe_direct = (name in (_SOURCE_BUILTINS | _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS
+                                   | _SOURCE_SHADER_CONSTRUCTORS | _SOURCE_TYPED_PAINT_CONSTRUCTORS
+                                   | _SOURCE_SPATIAL_CONSTRUCTORS | _SOURCE_CONTROLLED_TEXT_COMPILERS
+                                   | _SOURCE_RESOURCE_PREPARATIONS)
                            | self.source_callable_imports | self.code_constructors
                            | self.module_callable_aliases
                            or name in self.numpy_module_functions
