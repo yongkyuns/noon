@@ -12,6 +12,7 @@ function section(begin, end) {
   return source.slice(from, to);
 }
 const lifecycle = [
+  section("function updateDraftStatus(", "function setRunPatchStatus("),
   section("function isPreparedPlayback(", "function showError("),
   section("function updatePlaybackControls(", "async function ensureExecutionReady("),
   section("async function ensureExecutionReady(", "async function runPlaygroundTestHook("),
@@ -40,7 +41,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
   const env = {
     initialCanvas, document, calls, errors,
     generations: new PlaygroundGeneration(),
-    status: dom(), patchStatus: dom(), sceneButton: dom(), sceneSourceEditor: dom(),
+    status: dom(), patchStatus: dom(), draftStatus: dom(), sceneButton: dom(), sceneSourceEditor: dom(),
     recoverButton: Object.assign(new EventTarget(), dom()),
     resetButton: dom(), gallerySearch: dom(), categorySelect: dom(), paritySelect: dom(),
     previousGalleryPage: dom(), nextGalleryPage: dom(), metricObjects: dom(), metricTime: dom(),
@@ -149,7 +150,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     players.push(runtime); return runtime;
   }
   const api = new Function("env", "authoring", "createRuntimeClient", "PlaygroundPlaybackControls", `
-    const { calls, errors, document, generations, status, patchStatus, sceneButton, sceneSourceEditor,
+    const { calls, errors, document, generations, status, patchStatus, draftStatus, sceneButton, sceneSourceEditor,
       resetButton, gallerySearch, categorySelect, paritySelect, previousGalleryPage, nextGalleryPage,
       galleryGrid, previousPreview, diagnosticPanel, metricObjects, metricTime, recoverButton } = env;
     const globalThis = { __NOON_PLAYGROUND_TEST_HOOKS__: env.hooks };
@@ -157,7 +158,6 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     const console = { warn() {}, debug() {}, error() {} };
     let canvas = env.initialCanvas, player = null, preparedPlaybackPlayer = null, playbackControls = null;
     let selectedExampleId = "test", canonicalSource = "", activeRunIdentity = null;
-    const updateDraftStatus = () => {};
     const setRunPatchStatus = (_token, message, state) => {
       patchStatus.value = message; patchStatus.dataset.state = state;
     };
@@ -385,6 +385,7 @@ test("ordinary source errors retain open history and the next Run uses the same 
   const owner = f.inspect().player, error = new Error("source exploded");
   job.reject(error); const failed = await promise;
   assert.equal(failed.retainedPreparedHistory, true); assert.equal(failed.error, error);
+  assert.match(f.env.draftStatus.value, /Test draft matches the failed Run/);
   assert.equal(f.inspect().player, owner); assert.equal(f.inspect().playbackControls.busy, false);
   assert.equal(f.inspect().playbackControls.state.durationSeconds, null);
   assert.equal(f.inspect().playbackControls.controllable, true);

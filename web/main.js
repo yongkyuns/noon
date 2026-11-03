@@ -1448,6 +1448,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
             startMetricsPolling();
             setPlaybackRuntimeStatus(partial, "Partial history retained · source failed");
             showSceneError(error);
+            updateDraftStatus();
             return { stale: false, error, retainedPreparedHistory: true };
           }
         } catch (observationError) {
