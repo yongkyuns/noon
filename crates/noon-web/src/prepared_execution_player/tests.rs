@@ -230,20 +230,20 @@ fn prepared_worker_terminal_adoption_and_source_drop_do_not_replace_display() {
 }
 
 #[test]
-fn prepared_static_seek_proof_joins_the_last_wire_and_the_new_selected_time() {
+fn prepared_idle_no_change_proof_joins_the_last_wire_and_is_consumed_once() {
     let mut f = Fixture::new(78);
     ready(&mut f.player);
 
-    assert!(f.player.seek_delta_json(0.75).unwrap().is_none());
+    assert!(f.player.drain_delta_json().unwrap().is_none());
     let proof: serde_json::Value = serde_json::from_str(
         &f.player
             .take_prepared_no_change_presentation_json()
-            .expect("unchanged seek has a retained publication to prove against"),
+            .expect("unchanged drain has a retained publication to prove against"),
     )
     .unwrap();
     assert_eq!(proof["session"], 78);
     assert_eq!(proof["sequence"], 0);
-    assert_eq!(proof["time"], 0.75);
+    assert_eq!(proof["time"], 0.5);
     assert_eq!(
         proof["publicationContext"]["frame_epoch"],
         f.player.playback.reader.publication_context().frame_epoch().get()
@@ -252,6 +252,12 @@ fn prepared_static_seek_proof_joins_the_last_wire_and_the_new_selected_time() {
         .player
         .take_prepared_no_change_presentation_json()
         .is_none());
+    assert!(f.player.drain_delta_json().unwrap().is_none());
+    assert!(f.player.take_prepared_no_change_presentation_json().is_some());
+    assert!(f.player.seek_delta_json(1.0).is_err());
+    assert!(f.player.take_prepared_no_change_presentation_json().is_none());
+    assert!(f.player.seek_delta_json(0.75).unwrap().is_some());
+    assert!(f.player.take_prepared_no_change_presentation_json().is_none());
 }
 
 #[test]

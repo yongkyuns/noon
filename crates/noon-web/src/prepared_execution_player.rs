@@ -14,8 +14,7 @@ use crate::{
 };
 use noon::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixReader};
 
-#[derive(Clone, Copy, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy)]
 struct PreparedPresentationIdentity {
     session: u32,
     sequence: u64,
@@ -113,6 +112,14 @@ impl PreparedExecutionPlayer {
             refresh || selection != self.last_selection,
         )?
         else {
+            self.no_change_presentation = self.last_publication.map(|publication| {
+                PreparedNoChangePresentation {
+                    session: publication.session,
+                    sequence: publication.sequence,
+                    time: reader.frame().time,
+                    publication_context: reader.publication_context(),
+                }
+            });
             return Ok(None);
         };
         // The prepared source gate rejects inset views; no frontend reconstructs
@@ -294,23 +301,12 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
+        self.no_change_presentation = None;
         self.playback
             .seek(time)
             .map_err(|error| error.to_string())?;
         self.clock = BrowserExecutionWakeClock::default();
-        self.no_change_presentation = None;
-        let delta = self.delta(false)?;
-        if delta.is_none() {
-            self.no_change_presentation =
-                self.last_publication
-                    .map(|publication| PreparedNoChangePresentation {
-                        session: publication.session,
-                        sequence: publication.sequence,
-                        time: self.playback.reader.frame().time,
-                        publication_context: self.playback.reader.publication_context(),
-                    });
-        }
-        delta
+        self.delta(false)?
             .map(|delta| serde_json::to_string(&delta).map_err(|error| error.to_string()))
             .transpose()
     }

@@ -193,7 +193,7 @@ export async function attachSemanticEngine(
       if (carrier !== null) json = carrier.json;
       if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
       const transportStartedAtMs = timing === null ? 0 : performance.now();
-      if (!transport.send(json, publication)) {
+      if (!transport.send(json, metadata)) {
         throw new Error("semantic transport became backpressured after admission");
       }
       if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
