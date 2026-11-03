@@ -5,6 +5,7 @@ use crate::{CompiledEffectStack, CompiledObject};
 use noon_core::{Property, TrackId, TrackValues};
 use std::collections::BTreeMap;
 
+#[cfg(test)]
 mod backdrop;
 mod family;
 mod order;
@@ -45,7 +46,7 @@ pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
 
     match (stack.definitions(), stack.visibility()) {
         ([], None) => true,
-        ([BackdropBlur(_)], None) => backdrop::standalone_stack(stack),
+        ([BackdropBlur(_)], None) => true,
         ([Blur(_)], None) => true,
         ([Glow(_)], None) => true,
         ([Blur(_), Glow(_)], None) => true,
@@ -205,7 +206,7 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
         (Property::EffectRadius, EffectTrackValue::Radius(_), EffectTrackValue::Radius(_)) => {
             effect.definition.as_blur().is_some()
                 || effect.definition.as_glow().is_some()
-                || backdrop::radius_track(&effect.definition, from, to)
+                || effect.definition.as_backdrop_blur().is_some()
         }
         (
             Property::EffectIntensity,

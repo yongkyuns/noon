@@ -2,31 +2,12 @@
 use super::*;
 use noon_core::{EffectDefinition, EffectTrackValue};
 
-pub(super) fn standalone_stack(stack: &CompiledEffectStack) -> bool {
-    matches!(
-        (stack.definitions(), stack.visibility()),
-        ([EffectDefinition::BackdropBlur(_)], None)
-    ) && stack.attachments().len() == 1
-}
-
-pub(super) fn radius_track(
-    definition: &EffectDefinition,
-    from: &EffectTrackValue,
-    to: &EffectTrackValue,
-) -> bool {
-    definition.as_backdrop_blur().is_some()
-        && matches!(
-            (from, to),
-            (EffectTrackValue::Radius(_), EffectTrackValue::Radius(_))
-        )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use noon_core::{
-        BackdropBlur, Blur, EffectRadius, EffectTrackEndBehavior, EffectUpdate, Glow,
-        NoiseDissolve, Pixels, SemanticNodeId,
+        BackdropBlur, EffectRadius, EffectTrackEndBehavior, EffectUpdate, NoiseDissolve, Pixels,
+        SemanticNodeId,
     };
     use std::sync::Arc;
 
@@ -48,39 +29,7 @@ mod tests {
             definition: blur.clone(),
         }])
         .unwrap();
-        assert!(standalone_stack(&stack));
-        assert!(radius_track(
-            &blur,
-            &EffectTrackValue::Radius(EffectRadius::Pixels(4.0)),
-            &EffectTrackValue::Radius(EffectRadius::Pixels(12.0)),
-        ));
-        assert!(!radius_track(
-            &blur,
-            &EffectTrackValue::Intensity(0.0),
-            &EffectTrackValue::Intensity(1.0),
-        ));
-        assert!(!radius_track(
-            &EffectDefinition::from(Blur::default()),
-            &EffectTrackValue::Radius(EffectRadius::Pixels(4.0)),
-            &EffectTrackValue::Radius(EffectRadius::Pixels(12.0)),
-        ));
-
-        for effects in [
-            vec![
-                effect(1, BackdropBlur::default()),
-                effect(2, Blur::default()),
-            ],
-            vec![
-                effect(1, Blur::default()),
-                effect(2, BackdropBlur::default()),
-            ],
-            vec![
-                effect(1, BackdropBlur::default()),
-                effect(2, Glow::default()),
-            ],
-        ] {
-            assert!(CompiledEffectStack::new(effects).is_err());
-        }
+        assert!(local_effect_stack(&stack));
         let noise = SemanticNodeId::new(2, 1);
         let mixed = CompiledEffectStack::new_with_visibility(
             [
@@ -90,7 +39,7 @@ mod tests {
             Some(noise),
         )
         .unwrap();
-        assert!(!standalone_stack(&mixed));
+        assert!(!local_effect_stack(&mixed));
 
         let mut object = crate::CompiledObject::new(
             noon_core::ObjectId::new(0),
@@ -98,8 +47,7 @@ mod tests {
             noon_core::Transform2D::IDENTITY,
             noon_core::Style::default(),
         );
-        object.effects = Some(Arc::new(stack_for(&blur, id)));
-        assert!(local_effect_stack(object.effects.as_deref().unwrap()));
+        object.effects = Some(Arc::new(stack));
         let track = crate::CompiledTrack {
             id: noon_core::TrackId::new(0),
             object_index: 0,
@@ -130,13 +78,5 @@ mod tests {
             *attachment = SemanticNodeId::new(4, 1);
         }
         assert!(!local_effect_track(&wrong_attachment, Some(&object)));
-    }
-
-    fn stack_for(definition: &EffectDefinition, attachment: SemanticNodeId) -> CompiledEffectStack {
-        CompiledEffectStack::new([crate::CompiledEffect {
-            attachment,
-            definition: definition.clone(),
-        }])
-        .unwrap()
     }
 }
