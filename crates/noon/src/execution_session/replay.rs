@@ -173,5 +173,5 @@ mod prefix;
 
 #[cfg(feature = "prepared-prefix")]
 pub use prefix::{PrefixReader, SourceExecutionRequirement};
-#[cfg(test)]
+#[cfg(all(test, feature = "prepared-prefix"))]
 mod playback_tests;
