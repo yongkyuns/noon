@@ -297,6 +297,63 @@ class SourceEffectsTests(unittest.TestCase):
                 self.assertEqual(source.splitlines()[span['line'] - 1].encode()
                                  [span['column']:span['endColumn']].decode(), span_text)
 
+    def test_lagged_start_map_requires_proven_factories_and_scene_only_callbacks(self):
+        examples = Path(__file__).parent / 'examples'
+        timing = (examples / 'showcase_timing.py').read_text()
+        self.assertTrue(source_is_scene_only(timing))
+
+        alias = dedent('''
+            from noon import *
+            animation_factory = FadeIn
+            class Example(Scene):
+                def construct(self):
+                    group = VGroup(Square(), Square())
+                    self.play(LaggedStartMap(
+                        animation_factory, group,
+                        arg_creator=lambda member: (member,),
+                    ))
+        ''')
+        self.assertTrue(source_is_scene_only(alias))
+
+        blocked = (
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(Code, group))\n',
+             'unproven_resource_reference', 'Code'),
+            ('from noon import *\ndef make(member):\n'
+             '    return Code(code_file="input.py")\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=make))\n',
+             'unproven_resource_input', 'Code(code_file="input.py")'),
+            ('from noon import *\nimport os as host\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(host.system, group))\n',
+             'unsupported_import', 'import os as host'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, '
+             'arg_creator=lambda member: print(member)))\n',
+             'unknown_name', 'print'),
+        )
+        for source, code, span_text in blocked:
+            with self.subTest(source=source):
+                reason = source_execution_proof(source)['reason']
+                self.assertEqual(reason['code'], code)
+                span = reason['span']
+                self.assertEqual(source.splitlines()[span['line'] - 1].encode()
+                                 [span['column']:span['endColumn']].decode(), span_text)
+
+        # This paired showcase uses only already-qualified map/composition
+        # structure; its separate tutorial pair remains blocked at Add.
+        paired = (examples / 'ordinary_timed_composition.py').read_text()
+        reason = source_execution_proof(paired)['reason']
+        self.assertEqual(reason['code'], 'unknown_name')
+        self.assertEqual(reason['span']['line'], 11)
+
 
 if __name__ == '__main__':
     unittest.main()
