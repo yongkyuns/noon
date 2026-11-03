@@ -562,6 +562,127 @@ fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind
 }
 
 #[test]
+fn matching_shapes_prefix_preserves_correspondence_replacement_and_rewind() {
+    let program = crate::example_scenes::family_transform_indicate::matching_shapes::program()
+        .unwrap();
+    let mut source = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    assert_eq!(reader.painter_order().len(), 2);
+    let initial_ids: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+
+    assert_eq!(
+        source.prepare_until(1.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+
+    reader.seek(0.5).unwrap();
+    let midpoint = reader.frame().clone();
+    let midpoint_order: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+    let xs: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].transform.translation.x)
+        .collect();
+    assert_eq!(midpoint_order, initial_ids);
+    assert_eq!(xs, vec![1.0, -1.0]);
+
+    let publication = reader.publication_context();
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(reader.frame(), &midpoint);
+    assert_eq!(reader.publication_context(), publication);
+
+    reader.seek(1.0).unwrap();
+    let target_order: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+    let target_xs: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].transform.translation.x)
+        .collect();
+    assert_eq!(target_order.len(), 2);
+    assert_ne!(target_order, initial_ids);
+    assert_eq!(target_xs, vec![-4.0, 4.0]);
+
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    assert!(batch.is_terminal());
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::Finished)
+    );
+    assert_eq!(reader.end_time(), Some(2.0));
+
+    let query = reader.query_renderer_viewports(&[crate::Rect::new(
+        Vec2::new(-10.0, -10.0),
+        Vec2::new(10.0, 10.0),
+    )]);
+    assert_eq!(query.publication(), reader.publication_context());
+    assert!(reader.viewport_query_is_current(&query));
+    assert_eq!(query.object_indices().len(), 2);
+
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.frame(), &midpoint);
+    assert_eq!(
+        reader
+            .painter_order()
+            .iter()
+            .map(|&index| reader.frame().objects[index as usize].id)
+            .collect::<Vec<_>>(),
+        initial_ids
+    );
+}
+
+#[test]
 fn cooperative_source_invalid_demand_is_atomic_before_and_after_output() {
     let (mut source, calls, _) = fixture(false, false, None, ReplayLimits::default());
     for target in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {

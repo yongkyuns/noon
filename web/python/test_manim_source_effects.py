@@ -6,6 +6,23 @@ from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_shape_matching.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        unsafe = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    source, target = VGroup(Circle()), VGroup(Square())
+                    self.play(TransformMatchingShapes(source, target, key_map=load_keys()))
+        ''')
+        proof = source_execution_proof(unsafe)
+        self.assertFalse(proof["admitted"])
+        self.assertEqual(proof["reason"]["code"], "unknown_name")
+
     def test_source_proof_reports_the_rejected_construct_and_exact_span(self):
         for expression, code, construct in (
             ('print("effect")', "unknown_name", "print"),
