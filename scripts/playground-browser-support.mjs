@@ -74,6 +74,10 @@ export async function disableAuthoringJspi(context, { beforeImport } = {}) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript",
+      headers: {
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cross-Origin-Resource-Policy": "same-origin",
+      },
       body: [
         "delete WebAssembly.promising;",
         "delete WebAssembly.Suspending;",
