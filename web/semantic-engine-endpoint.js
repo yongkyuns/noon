@@ -1741,8 +1741,11 @@ export async function attachSemanticEngine(
       }
     },
     async prepareSourceEffects(generation, staged) {
-      if (stopped || continuation === null || continuationActive || player !== null ||
-          generation !== continuation.generation || pendingEffectPreparation !== null) {
+      const preparedSource = () => prepared !== null && player === prepared.player &&
+        prepared.generation === generation && !sourceHandoffRequested;
+      const observedSource = () => continuation !== null && !continuationActive && player === null &&
+        generation === continuation.generation;
+      if (stopped || (!preparedSource() && !observedSource()) || pendingEffectPreparation !== null) {
         throw new Error("resource preparation requires the current returned source lease");
       }
       const id = nextEffectPreparation++;
@@ -1755,10 +1758,14 @@ export async function attachSemanticEngine(
         const bytes = Uint8Array.from(context.effectPreparationResources(staged));
         renderPort.postMessage({ type: "prepare_effect_programs", session, requestId: id, bytes }, [bytes.buffer]);
         await ready;
-        if (stopped || generation !== continuation.generation || continuationActive || player !== null) {
+        if (stopped || (!preparedSource() && !observedSource())) {
           throw new Error("source changed during effect preparation");
         }
         context.publishPreparedEffects(staged);
+        // Prepared interpreter source owns a future semantic suffix. Its GPU
+        // work is validated here, while the current reader remains the only
+        // presentation authority; PrefixReader adopts the source edit later.
+        if (preparedSource()) return;
         const publication = startsSegment
           ? this.startContinuation(generation)
           : send(context.drainReturnedPublicationJson());

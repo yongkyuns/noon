@@ -3327,6 +3327,90 @@ test("source effect preparation publishes only after GPU readiness and waits for
 });
 
 
+test("prepared source effect preparation keeps the paused reader as presentation authority", { timeout: 5000 }, async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let preparedPlaying = false, published = 0, drained = 0, wakes = 0, deltaCount = 0;
+  f.render.port2.on("message", message => {
+    if (message.type === "execution_delta") deltaCount += 1;
+  });
+  f.player.setPreparedPlaying = value => { preparedPlaying = value; };
+  f.player.preparedPlaying = () => preparedPlaying;
+  f.player.preparedTime = () => f.player.time();
+  f.player.preparedPlaybackTimeAt = () => f.player.time();
+  f.player.preparedFrontier = () => 1;
+  f.player.sourceExecutionReady = () => false;
+  f.player.stopSourcePreparation = () => {};
+  f.player.free = () => {};
+  f.player.preparedPlaybackStateJson = () => JSON.stringify({
+    time: f.player.time(), frontier: 1, end: null,
+    seekRange: { start: 0, end: 0.9999999999999999 }, playing: preparedPlaying,
+    buffering: false, completed: false, advancing: false,
+    loopDuration: null, loopCount: 0, loopError: null,
+  });
+  f.player.sectionsJson = () => "[]";
+  f.context.effectPreparationResources = () => new Uint8Array([1, 2, 3]);
+  f.context.publishPreparedEffects = () => { published += 1; };
+  f.context.drainReturnedPublicationJson = () => { drained += 1; return null; };
+  let resolveInitialWake;
+  const initialWake = new Promise(resolve => { resolveInitialWake = resolve; });
+  const prepared = {
+    player: f.player, generation: 74, wakeSource() { wakes += 1; resolveInitialWake?.(); resolveInitialWake = null; },
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(prepared);
+    await ready;
+    const first = await initial;
+    present(f.render.port2, first);
+    await initialWake;
+    await request(f.control.port2, "state", 900);
+    const wakeCount = wakes;
+    const beforeTime = f.player.time();
+    assert.equal(deltaCount, 1);
+
+    await assert.rejects(
+      endpoint.prepareSourceEffects(75, { startsSegment: false }),
+      /current returned source lease/,
+      "a stale continuation generation cannot prepare a module",
+    );
+
+    const staged = { startsSegment: false };
+    let resourceReady = nextMatching(f.render.port2, message => message.type === "prepare_effect_programs");
+    let released = nextMatching(f.render.port2, message => message.type === "release_effect_programs");
+    const failedPreparation = assert.rejects(
+      endpoint.prepareSourceEffects(74, staged),
+      /shader compilation failed/,
+    );
+    let resource = await resourceReady;
+    f.render.port2.postMessage({
+      type: "effect_programs_prepared", session: resource.session,
+      requestId: resource.requestId, error: "shader compilation failed",
+    });
+    await failedPreparation;
+    await released;
+    assert.equal(published, 0, "failed device work cannot commit the source edit");
+
+    resourceReady = nextMatching(f.render.port2, message => message.type === "prepare_effect_programs");
+    released = nextMatching(f.render.port2, message => message.type === "release_effect_programs");
+    const operation = endpoint.prepareSourceEffects(74, staged);
+    resource = await resourceReady;
+    assert.equal(published, 0, "source semantics wait for successful device compilation");
+    f.render.port2.postMessage({
+      type: "effect_programs_prepared", session: resource.session, requestId: resource.requestId,
+    });
+    await operation;
+    await released;
+
+    assert.equal(published, 1);
+    assert.equal(drained, 0, "future source state is not sent as a display publication");
+    assert.equal(deltaCount, 1, "shader preparation does not fabricate a new picture");
+    assert.equal(f.player.time(), beforeTime);
+    assert.equal(wakes, wakeCount, "source resumes only through its prepared-driver barrier");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("silent execution publishes Rust cue metadata and forwards strict section navigation", async () => {
   const f = fixture();
   const sections = [{ index: 0, name: "Start", time: 0 }, { index: 1, name: "Detail", time: 0.75 }];

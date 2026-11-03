@@ -140,14 +140,10 @@ async function initializePyodide() {
     try {
       const continuation = activeAuthoringRun?.continuation;
       if (!continuation || continuation.context !== context || continuation.terminal ||
-          (continuation.preparedPlayback && !continuation.observedExecution) || continuation.endpoint === null) {
+          continuation.endpoint === null) {
         throw new Error("shader resource preparation requires the active render endpoint");
       }
-      if (staged.startsSegment === true) {
-        return await awaitSemanticContinuation(context, () =>
-          continuation.endpoint.prepareSourceEffects(continuation.generation, staged));
-      }
-      await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+      return await prepareSemanticEffectRequest(continuation, context, staged);
     } catch (error) {
       if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
       throw error;
@@ -680,6 +676,24 @@ function observeSemanticExecution(request, entry, prepared) {
     executionDiagnostic(entry, { ...event, profile, contextId: request.contextId,
       continuationGeneration: entry.continuationGeneration ?? null, session: request.session });
   };
+}
+
+async function prepareSemanticEffectRequest(continuation, context, staged) {
+  if (continuation.preparedPlayback && !continuation.observedExecution) {
+    if (!continuation.preparedPlayer || continuation.endpoint === null) {
+      throw new Error("shader resource preparation requires the active prepared source");
+    }
+    await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+    if (staged.startsSegment === true) {
+      return await continuation.preparedDriver.awaitSegment(context);
+    }
+    return;
+  }
+  if (staged.startsSegment === true) {
+    return await awaitSemanticContinuation(context, () =>
+      continuation.endpoint.prepareSourceEffects(continuation.generation, staged));
+  }
+  await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
 }
 
 function registerContinuationContext(context) {
@@ -1673,6 +1687,10 @@ function createPreparedReceiver(request, entry, continuation, player) {
     prepared: { player, generation: continuation?.generation,
       wakeSource: () => continuation?.preparedDriver.wake() },
     sourcePrefixDelivered() { receiver.endpoint?.sourcePrefixDelivered(); },
+    prepareSourceEffects(generation, staged) {
+      if (!receiver.endpoint) throw new Error("prepared source renderer endpoint is not attached");
+      return receiver.endpoint.prepareSourceEffects(generation, staged);
+    },
     sourceExecutionRequired() {
       receiver.sourceRequired = true;
       receiver.endpoint?.sourceExecutionRequired();

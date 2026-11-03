@@ -25,6 +25,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture({ failureAt = null, failure = "budget rejected", catchBarrier = false, quiet = false } = {}) {
   const tasks = new Map(), calls = [], messages = [], diagnostics = [], errors = [], runs = [];
+  const effectCalls = [];
   const semanticContexts = new Map();
   let nextTask = 0, nextRun = 0, armed = true, closed = 0;
   const attempt = (stage, run) => {
@@ -39,6 +40,11 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
     isRecord: value => value !== null && typeof value === "object" && !Array.isArray(value),
     postError: (requestId, error) => errors.push({ requestId, error }),
     self: { close() { closed++; } },
+    awaitSemanticContinuation: async (_context, start = null) => {
+      effectCalls.push("observed-await");
+      if (start !== null) await start();
+      return "observed-event";
+    },
     retireSemanticContext() { assert.fail("an attached historical reader must not be retired"); },
     createPreparedInterpreterDriver: options => createPreparedInterpreterDriver({
       ...options,
@@ -124,9 +130,9 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       } finally { record.cleanup++; }
     },
   });
-  vm.runInContext(`${production}\nglobalThis.testHandleRequest = handleRequest;`, context);
+  vm.runInContext(`${production}\nglobalThis.testHandleRequest = handleRequest;\nglobalThis.testPrepareSemanticEffectRequest = prepareSemanticEffectRequest;`, context);
   return {
-    tasks, calls, messages, diagnostics, errors, runs, context,
+    tasks, calls, effectCalls, messages, diagnostics, errors, runs, context,
     get closed() { return closed; },
     disarm() { armed = false; },
     async run(requestId = 1) {
@@ -147,6 +153,45 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
     },
   };
 }
+
+test("prepared shader resources resume the same source barrier without observed handoff", async () => {
+  const f = fixture();
+  const context = {};
+  const continuation = {
+    preparedPlayback: true,
+    observedExecution: false,
+    preparedPlayer: {},
+    generation: 17,
+    endpoint: { async prepareSourceEffects(generation, staged) {
+      f.effectCalls.push(["prepare", generation, staged.startsSegment]);
+    } },
+    preparedDriver: { async awaitSegment(value) {
+      assert.equal(value, context);
+      f.effectCalls.push("prepared-await");
+      return "prepared-source-event";
+    } },
+  };
+  const segmentEvent = await f.context.testPrepareSemanticEffectRequest(
+    continuation, context, { startsSegment: true },
+  );
+  assert.equal(segmentEvent, "prepared-source-event");
+  assert.deepEqual(f.effectCalls, [["prepare", 17, true], "prepared-await"]);
+
+  f.effectCalls.length = 0;
+  const ordinaryEffect = await f.context.testPrepareSemanticEffectRequest(
+    continuation, context, { startsSegment: false },
+  );
+  assert.equal(ordinaryEffect, undefined);
+  assert.deepEqual(f.effectCalls, [["prepare", 17, false]]);
+
+  f.effectCalls.length = 0;
+  continuation.observedExecution = true;
+  const observedEvent = await f.context.testPrepareSemanticEffectRequest(
+    continuation, context, { startsSegment: true },
+  );
+  assert.equal(observedEvent, "observed-event");
+  assert.deepEqual(f.effectCalls, ["observed-await", ["prepare", 17, true]]);
+});
 
 async function assertOrdinaryFailure(f, done, record, expected) {
   await f.drain();
