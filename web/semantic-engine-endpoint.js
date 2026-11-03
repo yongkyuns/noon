@@ -329,6 +329,33 @@ export async function attachSemanticEngine(
       unchanged: publication === null,
     };
   };
+  const captureCommandPresentation = (publication) => {
+    if (publication !== null) {
+      const identity = { session: publication.session, sequence: publication.sequence,
+        time: publication.time ?? null };
+      if (!publicationAlreadyPresented(publication)) return { identity, receipt: null, settledEpochMs: null };
+      return {
+        identity,
+        receipt: { ...identity, unchanged: false },
+        settledEpochMs: performance.timeOrigin + performance.now(),
+      };
+    }
+    if (typeof player?.takeNoChangePresentationJson !== "function") return null;
+    const proof = JSON.parse(player.takeNoChangePresentationJson() ?? "null");
+    if (proof === null || !Number.isSafeInteger(proof.session) || !Number.isSafeInteger(proof.sequence) ||
+        !Number.isFinite(proof.time) || proof.publicationContext === null ||
+        typeof proof.publicationContext !== "object" ||
+        proof.session !== lastSentPublication?.session || proof.sequence !== lastSentPublication?.sequence) {
+      return null;
+    }
+    const identity = { session: proof.session, sequence: proof.sequence, time: proof.time };
+    if (!publicationAlreadyPresented(identity)) return { identity, receipt: null, settledEpochMs: null };
+    return {
+      identity,
+      receipt: { ...identity, unchanged: true },
+      settledEpochMs: performance.timeOrigin + performance.now(),
+    };
+  };
   const notePresentedPublication = (publication) => {
     if (!publication || !Number.isSafeInteger(publication.session) ||
         publication.session < 0 || !Number.isSafeInteger(publication.sequence) ||
@@ -1161,9 +1188,16 @@ export async function attachSemanticEngine(
             }
             player.pause();
             const acceptedEpochMs = performance.timeOrigin + performance.now();
+            const evidence = captureCommandPresentation(drainAndSendDelta());
+            if (evidence !== null) {
+              commandPublication = evidence.identity;
+              if (evidence.receipt !== null) {
+                presentationReceipt = evidence.receipt;
+                commandTiming = { acceptedEpochMs, presentationSettledEpochMs: evidence.settledEpochMs };
+              } else commandTiming = { acceptedEpochMs };
+            } else commandTiming = { acceptedEpochMs };
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else observeExecutionWake(performance.now(), true);
-            commandTiming = { acceptedEpochMs };
             break;
           }
           case "resume": {
@@ -1181,7 +1215,6 @@ export async function attachSemanticEngine(
             if (prepared !== null) player.setPreparedPlaying(true);
             else player.resume();
             const acceptedEpochMs = performance.timeOrigin + performance.now();
-            commandTiming = { acceptedEpochMs };
             if (prepared !== null) {
               const publication = drainAndSendDelta();
               presentationReceipt = await settlePreparedControlPresentation(
@@ -1191,6 +1224,15 @@ export async function attachSemanticEngine(
                 acceptedEpochMs,
                 presentationSettledEpochMs: performance.timeOrigin + performance.now(),
               };
+            } else {
+              const evidence = captureCommandPresentation(drainAndSendDelta());
+              if (evidence !== null) {
+                commandPublication = evidence.identity;
+                if (evidence.receipt !== null) {
+                  presentationReceipt = evidence.receipt;
+                  commandTiming = { acceptedEpochMs, presentationSettledEpochMs: evidence.settledEpochMs };
+                } else commandTiming = { acceptedEpochMs };
+              } else commandTiming = { acceptedEpochMs };
             }
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else if (!hasAudio) observeExecutionWake(performance.now(), true);
@@ -1226,10 +1268,8 @@ export async function attachSemanticEngine(
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             const acceptedEpochMs = performance.timeOrigin + performance.now();
             const publication = send(delta);
-            if (publication !== null && prepared === null && !hasAudio) {
-              commandPublication = { session: publication.session, sequence: publication.sequence,
-                time: publication.time ?? null };
-            }
+            const evidence = prepared === null ? captureCommandPresentation(publication) : null;
+            if (evidence !== null) commandPublication = evidence.identity;
             commandTiming = { acceptedEpochMs };
             if (prepared !== null) {
               const selectedTime = player.preparedTime();
@@ -1241,16 +1281,25 @@ export async function attachSemanticEngine(
               if (playing) player.setPreparedPlaying(true);
             } else if (hasAudio) {
               const presented = await awaitPresentation(publication);
-              if (presented !== null) {
-                presentationReceipt = { session: presented.session, sequence: presented.sequence,
-                  time: presented.time, unchanged: publication === null };
+              if (presented !== null && (publication !== null || evidence !== null)) {
+                presentationReceipt = publication !== null
+                  ? { session: presented.session, sequence: presented.sequence,
+                    time: presented.time, unchanged: false }
+                  : { ...evidence.identity, unchanged: true };
                 commandTiming = {
                   acceptedEpochMs,
                   presentationSettledEpochMs: performance.timeOrigin + performance.now(),
                 };
               }
               if (playing) player.resume();
-            } else observeExecutionWake(performance.now());
+            } else {
+              if (evidence !== null && evidence.receipt !== null) {
+                presentationReceipt = evidence.receipt;
+                commandTiming = { acceptedEpochMs,
+                  presentationSettledEpochMs: evidence.settledEpochMs };
+              }
+              observeExecutionWake(performance.now());
+            }
             break;
           }
           case "undo_translation_drag": {

@@ -43,20 +43,20 @@
   "sampling": {
     "warmupsPerArmPerStratum": 1,
     "measuredStartsPerArmPerStratum": 20,
-    "minimumCommandObservationsPerSource": 100,
+    "minimumCommandObservationsPerSourceArm": 100,
     "startupPercentiles": ["median", "p90", "p95"],
     "commandPercentiles": ["median", "p95", "p99"],
-    "presentationGapPercentiles": ["median", "p95", "p99"],
+    "activeCadenceWindowPercentiles": ["median", "p95", "p99"],
     "tailMethod": "nearest-rank",
     "startupPopulationP99": false
   },
   "bounds": {
     "firstUsefulMs": null,
     "commandFeedbackMs": null,
-    "commandAcceptanceMs": null,
-    "commandPresentationMs": null,
+    "commandAcceptanceP95Ms": null,
+    "commandPresentationP99Ms": null,
     "bufferingEpisodeMs": null,
-    "frameGapMs": null,
+    "activeCadenceWindowP99Ms": null,
     "peakProcessRssBytes": null,
     "liveOwnerRetirementMs": null
   },

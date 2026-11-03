@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { sceneInkPixels, distribution, summarizeReadiness,
   validateReadinessContract, validateReadinessTrace, validateReadinessResults,
-  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt } from "./playground-prepared-loading-observation.mjs";
+  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 function canvas() {
@@ -38,6 +38,20 @@ test("timing summaries retain sample count and nearest-rank tails", () => {
     n: 4, min: 1, median: 4, p90: 9, p95: 9, p99: 9, max: 9, percentileMethod: "midpoint median; nearest-rank tails",
   });
   assert.equal(distribution([]).median, null);
+});
+
+test("active cadence summaries exclude static holds and split reset sessions", () => {
+  const window = (epochMs, count, session, p99) => ({ epochMs, metrics: {
+    presentationIntervalSamples: count, presentedSession: session,
+    presentationIntervalMs: count ? { p95: p99 - 1, p99, max: p99 } : null,
+  } });
+  assert.deepEqual(activeCadenceWindows([
+    window(0, 0, 1, 0), window(10, 1, 1, 17), window(20, 2, 1, 18),
+    window(1000, 0, 1, 0), window(2000, 1, 2, 19),
+  ]), [
+    { startedAtEpochMs: 10, sampleCount: 2, endedAtEpochMs: 20, p95Ms: 17, p99Ms: 18, maxMs: 18 },
+    { startedAtEpochMs: 2000, sampleCount: 1, endedAtEpochMs: 2000, p95Ms: 18, p99Ms: 19, maxMs: 19 },
+  ]);
 });
 
 test("readiness draft binds showcase sources and the cumulative Product Gate anchor", async () => {
@@ -95,7 +109,7 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   const sourceId = contract.sources[0].id, stratum = "fresh-process-warm-resource-cache";
   const row = (arm, overrides = {}) => ({ sourceId, arm, stratum, warmup: false, status: "observed",
     startup: { firstUsefulMs: 20 }, commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12 }],
-    presentationGapsMs: [16, 17], bufferingEpisodes: [{ durationMs: 40 }],
+    activeCadenceWindows: [{ p95Ms: 16, p99Ms: 17 }], bufferingEpisodes: [{ durationMs: 40 }],
     memory: { peakSampledRssBytes: 100 }, ...overrides });
   const summary = summarizeReadiness([
     row("A"), row("A", { warmup: true, startup: { firstUsefulMs: 1 } }),
@@ -109,7 +123,7 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   assert.equal("p99" in summary.startup.firstUsefulMs, false,
     "twenty-start strata do not publish an unsupported startup population p99");
   assert.equal(summary.commands.pause.feedback.n, 1);
-  assert.equal(summary.presentationGapMs.n, 2);
+  assert.equal(summary.activeCadenceWindowP99Ms.n, 1);
   assert.equal(summary.buffering.episodes, 1);
   assert.equal(summary.peakProcessRssBytes.n, 1);
 });
@@ -160,13 +174,15 @@ test("strict readiness fails closed when acceptance and submission receipts are 
     startup: { firstUsefulMs: 10, firstSubmittedMs: null, runtimeAcceptanceMs: null },
     commands: [{ uiFeedbackMs: 2, commandCompletionUpperMs: 4, runtimeAcceptanceEpochMs: null,
       matchingPresentation: null }],
-    bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 }, presentationGapsMs: [] }];
+    bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 }, activeCadenceWindows: [] }];
   const errors = validateReadinessResults(cases, contract);
   assert.ok(errors.some(error => /missing firstSubmittedMs/.test(error)));
   assert.ok(errors.some(error => /missing runtimeAcceptanceMs/.test(error)));
   assert.ok(errors.some(error => /no command-correlated renderer receipt/.test(error)));
   assert.ok(errors.some(error => /missing ordered presentation-settled receipt/.test(error)));
   assert.ok(errors.some(error => /incomplete starts/.test(error)));
+  assert.ok(errors.some(error => /showcase-first-scene\/A: too few command observations/.test(error)),
+    "other arms cannot make up a missing command sample population");
   const wrongSequence = structuredClone(cases);
   wrongSequence[0].commands[0].commandPublication = { session: 1, sequence: 1 };
   wrongSequence[0].commands[0].matchingPresentation = {

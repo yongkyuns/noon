@@ -2814,6 +2814,31 @@ test("seek acknowledgements retain the exact evaluated time", async () => {
   } finally { endpoint?.stop(); f.close(); }
 });
 
+test("unchanged observed controls require Rust no-change evidence before reusing a shown frame", async () => {
+  const f = fixture(); let endpoint;
+  let proof = { session: 7, sequence: 0, time: 0, publicationContext: { frameEpoch: "1" } };
+  f.player.takeNoChangePresentationJson = () => JSON.stringify(proof);
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(); await ready;
+    present(f.render.port2, await initial);
+    await turn();
+
+    const paused = await request(f.control.port2, "pause", 905);
+    assert.deepEqual(paused.commandPublication, { session: 7, sequence: 0, time: 0 });
+    assert.equal(paused.presentationReceipt, undefined,
+      "nonblocking no-change evidence does not claim a command-time renderer receipt");
+    assert.equal(paused.commandTiming.presentationSettledEpochMs, undefined);
+
+    proof = { ...proof, sequence: 99 };
+    const resumed = await request(f.control.port2, "resume", 906);
+    assert.equal(resumed.commandPublication, undefined, "a stale Rust proof cannot name the cached frame");
+    assert.equal(resumed.presentationReceipt, undefined);
+    assert.equal(resumed.commandTiming.presentationSettledEpochMs, undefined);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 
 test("callback-stalled pointer controls keep bounded order and occurrence-local motion evidence", async () => {
   let release;

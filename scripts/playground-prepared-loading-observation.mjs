@@ -1,8 +1,8 @@
 export const READINESS_ARMS = ["A", "B", "C", "D"];
 export const READINESS_BASELINE_ARMS = ["C", "D"];
 export const READINESS_STRATA = ["fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"];
-export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceMs",
-  "commandPresentationMs", "bufferingEpisodeMs", "frameGapMs", "peakProcessRssBytes", "liveOwnerRetirementMs"];
+export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceP95Ms",
+  "commandPresentationP99Ms", "bufferingEpisodeMs", "activeCadenceWindowP99Ms", "peakProcessRssBytes", "liveOwnerRetirementMs"];
 export const PRODUCT_GATE_THRESHOLD_ENVS = {
   maxLatencyRatio: "NOON_PRODUCT_MAX_LATENCY_RATIO",
   latencySlackMs: "NOON_PRODUCT_LATENCY_SLACK_MS",
@@ -73,6 +73,33 @@ export function distribution(values) {
     percentileMethod: "midpoint median; nearest-rank tails" };
 }
 
+export function activeCadenceWindows(observations) {
+  const windows = [];
+  let current = null, previousCount = 0, previousSession = null;
+  const close = () => { if (current) windows.push(current); current = null; };
+  for (const sample of observations) {
+    const metrics = sample.metrics ?? {};
+    const count = metrics.presentationIntervalSamples;
+    const summary = metrics.presentationIntervalMs;
+    if (!Number.isSafeInteger(count) || count <= 0 || !Number.isFinite(summary?.p95) ||
+        !Number.isFinite(summary?.p99)) {
+      close(); previousCount = 0; previousSession = null; continue;
+    }
+    const session = metrics.presentedSession ?? null;
+    if (current && (count < previousCount || session !== previousSession)) close();
+    if (!current) current = { startedAtEpochMs: sample.epochMs, sampleCount: 0 };
+    current.endedAtEpochMs = sample.epochMs;
+    current.sampleCount = Math.max(current.sampleCount, count);
+    current.p95Ms = summary.p95;
+    current.p99Ms = Number.isFinite(summary.p99) ? summary.p99 : null;
+    current.maxMs = Number.isFinite(summary.max) ? summary.max : null;
+    previousCount = count;
+    previousSession = session;
+  }
+  close();
+  return windows;
+}
+
 export function validateReadinessContract(contract, { strict = false } = {}) {
   const errors = [];
   if (contract?.schemaVersion !== 1) errors.push("unsupported readiness contract schema");
@@ -104,12 +131,12 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
   const sampling = contract?.sampling;
   if (!(Number.isSafeInteger(sampling?.warmupsPerArmPerStratum) && sampling.warmupsPerArmPerStratum >= 1 &&
         Number.isSafeInteger(sampling?.measuredStartsPerArmPerStratum) && sampling.measuredStartsPerArmPerStratum >= 20 &&
-        Number.isSafeInteger(sampling?.minimumCommandObservationsPerSource) && sampling.minimumCommandObservationsPerSource >= 100)) {
+        Number.isSafeInteger(sampling?.minimumCommandObservationsPerSourceArm) && sampling.minimumCommandObservationsPerSourceArm >= 100)) {
     errors.push("readiness sample plan is below the minimum coverage");
   }
   if (JSON.stringify(sampling?.startupPercentiles) !== JSON.stringify(["median", "p90", "p95"]) ||
       JSON.stringify(sampling?.commandPercentiles) !== JSON.stringify(["median", "p95", "p99"]) ||
-      JSON.stringify(sampling?.presentationGapPercentiles) !== JSON.stringify(["median", "p95", "p99"]) ||
+      JSON.stringify(sampling?.activeCadenceWindowPercentiles) !== JSON.stringify(["median", "p95", "p99"]) ||
       sampling?.startupPopulationP99 !== false || sampling?.tailMethod !== "nearest-rank") {
     errors.push("readiness percentile plan is inconsistent with the sample size");
   }
@@ -194,7 +221,7 @@ export function summarizeReadiness(cases, contract) {
       }
       const commandSummary = Object.fromEntries(Object.entries(commands).map(([name, values]) => [name,
         Object.fromEntries(Object.entries(values).map(([stage, samples]) => [stage, distribution(samples)]))]));
-      const gaps = observed.flatMap(row => row.presentationGapsMs ?? []);
+      const cadence = observed.flatMap(row => row.activeCadenceWindows ?? []);
       const buffering = observed.flatMap(row => row.bufferingEpisodes ?? []);
       return {
         sourceId: source.id, arm, stratum,
@@ -207,7 +234,8 @@ export function summarizeReadiness(cases, contract) {
           "runtimeAcceptanceMs", "firstUsefulMs"].map(key =>
           [key, startupDistribution(observed.map(row => row.startup?.[key]))])),
         commands: commandSummary,
-        presentationGapMs: distribution(gaps),
+        activeCadenceWindowP99Ms: distribution(cadence.map(window => window.p99Ms)),
+        activeCadenceWindowCount: cadence.length,
         buffering: { episodes: buffering.length,
           durationMs: distribution(buffering.map(episode => episode.durationMs)) },
         ownerRetirementMs: distribution(observed.map(row => row.retirementMs)),
@@ -240,8 +268,10 @@ export function validateReadinessResults(cases, contract) {
         }
         if (!Number.isFinite(row.retirementMs)) errors.push(`${source.id}/${arm}: missing owner retirement observation`);
         if (!Number.isFinite(row.memory?.peakSampledRssBytes)) errors.push(`${source.id}/${arm}: missing process RSS samples`);
-        if (!Array.isArray(row.presentationGapsMs) || row.presentationGapsMs.length === 0) {
-          errors.push(`${source.id}/${arm}: missing renderer presentation gap samples`);
+        if (!Array.isArray(row.activeCadenceWindows) || row.activeCadenceWindows.length === 0) {
+          errors.push(`${source.id}/${arm}: missing active renderer cadence samples`);
+        } else if (row.activeCadenceWindows.some(window => !Number.isFinite(window.p99Ms))) {
+          errors.push(`${source.id}/${arm}: malformed active renderer cadence summary`);
         }
         for (const command of row.commands ?? []) {
           if (!Number.isFinite(command.uiFeedbackMs)) errors.push(`${source.id}/${arm}: missing UI feedback timing`);
@@ -269,16 +299,6 @@ export function validateReadinessResults(cases, contract) {
               errors.push(`${source.id}/${arm}: renderer presentation does not match the command publication`);
             }
           }
-          const acceptanceMs = command.runtimeAcceptanceMs ?? command.acceptedMs;
-          if (Number.isFinite(contract.bounds.commandAcceptanceMs) &&
-              Number.isFinite(acceptanceMs) && acceptanceMs > contract.bounds.commandAcceptanceMs) {
-            errors.push(`${source.id}/${arm}/${stratum}: command acceptance exceeds its bound`);
-          }
-          const presentationMs = command.commandPresentationMs ?? command.presentedMs;
-          if (Number.isFinite(contract.bounds.commandPresentationMs) &&
-              Number.isFinite(presentationMs) && presentationMs > contract.bounds.commandPresentationMs) {
-            errors.push(`${source.id}/${arm}/${stratum}: command presentation exceeds its bound`);
-          }
         }
         if ((row.bufferingEpisodes ?? []).some(episode => !Number.isFinite(episode.durationMs))) {
           errors.push(`${source.id}/${arm}: incomplete buffering episode`);
@@ -297,28 +317,35 @@ export function validateReadinessResults(cases, contract) {
       if (Number.isFinite(contract.bounds.firstUsefulMs) && useful.p95 > contract.bounds.firstUsefulMs) {
         errors.push(`${source.id}/${arm}/${stratum}: first useful p95 exceeds its bound`);
       }
-      const gaps = distribution(rows.flatMap(row => row.presentationGapsMs ?? []));
-      if (Number.isFinite(contract.bounds.frameGapMs) && gaps.p99 > contract.bounds.frameGapMs) {
-        errors.push(`${source.id}/${arm}/${stratum}: presentation gap p99 exceeds its bound`);
+      const cadence = distribution(rows.flatMap(row => row.activeCadenceWindows ?? []).map(window => window.p99Ms));
+      if (Number.isFinite(contract.bounds.activeCadenceWindowP99Ms) && cadence.p99 > contract.bounds.activeCadenceWindowP99Ms) {
+        errors.push(`${source.id}/${arm}/${stratum}: active cadence p99 exceeds its bound`);
       }
       const memory = distribution(rows.map(row => row.memory?.peakSampledRssBytes));
       if (Number.isFinite(contract.bounds.peakProcessRssBytes) && memory.p95 > contract.bounds.peakProcessRssBytes) {
         errors.push(`${source.id}/${arm}/${stratum}: process RSS p95 exceeds its bound`);
       }
     }
-    for (const stratum of READINESS_STRATA) {
-      const commands = cases.filter(row => row.sourceId === source.id && row.stratum === stratum && !row.warmup)
+    for (const arm of Object.keys(contract.arms)) {
+      const commands = cases.filter(row => row.sourceId === source.id && row.arm === arm && !row.warmup)
         .flatMap(row => row.commands ?? []);
-      if (commands.length < contract.sampling.minimumCommandObservationsPerSource) {
-        errors.push(`${source.id}/${stratum}: too few command observations`);
+      const byStratum = READINESS_STRATA.map(stratum => cases.filter(row => row.sourceId === source.id &&
+        row.arm === arm && row.stratum === stratum && !row.warmup).flatMap(row => row.commands ?? []));
+      if (byStratum.some(samples => samples.length === 0) ||
+          commands.length < contract.sampling.minimumCommandObservationsPerSourceArm) {
+        errors.push(`${source.id}/${arm}: too few command observations or a missing stratum`);
       }
       const feedback = distribution(commands.map(command => command.uiFeedbackMs));
-      const completion = distribution(commands.map(command => command.commandCompletionUpperMs));
       if (Number.isFinite(contract.bounds.commandFeedbackMs) && feedback.p95 > contract.bounds.commandFeedbackMs) {
-        errors.push(`${source.id}/${stratum}: command feedback p95 exceeds its bound`);
+        errors.push(`${source.id}/${arm}: command feedback p95 exceeds its bound`);
       }
-      if (Number.isFinite(contract.bounds.commandPresentationMs) && completion.p99 > contract.bounds.commandPresentationMs) {
-        errors.push(`${source.id}/${stratum}: command presentation p99 exceeds its bound`);
+      const acceptance = distribution(commands.map(command => command.runtimeAcceptanceMs));
+      if (Number.isFinite(contract.bounds.commandAcceptanceP95Ms) && acceptance.p95 > contract.bounds.commandAcceptanceP95Ms) {
+        errors.push(`${source.id}/${arm}: command acceptance p95 exceeds its bound`);
+      }
+      const presentation = distribution(commands.map(command => command.commandPresentationMs));
+      if (Number.isFinite(contract.bounds.commandPresentationP99Ms) && presentation.p99 > contract.bounds.commandPresentationP99Ms) {
+        errors.push(`${source.id}/${arm}: command presentation p99 exceeds its bound`);
       }
     }
   }

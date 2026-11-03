@@ -1,6 +1,5 @@
-// Compare separately built normal and prepared packages over ordinary streamed
-// HTTP. Each package root contains pkg/ and runtime-build-identity.json. Sources
-// are unchanged; only the existing qualification run option selects preparation.
+// Measure default and observed profiles in one package over ordinary streamed
+// HTTP. Each source runs once, then replays its retained history.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -17,13 +16,14 @@ import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs"
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
 import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
-  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt } from "./playground-prepared-loading-observation.mjs";
+  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = process.env;
 const readinessMode = env.NOON_PLAYBACK_LOADING_READINESS ?? "baseline";
 assert.ok(["baseline", "strict"].includes(readinessMode));
+const wasmAccounting = env.NOON_PLAYBACK_LOADING_WASM_ACCOUNTING === "1";
 const trials = Number(env.NOON_PLAYBACK_LOADING_TRIALS ?? 20);
 assert.ok(Number.isSafeInteger(trials) && trials > 0);
 const backend = env.NOON_PLAYBACK_LOADING_BACKEND ?? "webgpu";
@@ -87,11 +87,13 @@ const cache = createPyodideResourceCache(await readFile(path.join(root, "web/pyt
 const report = { status: "running", readinessMode,
   scope: "W7/W8 same-package profile measurements; source pass plus retained replay; warm-resource-cache strata only; not cold-network, physical-scanout or total-memory qualification",
   instrumentationMode: "bounded-diagnostics",
+  wasmAccounting: wasmAccounting ? "invasive-diagnostic" : "off",
   instrumentationLimitations: [
     "first useful capture is an observed upper bound; startup exposes no renderer-submission or separate runtime-acceptance timestamp",
     "command acceptance and presentation receipts come from actual endpoint command results; UI busy-clear remains a separate upper bound",
     "renderer frame timing is a renderer.render() call-completion timestamp after submission, not GPU completion or physical scanout",
     "bounded probes can perturb timings; this report is diagnostic, not minimally instrumented timing",
+    ...(wasmAccounting ? ["WASM accounting rewrites worker entrypoints and changes cache/timing behavior; exclude these runs from readiness timing comparisons"] : []),
   ],
   harnessRevision: revision, runtimeSourceTrees: runtimeTrees(revision), harnessSha256: digest(await readFile(fileURLToPath(import.meta.url))),
   readinessContract: { path: path.relative(root, readinessContractPath), sha256: digest(readinessContractBytes), status: readinessContract.status },
@@ -105,7 +107,7 @@ const report = { status: "running", readinessMode,
   launchArgs: browserArgs(backend, { gpuMode: "hardware" }), observer: { inkThreshold: 128, channelDifference: 8, edgeMargin: 8, pollIntervalMs: 25,
     usefulTiming: "upper bound at completion of the first positive canvas capture; native first-any-frame time is separate",
     memoryWindow: "paired source and retained replay plus 750 ms after context close; aggregate sampled browser-process-tree RSS",
-    presentation: "bounded renderer publication samples and playback-control buffering events; physical scanout is not measured" },
+    presentation: "renderer active-cadence interval summaries and playback-control buffering events; static publication holds are excluded; physical scanout is not measured" },
   clockOrigins: {
     pageEvents: "performance.timeOrigin + performance.now(), epoch milliseconds",
     rendererEvents: "renderer performance.timeOrigin + presentedAtMs; per-session gaps use one renderer clock origin",
@@ -165,7 +167,7 @@ async function observation(page) {
     const controls = document.querySelector(".playback-controls");
     const scrubber = controls?.querySelector(".playback-scrubber");
     const renderProbe = globalThis.__noonReadinessPresentationProbe;
-    return { metrics: response?.metrics, run: gallery?.runPhaseMetrics,
+    return { metrics: response?.metrics, preparedRetention: response?.preparedRetention ?? null, run: gallery?.runPhaseMetrics,
       executionDiagnostics: gallery?.executionDiagnostics ?? null,
       presentationProbe: renderProbe ? { count: renderProbe.samples.length, error: renderProbe.error,
         uiEventCount: renderProbe.uiEvents.length, droppedUiEvents: renderProbe.droppedUiEvents } : null,
@@ -314,16 +316,23 @@ function readinessTraceState(row, sample) {
   };
 }
 
-function presentationGapsMs(samples) {
-  const ordered = samples.filter(sample => Number.isFinite(sample.presentedAtMs) &&
-    Number.isFinite(sample.session) && Number.isFinite(sample.clockOriginMs))
-    .slice().sort((left, right) => left.clockOriginMs - right.clockOriginMs ||
-      left.session - right.session || left.sequence - right.sequence);
-  return ordered.slice(1).flatMap((sample, index) => {
-    const previous = ordered[index];
-    return sample.session === previous.session && sample.clockOriginMs === previous.clockOriginMs &&
-      sample.presentedAtMs > previous.presentedAtMs ? [sample.presentedAtMs - previous.presentedAtMs] : [];
+async function installWasmAccounting(page) {
+  const entries = new Set(["/web/python-worker.js", "/web/execution-render-worker.js"]);
+  await page.route(url => entries.has(new URL(url).pathname), async route => {
+    if (!["script", "worker"].includes(route.request().resourceType())) return route.continue();
+    const response = await route.fetch(), headers = { ...response.headers() };
+    delete headers["content-length"]; delete headers["content-encoding"];
+    await route.fulfill({ response, headers,
+      body: `import "./playground-cold-start-wasm-accounting.js";\n${await response.text()}` });
   });
+}
+
+async function wasmAccountingSnapshot(workers) {
+  return Promise.all(workers.filter(worker => /\/(python-worker|execution-render-worker)\.js/.test(worker.url()))
+    .map(async worker => ({ url: worker.url(), accounting: await worker.evaluate(() => {
+      const probe = globalThis.__noonColdStartWasmAccounting;
+      return probe ? { records: probe.records, linearMemory: probe.snapshot() } : null;
+    }).catch(error => ({ unavailable: String(error) })) })));
 }
 
 function bufferingEpisodes(uiEvents) {
@@ -450,10 +459,10 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
   const sourceRow = { sourceId: source.id, sourcePath: source.path, sourceSha256: source.sha256,
     durationSeconds: source.durationSeconds, arm: initialArm, pairedReplayArm: replayArm,
     stratum, trial, warmup, status: "running", startup: {}, commands: [],
-    rendererSamples: [], pageErrors: [], consoleErrors: [],
+    rendererSamples: [], cadenceObservations: [], pageErrors: [], consoleErrors: [],
     sourceInvocationIds: [], profileValidationErrors: [], limitation: [] };
   const replayRow = { ...sourceRow, arm: replayArm, pairedInitialArm: initialArm, startup: {},
-    commands: [], rendererSamples: [], pageErrors: [],
+    commands: [], rendererSamples: [], cadenceObservations: [], pageErrors: [],
     consoleErrors: [], sourceInvocationIds: [], profileValidationErrors: [], limitation: [] };
   report.cases.push(sourceRow, replayRow);
   let activeRow = sourceRow;
@@ -489,6 +498,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     const read = async (targetRow = sourceRow) => {
       const sample = await observation(page);
       targetRow.lastObservation = sample;
+      targetRow.cadenceObservations.push({ epochMs: sample.epochMs, metrics: sample.metrics });
+      targetRow.preparedRetention = sample.preparedRetention ?? targetRow.preparedRetention ?? null;
       readinessTraceState(targetRow, sample);
       const diagnostic = sample.executionDiagnostics;
       if (diagnostic?.runRequestId !== null && diagnostic?.runRequestId !== undefined &&
@@ -578,7 +589,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     sourceRow.rendererSamples = await page.evaluate(() =>
       globalThis.__noonReadinessPresentationProbe?.samples ?? []);
     sourceRow.presentationSampleEnd = sourceRow.rendererSamples.length;
-    sourceRow.presentationGapsMs = presentationGapsMs(sourceRow.rendererSamples);
+    sourceRow.activeCadenceWindows = activeCadenceWindows(sourceRow.cadenceObservations);
+    delete sourceRow.cadenceObservations;
     sourceRow.uiEvents = await page.evaluate(() => globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []);
     sourceRow.bufferingEpisodes = bufferingEpisodes(sourceRow.uiEvents);
     replayRow.presentationSampleStart = sourceRow.presentationSampleEnd;
@@ -683,7 +695,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     replayRow.status = replayRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
     replayRow.rendererSamples = await page.evaluate(start =>
       (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
-    replayRow.presentationGapsMs = presentationGapsMs(replayRow.rendererSamples);
+    replayRow.activeCadenceWindows = activeCadenceWindows(replayRow.cadenceObservations);
+    delete replayRow.cadenceObservations;
     const firstReplayRender = replayRow.rendererSamples.map(sample => ({ sample,
       epochMs: sample.clockOriginMs + sample.presentedAtMs })).filter(value =>
       Number.isFinite(value.epochMs) && value.epochMs >= replayStartedAtEpochMs &&
@@ -713,6 +726,16 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assert.equal(probeStatus.droppedUiEvents, 0);
     assert.deepEqual(sourceRow.pageErrors, []);
     assert.deepEqual(sourceRow.consoleErrors, []);
+    if (wasmAccounting) {
+      const snapshot = await wasmAccountingSnapshot(workers);
+      sourceRow.wasmAccounting = snapshot;
+      replayRow.wasmAccounting = snapshot;
+    }
+    if (wasmAccounting) {
+      const snapshot = await wasmAccountingSnapshot(workers);
+      sourceRow.wasmAccounting = snapshot;
+      replayRow.wasmAccounting = snapshot;
+    }
   } catch (error) {
     sourceRow.status = "failed";
     sourceRow.error = String(error.stack ?? error);
@@ -772,6 +795,7 @@ try {
             assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""),
               "readiness browser version differs from the pinned reference");
             const workers = []; page.on("worker", worker => workers.push(worker));
+            if (wasmAccounting) await installWasmAccounting(page);
             for (const stratum of strata) {
               await measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, trial < 0);
               assert.equal(await fileHash(sourceFile), sourceHash, "source changed during measurement");
