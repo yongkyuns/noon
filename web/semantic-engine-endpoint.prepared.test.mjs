@@ -27,7 +27,7 @@ function fixture(mode = "transferable", options = {}) {
     channel: "noon.execution.retained", protocol_version: 18, session: 7,
     sequence: sequence++, snapshot: sequence === 1, time, objects: [], padding: payloadPadding,
   });
-  let loopDuration = null, loopCount = 0;
+  let loopDuration = null, loopCount = 0, noChangeProof = null;
   const seekDeltaJson = value => {
     if (!Number.isFinite(value) || value < 0 || (end === undefined ? value >= frontier : value > end)) {
       throw new Error("prepared target is unavailable");
@@ -53,7 +53,10 @@ function fixture(mode = "transferable", options = {}) {
     },
     seekDeltaJson,
     preparedTime: () => time,
-    time: () => time,
+    takePreparedNoChangePresentationJson() {
+      const proof = noChangeProof; noChangeProof = null;
+      return proof === null ? null : JSON.stringify(proof);
+    },
     preparedFrontier: () => frontier,
     preparedEndTime: () => end,
     preparedPlaying: () => playing,
@@ -128,10 +131,14 @@ function fixture(mode = "transferable", options = {}) {
       await when(() => count("wake") > prior);
     },
     observe(value) { observation = value; },
-    noDeltaSeek() {
-      player.seekDeltaJson = value => { record("seek", value); time = value; return null; };
+    noDeltaSeek(proof = {}) {
+      player.seekDeltaJson = value => {
+        record("seek", value); time = value;
+        noChangeProof = { session: 7, sequence: sequence - 1, time, ...proof };
+        return null;
+      };
     },
-    restoreDeltaSeek() { player.seekDeltaJson = seekDeltaJson; },
+    restoreDeltaSeek() { noChangeProof = null; player.seekDeltaJson = seekDeltaJson; },
     buffer() { buffering = true; },
     publishOnTick(value = true) { tickDelta = value; },
     oversizePayload(bytes = 4096) { payloadPadding = "x".repeat(bytes); },
@@ -340,24 +347,57 @@ test("no-delta seek joins the latest publication and a stale receipt cannot sett
     f.tick();
     await f.when(() => f.deltas.length === 2);
     f.acknowledge(f.deltas[0]); // Free transport capacity without presenting the newer frame.
+    f.noDeltaSeek({ time: 0.25 });
+    const invalidProof = await f.request("seek", { time: 0.5 });
+    assert.equal(invalidProof.type, "error");
+    assert.match(invalidProof.message, /no-change seek.*Rust presentation proof/);
+
     f.noDeltaSeek();
-    const seekingUnchanged = f.request("seek", { time: 0 });
+    const seekingUnchanged = f.request("seek", { time: 0.5 });
     await new Promise(resolve => setImmediate(resolve));
     f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0 });
     assert.equal(f.replies.some(reply => reply.type === "seek"), false,
       "an older displayed frame cannot settle a no-delta seek while a newer publication is pending");
     f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
     const result = await seekingUnchanged;
-    assert.deepEqual(result.presentationReceipt, { session: 7, sequence: 1, time: 0, unchanged: true });
+    assert.equal(result.time, 0.5);
+    assert.deepEqual(result.presentationReceipt, { session: 7, sequence: 1, time: 0.5, unchanged: true });
 
     f.restoreDeltaSeek();
     const seeking = f.request("seek", { time: 1 });
     await f.when(() => f.deltas.length === 3);
     f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
-    assert.equal(f.replies.some(reply => reply.requestId === 3), false);
+    assert.equal(f.replies.some(reply => reply.requestId === 4), false);
     f.rendererMessage({ type: "execution_presented", session: 7, sequence: 2 });
     const next = await seeking;
     assert.deepEqual(next.presentationReceipt, { session: 7, sequence: 2, time: 1, unchanged: false });
+  } finally { f.close(); }
+});
+
+test("a receipt outside the bounded metadata window cannot replace a validated display", { timeout: 3000 }, async () => {
+  const f = fixture();
+  try {
+    await f.attach();
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0 });
+    await f.when(() => f.count("wake") > 0);
+    f.publishOnTick();
+    await f.request("resume");
+    for (let count = 2; count <= 4; count += 1) {
+      f.tick();
+      await f.when(() => f.deltas.length === count);
+      f.acknowledge(f.deltas[count - 2]);
+    }
+
+    f.noDeltaSeek();
+    const seeking = f.request("seek", { time: 0.5 });
+    await f.when(() => f.count("seek") > 0);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
+    assert.equal(f.replies.some(reply => reply.type === "error"), false);
+    assert.equal(f.replies.some(reply => reply.type === "seek"), false,
+      "an unretained older receipt cannot settle the seek or advance displayed metadata");
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 3 });
+    const result = await seeking;
+    assert.deepEqual(result.presentationReceipt, { session: 7, sequence: 3, time: 0.5, unchanged: true });
   } finally { f.close(); }
 });
 

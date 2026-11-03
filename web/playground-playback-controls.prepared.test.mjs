@@ -344,6 +344,17 @@ test("latest Play intent survives a pending Pause, then seek, without reordering
   assert.deepEqual(f.calls.map(call => call[0]), ["pause", "seek", "resume"]);
 });
 
+test("Play intent survives a pending Restart acknowledgement", async () => {
+  const f = fixture(prepared({ playing: false })), restart = deferred();
+  f.player.restartPlayback = () => { f.calls.push(["restartPlayback"]); return restart.promise; };
+  f.restart.click();
+  f.toggle.click();
+  assert.deepEqual(f.activations, ["unlock"]);
+  restart.resolve(prepared({ time: 0, playing: true }));
+  await flush();
+  assert.deepEqual(f.calls.map(call => call[0]), ["restartPlayback", "resume"]);
+});
+
 test("completed slider also restores the latest successful receipt when a later scrub rejects", async () => {
   const f = fixture(prepared({ preparedFrontier: 4, durationSeconds: 4 }));
   const first = deferred(), second = deferred();

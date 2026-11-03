@@ -186,15 +186,29 @@ try {
         assert.ok(Number(await seekInput.getAttribute("max")) < initial.preparedFrontier,
           "the open history slider must stop before its exclusive frontier");
         assert.equal(await page.locator(".playback-time").textContent(), "0.00 / — s");
-        await seekInput.evaluate(element => {
+        const selectableEnd = Number(await seekInput.getAttribute("max"));
+        const clampedTarget = await seekInput.evaluate(element => {
           element.value = "1"; element.dispatchEvent(new Event("input", { bubbles: true }));
+          return Number(element.value);
         });
-        assert.match(await page.locator(".playback-live-status").textContent(), /before 1 s/);
-        const atOpenBoundary = await state();
-        assert.equal(atOpenBoundary.time, 0);
-        assert.deepEqual(atOpenBoundary.events, ["start"]);
-        assert.deepEqual(atOpenBoundary.errors, []);
-        entry.checks.push("shared-controls-open-history", "controls-refuse-open-boundary");
+        assert.equal(clampedTarget, selectableEnd,
+          "the browser range input must clamp the exclusive frontier to Rust's inclusive selectable end");
+        await page.waitForFunction(target => document.querySelector(".playback-controls")?.dataset.busy === "false" &&
+          Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) === target &&
+          !document.querySelector(".playback-live-status")?.textContent.includes("waiting for display"), selectableEnd);
+        const atSelectableEnd = await state();
+        assert.equal(atSelectableEnd.time, selectableEnd);
+        assert.deepEqual(atSelectableEnd.events, ["start"]);
+        assert.deepEqual(atSelectableEnd.errors, []);
+        const rejectedFrontier = await page.evaluate(async frontier => {
+          const before = await preparedAuthoring.execution.state();
+          let error;
+          try { await preparedAuthoring.execution.seek(frontier); } catch (cause) { error = String(cause); }
+          return { before, after: await preparedAuthoring.execution.state(), error };
+        }, initial.preparedFrontier);
+        assert.ok(rejectedFrontier.error);
+        assert.equal(rejectedFrontier.after.time, rejectedFrontier.before.time);
+        entry.checks.push("shared-controls-open-history", "selectable-end-and-exclusive-frontier");
         await seekInput.evaluate(element => {
           element.value = "0.5"; element.dispatchEvent(new Event("input", { bubbles: true }));
         });

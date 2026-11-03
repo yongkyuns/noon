@@ -10,6 +10,7 @@ import {
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
 export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
+const MAX_IN_FLIGHT_RENDER_PUBLICATIONS = 2;
 export const SEMANTIC_PACING_REALTIME = "realtime";
 export const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
@@ -178,14 +179,15 @@ export async function attachSemanticEngine(
     if (notePreparedTrap(error)) { stop(); return; }
     post({ type: "error", requestId, message: String(error?.message ?? error) });
   };
-  const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
+  const writable = () => typeof transport.canSend === "function"
+    ? transport.canSend() : transport.inFlight() < MAX_IN_FLIGHT_RENDER_PUBLICATIONS;
   const send = (json, timing = null, workerCarrier = false) => {
     if (json == null) return null;
     try {
       const metadataStartedAtMs = timing === null ? 0 : performance.now();
       const carrier = workerCarrier ? prepareExecutionDeltaTransportForSend(json) : null;
       const metadata = carrier?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
-      const rustTime = player?.time?.();
+      const rustTime = prepared !== null ? player.preparedTime() : player?.time?.();
       const publication = Number.isFinite(rustTime)
         ? Object.freeze({ ...metadata, time: rustTime }) : metadata;
       if (carrier !== null) json = carrier.json;
@@ -197,6 +199,13 @@ export async function attachSemanticEngine(
       if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
       lastSentPublication = publication;
       sentPublicationMetadata.set(publication.sequence, publication);
+      const retainedSequences = new Set([...sentPublicationMetadata.keys()]
+        .sort((left, right) => right - left)
+        .slice(0, MAX_IN_FLIGHT_RENDER_PUBLICATIONS));
+      if (pendingPresentation !== null) retainedSequences.add(pendingPresentation.publication.sequence);
+      for (const sequence of sentPublicationMetadata.keys()) {
+        if (!retainedSequences.has(sequence)) sentPublicationMetadata.delete(sequence);
+      }
       if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
       return publication;
     } catch (error) {
@@ -314,17 +323,21 @@ export async function attachSemanticEngine(
         publication.sequence < lastPresentedPublication.sequence) {
       return;
     }
-    const firstPresentation = lastPresentedPublication === null;
     const samePresentedPublication = lastPresentedPublication !== null &&
       samePublication(lastPresentedPublication, publication);
-    const priorPresentedMetadata = lastPresentedDeltaMetadata;
-    lastPresentedPublication = publication;
-    lastPresentedDeltaMetadata = sentPublicationMetadata.get(publication.sequence) ??
-      (samePresentedPublication ? priorPresentedMetadata : null);
-    if (lastPresentedDeltaMetadata === null) {
-      fail(new Error("renderer acknowledged an unknown execution publication"));
+    const pendingMatch = pendingPresentation !== null &&
+      samePublication(pendingPresentation.publication, publication);
+    const presentedMetadata = sentPublicationMetadata.get(publication.sequence) ??
+      (pendingMatch ? pendingPresentation.publication : null) ??
+      (samePresentedPublication ? lastPresentedDeltaMetadata : null);
+    if (presentedMetadata === null) {
+      // A late receipt may outlive the bounded metadata window. It cannot
+      // settle a command or replace the last validated displayed publication.
       return;
     }
+    const firstPresentation = lastPresentedPublication === null;
+    lastPresentedPublication = publication;
+    lastPresentedDeltaMetadata = presentedMetadata;
     for (const sequence of sentPublicationMetadata.keys()) {
       if (sequence <= publication.sequence) sentPublicationMetadata.delete(sequence);
     }
@@ -1149,14 +1162,19 @@ export async function attachSemanticEngine(
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             const publication = send(delta);
             if (prepared !== null) {
+              const selectedTime = player.preparedTime();
+              const noChangeProof = publication === null
+                ? JSON.parse(player.takePreparedNoChangePresentationJson() ?? "null") : null;
+              const proofMatches = publication !== null || (noChangeProof !== null &&
+                noChangeProof.session === lastSentPublication?.session &&
+                noChangeProof.sequence === lastSentPublication?.sequence &&
+                noChangeProof.time === selectedTime);
+              if (!proofMatches) {
+                throw new Error("prepared no-change seek lacks a matching Rust presentation proof");
+              }
               const presented = await awaitPresentation(publication);
-              const selectedTime = player.time();
-              // A no-delta result may reuse the most recently encoded frame,
-              // but only when that exact publication represents Rust's
-              // selected time. The barrier joins lastSentPublication when the
-              // command itself produced no publication.
               if (presented === null || !Number.isFinite(presented.time) ||
-                  presented.time !== selectedTime) {
+                  (publication !== null && presented.time !== selectedTime)) {
                 throw new Error("prepared seek did not receive a matching displayed-time receipt");
               }
               presentationReceipt = {

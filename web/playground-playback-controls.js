@@ -273,6 +273,8 @@ export class PlaygroundPlaybackControls {
   }
 
   sync(state) {
+    const pendingPlaying = this.#commandPending ? this.#desiredPlaying : null;
+    const pendingActivation = pendingPlaying === null ? null : this.#pendingActivation;
     const { time, playing, durationSeconds, canUndoTranslationDrag,
       hasAudio, audioReady, audioMuted, audioVolume, sections, sectionState } = state;
     if (!Number.isFinite(time) || time < 0) {
@@ -320,7 +322,8 @@ export class PlaygroundPlaybackControls {
     this.#confirmedTimeSeconds = this.#controllable && duration !== null ? Math.min(time, duration) : time;
     this.#timeSeconds = this.#confirmedTimeSeconds;
     this.#playing = playing;
-    this.#desiredPlaying = null;
+    this.#desiredPlaying = pendingPlaying;
+    this.#pendingActivation = pendingActivation;
     if (prepared) this.#hasAudio = false;
     else if (hasAudio !== undefined) this.#hasAudio = hasAudio === true;
     if (audioReady !== undefined) this.#audioReady = audioReady === true;
@@ -518,6 +521,10 @@ export class PlaygroundPlaybackControls {
     } finally {
       this.#commandPending = false;
       this.#renderDisabled();
+      if (!this.#destroyed && !this.#externalBusy) {
+        if (this.#desiredSeek !== null) void this.#drainSeek();
+        else if (this.#desiredPlaying !== null) void this.#drainTransport();
+      }
     }
   }
 

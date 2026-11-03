@@ -14,6 +14,22 @@ use crate::{
 };
 use noon::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixReader};
 
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedPresentationIdentity {
+    session: u32,
+    sequence: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedNoChangePresentation {
+    session: u32,
+    sequence: u64,
+    time: f64,
+    publication_context: noon_core::PublicationContext,
+}
+
 pub(crate) mod source;
 use source::SourceDelivery;
 
@@ -27,6 +43,8 @@ pub struct PreparedExecutionPlayer {
     pointer: WorkerPointerPresentation,
     binding: Option<BrowserPointerBinding>,
     sequence: u64,
+    last_publication: Option<PreparedPresentationIdentity>,
+    no_change_presentation: Option<PreparedNoChangePresentation>,
     // Optional interpreter delivery cursor; never the source scene/runtime.
     source: Option<SourceDelivery>,
 }
@@ -45,6 +63,8 @@ impl PreparedExecutionPlayer {
             pointer: WorkerPointerPresentation::default(),
             binding: None,
             sequence: 0,
+            last_publication: None,
+            no_change_presentation: None,
             source: None,
         }
     }
@@ -72,6 +92,7 @@ impl PreparedExecutionPlayer {
         &mut self,
         snapshot: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
+        self.no_change_presentation = None;
         let reader = &mut self.playback.reader;
         let selection = reader.pointer_selection_presentation();
         let overlay = selection
@@ -103,6 +124,11 @@ impl PreparedExecutionPlayer {
         self.snapshot_sent = true;
         self.last_selection = selection;
         self.encoder.compact_dense_rows(&mut delta);
+        self.last_publication = Some(PreparedPresentationIdentity {
+            session: delta.retained.session,
+            sequence: delta.retained.sequence,
+        });
+        self.no_change_presentation = None;
         Ok(Some(delta))
     }
 
@@ -189,6 +215,8 @@ impl PreparedExecutionPlayer {
         self.encoder = RetainedFamilyExecutionDeltaEncoder::new(transport_session);
         self.snapshot_sent = false;
         self.last_selection = None;
+        self.last_publication = None;
+        self.no_change_presentation = None;
         self.clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
@@ -270,7 +298,21 @@ impl PreparedExecutionPlayer {
             .seek(time)
             .map_err(|error| error.to_string())?;
         self.clock = BrowserExecutionWakeClock::default();
-        self.drain_delta_json()
+        self.no_change_presentation = None;
+        let delta = self.delta(false)?;
+        if delta.is_none() {
+            self.no_change_presentation =
+                self.last_publication
+                    .map(|publication| PreparedNoChangePresentation {
+                        session: publication.session,
+                        sequence: publication.sequence,
+                        time: self.playback.reader.frame().time,
+                        publication_context: self.playback.reader.publication_context(),
+                    });
+        }
+        delta
+            .map(|delta| serde_json::to_string(&delta).map_err(|error| error.to_string()))
+            .transpose()
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPreparedPlaying))]
@@ -295,6 +337,15 @@ impl PreparedExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedTime))]
     pub fn prepared_time(&self) -> f64 {
         self.playback.reader.frame().time
+    }
+
+    /// Consume a Rust-owned proof that the last seek selected no renderer
+    /// changes relative to its latest emitted publication.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = takePreparedNoChangePresentationJson))]
+    pub fn take_prepared_no_change_presentation_json(&mut self) -> Option<String> {
+        self.no_change_presentation
+            .take()
+            .map(|proof| serde_json::to_string(&proof).expect("presentation proof is serializable"))
     }
 
     /// Adopted history frontier. It is open until a terminal batch is adopted.
