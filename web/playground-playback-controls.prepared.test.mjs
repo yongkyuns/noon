@@ -239,6 +239,7 @@ test("coalesced seeks stay bounded and rejection restores the latest successful 
   assert.equal(f.output.value, "0.50 / — s");
   first.resolve(prepared({ time: 1, preparedFrontier: 4 })); await flush();
   assert.deepEqual(f.calls, [["seek", 1], ["seek", 2]]);
+  assert.equal(f.range.value, "2", "an intermediate receipt must not move the thumb away from the queued target");
   second.reject(new Error("second seek failed")); await flush();
   assert.equal(f.output.value, "1.00 / — s");
   assert.equal(f.range.value, "1");

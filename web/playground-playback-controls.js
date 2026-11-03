@@ -470,7 +470,8 @@ export class PlaygroundPlaybackControls {
         if (this.#destroyed) break;
         const desired = this.#desiredSeek;
         this.sync(result);
-        if (desired !== null && this.#durationSeconds !== null) {
+        if (desired !== null && this.#controllable &&
+            (this.#durationSeconds !== null || this.#preparedFrontier !== null)) {
           // Keep the latest slider request visible, but remember the successful
           // receipt so a later rejection cannot leave a fictitious playhead.
           this.#timeSeconds = desired;
