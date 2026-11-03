@@ -696,6 +696,35 @@ fn procedural_paint_tracks_preserve_midpoint_and_old_resources_after_future_appe
         assert!((hatch.angle() - angle).abs() < 1e-12);
         assert_near_pair(hatch.phase(), phase);
     });
+
+    let image = crate::example_scenes::image_fill::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    let image_resource = std::cell::Cell::new(None);
+    assert_paint_prefix_history(image, |reader, time| {
+        let image = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_image()
+            .unwrap();
+        let mapping = image.mapping();
+        assert_eq!(mapping.fit(), crate::ImageFit::Cover);
+        assert_eq!(mapping.alignment(), [0.5; 2]);
+        assert_eq!(mapping.address(), crate::ImageAddressMode::Clamp);
+        let transform = mapping.transform();
+        let (translation, scale, rotation) = if time == 1.0 {
+            image_resource.set(Some(image.resource()));
+            ([0.0865, -0.1155], [0.815, 1.185], 0.185)
+        } else {
+            assert_eq!(Some(image.resource()), image_resource.get());
+            ([0.173, -0.231], [0.63, 1.37], 0.37)
+        };
+        assert_near_pair(transform.translation(), translation);
+        assert_near_pair(transform.scale(), scale);
+        assert!((transform.rotation() - rotation).abs() < 1e-12);
+    });
 }
 
 #[test]
