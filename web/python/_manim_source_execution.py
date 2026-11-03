@@ -1799,6 +1799,31 @@ class _SceneOnlySource(ast.NodeVisitor):
                 if isinstance(nested, ast.comprehension):
                     local_names.update(item.id for item in ast.walk(nested.target)
                                        if isinstance(item, ast.Name))
+            parents = {child: parent for parent in ast.walk(function)
+                       for child in ast.iter_child_nodes(parent)}
+            for loop in (node for node in ast.walk(function) if isinstance(node, ast.While)):
+                loop_nodes = set(ast.walk(loop))
+                has_own_break = False
+                for candidate in (node for node in loop_nodes if isinstance(node, ast.Break)):
+                    parent = parents.get(candidate)
+                    while parent is not None and not isinstance(parent, (ast.For, ast.AsyncFor, ast.While)):
+                        parent = parents.get(parent)
+                    if parent is loop:
+                        has_own_break = True
+                        break
+                if isinstance(loop.test, ast.Constant) and loop.test.value is True and not has_own_break:
+                    return False
+                for candidate in loop_nodes:
+                    if (isinstance(candidate, ast.Call) and isinstance(candidate.func, ast.Name)
+                            and (candidate.func.id in {"bytearray", "array", "list", "dict", "set"}
+                                 or self.module_import_functions.get(candidate.func.id) == ("array", "array")
+                                 or candidate.func.id in self.module_functions)
+                            or isinstance(candidate, ast.Call) and isinstance(candidate.func, ast.Attribute)
+                            and candidate.func.attr in {"append", "add"}):
+                        return False
+                    if (isinstance(candidate, ast.Assign) and isinstance(candidate.value,
+                            (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp, ast.DictComp))):
+                        return False
             owned = set()
             for node in ast.walk(function):
                 if (isinstance(node, ast.Assign) and len(node.targets) == 1
@@ -2064,11 +2089,14 @@ class _SceneOnlySource(ast.NodeVisitor):
                     and bindings.binding_counts.get(node.args[2].id) == 1 and not node.keywords)
 
         direct_returns = [node.value for node in function.body if isinstance(node, ast.Return)]
+        defaults = function.args.defaults
         if (len(direct_returns) == 1 and is_png_call(direct_returns[0])
                 and len(function.args.defaults) == len(function.args.args)
                 and not function.args.posonlyargs and not function.args.kwonlyargs
-                and all(isinstance(value, ast.Constant)
-                    and type(value.value) in (int, float) for value in function.args.defaults)):
+                and len(defaults) == 2
+                and all(isinstance(value, ast.Constant) and type(value.value) is int
+                        and 0 < value.value <= 1024 for value in defaults)
+                and defaults[0].value * defaults[1].value <= 1_048_576):
             return "png"
 
         for returned in direct_returns:

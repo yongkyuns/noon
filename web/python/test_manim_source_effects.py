@@ -558,6 +558,26 @@ class Example(Scene):
             1,
         )
         self.assertFalse(source_execution_proof(shadowed_png)["admitted"])
+        unbounded_buffer_loop = triangle.replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = bytearray(width * height * 4)\n    while True:\n        pass",
+            1,
+        )
+        self.assertFalse(source_execution_proof(unbounded_buffer_loop)["admitted"])
+        unbounded_exposure_growth = triangle.replace(
+            "snapshots = []",
+            "snapshots = []\n    while True:\n"
+            "        snapshots.append(rgba_png(width, height, bytearray(width * height * 4)))\n"
+            "        if width < 0:\n            break",
+            1,
+        )
+        self.assertFalse(source_execution_proof(unbounded_exposure_growth)["admitted"])
+        oversized_image = triangle.replace(
+            "def wood_texture(width=640, height=360):",
+            "def wood_texture(width=4096, height=4096):",
+            1,
+        )
+        self.assertFalse(source_execution_proof(oversized_image)["admitted"])
         external_png = triangle.replace(
             "ImageMobject(wood_texture(), height=8.0, resampling_algorithm=\"bilinear\")",
             "ImageMobject(open('image.png', 'rb').read(), height=8.0, resampling_algorithm=\"bilinear\")",
