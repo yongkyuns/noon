@@ -156,6 +156,16 @@ fn prepared_reader_adopts_scalar_timeline_suffix_while_paused() {
         reader.frame().objects[0].transform.translation,
         Vec2::new(-1.0, 0.0)
     );
+    reader.seek(0.5).unwrap();
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(-2.0, 0.0)
+    );
+    reader.seek(2.0).unwrap();
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(-1.0, 0.0)
+    );
     let query = reader.query_viewport(crate::Rect::new(
         Vec2::new(-1.5, -0.5),
         Vec2::new(-0.5, 0.5),
