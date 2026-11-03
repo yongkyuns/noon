@@ -236,6 +236,9 @@ class Example(Scene):
             'from noon import *\ndef pixels():\n    return [[1]]\n'
             'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
             '        pixels = lambda: "file.png"\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[[1, 2, 3, 255]]]\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            "        images = [ImageMobject(pixels()) for pixels in [context.get('factory')]]\n",
             'from noon import *\ndef pixels():\n    return [[1]]\n'
             'class Example(Scene):\n    def construct(self):\n        factory = pixels\n'
             '        data = pixels()\n        factory()\n        ImageMobject(data)\n',

@@ -731,6 +731,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and isinstance(node.args[0].func, ast.Name)
                 and node.args[0].func.id in self.closed_pixel_factory_names
                 and id(node.args[0].func) in self.admitted_pixel_factory_loads
+                and not any(node.args[0].func.id in scope for scope in self.scopes[1:])
                 and not node.args[0].args and not node.args[0].keywords)
             if not pixel_source and not pixel_factory:
                 raise _OpaqueSource(node, "unproven_image_source")
