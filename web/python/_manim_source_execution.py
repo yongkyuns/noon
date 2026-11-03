@@ -995,6 +995,13 @@ class _SceneOnlySource(ast.NodeVisitor):
             node.name: node for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
+        self.module_string_literals = {
+            node.targets[0].id: node.value.value for node in tree.body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and bindings.binding_counts.get(node.targets[0].id) == 1
+            and isinstance(node.value, ast.Constant) and type(node.value.value) is str
+        }
         self.shader_function_names = set()
         self.shader_helper_specs = {}
         self.shader_program_call_specs = {}
@@ -1007,7 +1014,6 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.shader_values = []
         self.shader_control_depth = 0
         self.scopes = [set()]
-        self.shader_source_constants = self._shader_source_constants()
         for name, function in self.module_functions.items():
             body = function.body
             if (self.module_binding_counts.get(name) != 1
@@ -1253,13 +1259,6 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.numpy_scalar_functions_with_parameters = {
             name for name, parameters in self.numpy_scalar_parameters.items() if parameters
         }
-        self.module_string_literals = {}
-        for node in tree.body:
-            if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and bindings.binding_counts.get(node.targets[0].id) == 1
-                    and isinstance(node.value, ast.Constant) and type(node.value.value) is str):
-                self.module_string_literals[node.targets[0].id] = node.value.value
         self.admitted_image_loads = set()
         self.admitted_image_paint_loads = set()
         self.admitted_scene_audio_calls = set()
@@ -1327,19 +1326,6 @@ class _SceneOnlySource(ast.NodeVisitor):
             for alias in node.names if alias.name == "Code"
         }
         self.admitted_code_loads = set()
-
-    def _shader_source_constants(self):
-        constants = {}
-        for name in self.module_binding_counts:
-            if self.module_binding_counts[name] != 1:
-                continue
-            for node in self.tree.body:
-                if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name
-                        and isinstance(node.value, ast.Constant) and type(node.value.value) is str):
-                    constants[name] = node.value.value
-                    break
-        return constants
 
     def _shader_role_unshadowed(self, name):
         if any(name in scope for scope in self.scopes[1:]):
@@ -1455,7 +1441,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_shader_program")
         source = node.args[0]
         source_text = (source.value if isinstance(source, ast.Constant) and type(source.value) is str
-                       else self.shader_source_constants.get(source.id)
+                       else self.module_string_literals.get(source.id)
                        if isinstance(source, ast.Name)
                        and not any(source.id in scope for scope in self.scopes[1:]) else None)
         if source_text is None or not source_text.strip() or len(source_text.encode("utf-8")) > 1024 * 1024:
