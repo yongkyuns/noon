@@ -510,6 +510,18 @@ class Example(Scene):
             "showcase_triangle_light.py"
         ).read_text()
         self.assertEqual(source_execution_proof(triangle), {"admitted": True, "reason": None})
+        for unsafe in (
+            triangle.replace("        if count in wanted:\n",
+                             "        if count in wanted:\n            pass\n        else:\n", 1),
+            triangle.replace("        if count in wanted:\n",
+                             "        count = checkpoints[0]\n        if count in wanted:\n", 1),
+            triangle.replace("    wanted = set(checkpoints)\n",
+                             "    checkpoints.append(1)\n    wanted = set(checkpoints)\n", 1),
+            triangle.replace("    wanted = set(checkpoints)\n",
+                             "    checkpoint_alias = checkpoints\n    wanted = set(checkpoints)\n", 1),
+        ):
+            with self.subTest(source="Triangle checkpoint resource bound"):
+                self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
         external_buffer = triangle.replace(
             "pixels = bytearray(width * height * 4)",

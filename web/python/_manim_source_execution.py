@@ -2190,18 +2190,36 @@ class _SceneOnlySource(ast.NodeVisitor):
                 append_scopes.append(any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
                                          for node in ancestors))
             checkpoint_guard = False
+            parameters = {arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
+                                               *function.args.kwonlyargs]}
             if len(appends) == 1 and len(append_loops[0]) == 1:
                 loop = append_loops[0][0]
                 if (isinstance(loop, ast.For) and isinstance(loop.target, (ast.Tuple, ast.List))
                         and len(loop.target.elts) == 2 and isinstance(loop.target.elts[0], ast.Name)
                         and isinstance(loop.iter, ast.Call) and isinstance(loop.iter.func, ast.Name)
-                        and loop.iter.func.id == "enumerate" and len(loop.iter.args) == 2
+                        and loop.iter.func.id == "enumerate" and "enumerate" not in bindings.names | parameters
+                        and self.module_binding_counts.get("enumerate", 0) == 0 and len(loop.iter.args) == 2
                         and isinstance(loop.iter.args[1], ast.Constant) and loop.iter.args[1].value == 1
                         and isinstance(loop.iter.args[0], ast.Call)
                         and isinstance(loop.iter.args[0].func, ast.Name)
-                        and loop.iter.args[0].func.id == "zip" and len(loop.iter.args[0].args) == 2):
+                        and loop.iter.args[0].func.id == "zip" and "zip" not in bindings.names | parameters
+                        and self.module_binding_counts.get("zip", 0) == 0
+                        and len(loop.iter.args[0].args) == 2
+                        and isinstance(loop.iter.args[0].args[0], ast.Name)
+                        and loop.iter.args[0].args[0].id in {arg.arg for arg in function.args.args}
+                        and isinstance(loop.iter.args[0].args[1], ast.Subscript)
+                        and isinstance(loop.iter.args[0].args[1].value, ast.Name)
+                        and loop.iter.args[0].args[1].value.id == loop.iter.args[0].args[0].id
+                        and isinstance(loop.iter.args[0].args[1].slice, ast.Slice)
+                        and isinstance(loop.iter.args[0].args[1].slice.lower, ast.Constant)
+                        and loop.iter.args[0].args[1].slice.lower.value == 1):
                     counter = loop.target.elts[0].id
-                    checkpoint_guard = any(
+                    checkpoint_guard = (bindings.binding_counts.get(counter) == 1
+                        and bindings.binding_counts.get("checkpoints", 0) == 0
+                        and "set" not in bindings.names | parameters
+                        and self.module_binding_counts.get("set", 0) == 0
+                        and self._closed_checkpoint_references(function, parents)
+                        and any(
                         isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
                         and isinstance(node.test.left, ast.Name) and node.test.left.id == counter
                         and len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.In)
@@ -2220,14 +2238,52 @@ class _SceneOnlySource(ast.NodeVisitor):
                             and bindings.binding_counts.get(assignment.targets[0].id) == 1
                             for assignment in ast.walk(function)
                         )
+                        and any(append is descendant for statement in node.body
+                                for descendant in ast.walk(statement))
                         for node in append_ancestors[0]
-                    )
+                    ))
             if (len(appends) == 1 and allowed_loads and not mutated and checkpoint_guard
                     and not any(append_scopes)
                     and all(len(node.args) == 1 and not node.keywords and is_png_call(node.args[0])
                             for node in appends)):
                 return "tuple_png_list_numeric_tuple"
         return None
+
+    @staticmethod
+    def _closed_checkpoint_references(function, parents):
+        def parent_of(node):
+            return parents.get(node)
+
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Name) or node.id != "checkpoints" or not isinstance(node.ctx, ast.Load):
+                continue
+            parent = parents.get(node)
+            if (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
+                    and parent.args and parent.args[0] is node):
+                outer = parent_of(parent)
+                if (parent.func.id == "set"
+                        and (isinstance(outer, ast.Assign) and outer.value is parent
+                             and any(isinstance(target, ast.Name) and target.id == "wanted"
+                                     for target in outer.targets)
+                             or isinstance(outer, ast.Call) and isinstance(outer.func, ast.Name)
+                             and outer.func.id == "sorted" and outer.args and outer.args[0] is parent)):
+                    continue
+                if (parent.func.id == "tuple" and isinstance(outer, ast.Compare)
+                        and (outer.left is parent or parent in outer.comparators)):
+                    continue
+            if (isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not)
+                    and isinstance(parent_of(parent), ast.BoolOp)):
+                continue
+            if (isinstance(parent, ast.comprehension) and parent.iter is node
+                    and isinstance(parent_of(parent), (ast.ListComp, ast.GeneratorExp))):
+                continue
+            if (isinstance(parent, ast.Subscript) and parent.value is node
+                    and isinstance(parent.slice, ast.UnaryOp) and isinstance(parent.slice.op, ast.USub)
+                    and isinstance(parent.slice.operand, ast.Constant) and parent.slice.operand.value == 1
+                    and isinstance(parent_of(parent), ast.Compare)):
+                continue
+            return False
+        return True
 
     def _closed_pixel_proof(self, name=None, *, expression=None, initial_values=None, return_type=False):
         """Type-check fresh numeric pixel data without running source or ranges."""
