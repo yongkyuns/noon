@@ -64,7 +64,7 @@ PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GRAY GOLD TEAL MAROON
 UP DOWN LEFT RIGHT IN OUT ORIGIN UL UR DL DR PI TAU DEGREES
 """.split())
 _SOURCE_BUILTINS = frozenset("""
-abs all any bool bytes bytearray dict divmod enumerate filter float frozenset int
+abs all any bool bytes bytearray complex dict divmod enumerate filter float frozenset int
 isinstance len list map max min next range reversed round set slice sorted str
 sum tuple zip ValueError RuntimeError
 """.split())
@@ -80,7 +80,7 @@ start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_co
 set_points set_object_opacity family_members_with_points get_subpaths get_arc_length
 point_from_proportion from_string
 animate id width height radius append extend insert pop count index get keys values
-items update union intersection difference join split strip lower upper replace
+items update union intersection difference join split strip lower upper replace bit_length
 startswith endswith encode decode hex fromhex tobytes reverse sort small_discovery
 """.split())
 _SOURCE_SPATIAL_MEMBERS = frozenset("""
@@ -107,6 +107,129 @@ _SOURCE_MODULES = {
     "array": frozenset({"array"}),
     "re": frozenset("compile escape findall finditer match fullmatch search split sub IGNORECASE MULTILINE DOTALL".split()),
 }
+
+# Only the numeric subset used by the original Fourier helpers is source-safe.
+# These are exact call paths, not a general NumPy attribute or object-dispatch grant.
+_NUMPY_ARRAY_CALLS = frozenset({
+    "np.array", "np.asarray", "np.concatenate", "np.cumsum", "np.diff", "np.exp",
+    "np.interp", "np.linspace", "np.outer", "np.zeros", "np.fft.fft",
+})
+_NUMPY_SCALAR_CALLS = frozenset({
+    "np.abs", "np.all", "np.isfinite", "np.max", "np.min", "np.ptp", "np.sum",
+})
+_NUMPY_CALLS = _NUMPY_ARRAY_CALLS | _NUMPY_SCALAR_CALLS
+_NUMPY_ARRAY_METHODS = frozenset({"reshape"})
+_NUMPY_ARRAY_ATTRIBUTES = frozenset({"real", "imag", "ndim", "shape"})
+
+
+def _walk_scope(body):
+    class ScopeWalk(ast.NodeVisitor):
+        def __init__(self):
+            self.nodes = []
+
+        def generic_visit(self, node):
+            self.nodes.append(node)
+            super().generic_visit(node)
+
+        def visit_FunctionDef(self, node):
+            self.nodes.append(node)
+
+        visit_AsyncFunctionDef = visit_ClassDef = visit_Lambda = visit_FunctionDef
+
+    walker = ScopeWalk()
+    for statement in body:
+        walker.visit(statement)
+    return walker.nodes
+
+
+def _attribute_path(node):
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([node.id, *reversed(parts)])
+
+
+def _numpy_array_expression(node, names, array_functions=()):
+    """Recognize only array-producing results needed by this closed data subset."""
+    if isinstance(node, ast.Name):
+        return node.id in names
+    if isinstance(node, ast.Call):
+        path = _attribute_path(node.func)
+        if path in _NUMPY_ARRAY_CALLS:
+            return True
+        if isinstance(node.func, ast.Name) and node.func.id in array_functions:
+            return True
+        if (isinstance(node.func, ast.Attribute) and node.func.attr in _NUMPY_ARRAY_METHODS
+                and _numpy_array_expression(node.func.value, names, array_functions)):
+            return True
+        if path == "np.abs" and node.args:
+            return _numpy_array_expression(node.args[0], names, array_functions)
+        return False
+    if isinstance(node, ast.Attribute) and node.attr in _NUMPY_ARRAY_ATTRIBUTES:
+        return _numpy_array_expression(node.value, names, array_functions)
+    if isinstance(node, ast.Subscript):
+        return _numpy_array_expression(node.value, names, array_functions)
+    if isinstance(node, ast.BinOp):
+        return (_numpy_array_expression(node.left, names, array_functions)
+                or _numpy_array_expression(node.right, names, array_functions))
+    if isinstance(node, ast.UnaryOp):
+        return _numpy_array_expression(node.operand, names, array_functions)
+    return False
+
+
+def _array_names_in_body(body, parameters, array_functions=(), tuple_outputs=None):
+    """Conservatively mark local bindings whose expressions stay ndarray-like."""
+    names = set(parameters)
+    changed = True
+    while changed:
+        changed = False
+        for statement in _walk_scope(body):
+            if isinstance(statement, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+                for generator in statement.generators:
+                    if _numpy_array_expression(generator.iter, names, array_functions):
+                        targets = generator.target.elts if isinstance(generator.target, (ast.Tuple, ast.List)) else [generator.target]
+                        for item in targets:
+                            if isinstance(item, ast.Name) and item.id not in names:
+                                names.add(item.id)
+                                changed = True
+            if (isinstance(statement, ast.For) and isinstance(statement.iter, ast.Call)
+                    and isinstance(statement.iter.func, ast.Name) and statement.iter.func.id == "zip"
+                    and any(_numpy_array_expression(arg, names, array_functions)
+                            for arg in statement.iter.args)):
+                targets = statement.target.elts if isinstance(statement.target, (ast.Tuple, ast.List)) else [statement.target]
+                for item in targets:
+                    if isinstance(item, ast.Name) and item.id not in names:
+                        names.add(item.id)
+                        changed = True
+            if (isinstance(statement, ast.For) and isinstance(statement.iter, ast.Call)
+                    and isinstance(statement.iter.func, ast.Name) and statement.iter.func.id == "enumerate"
+                    and statement.iter.args
+                    and _numpy_array_expression(statement.iter.args[0], names, array_functions)
+                    and isinstance(statement.target, (ast.Tuple, ast.List)) and len(statement.target.elts) == 2
+                    and isinstance(statement.target.elts[1], ast.Name)
+                    and statement.target.elts[1].id not in names):
+                names.add(statement.target.elts[1].id)
+                changed = True
+            if not isinstance(statement, ast.Assign):
+                continue
+            for target in statement.targets:
+                targets = target.elts if isinstance(target, (ast.Tuple, ast.List)) else [target]
+                unpacking = isinstance(target, (ast.Tuple, ast.List))
+                outputs = None
+                if (isinstance(statement.value, ast.Call) and isinstance(statement.value.func, ast.Name)
+                        and tuple_outputs is not None):
+                    outputs = tuple_outputs.get(statement.value.func.id)
+                is_array = _numpy_array_expression(statement.value, names, array_functions)
+                for index, item in enumerate(targets):
+                    target_is_array = ((is_array and not unpacking)
+                                       or outputs is not None and index < len(outputs) and outputs[index])
+                    if target_is_array and isinstance(item, ast.Name) and item.id not in names:
+                        names.add(item.id)
+                        changed = True
+    return names
 
 
 class _OpaqueSource(Exception):
@@ -271,6 +394,63 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_resource_preparation_loads = set()
         self.admitted_controlled_text_loads = set()
         self.resource_preparation_scopes = []
+        self.numpy_functions = {
+            node.name: node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.numpy_function_outputs = {}
+        self.numpy_array_functions = set()
+        self.numpy_array_parameters = {name: set() for name in self.numpy_functions}
+        changed = True
+        while changed:
+            changed = False
+            for name, function in self.numpy_functions.items():
+                formal = [arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
+                                               *function.args.kwonlyargs]]
+                parameters = self.numpy_array_parameters[name]
+                arrays = _array_names_in_body(function.body, parameters,
+                                               self.numpy_array_functions,
+                                               self.numpy_function_outputs)
+                returns = [node.value for node in _walk_scope(function.body)
+                           if isinstance(node, ast.Return) and node.value is not None]
+                if returns:
+                    shape = None
+                    for value in returns:
+                        current = (tuple(_numpy_array_expression(item, arrays, self.numpy_array_functions)
+                                         for item in value.elts)
+                                   if isinstance(value, ast.Tuple) else
+                                   (True,) if _numpy_array_expression(value, arrays, self.numpy_array_functions) else ())
+                        if shape is None:
+                            shape = current
+                        elif shape != current:
+                            shape = ()
+                            break
+                    if shape and self.numpy_function_outputs.get(name) != shape:
+                        self.numpy_function_outputs[name] = shape
+                        if len(shape) == 1 and shape[0]:
+                            self.numpy_array_functions.add(name)
+                        changed = True
+                for call in (node for node in _walk_scope(function.body)
+                             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                             and node.func.id in self.numpy_functions):
+                    callee = call.func.id
+                    callee_formals = [arg.arg for arg in [*self.numpy_functions[callee].args.posonlyargs,
+                                                          *self.numpy_functions[callee].args.args,
+                                                          *self.numpy_functions[callee].args.kwonlyargs]]
+                    actuals = dict(zip(callee_formals, call.args))
+                    actuals.update({keyword.arg: keyword.value for keyword in call.keywords
+                                    if keyword.arg in callee_formals})
+                    for formal in callee_formals:
+                        actual = actuals.get(formal)
+                        if actual is None:
+                            continue
+                        if (_numpy_array_expression(actual, arrays, self.numpy_array_functions)
+                                and formal not in self.numpy_array_parameters[callee]):
+                            self.numpy_array_parameters[callee].add(formal)
+                            changed = True
+        self.numpy_array_functions_with_parameters = {
+            name for name, parameters in self.numpy_array_parameters.items() if parameters
+        }
         self.module_string_literals = {}
         for node in tree.body:
             if (isinstance(node, ast.Assign) and len(node.targets) == 1
@@ -283,6 +463,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_scene_audio_calls = set()
         self.admitted_audio_factory_attributes = set()
         self.admitted_svg_from_string_attributes = set()
+        self.admitted_numpy_attributes = set()
+        self.admitted_numpy_function_loads = set()
+        self.numpy_import = None
         self.image_pixel_sources = [set()]
         self.pixel_factory_names = set()
         self.admitted_pixel_factory_loads = set()
@@ -319,6 +502,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(origin, "unproven_wildcard_binding")
         self.scopes = [bindings.names | {"context", "__name__"} | _SOURCE_BUILTINS]
         self.owned_containers = [set()]
+        self.numpy_array_names = [set()]
+        self.local_discard_names = [set()]
         self.members = _SOURCE_MEMBERS | frozenset().union(*_SOURCE_MODULES.values())
         # Constructor aliases and wildcard exports are proven only for direct
         # module declarations, never imports hidden in a conditional suite.
@@ -656,9 +841,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         # later binding cannot turn that intrinsic (or compiler helpers) into
         # owned data. __name__ is the one explicit string in our namespace;
         # a local discard target is permitted only as a write, never a read.
-        local_discard_store = (
-            node.id == "_" and isinstance(node.ctx, ast.Store) and len(self.scopes) > 1
-        )
+        local_discard_store = (isinstance(node.ctx, ast.Store) and len(self.scopes) > 1
+                               and (node.id == "_" or node.id in self.local_discard_names[-1]))
         if node.id.startswith("_") and node.id != "__name__" and not local_discard_store:
             raise _OpaqueSource(node, "private_name")
         if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_SHADER_CONSTRUCTORS
@@ -688,6 +872,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id in self.pixel_factory_names
                 and id(node) not in self.admitted_pixel_factory_loads):
             raise _OpaqueSource(node, "unproven_image_factory_reference")
+        if (isinstance(node.ctx, ast.Load) and node.id in self.numpy_array_functions_with_parameters
+                and id(node) not in self.admitted_numpy_function_loads):
+            raise _OpaqueSource(node, "unproven_function_reference")
         if (isinstance(node.ctx, ast.Load) and node.id == "LaggedStartMap"
                 and id(node) not in self.admitted_lagged_map_loads):
             raise _OpaqueSource(node, "unproven_callback_factory")
@@ -1197,6 +1384,59 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or not self._scalar_plot_lambda(node.args[0])):
                 raise _OpaqueSource(node, "unproven_plot_function")
             self.admitted_plot_loads.add(id(node.func))
+        numpy_path = _attribute_path(node.func)
+        if numpy_path and (numpy_path.startswith("np.") or numpy_path in _NUMPY_CALLS):
+            if numpy_path not in _NUMPY_CALLS:
+                raise _OpaqueSource(node, "unsupported_numpy_operation")
+            if self.numpy_import is None or self.module_binding_counts.get("np") != 1:
+                raise _OpaqueSource(node, "unproven_numpy_binding")
+            if (any(isinstance(argument, ast.Starred) for argument in node.args)
+                    or any(keyword.arg is None for keyword in node.keywords)
+                    or len({keyword.arg for keyword in node.keywords}) != len(node.keywords)):
+                raise _OpaqueSource(node, "unproven_numpy_arguments")
+            allowed_keywords = {
+                "np.array": {"dtype"}, "np.asarray": {"dtype"},
+                "np.linspace": {"endpoint"}, "np.concatenate": {"axis"},
+                "np.cumsum": {"axis"}, "np.zeros": {"dtype"},
+            }.get(numpy_path, set())
+            if any(keyword.arg not in allowed_keywords for keyword in node.keywords):
+                raise _OpaqueSource(node, "unproven_numpy_arguments")
+            for keyword in node.keywords:
+                if keyword.arg == "dtype" and not (
+                    isinstance(keyword.value, ast.Name) and keyword.value.id in {"float", "complex"}
+                ):
+                    raise _OpaqueSource(keyword.value, "unproven_numpy_dtype")
+                if keyword.arg == "endpoint" and not (
+                    isinstance(keyword.value, ast.Constant) and type(keyword.value.value) is bool
+                ):
+                    raise _OpaqueSource(keyword.value, "unproven_numpy_arguments")
+            self.admitted_numpy_attributes.add(id(node.func))
+            cursor = node.func
+            while isinstance(cursor, ast.Attribute):
+                self.admitted_numpy_attributes.add(id(cursor))
+                cursor = cursor.value
+        elif isinstance(node.func, ast.Attribute) and node.func.attr in _NUMPY_ARRAY_METHODS:
+            if (node.func.attr != "reshape" or not node.args or node.keywords
+                    or self.numpy_import is None
+                    or not _numpy_array_expression(node.func.value, self.numpy_array_names[-1],
+                                                   self.numpy_array_functions)):
+                raise _OpaqueSource(node, "unproven_numpy_method")
+            self.admitted_numpy_attributes.add(id(node.func))
+        if isinstance(node.func, ast.Name) and node.func.id in self.numpy_array_parameters:
+            self.admitted_numpy_function_loads.add(id(node.func))
+            function = self.numpy_functions[node.func.id]
+            formals = [arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
+                                            *function.args.kwonlyargs]]
+            actuals = dict(zip(formals, node.args))
+            actuals.update({keyword.arg: keyword.value for keyword in node.keywords
+                            if keyword.arg in formals})
+            arrays = self.numpy_array_names[-1]
+            for formal in formals:
+                if formal not in self.numpy_array_parameters[node.func.id]:
+                    continue
+                if (formal not in actuals or not _numpy_array_expression(
+                        actuals[formal], arrays, self.numpy_array_functions)):
+                    raise _OpaqueSource(node, "unproven_numpy_argument_origin")
         if isinstance(node.func, ast.Attribute) and node.func.attr == "audio":
             if id(node.func) not in self.admitted_scene_audio_calls:
                 raise _OpaqueSource(node, "unproven_audio_declaration")
@@ -1499,6 +1739,22 @@ class _SceneOnlySource(ast.NodeVisitor):
             return
         if node.attr == "plot" and id(node) not in self.admitted_plot_loads:
             raise _OpaqueSource(node, "unproven_plot_function")
+        numpy_path = _attribute_path(node)
+        if numpy_path and numpy_path.startswith("np.") and numpy_path != "np.pi" \
+                and id(node) not in self.admitted_numpy_attributes:
+            raise _OpaqueSource(node, "unproven_numpy_reference")
+        if numpy_path == "np.pi" and isinstance(node.ctx, ast.Load):
+            if "np" in self.module_bindings and self.module_binding_counts.get("np") == 1:
+                self.visit(node.value)
+                return
+        if id(node) in getattr(self, "admitted_numpy_attributes", ()):
+            self.visit(node.value)
+            return
+        if node.attr in _NUMPY_ARRAY_ATTRIBUTES and isinstance(node.ctx, ast.Load):
+            if _numpy_array_expression(node.value, self.numpy_array_names[-1], self.numpy_array_functions):
+                self.visit(node.value)
+                return
+            raise _OpaqueSource(node, "unproven_numpy_value")
         if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
             raise _OpaqueSource(node, "unsupported_member" if isinstance(node.ctx, ast.Load) else "unproven_member_write")
         if node.attr == "audio" and id(node) not in self.admitted_scene_audio_calls:
@@ -1540,7 +1796,15 @@ class _SceneOnlySource(ast.NodeVisitor):
         return scalar(node.body)
 
     def visit_Import(self, node):
-        if node not in self.module_imports or len(self.scopes) != 1 or any(alias.name not in _SOURCE_MODULES for alias in node.names):
+        if node not in self.module_imports or len(self.scopes) != 1:
+            raise _OpaqueSource(node, "unsupported_import")
+        if any(alias.name == "numpy" for alias in node.names):
+            if (len(node.names) != 1 or node.names[0].name != "numpy" or node.names[0].asname != "np"
+                    or self.module_binding_counts.get("np") != 1
+                    or self.module_binding_locations.get("np") is not node):
+                raise _OpaqueSource(node, "unsupported_import")
+            self.numpy_import = node
+        elif any(alias.name not in _SOURCE_MODULES for alias in node.names):
             raise _OpaqueSource(node, "unsupported_import")
 
     def visit_ImportFrom(self, node):
@@ -1618,11 +1882,13 @@ class _SceneOnlySource(ast.NodeVisitor):
             bool_checks.add(name)
         return set()
 
-    def _scope(self, body, parameters=()):
+    def _scope(self, body, parameters=(), array_parameters=()):
         parameters = set(parameters)
         bindings = _SourceBindings()
         for node in body:
             bindings.visit(node)
+        if "np" in bindings.names or "np" in parameters:
+            raise _OpaqueSource(bindings.locations.get("np"), "unproven_numpy_shadow")
         integer_names = self._guarded_integer_parameters(body, parameters, bindings)
         if integer_names:
             # Only a leading, terminating builtin guard proves parameter type.
@@ -1647,6 +1913,19 @@ class _SceneOnlySource(ast.NodeVisitor):
         }
         preparation_scope = {"awaits": preparation_awaits, "ready": False}
         self.resource_preparation_scopes.append(preparation_scope)
+        array_names = _array_names_in_body(body, array_parameters, self.numpy_array_functions,
+                                           self.numpy_function_outputs)
+        self.numpy_array_names.append(array_names)
+        self.owned_containers[-1].update(array_names - set(array_parameters))
+        discards = set()
+        for statement in _walk_scope(body):
+            targets = statement.targets if isinstance(statement, ast.Assign) else (
+                [statement.target] if isinstance(statement, (ast.For, ast.AsyncFor)) else [])
+            for target in targets:
+                if isinstance(target, (ast.Tuple, ast.List)):
+                    discards.update(item.id for item in ast.walk(target)
+                                    if isinstance(item, ast.Name) and item.id.startswith("_"))
+        self.local_discard_names.append(discards)
         try:
             for node in body:
                 self.visit(node)
@@ -1657,6 +1936,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.resource_preparation_scopes.pop()
             self.image_pixel_sources.pop()
             self.shader_values.pop()
+            self.numpy_array_names.pop()
+            self.local_discard_names.pop()
             self.scopes.pop()
             self.owned_containers.pop()
 
@@ -1668,7 +1949,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_function_contract")
         for value in [*node.args.defaults, *filter(None, node.args.kw_defaults)]:
             self.visit(value)
-        self._scope(node.body, (argument.arg for argument in arguments))
+        self._scope(node.body, (argument.arg for argument in arguments),
+                    self.numpy_array_parameters.get(node.name, ()))
 
     visit_AsyncFunctionDef = visit_FunctionDef
 

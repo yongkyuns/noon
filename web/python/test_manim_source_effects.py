@@ -233,16 +233,35 @@ class SourceEffectsTests(unittest.TestCase):
             with self.subTest(source=candidate):
                 self.assertFalse(source_execution_proof(candidate)["admitted"])
 
-    def test_full_fourier_source_remains_opaque_at_numpy_before_numeric_proof(self):
+    def test_full_fourier_source_proves_closed_numpy_dataflow_without_claiming_runtime_replay(self):
         source = Path(__file__).parents[2].joinpath(
             "scripts", "fixtures", "noon_fourier_epicycles.py"
         ).read_text()
         self.assertEqual(sha256(source.encode()).hexdigest(),
                          "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9")
         proof = source_execution_proof(source)
-        self.assertFalse(proof["admitted"])
-        self.assertEqual(proof["reason"]["code"], "unsupported_import")
-        self.assertEqual(proof["reason"]["span"]["line"], 24)
+        self.assertEqual(proof, {"admitted": True, "reason": None})
+
+        unsafe = (
+            source.replace("import numpy as np", "import numpy", 1),
+            source.replace("np.fft.fft(samples)", "np.fft.rfft(samples)", 1),
+            source.replace("import numpy as np", "from numpy import array", 1),
+            source.replace("dtype=complex", "dtype=object", 1),
+            source.replace("import numpy as np", "import numpy as np\nmake_array = np.array", 1),
+            source.replace("import numpy as np", "import numpy as np\ndef leak(value):\n    return value.real", 1),
+            source.replace("def resample_outline(points, count):",
+                           "def resample_outline(points, count):\n    np = math", 1),
+        )
+        for candidate in unsafe:
+            with self.subTest(source_mutation=candidate[:120]):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+        shadow = ("import numpy as np\n"
+                  "def outer(value):\n"
+                  "    def inner():\n"
+                  "        value = np.array([])\n"
+                  "    return value.real\n")
+        self.assertFalse(source_execution_proof(shadow)["admitted"])
 
     def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
         source = Path(__file__).with_name("examples").joinpath(
