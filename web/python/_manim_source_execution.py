@@ -347,7 +347,10 @@ class _SceneOnlySource(ast.NodeVisitor):
             value = self._shader_number(node.operand)
             return None if value is None else value if isinstance(node.op, ast.UAdd) else -value
         if isinstance(node, ast.Constant) and type(node.value) in (int, float):
-            return node.value if not isinstance(node.value, float) or math.isfinite(node.value) else None
+            try:
+                return node.value if math.isfinite(node.value) else None
+            except OverflowError:
+                return None
         if isinstance(node, ast.Name):
             if node.id not in {"PI", "TAU", "DEGREES"} or not self._shader_role_unshadowed(node.id):
                 return None
@@ -356,11 +359,44 @@ class _SceneOnlySource(ast.NodeVisitor):
             left, right = (self._shader_number(value) for value in (node.left, node.right))
             if left is None or right is None or isinstance(node.op, ast.Div) and right == 0:
                 return None
-            result = (left + right if isinstance(node.op, ast.Add) else
-                      left - right if isinstance(node.op, ast.Sub) else
-                      left * right if isinstance(node.op, ast.Mult) else left / right)
-            return result if math.isfinite(result) else None
+            try:
+                result = (left + right if isinstance(node.op, ast.Add) else
+                          left - right if isinstance(node.op, ast.Sub) else
+                          left * right if isinstance(node.op, ast.Mult) else left / right)
+                return result if math.isfinite(result) else None
+            except (OverflowError, ValueError):
+                return None
         return None
+
+    def _shader_container_reference(self, node, *, skip_zip=False):
+        """Whether an expression can carry a proven program/key collection."""
+        pending = [node]
+        while pending:
+            item = pending.pop()
+            if (skip_zip and isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
+                    and item.func.id == "zip"):
+                continue
+            value = self._shader_value(item)
+            if value is not None and value[0] in {"programs", "keys"}:
+                return True
+            pending.extend(ast.iter_child_nodes(item))
+        return False
+
+    def _reject_shader_collection_mutation(self, node, receiver):
+        value = self._shader_value(receiver)
+        mutating_methods = {
+            "append", "extend", "insert", "pop", "clear", "remove",
+            "reverse", "sort", "update", "add", "discard",
+            "difference_update", "intersection_update", "symmetric_difference_update",
+        }
+        subscript_store = isinstance(node, ast.Subscript) and not isinstance(node.ctx, ast.Load)
+        augmented_store = isinstance(node, ast.AugAssign)
+        method_store = (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in mutating_methods)
+        if value and value[0] in {"programs", "keys"} and (
+            subscript_store or augmented_store or method_store
+        ):
+            raise _OpaqueSource(node, "unproven_shader_collection_mutation")
 
     def _shader_color(self, node):
         if (isinstance(node, ast.Name) and node.id in _SOURCE_COLOR_CONSTANTS
@@ -455,9 +491,9 @@ class _SceneOnlySource(ast.NodeVisitor):
             return ("number",)
         if isinstance(node, (ast.List, ast.Tuple)):
             items = tuple(self._shader_value(item) for item in node.elts)
-            if isinstance(node, ast.List) and all(item and item[0] == "programs" for item in items):
+            if isinstance(node, ast.List) and items and all(item and item[0] in {"program", "programs"} for item in items):
                 return ("programs", tuple(entry for item in items for entry in item[1]))
-            if isinstance(node, ast.List) and all(item and item[0] == "keys" for item in items):
+            if isinstance(node, ast.List) and items and all(item and item[0] in {"keys", "key"} for item in items):
                 return ("keys", tuple(entry for item in items for entry in item[1]))
             return ("sequence", items)
         if isinstance(node, ast.Subscript):
@@ -480,7 +516,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         values = tuple(values)
         if not values or any(value is None for value in values):
             return None
-        if all(value[0] == "programs" for value in values):
+        if all(value[0] in {"program", "programs"} for value in values):
             entries = tuple(entry for value in values for entry in value[1])
             return ("programs", entries)
         if all(value[0] == "keys" for value in values):
@@ -512,9 +548,15 @@ class _SceneOnlySource(ast.NodeVisitor):
     def _loop_shader_value(self, iterable, index):
         if iterable and iterable[0] == "zip":
             value = iterable[1][index] if index < len(iterable[1]) else None
+            if value and value[0] == "programs":
+                return ("program", value[1])
+            if value and value[0] == "keys":
+                return ("key", value[1])
             return value
-        if iterable and iterable[0] in {"programs", "keys"}:
-            return iterable
+        if iterable and iterable[0] == "programs":
+            return ("program", iterable[1])
+        if iterable and iterable[0] == "keys":
+            return ("key", iterable[1])
         if iterable and iterable[0] == "sequence":
             rows = iterable[1]
             return self._merge_shader_values(
@@ -529,7 +571,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         program_ids = {identity for identity, _ in programs[1]} if programs else None
         for key, value in zip(node.keys, node.values):
             origin = self._shader_value(key)
-            if (not origin or origin[0] != "keys" or not origin[1]
+            if (not origin or origin[0] not in {"keys", "key"} or not origin[1]
                     or programs is not None and any(identity not in program_ids
                                                     for identity, _ in origin[1])
                     or not self._shader_numeric_value(value)):
@@ -622,6 +664,11 @@ class _SceneOnlySource(ast.NodeVisitor):
     def visit_Assign(self, node):
         self.visit(node.value)
         value = self._shader_value(node.value)
+        carries_collection = self._shader_container_reference(node.value)
+        if (carries_collection and (not value or value[0] not in {"programs", "keys"}
+                or any(not isinstance(target, ast.Name) for target in node.targets)
+                or self.shader_control_depth)):
+            raise _OpaqueSource(node, "unproven_shader_collection_escape")
         if self.shader_control_depth:
             value = None
         for target in node.targets:
@@ -1042,6 +1089,13 @@ class _SceneOnlySource(ast.NodeVisitor):
         return True
 
     def visit_Call(self, node):
+        if isinstance(node.func, ast.Attribute):
+            self._reject_shader_collection_mutation(node, node.func.value)
+        if (not (isinstance(node.func, ast.Name) and node.func.id == "zip")
+                and any(self._shader_container_reference(
+                    argument, skip_zip=isinstance(node.func, ast.Attribute) and node.func.attr == "play")
+                        for argument in [*node.args, *(keyword.value for keyword in node.keywords)])):
+            raise _OpaqueSource(node, "unproven_shader_collection_escape")
         if isinstance(node.func, ast.Name) and node.func.id == "LinearGradient":
             self._linear_gradient(node)
         elif isinstance(node.func, ast.Name) and node.func.id == "WgslEffectProgram":
@@ -1049,7 +1103,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             if schema is None:
                 schema = self._shader_program_spec(node)
             self.admitted_shader_loads.add(id(node.func))
-            self.shader_call_values[id(node)] = ("programs", ((id(node), schema),))
+            self.shader_call_values[id(node)] = ("program", ((id(node), schema),))
         elif isinstance(node.func, ast.Name) and node.func.id in self.shader_helper_specs:
             if (node.func.id in self.module_bindings
                     and self.module_binding_counts.get(node.func.id) != 1
@@ -1061,18 +1115,18 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unproven_shader_factory")
             self.admitted_shader_helper_loads.add(id(node.func))
             self.shader_call_values[id(node)] = (
-                "programs", ((id(node), self.shader_helper_specs[node.func.id]),)
+                "program", ((id(node), self.shader_helper_specs[node.func.id]),)
             )
         elif isinstance(node.func, ast.Attribute) and node.func.attr == "parameter":
             programs = self._shader_value(node.func.value)
-            if (not programs or programs[0] != "programs" or len(node.args) != 1
+            if (not programs or programs[0] not in {"program", "programs"} or len(node.args) != 1
                     or node.keywords or not isinstance(node.args[0], ast.Constant)
                     or type(node.args[0].value) is not str
                     or any(node.args[0].value not in schema for _, schema in programs[1])):
                 raise _OpaqueSource(node, "unproven_shader_key")
             self.admitted_shader_attributes.add(id(node.func))
             self.shader_call_values[id(node)] = (
-                "keys", tuple((identity, node.args[0].value) for identity, _ in programs[1])
+                "key", tuple((identity, node.args[0].value) for identity, _ in programs[1])
             )
         elif isinstance(node.func, ast.Name) and node.func.id == "ShaderEffect":
             if (not self._shader_role_unshadowed(node.func.id)
@@ -1081,7 +1135,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or len(node.keywords) > 1):
                 raise _OpaqueSource(node, "unproven_shader_effect")
             programs = self._shader_value(node.args[0])
-            if not programs or programs[0] != "programs":
+            if not programs or programs[0] != "program":
                 raise _OpaqueSource(node.args[0], "unproven_shader_effect")
             for keyword in node.keywords:
                 self._shader_parameter_mapping(keyword.value, programs)
@@ -1666,6 +1720,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             for value in ([node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]):
                 self.visit(value)
             result = self._shader_value(node.key if isinstance(node, ast.DictComp) else node.elt)
+            if result and result[0] == "key":
+                result = ("keys", result[1])
             if result and result[0] in {"programs", "keys"}:
                 self.shader_expression_values[id(node)] = result
         finally:
@@ -1678,6 +1734,7 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def visit_Subscript(self, node):
         if not isinstance(node.ctx, ast.Load):
+            self._reject_shader_collection_mutation(node, node.value)
             name = node.value.id if isinstance(node.value, ast.Name) else None
             owner = next((owned for scope, owned in zip(reversed(self.scopes), reversed(self.owned_containers))
                 if name in scope), ())
@@ -1685,9 +1742,16 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unproven_ownership")
         self.generic_visit(node)
 
+    def visit_Return(self, node):
+        if node.value is not None and self._shader_container_reference(node.value):
+            raise _OpaqueSource(node, "unproven_shader_collection_escape")
+        self.generic_visit(node)
+
     def visit_AugAssign(self, node):
         if isinstance(node.target, ast.Name) and node.target.id == "_":
             raise _OpaqueSource(node.target, "private_name")
+        if isinstance(node.target, ast.Name):
+            self._reject_shader_collection_mutation(node, node.target)
         if isinstance(node.target, ast.Name) and self.shader_values:
             self.shader_values[-1][node.target.id] = None
         self.generic_visit(node)

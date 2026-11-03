@@ -382,6 +382,62 @@ class Example(Scene):
             with self.subTest(source=source):
                 self.assertFalse(source_execution_proof(source)["admitted"])
 
+    def test_shader_program_and_key_collections_cannot_be_mutated_or_escape(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_shader_material.py"
+        ).read_text()
+        insertion = '        phase = [program.parameter("phase") for program in programs]\n'
+        program_mutations = (
+            '        programs.append(context.get("proxy"))\n',
+            '        alias = programs\n        alias.append(context.get("proxy"))\n',
+            '        programs.extend([material("scene")])\n',
+            '        programs.insert(0, material("scene"))\n',
+            '        programs.pop()\n',
+            '        programs.clear()\n',
+            '        programs.reverse()\n',
+            '        programs.sort()\n',
+            '        programs[0] = context.get("proxy")\n',
+            '        alias = programs\n        alias[0] = context.get("proxy")\n',
+            '        programs += [material("scene")]\n',
+            '        programs = context.get("proxy")\n',
+            '        programs = []\n',
+            '        consume(programs)\n',
+            '        consume(zip(programs))\n',
+            '        zipped = zip(programs)\n',
+            '        alias = programs if True else []\n        alias.append(context.get("proxy"))\n',
+            '        if True:\n            alias = programs\n            alias.append(context.get("proxy"))\n',
+            '        def expose():\n            return programs\n        alias = expose()\n'
+            '        alias.append(context.get("proxy"))\n',
+        )
+        for mutation in program_mutations:
+            with self.subTest(mutation=mutation):
+                self.assertFalse(source_execution_proof(
+                    source.replace(insertion, mutation + insertion, 1)
+                )["admitted"])
+
+        key_insertion = '        self.wait(0.5)\n'
+        key_mutations = (
+            '        phase.append(context.get("proxy"))\n',
+            '        alias = phase\n        alias[0] = context.get("proxy")\n',
+            '        phase += [phase[0]]\n',
+        )
+        for mutation in key_mutations:
+            with self.subTest(mutation=mutation):
+                self.assertFalse(source_execution_proof(
+                    source.replace(key_insertion, mutation + key_insertion, 1)
+                )["admitted"])
+
+        huge = "9" * 400
+        overflow = (
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            f'        WgslEffectProgram("shader", parameters=[ShaderParameter.scalar("phase", '
+            f'default={huge} * {huge}, minimum=0, maximum={huge})])\n'
+        )
+        proof = source_execution_proof(overflow)
+        self.assertFalse(proof["admitted"])
+        self.assertEqual(proof["reason"]["code"], "unproven_shader_schema")
+
     def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_ordered_reveal.py"
