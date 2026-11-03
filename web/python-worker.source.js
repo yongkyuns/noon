@@ -636,11 +636,50 @@ function registerSemanticExecution(context) {
   if (run?.preparedPlayback) invokePreparedEngine(() => context.prepareExecutionRun());
   else context.prepareExecutionRun();
   const token = `semantic-${nextSemanticContext++}`;
-  semanticContexts.set(token, { context, endpoints: new Set(), released: false,
+  semanticContexts.set(token, { context, endpoints: new Set(), released: false, runRequestId: run?.requestId,
     ...(run?.preparedPlayback ? { preparedPlayback: true, preparedSourceFinished: false } : {}),
   });
   if (run?.preparedPlayback) run.completedPreparedContextId = token;
   return token;
+}
+
+function executionDiagnostic(entry, event) {
+  if (entry?.runRequestId == null) return;
+  post("execution_diagnostic", { requestId: entry.runRequestId,
+    libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted", event });
+}
+
+function sourceExecutionRequirement(json) {
+  const requirement = JSON.parse(json);
+  if (requirement !== null && (!isRecord(requirement) || ![
+    "host_effects", "host_callbacks", "effective_display", "native_input", "signals",
+    "replay_unavailable", "external_resources",
+  ].includes(requirement.code))) throw new TypeError("invalid source execution requirement");
+  return requirement;
+}
+
+function observeSemanticExecution(request, entry, prepared) {
+  const profile = prepared ? entry.continuationGeneration == null ? "immutable" : "incremental"
+    : entry.continuationGeneration != null || request.completedStaticSource ? "observed" : "immutable";
+  return event => {
+    if (entry.released) return;
+    if (event.stage === "attached") {
+      const stage = entry.diagnosticProfile == null ? "attached"
+        : entry.diagnosticProfile === profile ? "receiver-attached" : "profile-change";
+      entry.diagnosticProfile = profile;
+      event = { ...event, stage, ...(entry.sourceRequirement ? { reason: entry.sourceRequirement } : {}),
+        ...(entry.handoffBoundary ?? {}) };
+    } else if (event.stage === "terminal-adopted" || event.stage === "disposition") {
+      const key = event.stage === "terminal-adopted" ? "diagnosticTerminalAdopted" : "diagnosticDisposition";
+      if (entry[key]) return;
+      entry[key] = true;
+      if (event.disposition === "observed-complete" && entry.handoffBoundary && entry.sourceRequirement?.code === "native_input") {
+        event = { ...event, disposition: "input-handoff" };
+      }
+    }
+    executionDiagnostic(entry, { ...event, profile, contextId: request.contextId,
+      continuationGeneration: entry.continuationGeneration ?? null, session: request.session });
+  };
 }
 
 function registerContinuationContext(context) {
@@ -673,6 +712,8 @@ function registerContinuationContext(context) {
   const preparedPlayback = activeAuthoringRun.preparedPlayback === true;
   const entry = {
     context,
+    runRequestId: activeAuthoringRun.requestId,
+    continuationGeneration: generation,
     endpoints: new Set(),
     released: false,
     preparedPlayback,
@@ -810,7 +851,9 @@ function createPreparedSourceDriver(run) {
       const continuation = requirePreparedContinuation(run, context, signal);
       if (continuation.observedExecution) return awaitObservedContinuation(continuation);
       if (!continuation.preparedBootstrapObserved) {
-        if (invokePreparedEngine(() => context.beginObservedPreparedSource(run.sourceSceneOnly === true))) {
+        const requirement = sourceExecutionRequirement(invokePreparedEngine(() => context.beginObservedPreparedSource(run.sourceSceneOnly === true)));
+        if (requirement !== null) {
+          semanticContexts.get(continuation.contextId).sourceRequirement = requirement;
           continuation.observedExecution = true;
           // Install the original stack's await before attachment can request its
           // first callback. There is no reader or replacement source invocation.
@@ -832,6 +875,8 @@ function createPreparedSourceDriver(run) {
       }
       const prepared = invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceSegment(context));
       if (prepared === false) {
+        semanticContexts.get(continuation.contextId).sourceRequirement = sourceExecutionRequirement(
+          invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
         // This is still the original suspended play/wait. Only a reader request
         // at the required frontier may activate its normal callback protocol.
         const event = awaitContinuationEvent(continuation);
@@ -1267,6 +1312,8 @@ async function handleContinuationControl(request) {
         activeAuthoringRun.requestId !== request.continuationRunRequestId) {
       throw new Error("stale semantic continuation cancellation");
     }
+    executionDiagnostic(entry, { stage: "cancelled", contextId: request.contextId,
+      continuationGeneration: continuation.generation });
     failContinuation(continuation, new Error(request.reason));
     entry.released = true;
     for (const endpoint of [...entry.endpoints]) endpoint.stop();
@@ -1302,12 +1349,12 @@ async function handleRequest(request) {
       let completed = false;
       try {
         const workerRunStartedAtMs = performance.now();
-        const execute = () => runAuthoringSource(
-          pyodide,
-          request.source,
-          request.context,
-          requestId,
-        );
+        const execute = async () => {
+          const resultJson = await runAuthoringSource(pyodide, request.source, request.context, requestId);
+          const contextId = JSON.parse(resultJson)?.semantic_execution?.context_id;
+          executionDiagnostic(semanticContexts.get(contextId), { stage: "source-complete", contextId });
+          return resultJson;
+        };
         let resultJson = await (run.preparedDriver ? run.preparedDriver.run(execute) : execute());
         const workerRunCompletedAtMs = performance.now();
         if (run.preparedPlayback) {
@@ -1362,6 +1409,10 @@ async function handleRequest(request) {
     }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);
   } catch (error) {
+    if (request?.type === "run" && requestId !== null) {
+      executionDiagnostic({ runRequestId: requestId }, { stage: "failed",
+        reason: { code: "authoring_failure", detail: String(error?.message ?? error).slice(0, 1024) } });
+    }
     if (request?.type === "attach_semantic_execution") {
       request.controlPort?.close?.();
       request.renderPort?.close?.();
@@ -1406,7 +1457,11 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     entry.endpoints.add(pendingAttachment);
     let endpoint;
     try {
+      const observation = invokePreparedEngine(() => JSON.parse(continuation.preparedPlayer.preparedPlaybackStateJson()));
+      const requirement = sourceExecutionRequirement(invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
       const playing = invokePreparedEngine(() => continuation.preparedPlayer.beginSourceExecution(entry.context));
+      entry.sourceRequirement = requirement;
+      entry.handoffBoundary = { boundaryValidated: true, time: observation.time, preparedFrontier: observation.frontier };
       continuation.observedExecution = true;
       endpoint = await attachObservedSemanticExecution({ ...request, initiallyPaused: !playing,
         loopDurationSeconds: Math.max(1, entry.context.liveHandoffDuration()) }, entry, continuation, true, pyodide);
@@ -1502,6 +1557,7 @@ async function attachObservedSemanticExecution(request, entry, continuation, con
     } : null,
     completeRequiredCallbackPhase,
     discardRequiredCallbackPhase,
+    null, null, observeSemanticExecution(request, entry, false),
   );
   entry.endpoints.add(endpoint);
   if (continuationOnly) continuation.endpoint = endpoint;
@@ -1662,7 +1718,7 @@ async function attachPreparedReceiver(request, entry, receiver, recovering) {
   try {
     endpoint = await attachSemanticEngine(entry.context, request,
       retained => receiver.finish(retained), null, null, null, null, null,
-      { ...receiver.prepared, retainOnSetupFailure: recovering });
+      { ...receiver.prepared, retainOnSetupFailure: recovering }, observeSemanticExecution(request, entry, true));
   } finally { receiver.attaching = false; }
   receiver.endpoint = endpoint;
   entry.endpoints.delete(receiver);

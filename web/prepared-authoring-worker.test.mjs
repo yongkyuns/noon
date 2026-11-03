@@ -39,6 +39,8 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const player = {
     resetReceiver(session) { alive(); assert.ok(session > 3); events.push("reset-receiver"); },
     preparedPlaying: () => false,
+    preparedPlaybackStateJson: () => JSON.stringify({ time: 1, frontier: 1 }),
+    get sourceExecutionRequirementJson() { return JSON.stringify({ code: "native_input" }); },
     setPreparedLoopDuration(value) { alive(); events.push(["loop", value]); },
     prepareSourceSegment(value) {
       if (late) { events.push("require-source"); return false; }
@@ -57,7 +59,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   };
   const context = {
     prepareFinishedSource() { events.push("finished-admission"); return staticAdmission; },
-    beginObservedPreparedSource() { return observed; },
+    beginObservedPreparedSource() { return JSON.stringify(observed ? { code: "host_callbacks" } : null); },
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
     createFinishedPreparedExecutionPlayer(session) {
       assert.equal(session, 3); events.push("static-reader");
@@ -71,7 +73,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   let endpoint;
   const attachSemanticEngine = async (_context, _request, onStop, ...args) => {
     assert.equal(_context, context);
-    const prepared = args[5] !== undefined;
+    const prepared = args[5] != null;
     if (staticNative && observed) {
       assert.equal(_request.completedStaticSource, true);
       assert.equal(args[1], null, "completed static source has no live continuation protocol");
@@ -107,13 +109,14 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
       else endpoint.stop();
       throw error;
     }
+    args[6]?.({ stage: "attached", capabilities: { commands: [], replay: prepared, audio: false, sections: false } });
     return endpoint;
   };
   api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
     const AUTHORING_CHANNEL = "noon.authoring", AUTHORING_PROTOCOL_VERSION = 8;
     const pyodidePromise = Promise.resolve({}), semanticContexts = new Map();
     let nextSemanticContext = 0, nextContinuationGeneration = 1, activeAuthoringRun = null;
-    let fatalAuthoringFailure = false;
+    let fatalAuthoringFailure = false, authoringLibrariesPristine = true;
     let requestQueue = Promise.resolve();
     const post = (type, value) => { if (!fatalAuthoringFailure) posts.push({ type, ...value }); };
     const postError = (requestId, error) => {
@@ -252,6 +255,12 @@ test("receiver replacement retains the original source before and after completi
   assert.equal(invocations, 1); assert.equal(completed, 1);
   assert.equal(h.counters.initial, 1); assert.equal(h.counters.terminal, 1);
   assert.equal(h.events.filter(event => event === "reset-receiver").length, 2);
+  const attachments = h.posts.filter(post => post.type === "execution_diagnostic" &&
+    ["attached", "receiver-attached", "profile-change"].includes(post.event.stage));
+  assert.deepEqual(attachments.map(post => post.event.stage), ["attached", "receiver-attached", "receiver-attached"]);
+  assert.ok(attachments.every(post => post.requestId === 1 && post.event.profile === "incremental" &&
+    post.event.contextId === attachments[0].event.contextId && post.event.continuationGeneration === attachments[0].event.continuationGeneration));
+  assert.deepEqual(attachments.map(post => post.event.session), [3, 4, 5]);
   assert.deepEqual(h.errors, []);
   h.endpoint().stop(); assert.equal(h.counters.freed, 1); assert.equal(h.contexts.size, 0);
 });
@@ -491,6 +500,11 @@ test("initial observed admission relays callbacks to the original stack without 
   assert.equal(h.counters.initial, 0); assert.equal(h.counters.segments, 0);
   assert.equal(h.counters.terminal, 0); assert.equal(h.counters.adopted, 0);
   assert.deepEqual(h.events, ["observe-segment", "final-publication"]);
+  const attached = h.posts.find(post => post.type === "execution_diagnostic" && post.event.stage === "attached");
+  assert.equal(attached.event.profile, "observed", "requesting preparation does not prove its attachment");
+  assert.equal(attached.event.reason.code, "host_callbacks");
+  assert.ok(h.posts.some(post => post.type === "execution_diagnostic" && post.event.stage === "source-complete" &&
+    post.event.contextId === attached.event.contextId));
   assert.equal(h.tasks.size, 0);
 });
 
@@ -600,6 +614,8 @@ for (const duration of [0, 30]) test(`completed declarations use Rust's original
   await h.attachFinished();
   assert.deepEqual(h.errors, []);
   assert.equal(h.events.includes("static-reader"), false);
+  const attached = h.posts.find(post => post.type === "execution_diagnostic" && post.event.stage === "attached");
+  assert.equal(attached.event.profile, "immutable", "a completed declaration is not a live continuation");
   assert.equal(h.counters.initial + h.counters.segments + h.counters.terminal, 0);
   await h.releaseFinished();
   assert.equal(h.contexts.size, 0);

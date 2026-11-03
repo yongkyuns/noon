@@ -27,7 +27,7 @@ function fixture(mode = "transferable", options = {}) {
     channel: "noon.execution.retained", protocol_version: 18, session: 7,
     sequence: sequence++, snapshot: sequence === 1, time, objects: [], padding: payloadPadding,
   });
-  let loopDuration = null;
+  let loopDuration = null, loopCount = 0;
   const player = {
     resourceBundleBytes() { record("resources"); return new Uint8Array([1]); },
     initialDeltaJson() { record("initial"); return json(); },
@@ -58,7 +58,7 @@ function fixture(mode = "transferable", options = {}) {
     preparedBuffering: () => buffering,
     preparedPlaybackStateJson: () => JSON.stringify({ time, frontier, end: end ?? null,
       playing, buffering, completed: end === 0 || (end != null && loopDuration === null && time >= end),
-      advancing: playing && !buffering, loopDuration, loopCount: 0, loopError: null }),
+      advancing: playing && !buffering, loopDuration, loopCount, loopError: null }),
     setPreparedLoopDuration(value) { record("loop", value); loopDuration = value ?? null; },
     sourceExecutionReady: () => options.sourceExecutionRequired === true && buffering,
     preparedPlaybackTimeAt(wallTime) { record("observe-time", wallTime); return observation ?? time; },
@@ -99,7 +99,7 @@ function fixture(mode = "transferable", options = {}) {
         controlPort: control.port1, renderPort: render.port1,
         transportMode: mode, session: 7, loopDurationSeconds: 4, ...options, ...request,
       }, () => record("cancel-source"), null, null, null, null, null,
-      { player, wakeSource: () => record("source-wake"), generation: 19 });
+      { player, wakeSource: () => record("source-wake"), generation: 19 }, options.onExecutionDiagnostic ?? null);
       await when(() => replies.some(value => value.type === "ready") && deltas.length === 1);
       return endpoint;
     },
@@ -134,6 +134,7 @@ function fixture(mode = "transferable", options = {}) {
       frontier = value; if (terminal) end = value; buffering = false;
       endpoint.sourcePrefixDelivered();
     },
+    wrap() { time = 0; loopCount++; },
     close() {
       endpoint?.stop();
       control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close();
@@ -142,6 +143,24 @@ function fixture(mode = "transferable", options = {}) {
 }
 
 for (const mode of ["transferable", "shared"]) {
+  test(`prepared ${mode} diagnostics report actual adoption and first Rust wrap once`, async () => {
+    const events = [], f = fixture(mode, { onExecutionDiagnostic: event => events.push(event) });
+    try {
+      await f.attach();
+      assert.deepEqual(events.map(event => event.stage), ["attached"]);
+      assert.equal(events[0].capabilities.replay, true);
+      assert.ok(events[0].capabilities.commands.includes("loop"));
+      f.deliver(4, true);
+      await f.request("state");
+      assert.deepEqual(events.map(event => event.stage), ["attached", "terminal-adopted"]);
+      await f.request("set_loop_duration", { loopDurationSeconds: 4 });
+      f.wrap();
+      await f.request("state"); await f.request("state");
+      assert.deepEqual(events.map(event => event.stage), ["attached", "terminal-adopted", "disposition"]);
+      assert.equal(events.at(-1).disposition, "looped");
+      assert.equal(events.at(-1).loopCount, 1);
+    } finally { f.close(); }
+  });
   test(`prepared ${mode} source handoff waits for demand, quiesces and frees on retirement`, { timeout: 3000 }, async () => {
     const f = fixture(mode, { sourceExecutionRequired: true });
     try {

@@ -48,6 +48,7 @@ export async function attachSemanticEngine(
   discardRequiredCallbackPhase = null,
   testOnlyTickTimestamp = null,
   prepared = null,
+  onExecutionDiagnostic = null,
 ) {
   const {
     controlPort,
@@ -92,6 +93,9 @@ export async function attachSemanticEngine(
   if (testOnlyTickTimestamp !== null && typeof testOnlyTickTimestamp !== "function") {
     throw new Error("test tick timestamp must be a function");
   }
+  if (onExecutionDiagnostic !== null && typeof onExecutionDiagnostic !== "function") {
+    throw new TypeError("execution diagnostic observer must be a function");
+  }
   let player = null;
   let replayUnavailable = null;
   let hasAudio = false;
@@ -133,7 +137,13 @@ export async function attachSemanticEngine(
   let externalInteractionTickTime = null;
   let pendingExternalContinuation = null;
   const controls = [];
-  const post = (payload, transfer = []) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
+  let diagnosticReady = false, diagnosticTerminal = false, diagnosticDisposition = false;
+  let diagnosticCapabilities = null;
+  const post = (payload, transfer = []) => {
+    controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
+    if (payload.type === "ready") diagnosticReady = true;
+    if (diagnosticReady && Number.isFinite(payload.time)) observeExecution(payload, payload.type === "ready");
+  };
   function requestSourceHandoff() {
     if (stopped || receiverFailed || prepared === null || !preparedClockAdmitted || sourceHandoffRequested || !player.sourceExecutionReady()) return;
     sourceHandoffRequested = true;
@@ -387,6 +397,43 @@ export async function attachSemanticEngine(
           replayUnavailable: "source execution is not retained for replay" }),
     };
   };
+  // Observe admitted owners and command readiness, never the caller's desired
+  // profile. Emit lifecycle changes only; the trace does not retain frames.
+  function observeExecution(snapshot, attached = false) {
+    if (onExecutionDiagnostic === null) return;
+    const replay = snapshot.replaySupported === true;
+    const controllable = replay || snapshot.sourcePlaybackControllable === true;
+    const commands = controllable ? ["play", "pause"] : [];
+    if (replay) {
+      commands.push("seek", "restart");
+      if (!hasAudio && snapshot.durationSeconds !== 0) commands.push("loop");
+      if (sections.length) commands.push("sections");
+    }
+    const capabilities = { commands, replay, audio: hasAudio, sections: sections.length > 0 };
+    const facts = { time: snapshot.time, preparedFrontier: snapshot.preparedFrontier ?? null,
+      durationSeconds: snapshot.durationSeconds ?? null, publication: lastSentPublication, capabilities };
+    const signature = JSON.stringify(capabilities);
+    if (attached || signature !== diagnosticCapabilities) {
+      onExecutionDiagnostic({ stage: attached ? "attached" : "capabilities-changed", ...facts });
+      diagnosticCapabilities = signature;
+    }
+    const terminal = prepared !== null ? snapshot.durationSeconds !== null
+      : continuation === null || sourceFinished;
+    if (terminal && !diagnosticTerminal) {
+      diagnosticTerminal = true;
+      onExecutionDiagnostic({ stage: "terminal-adopted", ...facts });
+    }
+    if (!terminal || diagnosticDisposition) return;
+    const disposition = prepared !== null
+      ? snapshot.loopCount > 0 ? "looped" : snapshot.completed ? "finite-complete" : null
+      : !replay ? "observed-complete"
+        : hasAudio && !snapshot.playing && snapshot.time >= snapshot.durationSeconds ? "finite-complete" : null;
+    if (disposition !== null) {
+      diagnosticDisposition = true;
+      onExecutionDiagnostic({ stage: "disposition", disposition, ...facts,
+        ...(prepared !== null ? { loopCount: snapshot.loopCount } : {}) });
+    }
+  }
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
     if (!force && cadence === "idle" && executionWakeCadence === "idle") return;
     executionWakeCadence = cadence;
@@ -1607,6 +1654,7 @@ export async function attachSemanticEngine(
       // History adoption alone neither selects another frame nor drains a
       // renderer delta. It may release Rust buffering/demand and wake sleepers.
       try {
+        if (diagnosticReady) observeExecution(state("state"));
         observeExecutionWake(performance.now());
         prepared.wakeSource();
       } catch (error) {
@@ -1667,6 +1715,7 @@ export async function attachSemanticEngine(
       const tail = drainAndSendDelta();
       observeExecutionWake(performance.now(), true);
       await awaitPresentation(tail);
+      observeExecution(state("state"));
       if (pendingExternalContinuation !== null) {
         const { resolve } = pendingExternalContinuation;
         pendingExternalContinuation = null;

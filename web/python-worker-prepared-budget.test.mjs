@@ -16,6 +16,7 @@ function section(start, end) {
 }
 const production = [
   section("function failAuthoringWorker(error)", "// A WASM trap"),
+  section("function executionDiagnostic(entry, event)", "function registerContinuationContext(context)"),
   section("function invokePreparedEngine(callback)", "function continuationEvent("),
   section("function failContinuation(continuation, error)", "function isContinuationControl("),
   section("async function handleRequest(request)", "async function attachSemanticExecutionRequest("),
@@ -23,7 +24,7 @@ const production = [
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture({ failureAt = null, failure = "budget rejected", catchBarrier = false, quiet = false } = {}) {
-  const tasks = new Map(), calls = [], messages = [], errors = [], runs = [];
+  const tasks = new Map(), calls = [], messages = [], diagnostics = [], errors = [], runs = [];
   const semanticContexts = new Map();
   let nextTask = 0, nextRun = 0, armed = true, closed = 0;
   const attempt = (stage, run) => {
@@ -31,10 +32,11 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
     if (armed && failureAt === stage) throw failure;
   };
   const context = vm.createContext({
-    semanticContexts, activeAuthoringRun: null, fatalAuthoringFailure: false,
+    semanticContexts, activeAuthoringRun: null, fatalAuthoringFailure: false, authoringLibrariesPristine: true,
     pyodidePromise: Promise.resolve({}), performance, WebAssembly, Error,
     validateRequest() {},
-    post: (type, payload) => messages.push({ type, ...payload }),
+    post: (type, payload) => (type === "execution_diagnostic" ? diagnostics : messages).push({ type, ...payload }),
+    isRecord: value => value !== null && typeof value === "object" && !Array.isArray(value),
     postError: (requestId, error) => errors.push({ requestId, error }),
     self: { close() { closed++; } },
     retireSemanticContext() { assert.fail("an attached historical reader must not be retired"); },
@@ -54,6 +56,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       };
       runs.push(record);
       const player = {
+        setPreparedLoopDuration() {},
         prepareSourceSegment(scene) {
           assert.equal(scene, continuation.context);
           attempt("prepare", id);
@@ -91,7 +94,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       };
       const continuation = {
         contextId: `context-${id}`, generation: id,
-        context: { beginObservedPreparedSource: () => false, prepareInitialSourceSegment: () => true }, terminal: false,
+        context: { beginObservedPreparedSource: () => "null", prepareInitialSourceSegment: () => true }, terminal: false,
         preparedPlayback: true, preparedPlayer: player, preparedDriver: owner.preparedDriver,
         initialSourceReady: { resolve() {}, reject(error) { record.initialRejection = error; } },
         preparedReady: { promise: Promise.resolve(), reject(error) { record.readyRejection = error; } },
@@ -101,7 +104,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       record.continuation = continuation;
       record.player = player;
       record.endpoint = endpoint;
-      record.entry = { released: false, context: continuation.context };
+      record.entry = { released: false, context: continuation.context, runRequestId: owner.requestId };
       semanticContexts.set(continuation.contextId, record.entry);
       owner.continuation = continuation;
       try {
@@ -115,7 +118,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
           record.caught = error;
         }
         record.statements++;
-        return JSON.stringify({ semantic_execution: {
+        return JSON.stringify({ duration: 2, semantic_execution: {
           context_id: continuation.contextId, continuation_generation: continuation.generation,
         } });
       } finally { record.cleanup++; }
@@ -123,7 +126,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
   });
   vm.runInContext(`${production}\nglobalThis.testHandleRequest = handleRequest;`, context);
   return {
-    tasks, calls, messages, errors, runs, context,
+    tasks, calls, messages, diagnostics, errors, runs, context,
     get closed() { return closed; },
     disarm() { armed = false; },
     async run(requestId = 1) {
@@ -158,6 +161,8 @@ async function assertOrdinaryFailure(f, done, record, expected) {
     assert.equal(rejection.cause, expected, "keep the original thrown value");
   }
   assert.deepEqual(f.messages, [], "failure must not publish a success descriptor");
+  assert.equal(f.diagnostics.at(-1).event.stage, "failed");
+  assert.equal(f.diagnostics.at(-1).requestId, 1);
   assert.equal(f.closed, 0, "a budget rejection is not an interpreter-fatal trap");
   assert.equal(f.context.fatalAuthoringFailure, false);
   assert.equal(f.context.activeAuthoringRun, null, "failed source invocation must be released");
