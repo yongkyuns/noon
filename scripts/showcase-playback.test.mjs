@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { seekPausedGallery } from "./showcase-playback.mjs";
+import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
+
+test("published-frame polling awaits asynchronous observations before accepting the endpoint", async () => {
+  let time = 1, polls = 0;
+  const window = { __noonExampleGallery: { executionMetrics: async () => ({ metrics: { time } }) } };
+  const page = {
+    evaluate: (fn, args) => runInNewContext(`(${fn})(args)`, { window, args }),
+    async waitForTimeout() { polls++; time = 2.6; },
+  };
+  const result = await waitForPublishedGalleryFrame(page, 2.6, 2.6);
+  assert.equal(polls, 1);
+  assert.equal(result.metrics.time, 2.6);
+});
 
 function gallery({ playing = true, duration = 2.5999999999999996, controllable = true,
   error = null, pauseFailure = false, seekFailure = false, staleSeek = false } = {}) {

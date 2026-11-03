@@ -1,11 +1,12 @@
 // Browser UI automation only. The production player still owns playback and seek.
 import assert from "node:assert/strict";
+import { waitForBrowserObservation } from "./playground-browser-support.mjs";
 
 export async function waitForPublishedGalleryFrame(page, targetTime, storyboardDuration) {
   assert.ok(Number.isFinite(targetTime) && targetTime >= 0);
   assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
   const tolerance = 8 * Number.EPSILON * Math.max(1, storyboardDuration);
-  await page.waitForFunction(async ({ targetTime, tolerance }) => {
+  await waitForBrowserObservation(page, async ({ targetTime, tolerance }) => {
     const gallery = window.__noonExampleGallery;
     if (!gallery) return false;
     const report = await gallery.executionMetrics();
