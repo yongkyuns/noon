@@ -488,7 +488,12 @@ export class PlaygroundPlaybackControls {
     if (this.#destroyed || !this.#controllable || this.#externalBusy) return;
     const range = this.#gestureRange ?? this.#currentSeekRange();
     if (range === null || range.end < range.start) return;
-    const target = Number(this.#scrubber.value);
+    const domTarget = Number(this.#scrubber.value);
+    const domEnd = Number(this.#scrubber.max);
+    // Some native range controls round an authored endpoint when storing its
+    // value. Recognize only the control's actual terminal coordinate, then map
+    // it back to the exact endpoint admitted by the Rust reader.
+    const target = domTarget === domEnd && domEnd > range.end ? range.end : domTarget;
     if (!Number.isFinite(target)) {
       this.#seekNotice = `Choose a time from ${formatTime(range.start)} to ${formatTime(range.end)} s`;
       this.#render();

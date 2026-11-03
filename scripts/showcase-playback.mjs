@@ -67,7 +67,8 @@ export async function qualifyPlayheadEndpoints(page, controlsModule = "./playgro
   return page.evaluate(async (moduleUrl) => {
     const { PlaygroundPlaybackControls } = await import(moduleUrl);
     const cases = [];
-    for (const duration of [2.5999999999999996, 2.6, 2.6000000000000005, 7.999999999999999, 8, 0.0004]) {
+    for (const duration of [2.5999999999999996, 2.6, 2.6000000000000005,
+      7.999999999999997, 7.999999999999999, 8, 0.0004]) {
       const pane = document.createElement("section");
       document.body.append(pane);
       const calls = [], presentations = [], errors = [];
@@ -97,7 +98,9 @@ export async function qualifyPlayheadEndpoints(page, controlsModule = "./playgro
           slider.dispatchEvent(new Event("input", { bubbles: true }));
           await new Promise(resolve => requestAnimationFrame(resolve));
           await new Promise(resolve => requestAnimationFrame(resolve));
-          const expected = requested === duration ? duration : actualInput;
+          const domEnd = Number(slider.max);
+          const expected = requested === duration ||
+            (actualInput === domEnd && domEnd > duration) ? duration : actualInput;
           if (Math.abs(actualInput - requested) > 8 * Number.EPSILON * duration ||
               calls.at(-1) !== expected || errors.length ||
               presentations.at(-1)?.time !== expected ||

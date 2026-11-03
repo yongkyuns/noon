@@ -207,6 +207,18 @@ test("adopted terminal metadata alone enables the full slider and exact endpoint
   assert.equal(f.output.value, "2.60 / 2.60 s");
 });
 
+test("native range endpoint rounding maps to the exact admitted terminal time", async () => {
+  const end = 7.999999999999997;
+  const f = fixture(prepared({ time: 0.12, preparedFrontier: end, durationSeconds: end,
+    seekRange: { start: 0, end } }));
+  // Model a native range implementation exposing its terminal coordinate as 8.
+  f.range.max = "8";
+  f.seek(8); await flush();
+  assert.deepEqual(f.calls, [["seek", end]]);
+  assert.equal(Number(f.controls.element.dataset.elapsedSeconds), end);
+  assert.equal(f.errors.length, 0);
+});
+
 test("static elapsed-time observation may equal the open boundary without authorizing that seek", async () => {
   const f = fixture(prepared({ time: 2 }));
   assert.equal(f.output.value, "2.00 / — s");
