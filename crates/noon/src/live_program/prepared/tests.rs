@@ -508,8 +508,14 @@ fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind
     let parallel_midpoint = reader.frame().clone();
     assert_eq!(parallel_midpoint.objects[0].id, left_id);
     assert_eq!(parallel_midpoint.objects[1].id, right_id);
-    assert_eq!(parallel_midpoint.objects[0].transform.translation, Vec2::new(-2.0, 0.25));
-    assert_eq!(parallel_midpoint.objects[1].transform.translation, Vec2::new(2.0, -0.25));
+    assert_eq!(
+        parallel_midpoint.objects[0].transform.translation,
+        Vec2::new(-2.0, 0.25)
+    );
+    assert_eq!(
+        parallel_midpoint.objects[1].transform.translation,
+        Vec2::new(2.0, -0.25)
+    );
     let publication = reader.publication_context();
 
     assert_eq!(
@@ -526,8 +532,14 @@ fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind
     assert_eq!(reader.publication_context(), publication);
 
     reader.seek(2.0).unwrap();
-    assert_eq!(reader.frame().objects[0].transform.translation, Vec2::new(-2.0, 1.0));
-    assert_eq!(reader.frame().objects[1].transform.translation, Vec2::new(2.0, -1.0));
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(-2.0, 1.0)
+    );
+    assert_eq!(
+        reader.frame().objects[1].transform.translation,
+        Vec2::new(2.0, -1.0)
+    );
 
     assert_eq!(
         source.prepare_until(4.1).unwrap(),
@@ -542,8 +554,14 @@ fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind
     reader.append(source.take_batch().unwrap()).unwrap();
 
     reader.seek(3.0).unwrap();
-    assert_eq!(reader.frame().objects[0].style.fill, Some(Color::rgb(1.0, 0.0, 0.0)));
-    assert_eq!(reader.frame().objects[1].style.fill, Some(Color::rgb(1.0, 1.0, 1.0)));
+    assert_eq!(
+        reader.frame().objects[0].style.fill,
+        Some(Color::rgb(1.0, 0.0, 0.0))
+    );
+    assert_eq!(
+        reader.frame().objects[1].style.fill,
+        Some(Color::rgb(1.0, 1.0, 1.0))
+    );
     reader.seek(3.5).unwrap();
     let right_fill = reader.frame().objects[1].style.fill.unwrap();
     assert!((right_fill.red - 0.5).abs() < 1e-6);
@@ -552,8 +570,14 @@ fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind
 
     assert_eq!(reader.end_time(), Some(4.0));
     reader.seek(4.0).unwrap();
-    assert_eq!(reader.frame().objects[0].style.fill, Some(Color::rgb(0.0, 1.0, 0.0)));
-    assert_eq!(reader.frame().objects[1].style.fill, Some(Color::rgb(0.0, 0.0, 1.0)));
+    assert_eq!(
+        reader.frame().objects[0].style.fill,
+        Some(Color::rgb(0.0, 1.0, 0.0))
+    );
+    assert_eq!(
+        reader.frame().objects[1].style.fill,
+        Some(Color::rgb(0.0, 0.0, 1.0))
+    );
 
     reader.seek(0.5).unwrap();
     assert_eq!(reader.frame(), &parallel_midpoint);
@@ -563,8 +587,8 @@ fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind
 
 #[test]
 fn matching_shapes_prefix_preserves_correspondence_replacement_and_rewind() {
-    let program = crate::example_scenes::family_transform_indicate::matching_shapes::program()
-        .unwrap();
+    let program =
+        crate::example_scenes::family_transform_indicate::matching_shapes::program().unwrap();
     let mut source = program
         .into_prepared_source(ReplayLimits::default())
         .unwrap();
@@ -601,7 +625,12 @@ fn matching_shapes_prefix_preserves_correspondence_replacement_and_rewind() {
     let xs: Vec<_> = reader
         .painter_order()
         .iter()
-        .map(|&index| reader.frame().objects[index as usize].transform.translation.x)
+        .map(|&index| {
+            reader.frame().objects[index as usize]
+                .transform
+                .translation
+                .x
+        })
         .collect();
     assert_eq!(midpoint_order, initial_ids);
     assert_eq!(xs, vec![1.0, -1.0]);
@@ -630,7 +659,12 @@ fn matching_shapes_prefix_preserves_correspondence_replacement_and_rewind() {
     let target_xs: Vec<_> = reader
         .painter_order()
         .iter()
-        .map(|&index| reader.frame().objects[index as usize].transform.translation.x)
+        .map(|&index| {
+            reader.frame().objects[index as usize]
+                .transform
+                .translation
+                .x
+        })
         .collect();
     assert_eq!(target_order.len(), 2);
     assert_ne!(target_order, initial_ids);
@@ -779,10 +813,8 @@ fn subset_display_prefix_preserves_order_thresholds_and_rewind() {
     );
     assert_eq!(reader.end_time(), Some(6.25));
 
-    let query = reader.query_renderer_viewports(&[crate::Rect::new(
-        Vec2::new(0.5, -1.2),
-        Vec2::new(1.5, -0.2),
-    )]);
+    let query = reader
+        .query_renderer_viewports(&[crate::Rect::new(Vec2::new(0.5, -1.2), Vec2::new(1.5, -0.2))]);
     assert_eq!(query.publication(), reader.publication_context());
     assert!(reader.viewport_query_is_current(&query));
     assert!(query.object_indices().contains(&(full_order[5] as usize)));

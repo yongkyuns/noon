@@ -153,14 +153,14 @@ impl PreparedExecutionPlayer {
             refresh || selection != self.last_selection,
         )?
         else {
-            self.no_change_presentation = self.last_publication.map(|publication| {
-                PreparedNoChangePresentation {
-                    session: publication.session,
-                    sequence: publication.sequence,
-                    time: reader.frame().time,
-                    publication_context: reader.publication_context(),
-                }
-            });
+            self.no_change_presentation =
+                self.last_publication
+                    .map(|publication| PreparedNoChangePresentation {
+                        session: publication.session,
+                        sequence: publication.sequence,
+                        time: reader.frame().time,
+                        publication_context: reader.publication_context(),
+                    });
             return Ok(None);
         };
         // The prepared source gate rejects inset views; no frontend reconstructs
