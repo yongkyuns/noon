@@ -2306,11 +2306,12 @@ test("completed source attachment publishes once without starting its old callba
 });
 
 for (const replaySupported of [true, false]) test(`source result waits for final edits before replay admission (${replaySupported})`, async () => {
+  const diagnostics = [];
   let finishSegment;
   const finished = new Promise((resolve) => { finishSegment = resolve; });
   const f = fixture("transferable", null, {
     generation: 27, onComplete: finishSegment, onError: (_generation, error) => { throw error; },
-  });
+  }, {}, { onExecutionDiagnostic: event => diagnostics.push(event) });
   if (!replaySupported) f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
   let endpoint;
   try {
@@ -2340,11 +2341,15 @@ for (const replaySupported of [true, false]) test(`source result waits for final
     await turn();
     assert.equal(resultReady, false);
     assert.equal(f.stats().completedSources, 0, "transport acceptance cannot retake the completed owner");
+    assert.equal(diagnostics.some(event => event.stage === "disposition"), false);
     assert.equal(finalDelta.sequence, initialDelta.sequence + 1);
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(finalDelta).json).time, 1);
     f.render.port2.postMessage({ type: "execution_presented", session: finalDelta.session, sequence: finalDelta.sequence });
     await result;
     assert.equal(f.stats().completedSources, 1);
+    assert.equal(diagnostics.at(-1).disposition, "observed-complete",
+      "completed live execution stays observed even when final history can replay");
+    assert.equal(diagnostics.at(-1).capabilities.replay, replaySupported);
     const state = await request(f.control.port2, "state", 899);
     assert.equal(state.replaySupported, replaySupported);
     assert.equal(state.sections[0].name, "Tail");
