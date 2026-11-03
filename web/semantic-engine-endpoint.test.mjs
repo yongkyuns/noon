@@ -149,7 +149,7 @@ function fixture(
       loopDurationSeconds: 2, transportMode, ...requestOptions,
     }, () => { stopped += 1; callbackHooks.onStop?.(); }, runRequiredCallbackPhase, continuation,
     callbackHooks.complete ?? null, callbackHooks.discard ?? null,
-    callbackHooks.testOnlyTickTimestamp ?? null),
+    callbackHooks.testOnlyTickTimestamp ?? null, null, callbackHooks.onExecutionDiagnostic ?? null),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
@@ -3153,6 +3153,29 @@ test("finite completion probes use the Rust target and await its matching presen
     assert.equal(completed.sourceCompleted, true);
     assert.equal(f.stats().created, 1);
     assert.equal(f.stats().returned, 0);
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+for (const replaySupported of [true, false]) test(`finite audio diagnostics wait for playback completion (replay=${replaySupported})`, async () => {
+  const events = [], f = fixture("transferable", null, null, {}, { onExecutionDiagnostic: event => events.push(event) });
+  let time = 0, endpoint;
+  Object.assign(f.player, { hasAudio: () => true, finiteAudioDuration: () => 2,
+    audioResourceBundleBytes: () => new Uint8Array([2]), time: () => time, playbackTimeAt: () => time,
+    sealReplay() { if (!replaySupported) throw new Error("replay unavailable"); } });
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    assert.deepEqual(events.map(event => event.stage), ["attached", "terminal-adopted"]);
+    assert.equal(events[0].capabilities.audio, true);
+    assert.equal(events[0].capabilities.commands.includes("loop"), false);
+    await request(f.control.port2, "state", 1);
+    assert.equal(events.some(event => event.stage === "disposition"), false,
+      "source cleanup and a paused audio start do not complete playback");
+    time = 2;
+    await request(f.control.port2, "state", 2); await request(f.control.port2, "state", 3);
+    assert.equal(events.filter(event => event.stage === "disposition").length, 1);
+    assert.equal(events.at(-1).disposition, "finite-complete");
   } finally { endpoint?.stop(); f.close(); }
 });
 

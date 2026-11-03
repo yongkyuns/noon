@@ -426,8 +426,9 @@ export async function attachSemanticEngine(
     if (!terminal || diagnosticDisposition) return;
     const disposition = prepared !== null
       ? snapshot.loopCount > 0 ? "looped" : snapshot.completed ? "finite-complete" : null
-      : !replay ? "observed-complete"
-        : hasAudio && !snapshot.playing && snapshot.time >= snapshot.durationSeconds ? "finite-complete" : null;
+      : hasAudio ? !snapshot.playing && Number.isFinite(snapshot.durationSeconds) &&
+          snapshot.time >= snapshot.durationSeconds ? "finite-complete" : null
+        : !replay && sourceFinished ? "observed-complete" : null;
     if (disposition !== null) {
       diagnosticDisposition = true;
       onExecutionDiagnostic({ stage: "disposition", disposition, ...facts,
