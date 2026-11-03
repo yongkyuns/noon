@@ -67,6 +67,7 @@ fn image_fill_and_historical_track_endpoints_are_pinned_once_per_handle() {
         path_motion_commands: 0,
         geometry_payload_bytes: 0,
         effect_payload_bytes: 0,
+        composed_payload_bytes: 0,
     };
     let revisions = std::slice::from_ref(&revision);
     let mut scene = blank_scene();

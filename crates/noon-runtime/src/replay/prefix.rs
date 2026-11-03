@@ -743,6 +743,11 @@ impl SceneInstance {
                     .prefix_effect_payload_bytes()
                     .ok_or(ReplayError::RetentionLimit)?,
             )?;
+        let history_payload_budget = history_payload_budget.with_additional(
+            self.compiled
+                .prefix_composed_payload_bytes()
+                .ok_or(ReplayError::RetentionLimit)?,
+        )?;
         // Check the requested nested-vector storage before cloning the runtime.
         // Source spare capacity is not copied, so this pass uses occupied lengths.
         let history_payload_budget =

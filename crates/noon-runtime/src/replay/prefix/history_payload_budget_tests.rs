@@ -145,7 +145,18 @@ fn history_payload_bootstrap_charges_reported_capacity_and_keeps_readiness_prece
     let mut source = source();
     create(&mut source, 1, 2.0);
     let (publisher, runtime, receiver) = source.create_prefix_projection().unwrap();
-    let bytes = retained_bytes(&runtime);
+    let capacity_bytes = retained_bytes(&runtime);
+    let clone_bytes = history_payload_budget::clone_bytes(
+        runtime
+            .replay_history
+            .as_ref()
+            .unwrap()
+            .revisions
+            .iter()
+            .filter_map(|revision| revision.inverse.as_ref()),
+    )
+    .unwrap();
+    let bytes = capacity_bytes + clone_bytes;
     assert!(bytes > 0);
     assert_eq!(publisher.extracted_history_payload_bytes(), bytes);
     assert_eq!(receiver.retained_history_payload_bytes(), bytes);
@@ -154,10 +165,8 @@ fn history_payload_bootstrap_charges_reported_capacity_and_keeps_readiness_prece
         .create_prefix_projection_with_budgets(0, bytes)
         .unwrap();
     assert_eq!(publisher.extracted_history_payload_bytes(), bytes);
-    assert_eq!(
-        receiver.retained_history_payload_bytes(),
-        retained_bytes(&runtime)
-    );
+    assert_eq!(receiver.retained_history_payload_bytes(), bytes);
+    assert!(retained_bytes(&runtime) <= bytes);
     source.seal_replay().unwrap();
     assert!(matches!(
         source.create_prefix_projection_with_budgets(0, 0),
@@ -214,6 +223,54 @@ fn history_payload_bootstrap_charges_the_initial_supported_effect_stack() {
         }) if additional_bytes == expected_additional
     ));
     assert_eq!(source.frame().objects[0].effects.as_ref().unwrap().len(), 2);
+}
+
+#[test]
+fn history_payload_bootstrap_charges_composed_member_order() {
+    use noon_core::{ComposedSource, ObjectContentRef};
+
+    let members = [ObjectId::new(0), ObjectId::new(1)];
+    let mut owner = object(2);
+    owner.content =
+        ObjectContentRef::Composed(Arc::new(ComposedSource::new(members, None).unwrap()));
+    owner.draw_enabled = false;
+    owner.base_style = Style {
+        fill: None,
+        stroke: None,
+        ..Style::default()
+    };
+    let source_plan_bytes = std::mem::size_of::<ComposedSource>()
+        + members
+            .len()
+            .checked_mul(std::mem::size_of::<ObjectId>())
+            .unwrap();
+    let compiled = CompiledScene::compile_objects(vec![object(0), object(1), owner], &[]).unwrap();
+    let mut source = SceneInstance::new(compiled);
+    source
+        .begin_replay_retention(ReplayLimits {
+            revisions: 16,
+            payloads: 256,
+        })
+        .unwrap();
+    source.advance_to(1.0).unwrap();
+    let inverse_bytes = history_payload_budget::clone_bytes(
+        source
+            .replay_history
+            .as_ref()
+            .unwrap()
+            .revisions
+            .iter()
+            .filter_map(|revision| revision.inverse.as_ref()),
+    )
+    .unwrap();
+    assert!(matches!(
+        source.create_prefix_projection_with_budgets(0, 0),
+        Err(PrefixError::HistoryPayloadBudgetExceeded {
+            retained_bytes: 0,
+            additional_bytes,
+            limit_bytes: 0,
+        }) if additional_bytes == source_plan_bytes + inverse_bytes
+    ));
 }
 
 #[test]
@@ -423,7 +480,7 @@ fn history_payload_receiver_accumulates_bootstrap_and_suffix_bytes() {
             receiver.retained_history_payload_bytes(),
             initial + additional
         );
-        assert_eq!(retained_bytes(&runtime), initial + additional);
+        assert!(retained_bytes(&runtime) <= initial + additional);
     }
 }
 

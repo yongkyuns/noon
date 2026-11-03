@@ -1,4 +1,5 @@
-//! Saved revision vectors and logical geometry/effect payload admission. This is accounting, not a history owner or total-memory bound.
+//! Saved revision vectors and logical geometry/effect/composed payload admission.
+//! This is accounting, not a history owner or total-memory bound.
 use super::{PrefixError, ReplayError};
 use noon_compile::CompiledReplayRevision;
 

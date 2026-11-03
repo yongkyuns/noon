@@ -52,6 +52,20 @@ fn effect_stack_bytes(row: &CompiledObject) -> Option<usize> {
         )
 }
 
+/// Logical bytes for one immutable composed membership plan. Arc aliases are
+/// charged at each retained row reference, including the inline owner header.
+fn composed_source_bytes(row: &CompiledObject) -> Option<usize> {
+    let Some(source) = row.content.composed_source() else {
+        return Some(0);
+    };
+    std::mem::size_of::<noon_core::ComposedSource>().checked_add(
+        source
+            .members()
+            .len()
+            .checked_mul(std::mem::size_of::<noon_core::ObjectId>())?,
+    )
+}
+
 fn track_geometry_bytes(track: &CompiledTrack) -> Option<usize> {
     let values = match &track.values {
         TrackValues::PreparedMorph { geometry, .. } => geometry_bytes(geometry)?,
@@ -95,6 +109,9 @@ impl CompiledScene {
                 revision.effect_payload_bytes = revision
                     .effect_payload_bytes
                     .checked_add(effect_stack_bytes(row)?)?;
+                revision.composed_payload_bytes = revision
+                    .composed_payload_bytes
+                    .checked_add(composed_source_bytes(row)?)?;
             }
         }
         for (id, saved) in &revision.tracks {
@@ -114,19 +131,28 @@ impl CompiledScene {
             total.checked_add(effect_stack_bytes(row)?)
         })
     }
+
+    /// Logical composed-source membership bytes in the current projection,
+    /// charged once per row reference with checked arithmetic.
+    pub fn prefix_composed_payload_bytes(&self) -> Option<usize> {
+        self.objects.iter().try_fold(0usize, |total, row| {
+            total.checked_add(composed_source_bytes(row)?)
+        })
+    }
 }
 
 impl CompiledReplayRevision {
-    /// Requested row/channel/track backing plus both-side path/effect payloads.
+    /// Requested row/channel/track backing plus both-side path/effect/composed payloads.
     /// These operations preserve occupied lengths, not source spare capacity.
     /// This is a pre-allocation request, not a bound on allocator over-allocation.
     pub fn prefix_clone_payload_bytes(&self) -> Option<usize> {
         revision_payload_bytes(self.rows.len(), self.channels.len(), self.tracks.len())?
             .checked_add(self.geometry_payload_bytes)?
-            .checked_add(self.effect_payload_bytes)
+            .checked_add(self.effect_payload_bytes)?
+            .checked_add(self.composed_payload_bytes)
     }
 
-    /// Reported Vec backing plus stable both-side logical path/effect charges.
+    /// Reported Vec backing plus stable both-side logical payload charges.
     /// Shared paths are conservatively charged per saved/current reference.
     /// Revision exchange only swaps elements; it cannot resize these buffers.
     /// Excludes the outer index, object/track storage in the active projection,
@@ -138,7 +164,8 @@ impl CompiledReplayRevision {
             self.tracks.capacity(),
         )?
         .checked_add(self.geometry_payload_bytes)?
-        .checked_add(self.effect_payload_bytes)
+        .checked_add(self.effect_payload_bytes)?
+        .checked_add(self.composed_payload_bytes)
     }
 }
 
@@ -221,6 +248,7 @@ mod tests {
             path_motion_commands: 0,
             geometry_payload_bytes: 0,
             effect_payload_bytes: 0,
+            composed_payload_bytes: 0,
         };
         assert_eq!(revision.prefix_clone_payload_bytes(), Some(0));
         let reserved = revision_payload_bytes(
@@ -262,6 +290,71 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn composed_membership_is_charged_on_both_saved_and_current_rows() {
+        use noon_core::{
+            ComposedSource, GeometryRef, ObjectContentRef, ObjectId, Style, Transform2D,
+        };
+        use std::sync::Arc;
+
+        let members = [ObjectId::new(1), ObjectId::new(2)];
+        let mut owner = CompiledObject::new(
+            ObjectId::new(0),
+            GeometryRef::circle(0.5),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        owner.content =
+            ObjectContentRef::Composed(Arc::new(ComposedSource::new(members, None).unwrap()));
+        owner.draw_enabled = false;
+        owner.base_style = Style {
+            fill: None,
+            stroke: None,
+            ..Style::default()
+        };
+        let member = |id| {
+            CompiledObject::new(
+                ObjectId::new(id),
+                GeometryRef::circle(0.25),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        };
+        let scene =
+            CompiledScene::compile_objects(vec![owner.clone(), member(1), member(2)], &[]).unwrap();
+        let one_reference = std::mem::size_of::<ComposedSource>()
+            + members
+                .len()
+                .checked_mul(std::mem::size_of::<ObjectId>())
+                .unwrap();
+        let mut revision = CompiledReplayRevision {
+            rows: vec![SavedRow {
+                index: 0,
+                object: Some(owner),
+                order: None,
+            }],
+            inset_2d_view: None,
+            channels: Vec::new(),
+            tracks: Vec::new(),
+            camera_motion_payloads: 0,
+            path_motion_commands: 0,
+            geometry_payload_bytes: 0,
+            effect_payload_bytes: 0,
+            composed_payload_bytes: 0,
+        };
+
+        scene
+            .charge_prefix_revision_geometry(&mut revision)
+            .unwrap();
+        assert_eq!(revision.composed_payload_bytes, one_reference * 2);
+        assert_eq!(scene.prefix_composed_payload_bytes(), Some(one_reference));
+
+        revision.composed_payload_bytes = usize::MAX;
+        assert!(scene
+            .charge_prefix_revision_geometry(&mut revision)
+            .is_none());
     }
 
     #[test]

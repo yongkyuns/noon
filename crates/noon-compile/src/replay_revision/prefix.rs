@@ -313,6 +313,7 @@ impl CompiledScene {
                 path_motion_commands: 0,
                 geometry_payload_bytes: old.geometry_payload_bytes,
                 effect_payload_bytes: old.effect_payload_bytes,
+                composed_payload_bytes: old.composed_payload_bytes,
             });
         }
         output.reverse();
