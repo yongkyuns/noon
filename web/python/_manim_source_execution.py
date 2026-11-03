@@ -284,8 +284,9 @@ def _numpy_numeric_expression(node, arrays, containers, module_literals, local=(
     if isinstance(node, ast.Attribute) and node.attr in {"real", "imag"}:
         return _numpy_array_expression(node.value, arrays)
     if isinstance(node, ast.Subscript):
-        return (_numpy_array_expression(node.value, arrays)
-                or isinstance(node.value, ast.Name) and node.value.id in containers | set(local))
+        return ((_numpy_array_expression(node.value, arrays)
+                 or isinstance(node.value, ast.Name) and node.value.id in containers | set(local))
+                and _numpy_index_expression(node.slice, arrays, module_literals, local))
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         if node.func.id in {"int", "float", "complex", "abs", "round", "min", "max", "len"}:
             return (bool(node.args) and not node.keywords
@@ -312,6 +313,141 @@ def _numpy_numeric_expression(node, arrays, containers, module_literals, local=(
                 return False
         return _numpy_numeric_expression(node.elt, arrays, containers, module_literals, local_names)
     return False
+
+
+def _numpy_index_expression(node, arrays, module_literals, integer_names):
+    if node is None:
+        return True
+    if isinstance(node, ast.Constant):
+        return node.value is None or type(node.value) is int
+    if isinstance(node, ast.Name):
+        value = module_literals.get(node.id)
+        return node.id in integer_names or isinstance(value, ast.Constant) and type(value.value) is int
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        return _numpy_index_expression(node.operand, arrays, module_literals, integer_names)
+    if isinstance(node, ast.Slice):
+        return all(value is None or _numpy_index_expression(value, arrays, module_literals, integer_names)
+                   for value in (node.lower, node.upper, node.step))
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_numpy_index_expression(item, arrays, module_literals, integer_names) for item in node.elts)
+    if _numpy_array_expression(node, arrays):
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)):
+        return (_numpy_index_expression(node.left, arrays, module_literals, integer_names)
+                and _numpy_index_expression(node.right, arrays, module_literals, integer_names))
+    if _static_numpy_literal(node) and isinstance(node, (ast.List, ast.Tuple)):
+        return True
+    return False
+
+
+def _integer_expression(node, names, module_literals):
+    if isinstance(node, ast.Constant):
+        return type(node.value) is int
+    if isinstance(node, ast.Name):
+        value = module_literals.get(node.id)
+        return node.id in names or (isinstance(value, ast.Constant) and type(value.value) is int)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        return _integer_expression(node.operand, names, module_literals)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod,
+                                                            ast.LShift, ast.RShift, ast.BitAnd, ast.BitOr, ast.BitXor)):
+        return (_integer_expression(node.left, names, module_literals)
+                and _integer_expression(node.right, names, module_literals))
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"int", "len", "min", "max"}:
+        return bool(node.args) and not node.keywords and all(
+            _integer_expression(argument, names, module_literals) for argument in node.args)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "bit_length":
+        return not node.args and not node.keywords and _integer_expression(node.func.value, names, module_literals)
+    return False
+
+
+def _integer_names_in_body(body, parameters, module_literals):
+    names = set(parameters)
+    changed = True
+    while changed:
+        changed = False
+        for node in _walk_scope(body):
+            if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+                iterator = node.iter
+                integer_iterator = (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
+                                    and iterator.func.id == "range" and bool(iterator.args)
+                                    and all(_integer_expression(arg, names, module_literals) for arg in iterator.args))
+                iterable = (module_literals.get(iterator.id) if isinstance(iterator, ast.Name) else None)
+                literal_iterator = (_static_numpy_literal(iterator) and isinstance(iterator, (ast.List, ast.Tuple))
+                                    and all(isinstance(item, ast.Constant) and type(item.value) is int
+                                            for item in iterator.elts)) or (
+                    isinstance(iterator, ast.Name) and isinstance(iterable, (ast.List, ast.Tuple))
+                    and all(isinstance(item, ast.Constant) and type(item.value) is int for item in iterable.elts))
+                if integer_iterator or literal_iterator:
+                    target = node.target.elts if isinstance(node.target, (ast.Tuple, ast.List)) else [node.target]
+                    for item in target:
+                        if isinstance(item, ast.Name) and item.id not in names:
+                            names.add(item.id)
+                            changed = True
+                elif (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
+                      and iterator.func.id == "enumerate" and iterator.args
+                      and isinstance(node.target, (ast.Tuple, ast.List)) and len(node.target.elts) == 2
+                      and isinstance(node.target.elts[0], ast.Name)
+                      and node.target.elts[0].id not in names):
+                    names.add(node.target.elts[0].id)
+                    changed = True
+            if isinstance(node, ast.Assign) and _integer_expression(node.value, names, module_literals):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id not in names:
+                        names.add(target.id)
+                        changed = True
+    invalid = set()
+    for node in _walk_scope(body):
+        if isinstance(node, ast.Assign) and not _integer_expression(node.value, names, module_literals):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    invalid.add(target.id)
+    return names - invalid
+
+
+def _integer_index_container_names(body, arrays, integer_names, module_literals):
+    bindings = _SourceBindings()
+    for statement in body:
+        bindings.visit(statement)
+    parents = {}
+    for statement in body:
+        for parent in ast.walk(statement):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+    candidates = {statement.targets[0].id for statement in _walk_scope(body)
+                  if isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                  and isinstance(statement.targets[0], ast.Name)
+                  and isinstance(statement.value, ast.List)
+                  and all(_integer_expression(item, integer_names, module_literals)
+                          for item in statement.value.elts)
+                  and bindings.binding_counts.get(statement.targets[0].id) == 1}
+    safe = set()
+    for name in candidates:
+        valid = True
+        for node in (node for statement in body for node in ast.walk(statement)):
+            if not isinstance(node, ast.Name) or node.id != name:
+                continue
+            parent = parents.get(node)
+            if isinstance(node.ctx, ast.Store):
+                valid &= (isinstance(parent, ast.Assign) and isinstance(parent.value, ast.List)
+                          and all(_integer_expression(item, integer_names, module_literals)
+                                  for item in parent.value.elts) and node in parent.targets)
+            elif isinstance(parent, ast.Attribute) and parent.value is node and parent.attr == "append":
+                call = parents.get(parent)
+                valid &= (isinstance(call, ast.Call) and len(call.args) == 1 and not call.keywords
+                          and _integer_expression(call.args[0], integer_names, module_literals))
+            elif isinstance(parent, ast.Subscript) and parent.slice is node:
+                valid &= (isinstance(parent.ctx, ast.Load)
+                          and _numpy_array_expression(parent.value, arrays))
+            elif (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
+                  and parent.func.id == "len" and parent.args == [node]):
+                valid &= True
+            else:
+                valid = False
+            if not valid:
+                break
+        if valid:
+            safe.add(name)
+    return safe
 
 
 def _numpy_array_collection(node, arrays, module_literals, array_functions=()):
@@ -559,7 +695,7 @@ def _safe_numpy_containers(body):
     return safe_lists
 
 
-def _nested_scope_references(body, arrays, numeric_containers):
+def _nested_scope_references(body, arrays, numeric_containers, integer_names, module_literals):
     if not arrays and not numeric_containers:
         return False
     parents = {}
@@ -579,7 +715,8 @@ def _nested_scope_references(body, arrays, numeric_containers):
                 if node.id in arrays:
                     parent = parents.get(node)
                     if not (isinstance(parent, ast.Subscript) and parent.value is node
-                            and isinstance(parent.ctx, ast.Load)):
+                            and isinstance(parent.ctx, ast.Load)
+                            and _numpy_index_expression(parent.slice, arrays, module_literals, integer_names)):
                         return True
     return False
 
@@ -855,6 +992,27 @@ class _SceneOnlySource(ast.NodeVisitor):
             and bindings.binding_counts.get(node.targets[0].id) == 1
             and _static_numpy_literal(node.value)
         }
+        self.numpy_integer_parameters = {name: set() for name in self.numpy_functions}
+        changed = True
+        while changed:
+            changed = False
+            for name, function in self.numpy_functions.items():
+                body_integer_names = _integer_names_in_body(
+                    function.body, self.numpy_integer_parameters[name], self.module_numpy_literals)
+                for call in (node for node in _walk_scope(function.body)
+                             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                             and node.func.id in self.numpy_functions):
+                    callee = self.numpy_functions[call.func.id]
+                    formals = [arg.arg for arg in [*callee.args.posonlyargs, *callee.args.args,
+                                                    *callee.args.kwonlyargs]]
+                    actuals = dict(zip(formals, call.args))
+                    actuals.update({keyword.arg: keyword.value for keyword in call.keywords
+                                    if keyword.arg in formals})
+                    for formal, actual in actuals.items():
+                        if (formal not in self.numpy_integer_parameters[call.func.id]
+                                and _integer_expression(actual, body_integer_names, self.module_numpy_literals)):
+                            self.numpy_integer_parameters[call.func.id].add(formal)
+                            changed = True
         changed = True
         while changed:
             changed = False
@@ -1003,6 +1161,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.owned_containers = [set()]
         self.numpy_safe_containers = [set()]
         self.numpy_array_names = [set()]
+        self.numpy_integer_names = [set()]
         self.numpy_scalar_names = [set()]
         self.safe_numpy_writes = [set()]
         self.local_discard_names = [set()]
@@ -1891,6 +2050,9 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.admitted_plot_loads.add(id(node.func))
         if isinstance(node.func, ast.Name):
             name = node.func.id
+            if name in {"int", "float", "complex", "abs", "round", "min", "max", "len", "range"} and (
+                    name in self.module_bindings or any(name in scope for scope in self.scopes[1:])):
+                raise _OpaqueSource(node.func, "unproven_shadowed_numeric_builtin")
             if name in {"VMobject", "SVGMobject"} and (
                     name in self.module_bindings or any(name in scope for scope in self.scopes[1:])):
                 raise _OpaqueSource(node.func, "unproven_shadowed_svg_constructor")
@@ -2441,7 +2603,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             bool_checks.add(name)
         return set()
 
-    def _scope(self, body, parameters=(), array_parameters=(), scalar_parameters=()):
+    def _scope(self, body, parameters=(), array_parameters=(), scalar_parameters=(), integer_parameters=()):
         parameters = set(parameters)
         bindings = _SourceBindings()
         for node in body:
@@ -2455,6 +2617,12 @@ class _SceneOnlySource(ast.NodeVisitor):
             bindings = _SourceBindings(integer_names)
             for node in body:
                 bindings.visit(node)
+        integer_names = _integer_names_in_body(
+            body, set(integer_parameters) | integer_names, self.module_numpy_literals)
+        for nested in (node for statement in body for node in ast.walk(statement)
+                       if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
+            integer_names.update(self.numpy_integer_parameters.get(nested.name, ()))
+        self.numpy_integer_names.append(integer_names)
         image_pixel_sources = self._image_pixel_source_names(body, bindings, parameters)
         self.scopes.append(bindings.names | parameters)
         self.shader_values.append({})
@@ -2497,7 +2665,10 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.safe_callable_aliases.append(aliases)
         array_names = _array_names_in_body(body, array_parameters, self.numpy_array_functions,
                                            self.numpy_function_outputs)
-        if _nested_scope_references(body, array_names, self.numpy_safe_containers[-1]):
+        integer_names.update(_integer_index_container_names(
+            body, array_names, integer_names, self.module_numpy_literals))
+        if _nested_scope_references(body, array_names, self.numpy_safe_containers[-1],
+                                    integer_names, self.module_numpy_literals):
             raise _OpaqueSource(None, "unproven_numpy_closure")
         self.numpy_array_names.append(array_names)
         self.owned_containers[-1].update(array_names - set(array_parameters))
@@ -2528,6 +2699,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.image_pixel_sources.pop()
             self.shader_values.pop()
             self.numpy_array_names.pop()
+            self.numpy_integer_names.pop()
             self.safe_numpy_writes.pop()
             self.numpy_scalar_names.pop()
             self.numpy_safe_containers.pop()
@@ -2548,7 +2720,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.visit(value)
         self._scope(node.body, (argument.arg for argument in arguments),
                     self.numpy_array_parameters.get(node.name, ()),
-                    self.numpy_scalar_parameters.get(node.name, ()))
+                    self.numpy_scalar_parameters.get(node.name, ()),
+                    self.numpy_integer_parameters.get(node.name, ()))
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
@@ -2767,6 +2940,11 @@ class _SceneOnlySource(ast.NodeVisitor):
     visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = _comprehension
 
     def visit_Subscript(self, node):
+        if (isinstance(node.ctx, ast.Load)
+                and _numpy_array_expression(node.value, self.numpy_array_names[-1], self.numpy_array_functions)
+                and not _numpy_index_expression(node.slice, self.numpy_array_names[-1],
+                                                self.module_numpy_literals, self.numpy_integer_names[-1])):
+            raise _OpaqueSource(node, "unproven_numpy_index")
         if not isinstance(node.ctx, ast.Load):
             self._reject_shader_collection_mutation(node, node.value)
             name = node.value.id if isinstance(node.value, ast.Name) else None

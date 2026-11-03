@@ -323,6 +323,24 @@ class SourceEffectsTests(unittest.TestCase):
             '    def construct(self):\n        result = np.concatenate(context.get("arrays"))\n',
             'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
             '    def construct(self):\n        result = np.linspace(context.get("start"), 1, 3)\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    return np.array([values[context.get("index")]])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    values[0] = values[context.get("index")]\n'
+            '    return values\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    int = context.get("cast")\n'
+            '    return np.array([int(1)])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    def read(index): return values[index]\n'
+            '    return np.array([read(context.get("index"))])\n',
             'import numpy as np\n'
             'def helper(context):\n'
             '    values = [context.get("payload")]\n'
