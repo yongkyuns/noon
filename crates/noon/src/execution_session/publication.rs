@@ -65,7 +65,7 @@ pub(super) struct PreparedScalarPublicationContract {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecutionSessionPublicationError {
     Interaction(String),
-    /// The first audio execution profile is a finite, pre-authored plan.
+    /// Only an immutable root soundtrack admits ordinary visual publication.
     AudioExecutionImmutable,
     /// Scene controls currently belong to the same finite pre-authored profile.
     PlaybackControlsExecutionImmutable,
@@ -93,7 +93,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
         match self {
             Self::Interaction(message) => f.write_str(message),
             Self::AudioExecutionImmutable => f.write_str(
-                "audio execution currently requires a pre-authored immutable scene; declare all clips and animation before execution (#2263)",
+                "audio publication requires an unchanged execution-root soundtrack; scoped clip edits and input/callback publication are not supported (#2263, #2358)",
             ),
             Self::PlaybackControlsExecutionImmutable => f.write_str(
                 "scene playback controls currently require a pre-authored immutable scene (#2263)",
@@ -230,10 +230,17 @@ impl ExecutionSession {
         &self,
         purpose: SemanticPublicationPurpose,
     ) -> Result<(), ExecutionSessionPublicationError> {
-        // Until audio participates in live structural/history publication, a
-        // scope detach or removal must not leave an obsolete audible plan alive.
-        // Reject the whole batch before resource admission or semantic staging.
-        if self.runtime.has_audio() {
+        // The fixed root soundtrack has no visual membership dependence. Keep
+        // nested/mixed scopes and input/callback profiles closed; do not rescan
+        // clips or PCM for each local visual edit.
+        if self.runtime.has_audio()
+            && (self.immutable_audio_root.is_none()
+                || !matches!(
+                    purpose,
+                    SemanticPublicationPurpose::AuthoredMutation
+                        | SemanticPublicationPurpose::SegmentCompletion
+                ))
+        {
             return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
         }
         if self.has_playback_controls() {
@@ -501,6 +508,15 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
+        // A scope removal would leave the immutable compiled soundtrack stale.
+        // The prepared removal index includes implicit removals. Reject before
+        // materializing provisional geometry or crossing any publication barrier.
+        if self
+            .immutable_audio_root
+            .is_some_and(|root| prepared.node_is_removed(root))
+        {
+            return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
+        }
         let pulse_edit = if purpose == SemanticPublicationPurpose::AuthoredMutation
             && self.pending_segment_completion.is_some()
         {

@@ -566,7 +566,10 @@ pub(super) fn admit_profile(
     source: &dyn crate::execution_source::NativeExecutionSource,
 ) -> Result<(), NativeHostError> {
     let session = source.session();
-    if source.source_active() || session.finite_timeline_end_time().is_none() {
+    if source.source_active()
+        || session.finite_timeline_end_time().is_none()
+        || !session.supports_immutable_playback()
+    {
         return Err(NativeHostError::Audio("native audio requires a complete finite immutable scene without source continuations or required callbacks (#2263)".into()));
     }
     if session

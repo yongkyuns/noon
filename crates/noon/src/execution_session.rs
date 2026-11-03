@@ -860,6 +860,10 @@ pub struct ExecutionSession {
     reactive_projection: SemanticReactiveProjection,
     signal_timeline: SignalTimelineSchedule,
     runtime: SceneInstance,
+    /// Derived once from the immutable initial clip plan. Only one execution-root
+    /// soundtrack admits visual publication; that exact scope cannot be removed.
+    /// Clips/resources remain owned by the ordinary compiled plan, not this field.
+    immutable_audio_root: Option<SemanticNodeId>,
     camera_object: Option<ObjectId>,
     next_activation_track_id: Option<u64>,
     last_native_event_sequence: Option<u64>,
@@ -918,6 +922,7 @@ impl Clone for ExecutionSession {
                 .signal_timeline
                 .clone_for_runtime(runtime.runtime_identity()),
             runtime,
+            immutable_audio_root: self.immutable_audio_root,
             camera_object: self.camera_object,
             next_activation_track_id: self.next_activation_track_id,
             last_native_event_sequence: self.last_native_event_sequence,
@@ -1117,6 +1122,9 @@ impl ExecutionSession {
         let last_spatial_update =
             spatial_index.rebuild(runtime.frame(), runtime.geometry_resources(), live_slots);
         let _ = runtime.take_spatial_changes();
+        let immutable_audio_root = runtime
+            .uniform_audio_scope()
+            .filter(|&scope| reachability.is_execution_root(scope));
         Self {
             store_identity,
             require_effect_preparation: false,
@@ -1129,6 +1137,7 @@ impl ExecutionSession {
             reactive_projection,
             signal_timeline,
             runtime,
+            immutable_audio_root,
             camera_object,
             next_activation_track_id,
             last_native_event_sequence: None,

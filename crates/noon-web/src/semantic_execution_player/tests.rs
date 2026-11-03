@@ -86,6 +86,50 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
 }
 
 #[test]
+fn root_audio_history_and_live_edits_do_not_grant_worker_playback() {
+    for mode in 0..4 {
+        let mut scene = noon::Scene::new();
+        let marker = scene.circle(0.5).unwrap();
+        scene.add(&marker).unwrap();
+        let pcm = noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.25; 8_000], 32_000)
+            .unwrap();
+        scene
+            .audio(
+                pcm,
+                noon_core::AudioClipOptions {
+                    duration: Some(2.0),
+                    looped: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        if mode != 3 {
+            session.begin_replay_retention(Default::default()).unwrap();
+        }
+        scene.live(&mut session).shift(&marker, 1.0, 0.0).unwrap();
+        session.advance_to(1.0).unwrap();
+        if mode < 3 && mode > 0 {
+            session.seal_replay().unwrap();
+        }
+        if mode == 2 {
+            session.discard_replay_retention();
+        }
+        let publication = session.publication_context();
+        let frame = session.frame().clone();
+        assert!(SemanticExecutionPlayer::require_worker_execution_profile(&session).is_err());
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.frame(), &frame);
+        assert!(SemanticExecutionPlayer::from_scene_execution(
+            scene.into_execution_with_session(session).unwrap(),
+            2.0,
+            109,
+        )
+        .is_err());
+    }
+}
+
+#[test]
 fn paused_worker_audio_tick_survives_new_scene_in_shared_authoring_store() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(0.5).unwrap();
