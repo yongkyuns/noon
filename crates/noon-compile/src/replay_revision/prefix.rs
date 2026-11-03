@@ -2,7 +2,7 @@
 //! revision representation; no second scene, evaluator, or resource registry.
 use super::{CompiledReplayRevision, CompiledScene, CompiledTrack, SavedRow};
 use crate::{CompiledEffectStack, CompiledObject};
-use noon_core::{Property, TrackId};
+use noon_core::{Property, TrackId, TrackValues};
 use std::collections::BTreeMap;
 
 mod family;
@@ -60,6 +60,49 @@ pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
 fn local_track(track: Option<&CompiledTrack>) -> bool {
     track.is_none_or(|track| {
         local_property(track.property) && super::path_motion_command_count(&track.values) == 0
+    })
+}
+
+fn camera_owner(object: &CompiledObject) -> bool {
+    object.live
+        && object.spatial.as_deref().is_some_and(|spatial| {
+            spatial.camera_projection.is_some()
+                && spatial.camera_profile.is_some()
+                && !spatial.point_light
+                && spatial.spatial_anchor_family.is_none()
+                && spatial.fixed_orientation_center.is_none()
+                && spatial.cairo_path_appearance.is_none()
+        })
+}
+
+fn local_track_for_object(track: Option<&CompiledTrack>, object: Option<&CompiledObject>) -> bool {
+    track.is_none_or(|track| {
+        let typed_camera_track = matches!(
+            track.property,
+            Property::WorldTransform | Property::CameraProfile
+        ) && object.is_some_and(camera_owner)
+            && object.is_some_and(|object| {
+                crate::valid_compiled_track_for_spatial(
+                    track.property,
+                    &track.values,
+                    object.spatial.as_deref(),
+                )
+            })
+            && match (&track.property, &track.values) {
+                (Property::WorldTransform, TrackValues::WorldTransform { .. }) => true,
+                (
+                    Property::CameraProfile,
+                    TrackValues::CameraProfile {
+                        from,
+                        to,
+                        near,
+                        far,
+                    },
+                ) => from.camera(*near, *far).is_some() && to.camera(*near, *far).is_some(),
+                _ => false,
+            };
+        (local_property(track.property) || typed_camera_track)
+            && super::path_motion_command_count(&track.values) == 0
     })
 }
 
@@ -137,7 +180,8 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
 fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
     object.live
         && object.id == physical.id
-        && object.spatial.is_none()
+        && ((object.spatial.is_none() && physical.spatial.is_none())
+            || (camera_owner(object) && camera_owner(physical)))
         && object
             .effects
             .as_ref()
@@ -147,9 +191,7 @@ fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
 impl CompiledReplayRevision {
     fn local_prefix_metadata(&self) -> bool {
         self.inset_2d_view.is_none()
-            && self.camera_motion_payloads == 0
             && self.path_motion_commands == 0
-            && self.channels.iter().all(|key| local_property(key.property))
             && self.rows.iter().filter(|row| row.order.is_some()).count() <= 1
     }
 
@@ -170,6 +212,21 @@ impl CompiledScene {
         if !old.local_prefix_metadata() {
             return false;
         }
+        if !old.channels.iter().all(|channel| {
+            local_property(channel.property)
+                || matches!(
+                    channel.property,
+                    Property::WorldTransform | Property::CameraProfile
+                ) && old
+                    .rows
+                    .iter()
+                    .find(|row| row.index == channel.object_index)
+                    .and_then(|row| row.object.as_ref())
+                    .zip(self.objects.get(channel.object_index as usize))
+                    .is_some_and(|(before, after)| camera_owner(before) && camera_owner(after))
+        }) {
+            return false;
+        }
         for saved in &old.rows {
             let Some(physical) = self.objects.get(saved.index as usize) else {
                 return false;
@@ -182,15 +239,12 @@ impl CompiledScene {
         }
         old.tracks.iter().all(|(id, before)| {
             let after = self.track(*id);
-            if !local_track(before.as_ref()) || !local_track(after) {
-                return false;
-            }
             let Some(index) = before
                 .as_ref()
                 .or(after)
                 .map(|track| track.object_index as usize)
             else {
-                return true;
+                return local_track(before.as_ref()) && local_track(after);
             };
             let physical = self.objects.get(index).filter(|object| object.live);
             let before_object = old
@@ -198,10 +252,13 @@ impl CompiledScene {
                 .iter()
                 .find(|row| row.index as usize == index)
                 .map_or(physical, |row| row.object.as_ref());
-            before
-                .as_ref()
-                .is_none_or(|track| local_effect_track(track, before_object))
-                && after.is_none_or(|track| local_effect_track(track, physical))
+            let valid = local_track_for_object(before.as_ref(), before_object)
+                && local_track_for_object(after, physical)
+                && before
+                    .as_ref()
+                    .is_none_or(|track| local_effect_track(track, before_object))
+                && after.is_none_or(|track| local_effect_track(track, physical));
+            valid
         })
     }
 
@@ -212,8 +269,9 @@ impl CompiledScene {
     /// Capturing each revision from the latest scene directly would leak a later
     /// write into earlier timestamps when a row is changed more than once.
     ///
-    /// Ordinary 2D lifecycle, content and property tracks are admitted. Family
-    /// transforms, path-motion and spatial plans require separate qualification.
+    /// Ordinary 2D lifecycle/content/property changes and typed profile history
+    /// for the existing camera owner are admitted. Family transforms, path-motion,
+    /// and other spatial rows require separate qualification.
     /// Append-only glyph plans travel through the existing immutable plan table.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry the bounded ordered Blur/Glow profile with optional
@@ -235,7 +293,7 @@ impl CompiledScene {
         for old in inverse.iter().rev() {
             // Empty revisions denote append-only glyph plans. Their immutable
             // table suffix is delivered separately; mapped starts gate activity.
-            if !old.local_prefix_metadata() {
+            if !self.supports_prefix_revision(old) {
                 return None;
             }
             let mut rows = Vec::with_capacity(old.rows.len());
@@ -275,7 +333,28 @@ impl CompiledScene {
                 let after = track_overlay
                     .entry(*id)
                     .or_insert_with(|| self.track(*id).cloned());
-                if !local_track(before.as_ref()) || !local_track(after.as_ref()) {
+                let Some(index) = before
+                    .as_ref()
+                    .or(after.as_ref())
+                    .map(|track| track.object_index as usize)
+                else {
+                    if !local_track(before.as_ref()) || !local_track(after.as_ref()) {
+                        return None;
+                    }
+                    tracks.push((*id, after.clone()));
+                    *after = before.clone();
+                    continue;
+                };
+                let physical = self.objects.get(index)?;
+                let before_object = old
+                    .rows
+                    .iter()
+                    .find(|row| row.index as usize == index)
+                    .and_then(|row| row.object.as_ref())
+                    .or_else(|| physical.live.then_some(physical));
+                if !local_track_for_object(before.as_ref(), before_object)
+                    || !local_track_for_object(after.as_ref(), Some(physical))
+                {
                     return None;
                 }
                 if let Some(index) = before
@@ -309,7 +388,7 @@ impl CompiledScene {
                 inset_2d_view: None,
                 tracks,
                 channels: old.channels.clone(),
-                camera_motion_payloads: 0,
+                camera_motion_payloads: old.camera_motion_payloads,
                 path_motion_commands: 0,
                 geometry_payload_bytes: old.geometry_payload_bytes,
                 effect_payload_bytes: old.effect_payload_bytes,
@@ -318,6 +397,136 @@ impl CompiledScene {
         }
         output.reverse();
         Some(output)
+    }
+}
+
+#[cfg(test)]
+mod camera_prefix_tests {
+    use super::*;
+    use crate::{CompiledObject, CompiledSpatialDrawKind, CompiledSpatialState};
+    use noon_core::{
+        GeometryRef, ManimCamera3DProfile, SemanticSpatialCompositionDomain,
+        SemanticSpatialMaterial, SemanticVec3, SemanticWorldTransform3D, Style, Transform2D,
+        WorldTransformTrackEndpoint,
+    };
+
+    fn object(camera: bool, point_light: bool) -> CompiledObject {
+        let mut object = CompiledObject::new(
+            noon_core::ObjectId::new(0),
+            GeometryRef::circle(0.0),
+            Transform2D::IDENTITY,
+            Style::default(),
+        );
+        let profile = ManimCamera3DProfile {
+            phi: 0.6,
+            theta: -1.2,
+            gamma: 0.0,
+            focal_distance: 5.0,
+            zoom: 1.0,
+            frame_height: 8.0,
+            frame_center: SemanticVec3::ZERO,
+        };
+        let camera_pose = profile.camera(0.1, 100.0).unwrap();
+        object.spatial = Some(Box::new(CompiledSpatialState {
+            world: SemanticWorldTransform3D::new(
+                camera_pose.position,
+                camera_pose.orientation,
+                SemanticVec3::new(1.0, 1.0, 1.0),
+            )
+            .unwrap(),
+            camera_projection: camera.then(|| {
+                profile
+                    .camera(0.1, 100.0)
+                    .expect("test camera profile is valid")
+                    .projection
+            }),
+            camera_profile: camera.then_some(profile),
+            camera_motions: None,
+            material: SemanticSpatialMaterial::Unlit,
+            point_light,
+            composition_domain: SemanticSpatialCompositionDomain::World,
+            draw_kind: CompiledSpatialDrawKind::Planar,
+            spatial_anchor_family: None,
+            fixed_orientation_center: None,
+            cairo_path_appearance: None,
+        }));
+        object
+    }
+
+    #[test]
+    fn spatial_suffix_predicate_keeps_meshes_and_lights_outside_camera_slice() {
+        let camera = object(true, false);
+        let mesh = object(false, false);
+        let light = object(false, true);
+        assert!(camera_owner(&camera));
+        assert!(!camera_owner(&mesh));
+        assert!(!camera_owner(&light));
+        assert!(local_object(&camera, &camera));
+        assert!(!local_object(&mesh, &mesh));
+        assert!(!local_object(&light, &light));
+
+        let camera_track = CompiledTrack {
+            id: TrackId::new(1),
+            object_index: 0,
+            property: Property::WorldTransform,
+            values: TrackValues::WorldTransform {
+                from: WorldTransformTrackEndpoint::from_world(SemanticWorldTransform3D::IDENTITY),
+                to: WorldTransformTrackEndpoint::from_world(SemanticWorldTransform3D::IDENTITY),
+            },
+            timing: noon_core::TrackTiming::new(0.0, 1.0, noon_core::RateFunction::Linear),
+            time_map: noon_core::CompositionTimeMap::identity(),
+            transform_geometry_plan: None,
+            reconciled: false,
+        };
+        assert!(local_track_for_object(Some(&camera_track), Some(&camera)));
+        assert!(!local_track_for_object(Some(&camera_track), Some(&mesh)));
+        assert!(!local_track_for_object(Some(&camera_track), Some(&light)));
+    }
+
+    #[test]
+    fn camera_motion_entries_stay_charged_in_forward_revisions() {
+        let id = noon_core::ObjectId::new(0);
+        let mut camera = object(true, false);
+        camera.id = id;
+        let spatial = camera.spatial.as_deref().unwrap();
+        let profile = spatial.camera_profile.unwrap();
+        let first = noon_core::CameraAngularMotion::new(
+            profile,
+            noon_core::CameraRotationAxis::Theta,
+            0.1,
+            0.0,
+            Some(0.5),
+            0.1,
+            100.0,
+        )
+        .unwrap();
+        let second = noon_core::CameraAngularMotion::new(
+            profile,
+            noon_core::CameraRotationAxis::Theta,
+            0.1,
+            0.5,
+            Some(1.0),
+            0.1,
+            100.0,
+        )
+        .unwrap();
+        camera.spatial.as_deref_mut().unwrap().camera_motions = Some(std::sync::Arc::from([first]));
+        let mut compiled = CompiledScene::compile_objects(vec![camera.clone()], &[]).unwrap();
+        let mut next_spatial = camera.spatial.as_deref().unwrap().clone();
+        next_spatial.camera_motions = Some(std::sync::Arc::from([first, second]));
+        let patch = crate::ExecutionPatch::SetSpatialState {
+            object: id,
+            base_transform: camera.base_transform,
+            spatial: Some(next_spatial),
+        };
+        let inverse = compiled.prepare_replay_revision(&patch).unwrap();
+        compiled.apply_execution_patch(&patch).unwrap();
+
+        assert_eq!(inverse.camera_motion_payloads, 3);
+        assert!(compiled.supports_prefix_revision(&inverse));
+        let forward = compiled.forward_prefix_revisions(&[&inverse]).unwrap();
+        assert_eq!(forward[0].camera_motion_payloads, 3);
+        assert_eq!(forward[0].retention_cost(), inverse.retention_cost());
     }
 }
 
