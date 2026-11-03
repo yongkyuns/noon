@@ -5,6 +5,7 @@ use crate::{CompiledEffectStack, CompiledObject};
 use noon_core::{Property, TrackId, TrackValues};
 use std::collections::BTreeMap;
 
+mod backdrop;
 mod family;
 mod order;
 mod resources;
@@ -40,10 +41,11 @@ fn local_property(property: Property) -> bool {
 /// then optional stack-owned visibility NoiseDissolve. Arbitrary stacks and
 /// shader programs remain outside this profile.
 pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
-    use noon_core::EffectDefinition::{Blur, Glow, NoiseDissolve};
+    use noon_core::EffectDefinition::{BackdropBlur, Blur, Glow, NoiseDissolve};
 
     match (stack.definitions(), stack.visibility()) {
         ([], None) => true,
+        ([BackdropBlur(_)], None) => backdrop::standalone_stack(stack),
         ([Blur(_)], None) => true,
         ([Glow(_)], None) => true,
         ([Blur(_), Glow(_)], None) => true,
@@ -201,7 +203,9 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
             effect.definition.as_glow().is_some()
         }
         (Property::EffectRadius, EffectTrackValue::Radius(_), EffectTrackValue::Radius(_)) => {
-            effect.definition.as_blur().is_some() || effect.definition.as_glow().is_some()
+            effect.definition.as_blur().is_some()
+                || effect.definition.as_glow().is_some()
+                || backdrop::radius_track(&effect.definition, from, to)
         }
         (
             Property::EffectIntensity,
@@ -325,8 +329,8 @@ impl CompiledScene {
     /// Append-only glyph plans travel through the existing immutable plan table.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry the bounded ordered Blur/Glow profile with optional
-    /// trailing visibility NoiseDissolve and its typed tracks. Other effect
-    /// definitions remain outside this suffix profile.
+    /// trailing visibility NoiseDissolve, or a standalone BackdropBlur with typed
+    /// radius tracks. Other effect definitions remain outside this suffix profile.
     /// Ordering reconstruction visits only affected rows and their neighbours;
     /// it never clones/scans the full painter/family order.
     /// The caller must pass the complete, ordered suffix ending at this scene's

@@ -45,6 +45,8 @@ fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
 }
 
 #[cfg(test)]
+mod backdrop_tests;
+#[cfg(test)]
 mod camera_prefix_tests;
 #[cfg(test)]
 mod spatial_prefix_tests;

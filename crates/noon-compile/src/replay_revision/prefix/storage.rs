@@ -424,16 +424,15 @@ mod tests {
     }
 
     #[test]
-    fn unqualified_effect_rows_remain_outside_prefix_suffix_admission() {
+    fn unsupported_effect_shapes_remain_outside_prefix_suffix_admission() {
         use crate::{CompiledEffect, CompiledEffectStack, CompiledObject, ExecutionPatch};
         use noon_core::{
-            BackdropBlur, Blur, Color, EffectDefinition, GeometryRef, Glow, ObjectId,
-            SemanticNodeId, Style, Transform2D,
+            Blur, Color, EffectDefinition, GeometryRef, Glow, ObjectId, SemanticNodeId, Style,
+            Transform2D,
         };
         for definitions in [
             vec![EffectDefinition::Glow(Glow::default()); 2],
             vec![EffectDefinition::Blur(Blur::default()); 2],
-            vec![EffectDefinition::BackdropBlur(BackdropBlur::default())],
         ] {
             let id = ObjectId::new(0);
             let effects = std::sync::Arc::new(
