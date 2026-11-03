@@ -44,7 +44,7 @@ ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedSta
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes Rotate
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
-ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve
+ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve SVGMobject
 """.split())
 _SOURCE_MAPPED_ANIMATION_FACTORIES = frozenset("FadeIn FadeOut".split())
 _SOURCE_FUNCTIONS = frozenset("""
@@ -77,6 +77,8 @@ add_effect remove_effect get_center get_x get_y get_width get_height get_value
 set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
 plot plot_samples
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
+set_points set_object_opacity family_members_with_points get_subpaths get_arc_length
+point_from_proportion from_string
 animate id width height radius append extend insert pop count index get keys values
 items update union intersection difference join split strip lower upper replace
 startswith endswith encode decode hex fromhex tobytes reverse sort small_discovery
@@ -269,10 +271,18 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_resource_preparation_loads = set()
         self.admitted_controlled_text_loads = set()
         self.resource_preparation_scopes = []
+        self.module_string_literals = {}
+        for node in tree.body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and bindings.binding_counts.get(node.targets[0].id) == 1
+                    and isinstance(node.value, ast.Constant) and type(node.value.value) is str):
+                self.module_string_literals[node.targets[0].id] = node.value.value
         self.admitted_image_loads = set()
         self.admitted_image_paint_loads = set()
         self.admitted_scene_audio_calls = set()
         self.admitted_audio_factory_attributes = set()
+        self.admitted_svg_from_string_attributes = set()
         self.image_pixel_sources = [set()]
         self.pixel_factory_names = set()
         self.admitted_pixel_factory_loads = set()
@@ -1255,6 +1265,20 @@ class _SceneOnlySource(ast.NodeVisitor):
             ):
                 raise _OpaqueSource(color, "unproven_text_compiler_option")
             self.admitted_controlled_text_loads.add(id(node.func))
+        if isinstance(node.func, ast.Name) and node.func.id == "SVGMobject":
+            raise _OpaqueSource(node, "unproven_svg_source")
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "from_string"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "SVGMobject"):
+            if any("SVGMobject" in scope for scope in self.scopes[1:]):
+                raise _OpaqueSource(node, "unproven_shadowed_svg_constructor")
+            self._prepare_svg_from_string(node)
+            self.admitted_svg_from_string_attributes.add(id(node.func))
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "set_points":
+            receiver = node.func.value
+            if (not isinstance(receiver, ast.Call) or not isinstance(receiver.func, ast.Name)
+                    or receiver.func.id != "VMobject" or receiver.args or receiver.keywords
+                    or len(node.args) != 1 or node.keywords):
+                raise _OpaqueSource(node, "unproven_svg_path_write")
         if isinstance(node.func, ast.Name) and node.func.id == "LaggedStartMap":
             shadowed = "LaggedStartMap" in self.module_bindings or any(
                 "LaggedStartMap" in scope for scope in self.scopes[1:]
@@ -1426,6 +1450,34 @@ class _SceneOnlySource(ast.NodeVisitor):
             return cls._numeric_expression(node.operand, names)
         return (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow))
                 and cls._numeric_expression(node.left, names) and cls._numeric_expression(node.right, names))
+    def _prepare_svg_from_string(self, node):
+        if (len(node.args) != 1 or isinstance(node.args[0], ast.Starred)
+                or not self._is_module_svg_text(node.args[0])
+                or any(keyword.arg is None for keyword in node.keywords)):
+            raise _OpaqueSource(node, "unproven_svg_source")
+        options = {}
+        for keyword in node.keywords:
+            if keyword.arg not in {"height", "width", "should_center"} or keyword.arg in options:
+                raise _OpaqueSource(keyword, "unproven_svg_option")
+            value = keyword.value
+            if keyword.arg == "should_center":
+                valid = isinstance(value, ast.Constant) and type(value.value) is bool
+            else:
+                valid = (isinstance(value, ast.Constant) and type(value.value) in (int, float)
+                         and math.isfinite(value.value) and value.value > 0)
+            if not valid:
+                raise _OpaqueSource(value, "unproven_svg_option")
+            options[keyword.arg] = value.value
+
+    def _is_module_svg_text(self, node):
+        if isinstance(node, ast.Constant) and type(node.value) is str:
+            value = node.value
+        elif (isinstance(node, ast.Name) and node.id in self.module_string_literals
+                and not any(node.id in scope for scope in self.scopes[1:])):
+            value = self.module_string_literals[node.id]
+        else:
+            return False
+        return len(value.encode("utf-8")) <= 1_048_576
 
     @staticmethod
     def _is_inert_arg_creator(node):
@@ -1453,6 +1505,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_audio_declaration")
         if node.attr == "small_discovery" and id(node) not in self.admitted_audio_factory_attributes:
             raise _OpaqueSource(node, "unproven_audio_source")
+        if node.attr == "from_string" and id(node) not in self.admitted_svg_from_string_attributes:
+            raise _OpaqueSource(node, "unproven_svg_source")
         self.visit(node.value)
 
     def _scalar_plot_lambda(self, node):

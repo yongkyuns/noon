@@ -187,6 +187,63 @@ class SourceEffectsTests(unittest.TestCase):
             with self.subTest(source=unsafe):
                 self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
+    def test_svg_from_string_is_in_memory_and_path_queries_are_read_only(self):
+        source = dedent('''
+            from noon import *
+
+            SVG_SOURCE = """<svg xmlns="http://www.w3.org/2000/svg">
+              <path d="M0 0 L1 0 L1 1 Z"/>
+            </svg>"""
+
+            class Outline(Scene):
+                def construct(self):
+                    imported = SVGMobject.from_string(SVG_SOURCE, height=4)
+                    contours = []
+                    for member in imported.family_members_with_points():
+                        for control_points in member.get_subpaths():
+                            if len(control_points) >= 4:
+                                contours.append(VMobject().set_points(control_points))
+                    contours.sort(key=lambda path: path.get_arc_length(), reverse=True)
+                    path = contours[0]
+                    point = path.point_from_proportion(0.5)
+                    self.add(path)
+        ''')
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        unsafe = (
+            # Path-based SVG construction and nonliteral resource acquisition stay opaque.
+            'from noon import *\nclass Outline(Scene):\n'
+            '    def construct(self):\n        imported = SVGMobject("outline.svg")\n',
+            'from noon import *\ndef load_svg(): return "<svg/>"\n'
+            'class Outline(Scene):\n    def construct(self):\n'
+            '        imported = SVGMobject.from_string(load_svg())\n',
+            # A method alias cannot carry the constructor capability.
+            'from noon import *\nmake_svg = SVGMobject.from_string\n',
+            # Imported geometry is immutable; set_points is limited to a fresh local VMobject.
+            'from noon import *\nclass Outline(Scene):\n'
+            '    def construct(self):\n'
+            '        imported = SVGMobject.from_string("<svg/>")\n'
+            '        imported.set_points([])\n',
+            # Module string ownership cannot be shadowed in the scene scope.
+            'from noon import *\nSVG_SOURCE = "<svg/>"\nclass Outline(Scene):\n'
+            '    def construct(self):\n        SVG_SOURCE = "<svg/>"\n'
+            '        SVGMobject.from_string(SVG_SOURCE)\n',
+        )
+        for candidate in unsafe:
+            with self.subTest(source=candidate):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+    def test_full_fourier_source_remains_opaque_at_numpy_before_numeric_proof(self):
+        source = Path(__file__).parents[2].joinpath(
+            "scripts", "fixtures", "noon_fourier_epicycles.py"
+        ).read_text()
+        self.assertEqual(sha256(source.encode()).hexdigest(),
+                         "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9")
+        proof = source_execution_proof(source)
+        self.assertFalse(proof["admitted"])
+        self.assertEqual(proof["reason"]["code"], "unsupported_import")
+        self.assertEqual(proof["reason"]["span"]["line"], 24)
+
     def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_shape_matching.py"
