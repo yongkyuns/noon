@@ -32,6 +32,7 @@ pub(crate) fn source_execution_requirement_json(
 pub(super) struct SourceDelivery {
     publisher: PrefixPublisher,
     pending: Option<PrefixBatch>,
+    staged_navigation: Option<noon::SceneSectionNavigation>,
     required: Option<noon::SourceExecutionRequirement>,
     finished: bool,
 }
@@ -47,9 +48,11 @@ impl PreparedExecutionPlayer {
             .create_prepared_prefix()
             .map_err(|e| e.to_string())?;
         let mut player = Self::from_reader(reader, transport_session);
+        player.set_section_navigation(context.section_navigation_snapshot());
         player.source = Some(SourceDelivery {
             publisher,
             pending: None,
+            staged_navigation: None,
             required: None,
             finished: false,
         });
@@ -106,6 +109,7 @@ impl PreparedExecutionPlayer {
         } else if endpoint != source.publisher.frontier() {
             return Err("prepared source moved behind its publication frontier".into());
         }
+        source.staged_navigation = Some(context.section_navigation_snapshot());
         // A zero-duration segment may complete without a new readable interval.
         // Its same-time edits remain in ordinary source history for a later suffix.
         self.source = Some(source);
@@ -151,6 +155,7 @@ impl PreparedExecutionPlayer {
             .prefix_source_requirement(&source.publisher, true)
             .map_err(|e| e.to_string())?;
         source.finished = true;
+        source.staged_navigation = Some(context.section_navigation_snapshot());
         if source.required.is_some() {
             return Ok(false);
         }
@@ -221,11 +226,20 @@ impl PreparedExecutionPlayer {
             .take()
             .expect("validated pending batch");
         let terminal = batch.is_terminal();
+        let navigation = self
+            .source
+            .as_mut()
+            .expect("validated source")
+            .staged_navigation
+            .take();
         if let Err(error) = self.append(batch) {
             // The same-owner preflight above admits all fallible validation. Do
             // not permit source retries if that internal invariant ever changes.
             self.source = None;
             return Err(error.to_string());
+        }
+        if let Some(navigation) = navigation {
+            self.set_section_navigation(navigation);
         }
         if terminal {
             self.source = None;
@@ -272,6 +286,7 @@ mod wasm {
                 return Ok(None);
             };
             let mut player = PreparedExecutionPlayer::from_reader(reader, transport_session);
+            player.set_section_navigation(self.inner.section_navigation_snapshot());
             player.set_prepared_playing(false);
             Ok(Some(player))
         }

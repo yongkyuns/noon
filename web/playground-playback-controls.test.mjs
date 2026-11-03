@@ -298,6 +298,36 @@ test("silent lessons expose annotated cues and delegate navigation without resol
   assert.equal(selected, null, "retired markers cannot issue commands");
 });
 
+test("prepared playback keeps Rust-provided cues and clears them when a new profile omits metadata", () => {
+  const f = fixture();
+  const sections = [
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Interior", time: 0.5 },
+  ];
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    sections, sectionState: { current: 0, previous: null, next: 1 },
+  });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, false);
+  assert.deepEqual(f.preview.querySelector(".playback-section-names").children
+    .slice(1).map(option => option.value), ["0", "1"]);
+
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+  });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true,
+    "a prepared observation with no Rust cue metadata clears previous cues");
+
+  f.controls.sync({ time: 0.25, playing: false, sourceExecution: "observed" });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true,
+    "a profile switch cannot retain prepared cue metadata");
+  f.controls.destroy();
+});
+
 test("focused panel shortcuts reuse admitted buttons and leave native controls alone", async () => {
   const f = fixture();
   const root = f.controls.element;

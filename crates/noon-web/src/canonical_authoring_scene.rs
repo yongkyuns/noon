@@ -623,6 +623,11 @@ impl Default for CanonicalAuthoringScene {
 }
 
 impl CanonicalAuthoringScene {
+    #[allow(dead_code)] // Used by the wasm-only prepared authoring path.
+    pub(crate) fn section_navigation_snapshot(&self) -> noon::SceneSectionNavigation {
+        self.scene.section_navigation()
+    }
+
     pub fn with_store(
         semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     ) -> Self {

@@ -35,6 +35,7 @@ use source::SourceDelivery;
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct PreparedExecutionPlayer {
     playback: PreparedCanvasPlayback,
+    section_navigation: noon::SceneSectionNavigation,
     clock: BrowserExecutionWakeClock,
     encoder: RetainedFamilyExecutionDeltaEncoder,
     snapshot_sent: bool,
@@ -55,6 +56,7 @@ impl PreparedExecutionPlayer {
     pub fn from_reader(reader: PrefixReader, transport_session: u32) -> Self {
         Self {
             playback: PreparedCanvasPlayback::new(reader),
+            section_navigation: noon::SceneSectionNavigation::default(),
             clock: BrowserExecutionWakeClock::default(),
             encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
             snapshot_sent: false,
@@ -85,6 +87,45 @@ impl PreparedExecutionPlayer {
             self.clock = BrowserExecutionWakeClock::default();
         }
         Ok(stats)
+    }
+
+    /// Supply the immutable cue snapshot owned by the same Rust Scene that
+    /// produced this reader. Bare readers intentionally start without cues.
+    pub fn set_section_navigation(&mut self, navigation: noon::SceneSectionNavigation) {
+        self.section_navigation = navigation;
+    }
+
+    fn selectable_section_index(
+        &self,
+        time: f64,
+        direction: noon::SectionNavigation,
+    ) -> Result<Option<usize>, String> {
+        let Some((index, section)) = self.section_navigation.target(time, direction)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .playback
+            .reader
+            .contains_time(section.time)
+            .then_some(index))
+    }
+
+    fn selectable_section_query_time(&self, time: f64) -> Result<Option<f64>, String> {
+        if !time.is_finite() || time < 0.0 {
+            return Err("section navigation time must be finite and non-negative".into());
+        }
+        let Some((start, end)) = self
+            .playback
+            .reader
+            .selectable_time_bounds()
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        if time < start {
+            return Err("section navigation time is before the prepared reader range".into());
+        }
+        Ok(Some(time.min(end)))
     }
 
     fn delta(
@@ -201,6 +242,82 @@ impl PreparedExecutionPlayer {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl PreparedExecutionPlayer {
+    /// Cue markers retain their Scene indices while only admitted times are
+    /// published. An open frontier cue stays hidden until a later append or
+    /// terminal adoption makes that exact timestamp selectable.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionsJson))]
+    pub fn sections_json(&self) -> String {
+        serde_json::Value::Array(
+            self.section_navigation
+                .sections()
+                .iter()
+                .enumerate()
+                .filter(|(_, section)| self.playback.reader.contains_time(section.time))
+                .map(|(index, section)| {
+                    serde_json::json!({
+                        "index": index,
+                        "name": section.name,
+                        "time": section.time,
+                    })
+                })
+                .collect(),
+        )
+        .to_string()
+    }
+
+    /// Query the same immutable cue metadata from a Rust-observed time while
+    /// requiring every reported cue target to be admitted by this reader.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionStateJson))]
+    pub fn section_state_json(&self, time: f64) -> Result<String, String> {
+        let query_time = self.selectable_section_query_time(time)?;
+        let (current, previous, next) = if let Some(query_time) = query_time {
+            let current = self
+                .section_navigation
+                .current(query_time)?
+                .filter(|(_, section)| self.playback.reader.contains_time(section.time))
+                .map(|(index, _)| index);
+            (
+                current,
+                self.selectable_section_index(query_time, noon::SectionNavigation::Previous)?,
+                self.selectable_section_index(query_time, noon::SectionNavigation::Next)?,
+            )
+        } else {
+            (None, None, None)
+        };
+        Ok(serde_json::json!({
+            "current": current,
+            "previous": previous,
+            "next": next,
+        })
+        .to_string())
+    }
+
+    /// Resolve a strict cue target in Rust and seek through the ordinary reader
+    /// path, which revalidates its inclusive/open selectable range.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekSectionDeltaJson))]
+    pub fn seek_section_delta_json(
+        &mut self,
+        previous: bool,
+        observed_time: f64,
+    ) -> Result<Option<String>, String> {
+        let direction = if previous {
+            noon::SectionNavigation::Previous
+        } else {
+            noon::SectionNavigation::Next
+        };
+        let target = self
+            .selectable_section_query_time(observed_time)?
+            .map(|time| self.section_navigation.target(time, direction))
+            .transpose()?
+            .flatten()
+            .filter(|(_, section)| self.playback.reader.contains_time(section.time))
+            .map(|(_, section)| section.time);
+        match target {
+            Some(time) => self.seek_delta_json(time),
+            None => Ok(None),
+        }
+    }
+
     /// Rebuild disposable delivery state for a fresh renderer without seeking,
     /// cloning history or invoking source. Old receipts require a new transport
     /// session; its first snapshot carries only the selected resource closure.

@@ -143,6 +143,75 @@ fn prepared_worker_snapshot_uses_existing_receiver_and_clean_frames_send_nothing
 }
 
 #[test]
+fn prepared_sections_share_reader_admission_and_terminal_endpoint_rules() {
+    let mut f = Fixture::new(721);
+    let mut scene = Scene::new();
+    for (name, time) in [
+        ("Start", 0.0),
+        ("Interior", 0.5),
+        ("Open frontier", 1.0),
+        ("Later", 2.0),
+        ("Terminal", 3.0),
+    ] {
+        scene
+            .next_section_at(name, noon::SectionType::Normal, time)
+            .unwrap();
+    }
+    f.player.set_section_navigation(scene.section_navigation());
+
+    let sections: serde_json::Value = serde_json::from_str(&f.player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().len(), 2);
+    assert_eq!(sections[1]["index"], 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&f.player.section_state_json(0.5).unwrap())
+            .unwrap(),
+        serde_json::json!({"current":1,"previous":0,"next":null}),
+        "a cue at the open frontier is not a selectable next target",
+    );
+    assert!(f
+        .player
+        .seek_section_delta_json(false, 0.5)
+        .unwrap()
+        .is_none());
+
+    f.player.set_prepared_playing(false);
+    let displayed_time = f.player.prepared_time();
+    let interior_batch = f.next(false);
+    f.deliver(interior_batch);
+    assert_eq!(
+        f.player.prepared_time(),
+        displayed_time,
+        "append does not seek a paused reader"
+    );
+    assert!(
+        !f.player.prepared_playing(),
+        "append preserves pause intent"
+    );
+    let sections: serde_json::Value = serde_json::from_str(&f.player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().len(), 3);
+    assert_eq!(sections[2]["index"], 2);
+    let delta = f
+        .player
+        .seek_section_delta_json(false, 0.5)
+        .unwrap()
+        .unwrap();
+    assert!(!delta.is_empty());
+    assert_eq!(f.player.prepared_time(), 1.0);
+
+    let terminal_batch = f.next(true);
+    f.deliver(terminal_batch);
+    let sections: serde_json::Value = serde_json::from_str(&f.player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().last().unwrap()["index"], 4);
+    assert_eq!(sections.as_array().unwrap().last().unwrap()["time"], 3.0);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&f.player.section_state_json(3.0).unwrap())
+            .unwrap()["current"],
+        4,
+        "terminal endpoint cue becomes current only after terminal adoption",
+    );
+}
+
+#[test]
 fn prepared_worker_future_delivery_preserves_receipt_and_pending_click() {
     let mut f = Fixture::new(72);
     let (mut mirror, receipt) = ready(&mut f.player);

@@ -144,12 +144,12 @@ function fixture(
     drained, committedPhases,
     callbackReads,
   }),
-    attach: () => attachSemanticEngine(context, {
+    attach: (prepared = callbackHooks.prepared ?? null) => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode, ...requestOptions,
     }, () => { stopped += 1; callbackHooks.onStop?.(); }, runRequiredCallbackPhase, continuation,
     callbackHooks.complete ?? null, callbackHooks.discard ?? null,
-    callbackHooks.testOnlyTickTimestamp ?? null, null, callbackHooks.onExecutionDiagnostic ?? null),
+    callbackHooks.testOnlyTickTimestamp ?? null, prepared, callbackHooks.onExecutionDiagnostic ?? null),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
@@ -3355,6 +3355,61 @@ test("silent execution publishes Rust cue metadata and forwards strict section n
       assert.equal((await result).time, time);
     }
     assert.deepEqual(directions, [[false, 0.5], [true, 0.5]], "relative seeks use the Rust clock observation, not stale frame time");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("prepared execution publishes admitted Rust cues and waits for section presentation", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  const calls = [];
+  let preparedPlaying = false;
+  f.player.setPreparedPlaying = value => { preparedPlaying = value; };
+  f.player.preparedTime = () => f.player.time();
+  f.player.preparedPlaybackTimeAt = () => f.player.time();
+  f.player.preparedFrontier = () => 1;
+  f.player.preparedPlaybackStateJson = () => JSON.stringify({
+    time: f.player.time(), frontier: 1, end: null,
+    seekRange: { start: 0, end: 0.9999999999999999 }, playing: preparedPlaying,
+    buffering: false, completed: false, advancing: false,
+    loopDuration: null, loopCount: 0, loopError: null,
+  });
+  f.player.sectionsJson = () => JSON.stringify([
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Interior", time: 0.75 },
+  ]);
+  f.player.sectionStateJson = time => JSON.stringify({ current: 0, previous: null, next: 1, observedTime: time });
+  f.player.seekSectionDeltaJson = (previous, time) => {
+    calls.push([previous, time]);
+    return f.player.seekDeltaJson(previous ? 0 : 0.75);
+  };
+  f.player.sourceExecutionReady = () => false;
+  f.player.takePreparedNoChangePresentationJson = () => null;
+  f.player.setPreparedLoopDuration = () => {};
+  f.player.stopSourcePreparation = () => {};
+  f.player.free = () => {};
+  const prepared = { player: f.player, generation: 1, wakeSource() {} };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(prepared);
+    const state = await ready;
+    assert.deepEqual(state.sections, [
+      { index: 0, name: "Start", time: 0 },
+      { index: 1, name: "Interior", time: 0.75 },
+    ]);
+    assert.equal(state.sectionState.observedTime, state.time);
+    present(f.render.port2, await initial);
+
+    let settled = false;
+    const seeking = request(f.control.port2, "seek_section", 1, { previous: false })
+      .then(result => { settled = true; return result; });
+    const delta = await nextMatching(f.render.port2, message => message.type === "execution_delta");
+    await turn();
+    assert.equal(settled, false, "section navigation waits for the chosen picture to be presented");
+    assert.deepEqual(calls, [[false, 0]]);
+    present(f.render.port2, delta);
+    const result = await seeking;
+    assert.equal(result.time, 0.75);
   } finally { endpoint?.stop(); f.close(); }
 });
 

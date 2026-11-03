@@ -329,9 +329,10 @@ export class PlaygroundPlaybackControls {
     if (audioReady !== undefined) this.#audioReady = audioReady === true;
     if (audioMuted !== undefined) this.#audioMuted = audioMuted === true;
     if (audioVolume !== undefined) this.#volume.value = String(audioVolume);
-    if (prepared) { this.#sections = []; this.#sectionState = null; }
-    else if (sections !== undefined) this.#sections = sections;
-    if (sectionState !== undefined && !prepared) this.#sectionState = sectionState;
+    if (sections !== undefined) this.#sections = sections;
+    else if (prepared || observed || state.preparedPlayback === false) this.#sections = [];
+    if (sectionState !== undefined) this.#sectionState = sectionState;
+    else if (prepared || observed || state.preparedPlayback === false) this.#sectionState = null;
     this.#seekNotice = null;
     if (canUndoTranslationDrag !== undefined) this.#canUndoTranslationDrag = canUndoTranslationDrag;
     this.#render();
