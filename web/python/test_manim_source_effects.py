@@ -53,6 +53,18 @@ class SourceEffectsTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertFalse(source_execution_proof(source)["admitted"])
 
+        for filename, names in (("showcase_spatial_scene.py", ("Mesh3D", "Color")),
+                                ("showcase_three_d_axes.py", ("RED",))):
+            spatial = (examples / filename).read_text()
+            for shadowed in names:
+                with self.subTest(filename=filename, shadowed=shadowed):
+                    poisoned = spatial.replace(
+                        "    async def construct(self):\n",
+                        f"    async def construct(self):\n        {shadowed} = None\n",
+                        1,
+                    )
+                    self.assertFalse(source_execution_proof(poisoned)["admitted"])
+
     def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_shape_matching.py"

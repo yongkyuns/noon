@@ -316,6 +316,11 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_SPATIAL_CONSTRUCTORS
                 and id(node) not in self.admitted_spatial_constructor_loads):
             raise _OpaqueSource(node, "unproven_spatial_constructor")
+        if (isinstance(node.ctx, ast.Load)
+                and node.id in (_SOURCE_SPATIAL_CONSTRUCTORS | _SOURCE_COLOR_CONSTANTS | {"Color"})
+                and (node.id in self.module_bindings
+                     or any(node.id in scope for scope in self.scopes[1:]))):
+            raise _OpaqueSource(node, "unproven_shadowed_spatial_constructor")
         if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
             raise _OpaqueSource(node, "unknown_name")
 
