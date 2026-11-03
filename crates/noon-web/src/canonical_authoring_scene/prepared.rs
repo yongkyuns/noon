@@ -28,7 +28,7 @@ impl CanonicalAuthoringScene {
     pub fn begin_observed_prepared_source(
         &mut self,
         effects: noon::ContinuationEffects,
-    ) -> Result<bool, AuthoringFailure> {
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
         self.active_live_player()?
             .begin_observed_prepared_source(effects)
     }

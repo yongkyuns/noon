@@ -10382,13 +10382,14 @@ mod wasm {
         pub fn begin_observed_prepared_source(
             &mut self,
             scene_only_source: Option<bool>,
-        ) -> Result<bool, JsValue> {
+        ) -> Result<String, JsValue> {
             self.inner
                 .begin_observed_prepared_source(if scene_only_source == Some(true) {
                     noon::ContinuationEffects::SceneOnly
                 } else {
                     noon::ContinuationEffects::Opaque
                 })
+                .map(crate::prepared_execution_player::source::source_execution_requirement_json)
                 .map_err(typed_js_error)
         }
 

@@ -11,6 +11,66 @@ fn pending_capacity(player: &PreparedExecutionPlayer) -> Option<usize> {
         .map(PrefixBatch::required_object_capacity)
 }
 
+#[test]
+fn source_execution_requirement_json_maps_every_engine_reason() {
+    use noon::SourceExecutionRequirement as Requirement;
+    use noon_runtime::ReplayError;
+
+    let cases = [
+        (
+            Requirement::HostEffects,
+            serde_json::json!({"code":"host_effects"}),
+        ),
+        (
+            Requirement::HostCallbacks,
+            serde_json::json!({"code":"host_callbacks"}),
+        ),
+        (
+            Requirement::EffectiveDisplay,
+            serde_json::json!({"code":"effective_display"}),
+        ),
+        (
+            Requirement::NativeInput,
+            serde_json::json!({"code":"native_input"}),
+        ),
+        (Requirement::Signals, serde_json::json!({"code":"signals"})),
+        (
+            Requirement::ReplayUnavailable(ReplayError::UnsupportedDomain),
+            serde_json::json!({
+                "code":"replay_unavailable",
+                "detail": ReplayError::UnsupportedDomain.to_string()
+            }),
+        ),
+        (
+            Requirement::ExternalResources,
+            serde_json::json!({"code":"external_resources"}),
+        ),
+    ];
+    assert_eq!(source_execution_requirement_json(None), "null");
+    for (requirement, expected) in cases {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&source_execution_requirement_json(Some(
+                requirement
+            )))
+            .unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn prepared_player_exposes_its_retained_source_requirement() {
+    let mut player = staged_player(93, false);
+    assert_eq!(player.source_execution_requirement_json(), "null");
+    player.source.as_mut().unwrap().required =
+        Some(noon::SourceExecutionRequirement::HostCallbacks);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&player.source_execution_requirement_json())
+            .unwrap(),
+        serde_json::json!({"code":"host_callbacks"})
+    );
+}
+
 // Stage a real compiler-produced creation suffix, then release the source scene.
 // Reservation/retry can only use this retained batch; no source can be rerun.
 fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {

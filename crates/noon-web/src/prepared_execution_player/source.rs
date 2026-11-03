@@ -5,6 +5,30 @@ use super::PreparedExecutionPlayer;
 use crate::canonical_authoring_scene::CanonicalAuthoringScene;
 use noon::{PrefixBatch, PrefixPublisher};
 
+pub(crate) fn source_execution_requirement_json(
+    requirement: Option<noon::SourceExecutionRequirement>,
+) -> String {
+    let Some(requirement) = requirement else {
+        return "null".into();
+    };
+    let (code, detail) = match requirement {
+        noon::SourceExecutionRequirement::HostEffects => ("host_effects", None),
+        noon::SourceExecutionRequirement::HostCallbacks => ("host_callbacks", None),
+        noon::SourceExecutionRequirement::EffectiveDisplay => ("effective_display", None),
+        noon::SourceExecutionRequirement::NativeInput => ("native_input", None),
+        noon::SourceExecutionRequirement::Signals => ("signals", None),
+        noon::SourceExecutionRequirement::ReplayUnavailable(error) => {
+            ("replay_unavailable", Some(error.to_string()))
+        }
+        noon::SourceExecutionRequirement::ExternalResources => ("external_resources", None),
+    };
+    let mut value = serde_json::json!({"code": code});
+    if let Some(detail) = detail {
+        value["detail"] = serde_json::Value::String(detail);
+    }
+    value.to_string()
+}
+
 pub(super) struct SourceDelivery {
     publisher: PrefixPublisher,
     pending: Option<PrefixBatch>,
@@ -13,6 +37,11 @@ pub(super) struct SourceDelivery {
 }
 
 impl PreparedExecutionPlayer {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = sourceExecutionRequirementJson))]
+    pub fn source_execution_requirement_json(&self) -> String {
+        source_execution_requirement_json(self.source.as_ref().and_then(|source| source.required))
+    }
+
     /// Bootstrap only after the interpreter's actual first segment is complete.
     /// The canonical source keeps its existing live player and semantic store.
     pub fn from_completed_source(
