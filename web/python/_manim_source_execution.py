@@ -38,7 +38,7 @@ _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
-ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint
+ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes
@@ -68,6 +68,7 @@ shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value
 set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
+plot plot_samples
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
 animate id width height radius append extend insert pop count index get keys values
 items update union intersection difference join split strip lower upper replace
@@ -174,6 +175,7 @@ class _SourceBindings(ast.NodeVisitor):
 class _SceneOnlySource(ast.NodeVisitor):
     def __init__(self, tree, star_exports):
         self.admitted_lagged_map_loads = set()
+        self.admitted_plot_loads = set()
         bindings = _SourceBindings()
         for node in tree.body:
             bindings.visit(node)
@@ -610,6 +612,14 @@ class _SceneOnlySource(ast.NodeVisitor):
         return sources | paint_sources
 
     def visit_Call(self, node):
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "plot":
+            # The canonical axes API samples this scalar callable once into a
+            # retained Rust path; it never installs a per-frame host callback.
+            if (not node.args or any(isinstance(arg, ast.Starred) for arg in node.args)
+                    or any(keyword.arg is None for keyword in node.keywords)
+                    or not self._scalar_plot_lambda(node.args[0])):
+                raise _OpaqueSource(node, "unproven_plot_function")
+            self.admitted_plot_loads.add(id(node.func))
         if isinstance(node.func, ast.Name) and node.func.id == "ImageMobject":
             if "ImageMobject" in self.module_bindings or any(
                 "ImageMobject" in scope for scope in self.scopes[1:]
@@ -685,9 +695,41 @@ class _SceneOnlySource(ast.NodeVisitor):
         )
 
     def visit_Attribute(self, node):
+        if node.attr == "plot" and id(node) not in self.admitted_plot_loads:
+            raise _OpaqueSource(node, "unproven_plot_function")
         if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
             raise _OpaqueSource(node, "unsupported_member" if isinstance(node.ctx, ast.Load) else "unproven_member_write")
         self.visit(node.value)
+
+    def _scalar_plot_lambda(self, node):
+        if (not isinstance(node, ast.Lambda) or node.args.posonlyargs
+                or len(node.args.args) != 1 or node.args.defaults or node.args.kwonlyargs
+                or node.args.vararg or node.args.kwarg):
+            return False
+        parameter = node.args.args[0].arg
+
+        def scalar(value):
+            if isinstance(value, ast.Constant):
+                return type(value.value) in (int, float)
+            if isinstance(value, ast.Name):
+                return value.id == parameter
+            if isinstance(value, ast.UnaryOp) and isinstance(value.op, (ast.UAdd, ast.USub)):
+                return scalar(value.operand)
+            if isinstance(value, ast.BinOp) and isinstance(value.op,
+                    (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)):
+                return scalar(value.left) and scalar(value.right)
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+                name = value.func.id
+                binding = self.module_binding_locations.get(name)
+                return (name != parameter and not value.keywords
+                    and self.module_binding_counts.get(name) == 1
+                    and not any(name in scope for scope in self.scopes[1:])
+                    and isinstance(binding, ast.ImportFrom) and binding.module == "math"
+                    and any(alias.name == name and alias.asname is None for alias in binding.names)
+                    and all(scalar(arg) for arg in value.args))
+            return False
+
+        return scalar(node.body)
 
     def visit_Import(self, node):
         if node not in self.module_imports or len(self.scopes) != 1 or any(alias.name not in _SOURCE_MODULES for alias in node.names):

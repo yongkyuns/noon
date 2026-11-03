@@ -6,6 +6,21 @@ from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_coordinate_plot_uses_only_preparation_time_scalar_math(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_coordinate_plotting.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        for callback in ("lambda t: print(t)", "lambda t: self.wait(t)",
+                         "lambda t: open(str(t))", "sin", "lambda t: context.sample(t)"):
+            with self.subTest(callback=callback):
+                self.assertFalse(source_is_scene_only(source.replace("lambda t: sin(0.8 * t)", callback)))
+        self.assertFalse(source_is_scene_only(source.replace(
+            "        model = axes.plot", "        sin = self.wait\n        model = axes.plot")))
+        self.assertFalse(source_is_scene_only(source.replace(
+            "        model = axes.plot", "        factory = axes.plot\n        model = factory")))
+
     def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_shape_matching.py"
