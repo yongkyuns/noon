@@ -118,6 +118,80 @@ async function playbackSnapshot(page) {
   });
 }
 
+async function verifyTimelineLifecycle(browser, example, preparedPlayback = true) {
+  const tab = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  tab.on("pageerror", error => errors.push(String(error)));
+  try {
+    await tab.addInitScript(({ preparedPlayback }) => {
+      if (!preparedPlayback) {
+        window.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: false }) };
+      }
+      const trace = window.timelineLifecycle = { states: [], violations: [], open: false, live: false };
+      let slider = null;
+      const observe = () => {
+        const controls = document.querySelector(".playback-controls");
+        if (!controls) return;
+        const range = controls.querySelector(".playback-scrubber");
+        const reject = message => { if (!trace.violations.includes(message)) trace.violations.push(message); };
+        if (!range || range.hidden || getComputedStyle(range).display === "none") reject("timeline disappeared");
+        if (range?.type !== "range") reject("timeline changed input type");
+        if (slider !== null && slider !== range) reject("timeline element replaced during the run");
+        slider = range;
+        if (controls.querySelector('input[type="number"]')) reject("numeric input replaced the timeline");
+        if (controls.textContent.includes("Duration pending")) reject("duration-pending placeholder returned");
+        const open = controls.dataset.durationKnown === "false";
+        const available = controls.dataset.controllable === "true";
+        if (open && available && !range.disabled) trace.open = true;
+        if (open && !available) trace.live = true;
+        const state = { open, available, disabled: range.disabled,
+          elapsed: Number(controls.dataset.elapsedSeconds), max: Number(range.max) };
+        const previous = trace.states.at(-1);
+        if (!previous || previous.open !== open || previous.available !== available || previous.disabled !== range.disabled) {
+          trace.states.push(state);
+        }
+      };
+      new MutationObserver(observe).observe(document, { subtree: true, childList: true, attributes: true,
+        attributeFilter: ["hidden", "type", "class", "style", "disabled", "data-duration-known", "data-elapsed-seconds"] });
+    }, { preparedPlayback });
+    await tab.goto(`${baseUrl}/web/index.html?example=${example}`);
+    await tab.waitForFunction(prepared => prepared ? window.timelineLifecycle?.open : window.timelineLifecycle?.live,
+      preparedPlayback, { timeout: 60_000 });
+    const loading = await playbackSnapshot(tab);
+    assert.equal(loading.scrubberDisabled, !preparedPlayback);
+    assert.equal(await tab.locator(".playback-scrubber").isVisible(), true);
+    await tab.locator(".playback-controls").screenshot({ path: path.join(artifactDir, `${example}-${preparedPlayback ? "prepared" : "live"}-loading.png`) });
+    if (preparedPlayback) {
+      // Exercise the same real slider before terminal metadata exists.
+      await tab.locator(".playback-toggle").click();
+      await tab.waitForFunction(() => {
+        const c = document.querySelector(".playback-controls");
+        return c.dataset.playing === "false" && c.dataset.busy === "false";
+      });
+      await tab.locator(".playback-scrubber").evaluate(input => {
+        input.value = "0"; input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      await tab.waitForFunction(() => {
+        const c = document.querySelector(".playback-controls");
+        return c.dataset.elapsedSeconds === "0" && c.dataset.busy === "false";
+      });
+      await tab.locator(".playback-toggle").click();
+    }
+    await tab.waitForFunction(() => {
+      const c = document.querySelector(".playback-controls");
+      return window.__noonExampleGallery?.runInFlight === false && c?.dataset.durationKnown === "true";
+    }, null, { timeout: 150_000 });
+    const trace = await tab.evaluate(() => window.timelineLifecycle);
+    assert.deepEqual(trace.violations, [], `${example}: timeline must stay visible throughout loading and completion`);
+    assert.ok(preparedPlayback ? trace.open : trace.live, `${example}: first-pass coverage missing`);
+    assert.ok(trace.states.some(state => !state.open && state.available && !state.disabled));
+    const completed = await playbackSnapshot(tab);
+    assert.equal(completed.documentWidth, completed.viewportWidth, "timeline must fit the mobile viewport");
+    assert.deepEqual(errors, []);
+    return { example, preparedPlayback, loading, completed, trace };
+  } finally { await tab.close(); }
+}
+
 let browser = null;
 let page = null;
 const pageErrors = [];
@@ -139,6 +213,10 @@ try {
       "--disable-dev-shm-usage",
     ],
   });
+  diagnostics.timelineLifecycle = [];
+  for (const [example, prepared] of [["showcase-first-scene", true], ["showcase-dynamic-scene", true], ["showcase-first-scene", false]]) {
+    diagnostics.timelineLifecycle.push(await verifyTimelineLifecycle(browser, example, prepared));
+  }
   page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
@@ -212,7 +290,7 @@ try {
   assert.ok(
     diagnostics.lifecycle.samples
       .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
-      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && sample.scrubberHidden),
+      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && !sample.scrubberHidden),
     "source-owned playback must expose live progress but reject host commands",
   );
   const liveTimes = diagnostics.lifecycle.samples

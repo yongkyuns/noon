@@ -99,10 +99,10 @@ async function observation(page) {
     let response = null;
     try { response = await gallery?.executionMetrics?.(); } catch {}
     const controls = document.querySelector(".playback-controls");
-    const prefix = controls?.querySelector(".playback-prepared-seek");
+    const prefix = controls?.querySelector(".playback-scrubber");
     return { metrics: response?.metrics, run: gallery?.runPhaseMetrics,
       controls: controls ? { ...controls.dataset,
-        preparedFrontier: prefix && !prefix.hidden ? Number(prefix.max) : null } : null,
+        preparedFrontier: prefix && controls.dataset.durationKnown === "false" && !prefix.disabled ? Number(prefix.max) : null } : null,
       inFlight: gallery?.runInFlight, selected: gallery?.selectedExampleId,
       status: document.querySelector("#patch-status")?.dataset.state,
       problem: document.querySelector("#authoring-problem")?.textContent,
@@ -140,11 +140,10 @@ async function measureSeek(page, settled) {
   const issued = await page.evaluate(() => {
     const controls = document.querySelector(".playback-controls");
     if (controls.dataset.controllable !== "true") return null;
-    const open = controls.querySelector(".playback-prepared-seek");
-    const input = open.hidden ? controls.querySelector(".playback-scrubber") : open;
+    const input = controls.querySelector(".playback-scrubber");
     const epochMs = performance.timeOrigin + performance.now();
     input.value = "0";
-    input.dispatchEvent(new Event(input === open ? "change" : "input", { bubbles: true }));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     return { epochMs, target: 0 };
   });
   if (issued === null) return { available: false, reason: "the source retired its reader before the seek" };

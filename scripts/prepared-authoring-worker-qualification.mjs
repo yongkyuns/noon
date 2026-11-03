@@ -180,21 +180,23 @@ try {
         assert.deepEqual((await state()).events, ["start"]);
         entry.checks.push("real-production-workers", "initially-paused-lookahead", "satisfied-demand-sleeps");
 
-        const seekInput = page.locator(".playback-prepared-seek");
+        const seekInput = page.locator(".playback-scrubber");
         assert.equal(await seekInput.isVisible(), true);
         assert.equal(await seekInput.isEnabled(), true);
-        assert.equal(await page.locator(".playback-scrubber").isVisible(), false);
+        assert.equal(await page.locator(".playback-scrubber").isVisible(), true);
         assert.equal(await page.locator(".playback-time").textContent(), "0.00 / — s");
-        await seekInput.fill("1");
-        await seekInput.press("Tab");
-        assert.match(await page.locator(".playback-live-status").textContent(), /before 1 s/);
+        await seekInput.evaluate(element => {
+          element.value = "1"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        assert.match(await page.locator(".playback-live-status").textContent(), /before 1.00 s/);
         const atOpenBoundary = await state();
         assert.equal(atOpenBoundary.time, 0);
         assert.deepEqual(atOpenBoundary.events, ["start"]);
         assert.deepEqual(atOpenBoundary.errors, []);
         entry.checks.push("shared-controls-open-history", "controls-refuse-open-boundary");
-        await seekInput.fill("0.5");
-        await seekInput.press("Tab");
+        await seekInput.evaluate(element => {
+          element.value = "0.5"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
         await waitState(s => s.preparedFrontier === 2 && s.events.length === 2);
         const baseline = await capture("historical");
         assert.equal((await state()).time, 0.5); assert.deepEqual((await state()).events, ["start", "first"]);
@@ -248,17 +250,20 @@ try {
         assert.equal(finished.outcome.result.duration, 4); assert.equal(finished.durationSeconds, 4);
         assert.equal(finished.outcome.result.semanticExecution.preparedPlayback, true);
         assert.deepEqual(finished.events, ["start", "first", "moved", 0, 1, 2, 3, 4, 5, 6, 7, "end"]);
-        assert.equal(await seekInput.isVisible(), false);
         const slider = page.locator(".playback-scrubber");
         assert.equal(await slider.isVisible(), true);
         assert.equal(await slider.getAttribute("max"), "4");
         await page.getByRole("button", { name: "Pause animation", exact: true }).click();
         await page.waitForFunction(() => preparedAuthoring.controls.element.dataset.busy === "false");
-        await slider.fill("4");
+        await slider.evaluate(element => {
+          element.value = "4"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
         await waitState(s => s.time === 4 && s.playing === false);
         assert.equal((await state()).time, 4);
         assert.ok(changedPixels(baseline, await capture("terminal")) > 100);
-        await slider.fill("0.5");
+        await slider.evaluate(element => {
+          element.value = "0.5"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
         await waitState(s => s.time === 0.5 && s.playing === false);
         assert.equal(changedPixels(baseline, await capture("rewind")), 0);
         entry.checks.push("controls-terminal-slider-and-rewind");
@@ -353,11 +358,12 @@ try {
         const status = await page.evaluate(() => preparedAuthoring.execution.state());
         assert.equal(status.durationSeconds, null); assert.equal(status.preparedFrontier, 1);
         await page.evaluate(state => preparedAuthoring.controls.observe(state), status);
-        assert.equal(await page.locator(".playback-scrubber").isVisible(), false);
-        const seekInput = page.locator(".playback-prepared-seek");
+        assert.equal(await page.locator(".playback-scrubber").isVisible(), true);
+        const seekInput = page.locator(".playback-scrubber");
         assert.equal(await seekInput.isEnabled(), true);
-        await seekInput.fill("0.25");
-        await seekInput.press("Tab");
+        await seekInput.evaluate(element => {
+          element.value = "0.25"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
         await page.waitForFunction(async () => (await preparedAuthoring.execution.state()).time === 0.25);
         entry.checks.push("controls-retain-partial-history-after-source-error");
       }
