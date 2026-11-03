@@ -101,7 +101,7 @@ fn fixture(
         .unwrap();
     (source, calls, drops)
 }
-fn deliver(source: &mut PreparedSource<Script>, reader: &mut PrefixReader) {
+fn deliver<C: LiveContinuation>(source: &mut PreparedSource<C>, reader: &mut PrefixReader) {
     let batch = source.pending_batch().expect("prepared batch");
     reader
         .reserve_object_capacity(batch.required_object_capacity())
@@ -583,6 +583,119 @@ fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind
     assert_eq!(reader.frame(), &parallel_midpoint);
     assert_eq!(reader.frame().objects[0].id, left_id);
     assert_eq!(reader.frame().objects[1].id, right_id);
+}
+
+fn assert_paint_prefix_history<C: LiveContinuation>(
+    mut source: PreparedSource<C>,
+    inspect: impl Fn(&PrefixReader, f64),
+) where
+    C::Error: std::fmt::Debug,
+{
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    assert_eq!(
+        source.prepare_until(1.0).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    deliver(&mut source, &mut reader);
+    reader.seek(1.0).unwrap();
+    let midpoint = reader.frame().clone();
+    let midpoint_paint = midpoint.objects[0].fill_paint.as_ref().unwrap();
+    inspect(&reader, 1.0);
+    let publication = reader.publication_context();
+
+    for target in [2.0, 2.1] {
+        assert_eq!(
+            source.prepare_until(target).unwrap(),
+            Some(PreparedSourceStatus::BatchReady)
+        );
+        deliver(&mut source, &mut reader);
+        assert_eq!(reader.frame(), &midpoint);
+        assert!(std::sync::Arc::ptr_eq(
+            reader.frame().objects[0].fill_paint.as_ref().unwrap(),
+            midpoint_paint
+        ));
+        assert_eq!(reader.publication_context(), publication);
+    }
+
+    reader.seek(1.5).unwrap();
+    inspect(&reader, 1.5);
+    reader.seek(1.0).unwrap();
+    assert_eq!(reader.frame(), &midpoint);
+}
+
+fn assert_near_pair(actual: [f64; 2], expected: [f64; 2]) {
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+}
+
+#[test]
+fn procedural_paint_tracks_preserve_midpoint_and_old_resources_after_future_append() {
+    let radial = crate::example_scenes::radial_gradient::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_paint_prefix_history(radial, |reader, time| {
+        let radial = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_radial_gradient()
+            .unwrap();
+        let (center, radii) = if time == 1.0 {
+            ([0.45, 0.425], [0.625, 0.575])
+        } else {
+            ([0.65, 0.35], [0.75, 0.4])
+        };
+        assert_eq!(radial.center(), center);
+        assert_eq!(radial.radii(), radii);
+    });
+
+    let noise = crate::example_scenes::noise_paint::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_paint_prefix_history(noise, |reader, time| {
+        let noise = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_noise()
+            .unwrap();
+        let (frequency, phase) = if time == 1.0 {
+            ([20.0, 10.0], [0.179, -0.244])
+        } else {
+            ([32.0, 12.0], [0.531, -0.719])
+        };
+        assert_near_pair(noise.frequency(), frequency);
+        assert_near_pair(noise.phase(), phase);
+    });
+
+    let hatch = crate::example_scenes::hatch_paint::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_paint_prefix_history(hatch, |reader, time| {
+        let hatch = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_hatch()
+            .unwrap();
+        let (spacing, width, angle, phase) = if time == 1.0 {
+            (0.475, 0.105, 0.525, [0.179, -0.244])
+        } else {
+            (0.35, 0.12, 0.85, [0.531, -0.719])
+        };
+        assert!((hatch.spacing() - spacing).abs() < 1e-12);
+        assert!((hatch.width() - width).abs() < 1e-12);
+        assert!((hatch.angle() - angle).abs() < 1e-12);
+        assert_near_pair(hatch.phase(), phase);
+    });
 }
 
 #[test]

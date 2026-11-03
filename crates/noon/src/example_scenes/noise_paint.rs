@@ -1,8 +1,8 @@
 //! Seeded local noise changes frequency, phase, colors and opacity on authored time.
 //! Paired with `web/python/examples/noise_paint.py`.
 use crate::{
-    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    NoisePaint, RateFunction, Scene,
+    AnimationOptions, Color, ContinuationEffects, ContinuationStep, LiveContinuation, LiveProgram,
+    LiveSession, Mobject, NoisePaint, RateFunction, Scene,
 };
 use std::sync::Arc;
 
@@ -35,6 +35,7 @@ fn paint(vertical: bool) -> Result<Arc<NoisePaint>, String> {
 }
 
 impl LiveContinuation for NoiseSurface {
+    const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
         let segment = match self.stage {

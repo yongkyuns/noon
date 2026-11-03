@@ -1,8 +1,8 @@
 //! An elliptical field changes center, radii, opacity and paint kind on authored time.
 //! Paired with `web/python/examples/radial_gradient.py`.
 use crate::{
-    AnimationOptions, Color, ContinuationStep, GradientStop, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RadialGradient, RateFunction, Scene,
+    AnimationOptions, Color, ContinuationEffects, ContinuationStep, GradientStop, LiveContinuation,
+    LiveProgram, LiveSession, Mobject, RadialGradient, RateFunction, Scene,
 };
 use std::sync::Arc;
 
@@ -34,6 +34,7 @@ fn paint(vertical: bool) -> Result<Arc<RadialGradient>, String> {
 }
 
 impl LiveContinuation for RadialSurface {
+    const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
         let segment = match self.stage {
