@@ -14,6 +14,7 @@ pub struct OrdinarySubsetDisplay {
 }
 
 impl LiveContinuation for OrdinarySubsetDisplay {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = String;
 
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {

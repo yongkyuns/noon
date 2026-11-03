@@ -23,6 +23,23 @@ class SourceEffectsTests(unittest.TestCase):
         self.assertFalse(proof["admitted"])
         self.assertEqual(proof["reason"]["code"], "unknown_name")
 
+    def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_ordered_reveal.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        unsafe = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    group = VGroup(Circle())
+                    self.play(ShowIncreasingSubsets(group, int_func=load_int_func()))
+        ''')
+        proof = source_execution_proof(unsafe)
+        self.assertFalse(proof["admitted"])
+        self.assertEqual(proof["reason"]["code"], "unknown_name")
+
     def test_source_proof_reports_the_rejected_construct_and_exact_span(self):
         for expression, code, construct in (
             ('print("effect")', "unknown_name", "print"),

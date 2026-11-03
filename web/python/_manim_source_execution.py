@@ -41,6 +41,7 @@ Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes
+ShowIncreasingSubsets ShowSubmobjectsOneByOne
 ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur GlowPulse
 """.split())
 _SOURCE_FUNCTIONS = frozenset("""
