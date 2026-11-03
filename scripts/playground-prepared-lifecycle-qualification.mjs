@@ -84,7 +84,7 @@ const hash = value => createHash("sha256").update(value).digest("hex");
 const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
   runOptions: "viewer defaults; no qualification run-options hook",
-  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
+  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; integer CSS origin; corner/shadow/border color normalized; unchanged backing size and full-canvas RGBA equality", cases: [] };
 report.staticInputSourceSha256 = hash(staticInputSource); report.zeroInputSourceSha256 = hash(zeroInputSource);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let browser, server;
@@ -234,7 +234,22 @@ async function pixels(page, name) {
     return metrics?.ready && Number.isFinite(metrics.firstPresentedSessionAtMs) &&
       !metrics.needsPresent && metrics.bufferedDeltas === 0;
   });
+  // Cue controls change vertical layout. Keep the original backing size while
+  // aligning the CSS capture origin, so compositing cannot shift equal pixels.
+  await page.locator("#scene").evaluate(canvas => {
+    canvas.style.transform = "none";
+    canvas.style.left = "0px";
+    canvas.style.top = "0px";
+    const { x, y } = canvas.getBoundingClientRect();
+    canvas.style.left = `${Math.round(x) - x}px`;
+    canvas.style.top = `${Math.round(y) - y}px`;
+    window.dispatchEvent(new Event("resize"));
+  });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  (report.captures ??= []).push({ name, ...await page.locator("#scene").evaluate(canvas => {
+    const { x, y, width, height } = canvas.getBoundingClientRect();
+    return { x, y, width, height, bitmap: { width: canvas.width, height: canvas.height } };
+  }) });
   const bytes = await page.locator("#scene").screenshot();
   await writeFile(path.join(output, `${name}.png`), bytes);
   return PNG.sync.read(bytes).data;
@@ -273,7 +288,7 @@ try {
         // CSS corner/shadow compositing can vary by one byte across captures.
         // Remove only that decoration and make its backdrop opaque. Keep canvas
         // dimensions, renderer, full screenshot and exact RGBA assertions.
-        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; } #scene { border-radius: 0 !important; box-shadow: none !important; }" });
+        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; } #scene { border-radius: 0 !important; box-shadow: none !important; border-color: #000 !important; }" });
         await page.evaluate(() => {
           if (!__noonExampleGallery.runInFlight && !document.querySelector(".playback-controls")) void __noonExampleGallery.run();
         });
