@@ -73,10 +73,8 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
     assert_eq!(player.time(), 0.25);
     assert!(player.set_loop_duration(f64::NAN).is_err());
     assert_eq!(player.finite_audio_duration(), Some(1.0));
-    assert!(
-        player.begin_replay_retention().is_err(),
-        "sequential source audio remains explicitly gated"
-    );
+    player.begin_replay_retention().unwrap();
+    assert_eq!(player.time(), 0.25, "retaining audio must not seek");
     assert!(SemanticExecutionPlayer::from_scene_execution(
         noon::Scene::new().into_execution().unwrap(),
         f64::NAN,
