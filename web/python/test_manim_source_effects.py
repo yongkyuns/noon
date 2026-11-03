@@ -506,6 +506,85 @@ class Example(Scene):
             "showcase_glass_lens.py"
         ).read_text()
         self.assertEqual(source_execution_proof(glass), {"admitted": True, "reason": None})
+        triangle = Path(__file__).with_name("examples").joinpath(
+            "showcase_triangle_light.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(triangle), {"admitted": True, "reason": None})
+
+        external_buffer = triangle.replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = context.get('pixels')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_buffer)["admitted"])
+        external_global = triangle.replace(
+            "from noon import *",
+            "from noon import *\nEXTERNAL_PIXELS = context.get('pixels')",
+            1,
+        ).replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = bytearray(width * height * 4)\n    pixels[0:4] = EXTERNAL_PIXELS[:4]",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_global)["admitted"])
+        aliased_buffer = triangle.replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = bytearray(width * height * 4)\n    backup = pixels",
+            1,
+        )
+        self.assertFalse(source_execution_proof(aliased_buffer)["admitted"])
+        external_geometry = triangle.replace(
+            "points, _ = trace_ray(TRIANGLE, LAUNCH_POINT, LAUNCH_ANGLE_DEGREES, visible_count + DENSE_BOUNCES)",
+            "points, _ = context.get('points')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_geometry)["admitted"])
+        shadowed_encoder = triangle.replace(
+            "def wood_texture(width=640, height=360):",
+            "def wood_texture(width=640, height=360):\n    rgba_png = context.get('encoder')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_encoder)["admitted"])
+        shadowed_enumerator = triangle.replace(
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            "enumerate = context.get('enumerate')\n        pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_enumerator)["admitted"])
+        shadowed_png = triangle.replace(
+            "exposure = ImageMobject(png, height=ymax - ymin, resampling_algorithm=\"bilinear\", z_index=18)",
+            "exposure = ImageMobject(png, height=ymax - ymin, resampling_algorithm=\"bilinear\", z_index=18)\n"
+            "            [ImageMobject(png) for png in context.get('external')]",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_png)["admitted"])
+        external_png = triangle.replace(
+            "ImageMobject(wood_texture(), height=8.0, resampling_algorithm=\"bilinear\")",
+            "ImageMobject(open('image.png', 'rb').read(), height=8.0, resampling_algorithm=\"bilinear\")",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_png)["admitted"])
+        forged_encoder = triangle.replace(
+            "return (b\"\\x89PNG\\r\\n\\x1a\\n\" + chunk(b\"IHDR\", struct.pack(\">2I5B\", width, height, 8, 6, 0, 0, 0))\n"
+            "            + chunk(b\"IDAT\", zlib.compress(scanlines, 4)) + chunk(b\"IEND\", b\"\"))",
+            "return b\"\\x89PNG\\r\\n\\x1a\\n\" + bytes(rgba)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(forged_encoder)["admitted"])
+        replaced_exposure = triangle.replace(
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)\n"
+            "        pngs[0] = context.get('external')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(replaced_exposure)["admitted"])
+        replaced_bounds = triangle.replace(
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)\n"
+            "        bounds = context.get('external')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(replaced_bounds)["admitted"])
 
         direct_pixels = '''from noon import *
 class Example(Scene):

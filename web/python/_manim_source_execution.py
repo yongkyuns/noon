@@ -912,6 +912,12 @@ class _SourceBindings(ast.NodeVisitor):
                         isinstance(count, ast.Constant) and type(count.value) is int
                         or isinstance(count, ast.Name) and count.id in self.integer_names) for items, count in
                         ((value.left, value.right), (value.right, value.left)))
+                    fresh = fresh or any(isinstance(items, ast.Call) and isinstance(items.func, ast.Name)
+                                         and items.func.id == "array"
+                                         for items, _ in ((value.left, value.right), (value.right, value.left)))
+                if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) \
+                        and value.func.id in {"bytearray", "array"}:
+                    fresh = True
                 if fresh:
                     self.container_stores.add(id(target))
             elif (isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
@@ -1002,6 +1008,17 @@ class _SceneOnlySource(ast.NodeVisitor):
             and bindings.binding_counts.get(node.targets[0].id) == 1
             and isinstance(node.value, ast.Constant) and type(node.value.value) is str
         }
+        self.module_imports = {node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))}
+        self.module_modules = {}
+        self.module_import_functions = {}
+        for node in self.module_imports:
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    self.module_modules[alias.asname or alias.name.split(".")[0]] = alias.name
+            else:
+                for alias in node.names:
+                    if alias.name != "*":
+                        self.module_import_functions[alias.asname or alias.name] = (node.module, alias.name)
         self.shader_function_names = set()
         self.shader_helper_specs = {}
         self.shader_program_call_specs = {}
@@ -1268,14 +1285,26 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_numpy_function_loads = set()
         self.numpy_import = None
         self.image_pixel_sources = [set()]
+        self.image_pixel_numeric_values = [set()]
+        self.image_numeric_values_by_body = {}
         self.pixel_factory_names = set()
         self.admitted_pixel_factory_loads = set()
+        self.closed_image_resource_factories = {}
+        self.admitted_image_resource_factory_loads = set()
         self.empty_pixel_list = object()
         self.has_image_constructor = any(
             isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id in {"ImageMobject", "ImagePaint"} for node in ast.walk(tree)
         )
         if self.has_image_constructor:
+            self.closed_png_encoders = {
+                name for name in self.module_functions if self._closed_png_encoder(name)
+            }
+            self.closed_image_resource_factories = {
+                name: result for name in self.module_functions
+                if (result := self._closed_image_resource_factory(name)) is not None
+            }
+            self.admitted_image_resource_factory_loads = set()
             self.closed_pixel_factory_names = {
                 name for name in self.module_functions if self._closed_pixel_proof(name)
             }
@@ -1319,7 +1348,6 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.members = _SOURCE_MEMBERS | frozenset().union(*_SOURCE_MODULES.values())
         # Constructor aliases and wildcard exports are proven only for direct
         # module declarations, never imports hidden in a conditional suite.
-        self.module_imports = {node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))}
         self.code_constructors = {"Code"} | {
             alias.asname or alias.name for node in tree.body
             if isinstance(node, ast.ImportFrom) and node.module in {"noon", "manim"}
@@ -1677,6 +1705,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id in self.numpy_integer_functions_with_parameters
                 and id(node) not in self.admitted_integer_function_loads):
             raise _OpaqueSource(node, "unproven_integer_helper_reference")
+        if (isinstance(node.ctx, ast.Load) and node.id in self.closed_image_resource_factories
+                and id(node) not in self.admitted_image_resource_factory_loads):
+            raise _OpaqueSource(node, "unproven_image_factory_reference")
         if (isinstance(node.ctx, ast.Load) and node.id == "LaggedStartMap"
                 and id(node) not in self.admitted_lagged_map_loads):
             raise _OpaqueSource(node, "unproven_callback_factory")
@@ -1732,6 +1763,349 @@ class _SceneOnlySource(ast.NodeVisitor):
         for target in ast.walk(node.target):
             if isinstance(target, ast.Name) and self.shader_values:
                 self.shader_values[-1][target.id] = None
+
+    def _closed_resource_function(self, name, active=None, active_data=None):
+        """Check a local data factory's call surface without executing Python."""
+        function = self.module_functions.get(name)
+        if (not isinstance(function, ast.FunctionDef) or self.module_binding_counts.get(name) != 1
+                or self.module_binding_locations.get(name) is not function
+                or function.decorator_list or function.returns or getattr(function, "type_params", ())):
+            return False
+        active = set() if active is None else active
+        if name in active:
+            return False
+        active.add(name)
+        try:
+            args = [*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs]
+            bindings = _SourceBindings()
+            for statement in function.body:
+                bindings.visit(statement)
+            if (any(arg.annotation for arg in args) or function.args.vararg or function.args.kwarg
+                    or any(value is not None for value in function.args.kw_defaults)
+                    or bindings.names.intersection(_SOURCE_BUILTINS)):
+                return False
+            local_names = bindings.names | {arg.arg for arg in args}
+            local_functions = set()
+            for nested in ast.walk(function):
+                if isinstance(nested, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    local_functions.add(nested.name)
+                    if nested is not function:
+                        nested_bindings = _SourceBindings()
+                        for statement in nested.body:
+                            nested_bindings.visit(statement)
+                        local_names.update(nested_bindings.names)
+                        local_names.update(arg.arg for arg in
+                                           [*nested.args.posonlyargs, *nested.args.args, *nested.args.kwonlyargs])
+                if isinstance(nested, ast.comprehension):
+                    local_names.update(item.id for item in ast.walk(nested.target)
+                                       if isinstance(item, ast.Name))
+            owned = set()
+            for node in ast.walk(function):
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], (ast.Tuple, ast.List))
+                        and isinstance(node.value, (ast.Tuple, ast.List))
+                        and len(node.targets[0].elts) == len(node.value.elts)):
+                    for target, value in zip(node.targets[0].elts, node.value.elts):
+                        if isinstance(target, ast.Name) and isinstance(
+                                value, (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp, ast.DictComp)):
+                            owned.add(target.id)
+                if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                    target = node.targets[0]
+                    value = node.value
+                    if isinstance(target, ast.Name) and (
+                            isinstance(value, (ast.List, ast.Set, ast.Dict, ast.ListComp, ast.SetComp,
+                                               ast.DictComp))
+                            or isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                            and (value.func.id == "bytearray" or value.func.id in self.module_import_functions
+                                 and self.module_import_functions[value.func.id] == ("array", "array"))
+                            or isinstance(value, ast.BinOp) and any(
+                                isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                                and self.module_import_functions.get(child.func.id) == ("array", "array")
+                                for child in ast.walk(value))):
+                        owned.add(target.id)
+                if isinstance(node, (ast.Global, ast.Nonlocal, ast.Delete, ast.With, ast.AsyncWith,
+                                     ast.Try, ast.AsyncFor)):
+                    return False
+                if isinstance(node, ast.Name) and node.id in {"context", "self", "__name__"}:
+                    return False
+                if isinstance(node, ast.Call):
+                    call = node.func
+                    if isinstance(call, ast.Name):
+                        callee = call.id
+                        if callee in local_functions or callee in _SOURCE_BUILTINS:
+                            continue
+                        if callee in local_names:
+                            return False
+                        origin = self.module_import_functions.get(callee)
+                        if origin and origin[0] in _SOURCE_MODULES and origin[1] in _SOURCE_MODULES[origin[0]]:
+                            continue
+                        if callee in self.module_functions:
+                            if not self._closed_resource_function(callee, active, active_data):
+                                return False
+                            continue
+                        return False
+                    if isinstance(call, ast.Attribute):
+                        if isinstance(call.value, ast.Name) and call.value.id in self.module_modules:
+                            if call.value.id in local_names:
+                                return False
+                            module = self.module_modules[call.value.id]
+                            if (module not in _SOURCE_MODULES or call.attr not in _SOURCE_MODULES[module]
+                                    or self.module_binding_counts.get(call.value.id) != 1):
+                                return False
+                            continue
+                        if (call.attr in {"append", "add", "join"}
+                                and isinstance(call.value, ast.Name) and call.value.id in owned
+                                or call.attr == "join" and isinstance(call.value, ast.Constant)
+                                and type(call.value.value) is bytes):
+                            continue
+                    return False
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                        and isinstance(node.targets[0], ast.Name):
+                    # Mutable buffers and collections cannot escape through aliases.
+                    references_owned = any(isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load)
+                                            and value.id in owned for value in ast.walk(node.value))
+                    if (isinstance(node.value, ast.Name) and node.value.id in owned
+                            or node.targets[0].id in owned and references_owned):
+                        return False
+                if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+                    if isinstance(node.value, ast.Name) and node.value.id in self.module_modules:
+                        if node.value.id in local_names:
+                            return False
+                        module = self.module_modules[node.value.id]
+                        if module not in _SOURCE_MODULES or node.attr not in _SOURCE_MODULES[module]:
+                            return False
+                    elif node.attr not in {"append", "add", "join"}:
+                        return False
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                    if (node.id not in local_names and node.id not in _SOURCE_BUILTINS
+                            and node.id not in self.module_functions and node.id not in self.module_modules
+                            and node.id not in self.module_import_functions and node.id not in self.module_bindings):
+                        return False
+                    if node.id in self.module_bindings and node.id not in self.module_functions \
+                            and node.id not in self.module_modules and node.id not in self.module_import_functions:
+                        if node.id in {"context", "__name__"}:
+                            return False
+                        if not self._closed_module_data(node.id, active_data):
+                            return False
+            return all(
+                isinstance(node.value, ast.Name) and node.value.id in owned
+                for node in ast.walk(function)
+                if isinstance(node, ast.Subscript) and not isinstance(node.ctx, ast.Load)
+            )
+        finally:
+            active.remove(name)
+
+    def _closed_module_data(self, name, active=None):
+        active = set() if active is None else active
+        if name in active or self.module_binding_counts.get(name) != 1:
+            return False
+        active.add(name)
+        for statement in self.tree.body:
+            value = None
+            if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name) and statement.targets[0].id == name):
+                value = statement.value
+            elif (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                  and isinstance(statement.targets[0], (ast.Tuple, ast.List))
+                  and isinstance(statement.value, (ast.Tuple, ast.List))
+                  and len(statement.targets[0].elts) == len(statement.value.elts)):
+                value = next((item for target, item in zip(statement.targets[0].elts, statement.value.elts)
+                              if isinstance(target, ast.Name) and target.id == name), None)
+            elif (isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+                  and statement.target.id == name):
+                value = statement.value
+            if value is None:
+                continue
+            result = self._closed_data_expression(value, set(), active)
+            active.remove(name)
+            return result
+        active.remove(name)
+        return False
+
+    def _closed_data_expression(self, expression, local_names, active=None):
+        """Prove a value is assembled from literals and closed deterministic helpers."""
+        active = set() if active is None else active
+        if isinstance(expression, ast.Name):
+            return (expression.id in local_names or expression.id in _SOURCE_BUILTINS
+                    or expression.id in self.module_modules and self.module_binding_counts.get(expression.id) == 1
+                    or expression.id in self.module_import_functions
+                    and self.module_binding_counts.get(expression.id) == 1
+                    or expression.id in self.module_functions
+                    and self._closed_resource_function(expression.id, active_data=active)
+                    or expression.id in self.module_bindings
+                    and self._closed_module_data(expression.id, active))
+        if isinstance(expression, ast.Constant):
+            return type(expression.value) in (int, float, str, bytes, bool, type(None))
+        if isinstance(expression, ast.Call):
+            if isinstance(expression.func, ast.Name):
+                callee = expression.func.id
+                trusted = (callee in {"tuple", "sorted", "set", "max", "min", "round", "range"}
+                           and callee not in self.module_bindings)
+                trusted = trusted or callee in self.module_functions and self._closed_resource_function(
+                    callee, active_data=active)
+            elif isinstance(expression.func, ast.Attribute) and isinstance(expression.func.value, ast.Name):
+                module = expression.func.value.id
+                trusted = (module in self.module_modules and self.module_binding_counts.get(module) == 1
+                           and self.module_modules[module] in _SOURCE_MODULES
+                           and expression.func.attr in _SOURCE_MODULES[self.module_modules[module]])
+            else:
+                trusted = False
+            return (trusted and all(self._closed_data_expression(arg, local_names, active)
+                                    for arg in expression.args)
+                    and all(self._closed_data_expression(item.value, local_names, active)
+                            for item in expression.keywords))
+        if isinstance(expression, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            names = set(local_names)
+            for generator in expression.generators:
+                if not self._closed_data_expression(generator.iter, names, active):
+                    return False
+                names.update(item.id for item in ast.walk(generator.target) if isinstance(item, ast.Name))
+                if any(not self._closed_data_expression(test, names, active) for test in generator.ifs):
+                    return False
+            values = ([expression.key, expression.value] if isinstance(expression, ast.DictComp)
+                      else [expression.elt])
+            return all(self._closed_data_expression(value, names, active) for value in values)
+        if isinstance(expression, ast.Attribute):
+            return (isinstance(expression.value, ast.Name) and expression.value.id in self.module_modules
+                    and self.module_binding_counts.get(expression.value.id) == 1
+                    and self.module_modules[expression.value.id] in _SOURCE_MODULES
+                    and expression.attr in _SOURCE_MODULES[self.module_modules[expression.value.id]])
+        if isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
+            return all(self._closed_data_expression(item, local_names, active) for item in expression.elts)
+        if isinstance(expression, ast.Dict):
+            return all(self._closed_data_expression(item, local_names, active)
+                       for item in [*expression.keys, *expression.values] if item is not None)
+        if isinstance(expression, ast.Slice):
+            return all(value is None or self._closed_data_expression(value, local_names, active)
+                       for value in (expression.lower, expression.upper, expression.step))
+        if isinstance(expression, ast.keyword):
+            return self._closed_data_expression(expression.value, local_names, active)
+        if isinstance(expression, (ast.operator, ast.unaryop, ast.boolop, ast.cmpop, ast.expr_context)):
+            return True
+        if isinstance(expression, ast.expr):
+            return (type(expression).__name__ in {
+                "BinOp", "UnaryOp", "Subscript", "Compare", "BoolOp", "IfExp", "Load", "Add", "Sub",
+                "Mult", "Div", "FloorDiv", "Mod", "Pow", "UAdd", "USub", "Not", "And", "Or",
+                "Eq", "NotEq", "Lt", "LtE", "Gt", "GtE", "In", "NotIn"
+            } and all(self._closed_data_expression(child, local_names, active)
+                      for child in ast.iter_child_nodes(expression)))
+        return False
+
+    def _closed_png_encoder(self, name):
+        function = self.module_functions.get(name)
+        if not self._closed_resource_function(name):
+            return False
+        body = function.body
+        returns = [node for node in body if isinstance(node, ast.Return)]
+        if not returns or not isinstance(returns[-1].value, ast.BinOp):
+            return False
+        returned = list(ast.walk(returns[-1].value))
+        if not any(isinstance(node, ast.Constant) and node.value == b"\x89PNG\r\n\x1a\n"
+                   for node in returned):
+            return False
+        calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)]
+        chunk_names = {node.name for node in function.body if isinstance(node, ast.FunctionDef)}
+        chunks = [node for node in returned if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Name) and node.func.id in chunk_names]
+        ids = [node for node in chunks if node.args and isinstance(node.args[0], ast.Constant)]
+        chunk_function = next((node for node in function.body if isinstance(node, ast.FunctionDef)
+                               and chunks and node.name == chunks[0].func.id), None)
+        chunk_return = next((node.value for node in chunk_function.body if isinstance(node, ast.Return)
+                             and isinstance(node.value, ast.BinOp)), None) if chunk_function else None
+        chunk_nodes = list(ast.walk(chunk_return)) if chunk_return else []
+        return (
+            len(chunks) >= 3
+            and any(node.args[0].value == b"IDAT" and len(node.args) == 2
+                    and isinstance(node.args[1], ast.Call)
+                    and isinstance(node.args[1].func, ast.Attribute)
+                    and node.args[1].func.attr == "compress"
+                    and isinstance(node.args[1].func.value, ast.Name)
+                    and self.module_modules.get(node.args[1].func.value.id) == "zlib" for node in ids)
+            and any(node.args[0].value == b"IEND" and len(node.args) == 2
+                    and isinstance(node.args[1], ast.Constant) and node.args[1].value == b"" for node in ids)
+            and any(isinstance(node.func, ast.Attribute) and node.func.attr == "pack"
+                    and isinstance(node.func.value, ast.Name)
+                    and self.module_modules.get(node.func.value.id) == "struct" for node in chunk_nodes
+                    if isinstance(node, ast.Call))
+            and any(isinstance(node.func, ast.Attribute) and node.func.attr == "crc32"
+                    and isinstance(node.func.value, ast.Name)
+                    and self.module_modules.get(node.func.value.id) == "zlib" for node in chunk_nodes
+                    if isinstance(node, ast.Call))
+        )
+
+    def _closed_image_resource_factory(self, name):
+        function = self.module_functions.get(name)
+        if not self._closed_resource_function(name):
+            return None
+        bindings = _SourceBindings()
+        for statement in function.body:
+            bindings.visit(statement)
+        buffers = set()
+        lists = set()
+        for statement in ast.walk(function):
+            if isinstance(statement, ast.Assign) and len(statement.targets) == 1 \
+                    and isinstance(statement.targets[0], ast.Name):
+                target, value = statement.targets[0].id, statement.value
+                if isinstance(value, ast.List) and not value.elts:
+                    lists.add(target)
+                if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                        and (value.func.id == "bytearray"
+                             or self.module_import_functions.get(value.func.id) == ("array", "array"))):
+                    buffers.add(target)
+
+        def is_png_call(node):
+            return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in self.closed_png_encoders
+                    and node.func.id not in bindings.names
+                    and self.module_binding_counts.get(node.func.id) == 1
+                    and self.module_binding_locations.get(node.func.id) is self.module_functions[node.func.id]
+                    and len(node.args) == 3 and isinstance(node.args[2], ast.Name)
+                    and node.args[2].id in buffers
+                    and bindings.binding_counts.get(node.args[2].id) == 1 and not node.keywords)
+
+        direct_returns = [node.value for node in function.body if isinstance(node, ast.Return)]
+        if (len(direct_returns) == 1 and is_png_call(direct_returns[0])
+                and len(function.args.defaults) == len(function.args.args)
+                and not function.args.posonlyargs and not function.args.kwonlyargs
+                and all(isinstance(value, ast.Constant)
+                    and type(value.value) in (int, float) for value in function.args.defaults)):
+            return "png"
+
+        for returned in direct_returns:
+            if not isinstance(returned, ast.Tuple) or not returned.elts \
+                    or not isinstance(returned.elts[0], ast.Name):
+                continue
+            target = returned.elts[0].id
+            if (target not in lists or bindings.binding_counts.get(target) != 1
+                    or len(returned.elts) != 2 or not isinstance(returned.elts[1], ast.Tuple)
+                    or len(returned.elts[1].elts) != 4
+                    or any(not isinstance(value, ast.Name) for value in returned.elts[1].elts)):
+                continue
+            appends = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Attribute) and node.func.attr == "append"
+                       and isinstance(node.func.value, ast.Name) and node.func.value.id == target]
+            parents = {child: parent for parent in ast.walk(function)
+                       for child in ast.iter_child_nodes(parent)}
+            loads = [node for node in ast.walk(function) if isinstance(node, ast.Name)
+                     and node.id == target and isinstance(node.ctx, ast.Load)]
+            allowed_loads = all(
+                isinstance(parents.get(node), ast.Attribute) and parents[node].attr == "append"
+                and parents[node].value is node
+                or isinstance(parents.get(node), ast.Tuple) and isinstance(parents.get(parents[node]), ast.Return)
+                for node in loads
+            )
+            mutated = any(
+                isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                and any(isinstance(child, ast.Subscript) and isinstance(child.value, ast.Name)
+                        and child.value.id == target and isinstance(child.ctx, (ast.Store, ast.Del))
+                        for child in ast.walk(node))
+                for node in ast.walk(function)
+            )
+            if (appends and allowed_loads and not mutated
+                    and all(len(node.args) == 1 and not node.keywords and is_png_call(node.args[0])
+                            for node in appends)):
+                return "tuple_png_list_numeric_tuple"
+        return None
 
     def _closed_pixel_proof(self, name=None, *, expression=None, initial_values=None, return_type=False):
         """Type-check fresh numeric pixel data without running source or ranges."""
@@ -1930,6 +2304,7 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def _image_pixel_source_names(self, body, bindings, parameters):
         if not self.has_image_constructor:
+            self.image_numeric_values_by_body[id(body)] = set()
             return set()
         class Uses(ast.NodeVisitor):
             def __init__(self):
@@ -1957,6 +2332,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         for statement in body:
             uses.visit(statement)
         if not uses.calls and not uses.paint_calls:
+            self.image_numeric_values_by_body[id(body)] = set()
             return set()
 
         for call in uses.calls:
@@ -1969,12 +2345,123 @@ class _SceneOnlySource(ast.NodeVisitor):
                     self.pixel_factory_names.add(helper)
                     self.admitted_pixel_factory_loads.add(id(call.args[0].func))
 
+                if (helper not in bindings.names and helper not in parameters
+                        and self.closed_image_resource_factories.get(helper) == "png"):
+                    self.admitted_image_resource_factory_loads.add(id(call.args[0].func))
+
+        closed_locals = set()
+        for statement in body:
+            if not isinstance(statement, ast.Assign):
+                continue
+            value = statement.value
+            if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                    and self.closed_image_resource_factories.get(value.func.id)
+                    == "tuple_png_list_numeric_tuple"):
+                names = {node.id for arg in value.args for node in ast.walk(arg) if isinstance(node, ast.Name)}
+                if (not all(self._closed_data_expression(arg, closed_locals) for arg in value.args)
+                        or any(name in closed_locals and bindings.binding_counts.get(name) != 1 for name in names)):
+                    raise _OpaqueSource(value, "unproven_image_source")
+            elif self._closed_data_expression(value, closed_locals):
+                for target in statement.targets:
+                    closed_locals.update(node.id for node in ast.walk(target) if isinstance(node, ast.Name))
+            else:
+                for target in statement.targets:
+                    closed_locals.difference_update(node.id for node in ast.walk(target) if isinstance(node, ast.Name))
+
+        png_lists = set()
+        png_bounds = set()
+        for statement in body:
+            if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], (ast.Tuple, ast.List))
+                    and isinstance(statement.value, ast.Call) and isinstance(statement.value.func, ast.Name)
+                    and len(statement.targets[0].elts) == 2
+                    and isinstance(statement.targets[0].elts[0], ast.Name)):
+                helper = statement.value.func.id
+                target = statement.targets[0].elts[0].id
+                if (self.closed_image_resource_factories.get(helper) == "tuple_png_list_numeric_tuple"
+                        and helper not in bindings.names and helper not in parameters
+                        and bindings.binding_counts.get(target) == 1
+                        and isinstance(statement.targets[0].elts[1], ast.Name)
+                        and bindings.binding_counts.get(statement.targets[0].elts[1].id) == 1):
+                    png_lists.add(target)
+                    png_bounds.add(statement.targets[0].elts[1].id)
+                    self.admitted_image_resource_factory_loads.add(id(statement.value.func))
+
+        numeric_values = set()
+        for statement in body:
+            if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], (ast.Tuple, ast.List))
+                    and isinstance(statement.value, ast.Name) and statement.value.id in png_bounds):
+                targets = [target.id for target in statement.targets[0].elts
+                           if isinstance(target, ast.Name)]
+                if len(targets) == len(statement.targets[0].elts) and all(
+                        bindings.binding_counts.get(target) == 1 for target in targets):
+                    numeric_values.update(targets)
+
+        for target in png_lists | png_bounds:
+            loads = [node for node in ast.walk(ast.Module(body=body, type_ignores=[]))
+                     if isinstance(node, ast.Name) and node.id == target and isinstance(node.ctx, ast.Load)]
+            if target in png_bounds:
+                allowed = (len(loads) == 1 and any(
+                    isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
+                    and node.value.id == target and isinstance(node.targets[0], (ast.Tuple, ast.List))
+                    and loads[0] is node.value for node in body))
+            else:
+                allowed = bool(loads) and all(any(
+                    isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in {"enumerate", "len"} and node.func.id not in bindings.names
+                    and node.func.id not in parameters and len(node.args) == 1 and not node.keywords
+                    and node.args[0] is load for node in ast.walk(ast.Module(body=body, type_ignores=[])))
+                    for load in loads)
+            if not allowed:
+                png_lists.discard(target)
+                png_bounds.discard(target)
+                numeric_values.clear()
+                break
+
+        for comp in ast.walk(ast.Module(body=body, type_ignores=[])):
+            if not isinstance(comp, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                continue
+            targets = {node.id for generator in comp.generators for node in ast.walk(generator.target)
+                       if isinstance(node, ast.Name)}
+            for call in uses.calls:
+                if (any(node is call for node in ast.walk(comp)) and len(call.args) == 1
+                        and isinstance(call.args[0], ast.Name) and call.args[0].id in png_lists
+                        and call.args[0].id in targets):
+                    raise _OpaqueSource(call, "unproven_image_source")
+
         requested_sources = {
             call.args[0].id for call in uses.calls
             if len(call.args) == 1 and isinstance(call.args[0], ast.Name)
         }
         sources = set()
         for statement in body:
+            if isinstance(statement, ast.For):
+                target = statement.target.elts if isinstance(statement.target, (ast.Tuple, ast.List)) else []
+                iterator = statement.iter
+                if (len(target) == 2 and isinstance(target[1], ast.Name)
+                        and isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
+                        and iterator.func.id == "enumerate" and len(iterator.args) == 1
+                        and not iterator.keywords and isinstance(iterator.args[0], ast.Name)
+                        and iterator.args[0].id in png_lists and "enumerate" not in bindings.names
+                        and "enumerate" not in parameters
+                        and bindings.binding_counts.get(target[1].id) == 1):
+                    name = target[1].id
+                    for call in uses.calls:
+                        shadowed = any(
+                            isinstance(comp, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
+                            and any(isinstance(bound, ast.Name) and bound.id == name
+                                    for generator in comp.generators
+                                    for bound in ast.walk(generator.target))
+                            and any(candidate is call for candidate in ast.walk(comp))
+                            for comp in ast.walk(statement)
+                        )
+                        if (not shadowed
+                                and any(candidate is call for nested in statement.body for candidate in ast.walk(nested))
+                                and len(call.args) == 1 and isinstance(call.args[0], ast.Name)
+                                and call.args[0].id == name):
+                            sources.add(name)
+                continue
             if (not isinstance(statement, ast.Assign) or len(statement.targets) != 1
                     or not isinstance(statement.targets[0], ast.Name)
                     or statement.targets[0].id not in requested_sources):
@@ -2000,6 +2487,10 @@ class _SceneOnlySource(ast.NodeVisitor):
                     sources.add(target)
                     self.pixel_factory_names.add(helper)
                     self.admitted_pixel_factory_loads.add(id(statement.value.func))
+                if (helper not in bindings.names and helper not in parameters
+                        and self.closed_image_resource_factories.get(helper) == "png"):
+                    sources.add(target)
+                    self.admitted_image_resource_factory_loads.add(id(statement.value.func))
         accepted = set()
         for call in uses.calls:
             keywords = {keyword.arg for keyword in call.keywords}
@@ -2009,10 +2500,15 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and isinstance(source_arg.func, ast.Name)
                 and id(source_arg.func) in self.admitted_pixel_factory_loads
                 and not source_arg.args and not source_arg.keywords)
+            source_image_factory = (isinstance(source_arg, ast.Call)
+                and isinstance(source_arg.func, ast.Name)
+                and id(source_arg.func) in self.admitted_image_resource_factory_loads
+                and self.closed_image_resource_factories.get(source_arg.func.id) == "png"
+                and not source_arg.args and not source_arg.keywords)
             if (len(call.args) != 1 or any(keyword.arg is None for keyword in call.keywords)
                     or not keywords.issubset({"height", "resampling_algorithm", "opacity", "z_index",
                                                "scale_to_resolution"})
-                    or (not source_name and not source_factory)):
+                    or (not source_name and not source_factory and not source_image_factory)):
                 raise _OpaqueSource(call, "unproven_image_source")
             for keyword in call.keywords:
                 option = keyword.value
@@ -2022,7 +2518,9 @@ class _SceneOnlySource(ast.NodeVisitor):
                               {"nearest", "none", "bilinear", "linear", "bicubic", "cubic"})
                              or (type(option.value) is int and option.value in {0, 2, 3})))
                 else:
-                    allowed = isinstance(option, ast.Constant) and type(option.value) in (int, float)
+                    allowed = (isinstance(option, ast.Constant) and type(option.value) in (int, float)
+                               or keyword.arg == "height" and self._numeric_expression(
+                                   option, numeric_values))
                 if not allowed:
                     raise _OpaqueSource(option, "unproven_image_option")
             if source_name:
@@ -2096,6 +2594,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             if any(node.id == name and id(node) not in allowed_loads for node in uses.loads):
                 raise _OpaqueSource(next(node for node in uses.loads if node.id == name),
                                     "unproven_image_palette")
+        self.image_numeric_values_by_body[id(body)] = numeric_values
         return sources | paint_sources
 
     def _bounded_direct_pixel_array(self, expression, bindings, parameters):
@@ -2118,6 +2617,12 @@ class _SceneOnlySource(ast.NodeVisitor):
         return True
 
     def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id in {"bytearray", "array"}:
+            name = node.func.id
+            if any(name in scope for scope in self.scopes[1:]):
+                raise _OpaqueSource(node.func, "unproven_shadowed_builtin")
+            if name == "array" and self.module_import_functions.get(name) != ("array", "array"):
+                raise _OpaqueSource(node.func, "unproven_array_constructor")
         if isinstance(node.func, ast.Attribute):
             self._reject_shader_collection_mutation(node, node.func.value)
         if isinstance(node.func, ast.Name) and node.func.id == "zip" \
@@ -2331,7 +2836,13 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and id(node.args[0].func) in self.admitted_pixel_factory_loads
                 and not any(node.args[0].func.id in scope for scope in self.scopes[1:])
                 and not node.args[0].args and not node.args[0].keywords)
-            if not pixel_source and not pixel_factory:
+            generated_factory = (len(node.args) == 1 and isinstance(node.args[0], ast.Call)
+                and isinstance(node.args[0].func, ast.Name)
+                and id(node.args[0].func) in self.admitted_image_resource_factory_loads
+                and self.closed_image_resource_factories.get(node.args[0].func.id) == "png"
+                and not any(node.args[0].func.id in scope for scope in self.scopes[1:])
+                and not node.args[0].args and not node.args[0].keywords)
+            if not pixel_source and not pixel_factory and not generated_factory:
                 raise _OpaqueSource(node, "unproven_image_source")
             self.admitted_image_loads.add(id(node.func))
         if isinstance(node.func, ast.Name) and node.func.id == "ImagePaint":
@@ -2790,6 +3301,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.scopes.append(bindings.names | parameters)
         self.shader_values.append({})
         self.image_pixel_sources.append(image_pixel_sources)
+        self.image_pixel_numeric_values.append(self.image_numeric_values_by_body.get(id(body), set()))
         # Every lexical binding must have a fresh origin; a parameter, alias,
         # conditional rebind or loop target cannot inherit another value's proof.
         self.owned_containers.append(bindings.container_names - bindings.other_names - parameters)
@@ -2860,6 +3372,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         finally:
             self.resource_preparation_scopes.pop()
             self.image_pixel_sources.pop()
+            self.image_pixel_numeric_values.pop()
             self.shader_values.pop()
             self.numpy_array_names.pop()
             self.numpy_integer_names.pop()
@@ -3069,6 +3582,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.owned_containers.append(set())
         self.numpy_integer_names.append(set(self.numpy_integer_names[-1]))
         self.image_pixel_sources.append(self.image_pixel_sources[-1].copy())
+        self.image_pixel_numeric_values.append(self.image_pixel_numeric_values[-1].copy())
         self.shader_values.append({})
         try:
             for generator in node.generators:
@@ -3104,6 +3618,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.shader_values.pop()
             self.image_pixel_sources.pop()
             self.numpy_integer_names.pop()
+            self.image_pixel_numeric_values.pop()
             self.scopes.pop()
             self.owned_containers.pop()
 
