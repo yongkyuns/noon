@@ -263,6 +263,7 @@ pub(crate) fn loop_phase(time: f64, duration: f64) -> f64 {
 }
 
 /// Completed loop cycles in an elapsed scene-time sample, before phase wrapping.
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn completed_loop_cycles(time: f64, duration: f64) -> u64 {
     (time / duration).floor().min(u64::MAX as f64) as u64
 }
