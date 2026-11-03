@@ -348,6 +348,53 @@ class SourceEffectsTests(unittest.TestCase):
             '    values = np.array([1])\n'
             '    def read(index): return values[index]\n'
             '    return np.array([read(context.get("index"))])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(index):\n'
+            '    values = np.array([1])\n'
+            '    return values[index]\n'
+            'def seed(): return helper(0)\n'
+            'class Example(Scene):\n'
+            '    def construct(self):\n'
+            '        callback = helper\n'
+            '        return callback(context.get("index"))\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(index):\n'
+            '    values = np.array([1])\n'
+            '    return values[index]\n'
+            'def seed(): return helper(0)\n'
+            'class Example(Scene):\n'
+            '    def construct(self):\n'
+            '        return sorted([context.get("index")], key=helper)\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    index += context.get("index")\n    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    for index in [context.get("index")]:\n        pass\n'
+            '    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    index: int = context.get("index")\n'
+            '    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    enumerate = context.get("enumerate")\n'
+            '    for index, value in enumerate(values):\n        pass\n'
+            '    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    index += context.get("index")\n'
+            '    def read(): return values[index]\n'
+            '    return np.array([read()])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    return np.array([values[index] for index in [context.get("index")]])\n',
             'import numpy as np\n'
             'def helper(context):\n'
             '    values = [context.get("payload")]\n'

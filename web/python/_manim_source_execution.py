@@ -369,48 +369,131 @@ def _integer_expression(node, names, module_literals):
     return False
 
 
+def _target_names(target):
+    return target.elts if isinstance(target, (ast.Tuple, ast.List)) else [target]
+
+
+def _integer_iteration_targets(iterator, target, known, module_literals):
+    if (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
+            and iterator.func.id == "range" and iterator.args and not iterator.keywords
+            and all(_integer_expression(arg, known, module_literals) for arg in iterator.args)):
+        return {item.id for item in _target_names(target) if isinstance(item, ast.Name)}
+    if (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
+            and iterator.func.id == "enumerate" and len(iterator.args) == 1 and not iterator.keywords
+            and isinstance(target, (ast.Tuple, ast.List)) and len(target.elts) == 2
+            and isinstance(target.elts[0], ast.Name)):
+        return {target.elts[0].id}
+    literal = module_literals.get(iterator.id) if isinstance(iterator, ast.Name) else iterator
+    if (isinstance(literal, (ast.List, ast.Tuple))
+            and all(_integer_expression(item, known, module_literals) for item in literal.elts)):
+        return {item.id for item in _target_names(target) if isinstance(item, ast.Name)}
+    return set()
+
+
+def _integer_names_at_node(body, node, parameters, module_literals):
+    names = _integer_names_in_body(body, parameters, module_literals)
+    parents = {}
+    for statement in body:
+        for parent in ast.walk(statement):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+    ancestors = []
+    current = parents.get(node)
+    while current is not None:
+        ancestors.append(current)
+        current = parents.get(current)
+
+    def bind_comprehension_generators(generators, stop_after=None):
+        for generator in generators:
+            if any(candidate is node for candidate in ast.walk(generator.iter)):
+                break
+            proven = _integer_iteration_targets(generator.iter, generator.target, names, module_literals)
+            names.difference_update(item.id for item in _target_names(generator.target)
+                                    if isinstance(item, ast.Name))
+            names.update(proven)
+            in_filter = any(candidate is node for condition in generator.ifs for candidate in ast.walk(condition))
+            if generator is stop_after or in_filter:
+                break
+
+    for ancestor in ancestors:
+        if isinstance(ancestor, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            bind_comprehension_generators(ancestor.generators)
+            continue
+        if not isinstance(ancestor, ast.comprehension):
+            continue
+        owner = parents.get(ancestor)
+        if isinstance(owner, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            bind_comprehension_generators(owner.generators, ancestor)
+    return names
+
+
 def _integer_names_in_body(body, parameters, module_literals):
+
+    nodes = list(_walk_scope(body))
     names = set(parameters)
     changed = True
     while changed:
         changed = False
-        for node in _walk_scope(body):
-            if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-                iterator = node.iter
-                integer_iterator = (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
-                                    and iterator.func.id == "range" and bool(iterator.args)
-                                    and all(_integer_expression(arg, names, module_literals) for arg in iterator.args))
-                iterable = (module_literals.get(iterator.id) if isinstance(iterator, ast.Name) else None)
-                literal_iterator = (_static_numpy_literal(iterator) and isinstance(iterator, (ast.List, ast.Tuple))
-                                    and all(isinstance(item, ast.Constant) and type(item.value) is int
-                                            for item in iterator.elts)) or (
-                    isinstance(iterator, ast.Name) and isinstance(iterable, (ast.List, ast.Tuple))
-                    and all(isinstance(item, ast.Constant) and type(item.value) is int for item in iterable.elts))
-                if integer_iterator or literal_iterator:
-                    target = node.target.elts if isinstance(node.target, (ast.Tuple, ast.List)) else [node.target]
-                    for item in target:
+        for node in nodes:
+            origins = []
+            if isinstance(node, ast.Assign):
+                origins.extend((target, _integer_expression(node.value, names, module_literals))
+                               for target in node.targets)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                origins.append((node.target, _integer_expression(node.value, names, module_literals)))
+            elif isinstance(node, ast.AugAssign):
+                origins.append((node.target, isinstance(node.target, ast.Name) and node.target.id in names
+                                and _integer_expression(node.value, names, module_literals)
+                                and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv,
+                                                         ast.Mod, ast.LShift, ast.RShift, ast.BitAnd,
+                                                         ast.BitOr, ast.BitXor))))
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                proven = _integer_iteration_targets(node.iter, node.target, names, module_literals)
+                origins.extend((item, isinstance(item, ast.Name) and item.id in proven)
+                               for item in _target_names(node.target))
+            for target, proven in origins:
+                if proven:
+                    for item in _target_names(target):
                         if isinstance(item, ast.Name) and item.id not in names:
                             names.add(item.id)
                             changed = True
-                elif (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
-                      and iterator.func.id == "enumerate" and iterator.args
-                      and isinstance(node.target, (ast.Tuple, ast.List)) and len(node.target.elts) == 2
-                      and isinstance(node.target.elts[0], ast.Name)
-                      and node.target.elts[0].id not in names):
-                    names.add(node.target.elts[0].id)
-                    changed = True
-            if isinstance(node, ast.Assign) and _integer_expression(node.value, names, module_literals):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id not in names:
-                        names.add(target.id)
-                        changed = True
-    invalid = set()
-    for node in _walk_scope(body):
-        if isinstance(node, ast.Assign) and not _integer_expression(node.value, names, module_literals):
+
+    events = {}
+
+    def event(name, proven):
+        events.setdefault(name, []).append(bool(proven))
+
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            proven = _integer_expression(node.value, names, module_literals)
             for target in node.targets:
-                if isinstance(target, ast.Name):
-                    invalid.add(target.id)
-    return names - invalid
+                for item in _target_names(target):
+                    if isinstance(item, ast.Name):
+                        event(item.id, proven)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                event(node.target.id, node.value is not None
+                      and _integer_expression(node.value, names, module_literals))
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            event(node.target.id, node.target.id in names
+                  and _integer_expression(node.value, names, module_literals)
+                  and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod,
+                                           ast.LShift, ast.RShift, ast.BitAnd, ast.BitOr, ast.BitXor)))
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            proven = _integer_iteration_targets(node.iter, node.target, names, module_literals)
+            for item in _target_names(node.target):
+                if isinstance(item, ast.Name):
+                    event(item.id, item.id in proven)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            event(node.name, False)
+
+    facts = names | set(parameters)
+    while True:
+        invalid = {name for name, origins in events.items() if not all(origins)}
+        narrowed = facts - invalid
+        if narrowed == facts:
+            return facts
+        facts = narrowed
 
 
 def _integer_index_container_names(body, arrays, integer_names, module_literals):
@@ -704,7 +787,8 @@ def _safe_numpy_containers(body):
     return safe_lists
 
 
-def _nested_scope_references(body, arrays, numeric_containers, integer_names, module_literals):
+def _nested_scope_references(body, arrays, numeric_containers, integer_names, module_literals,
+                             integer_parameters):
     if not arrays and not numeric_containers:
         return False
     parents = {}
@@ -716,6 +800,13 @@ def _nested_scope_references(body, arrays, numeric_containers, integer_names, mo
         for scope in ast.walk(statement):
             if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
                 continue
+            nested_names = set(integer_names)
+            if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                parameters = {arg.arg for arg in [*scope.args.posonlyargs, *scope.args.args,
+                                                   *scope.args.kwonlyargs]}
+                nested_names.difference_update(parameters)
+                nested_names.update(integer_parameters.get(scope.name, ()))
+                nested_names = _integer_names_in_body(scope.body, nested_names, module_literals)
             for node in ast.walk(scope):
                 if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load):
                     continue
@@ -725,7 +816,7 @@ def _nested_scope_references(body, arrays, numeric_containers, integer_names, mo
                     parent = parents.get(node)
                     if not (isinstance(parent, ast.Subscript) and parent.value is node
                             and isinstance(parent.ctx, ast.Load)
-                            and _numpy_index_expression(parent.slice, arrays, module_literals, integer_names)):
+                            and _numpy_index_expression(parent.slice, arrays, module_literals, nested_names)):
                         return True
     return False
 
@@ -1005,23 +1096,68 @@ class _SceneOnlySource(ast.NodeVisitor):
         changed = True
         while changed:
             changed = False
-            for name, function in self.numpy_functions.items():
-                body_integer_names = _integer_names_in_body(
-                    function.body, self.numpy_integer_parameters[name], self.module_numpy_literals)
+            call_sites = {name: [] for name in self.numpy_functions}
+            for caller, function in self.numpy_functions.items():
                 for call in (node for node in _walk_scope(function.body)
                              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                              and node.func.id in self.numpy_functions):
-                    callee = self.numpy_functions[call.func.id]
-                    formals = [arg.arg for arg in [*callee.args.posonlyargs, *callee.args.args,
-                                                    *callee.args.kwonlyargs]]
-                    actuals = dict(zip(formals, call.args))
-                    actuals.update({keyword.arg: keyword.value for keyword in call.keywords
-                                    if keyword.arg in formals})
-                    for formal, actual in actuals.items():
-                        if (formal not in self.numpy_integer_parameters[call.func.id]
-                                and _integer_expression(actual, body_integer_names, self.module_numpy_literals)):
-                            self.numpy_integer_parameters[call.func.id].add(formal)
-                            changed = True
+                    call_sites[call.func.id].append((caller, function, call))
+            for callee, sites in call_sites.items():
+                if not sites:
+                    continue
+                function = self.numpy_functions[callee]
+                formals = [arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
+                                                *function.args.kwonlyargs]]
+                for formal in formals:
+                    proven_at_any_call = False
+                    for caller, caller_function, call in sites:
+                        caller_names = _integer_names_at_node(
+                            caller_function.body, call, self.numpy_integer_parameters[caller],
+                            self.module_numpy_literals)
+                        actuals = dict(zip(formals, call.args))
+                        actuals.update({keyword.arg: keyword.value for keyword in call.keywords
+                                        if keyword.arg in formals})
+                        actual = actuals.get(formal)
+                        if actual is not None and _integer_expression(
+                                actual, caller_names, self.module_numpy_literals):
+                            proven_at_any_call = True
+                            break
+                    if proven_at_any_call and formal not in self.numpy_integer_parameters[callee]:
+                        self.numpy_integer_parameters[callee].add(formal)
+                        changed = True
+        # Requiring every call site closes the candidate facts after recursive
+        # and mutually recursive calls have received their entry facts.
+        changed = True
+        while changed:
+            changed = False
+            for callee, parameters in self.numpy_integer_parameters.items():
+                sites = [(caller, function, call)
+                         for caller, function in self.numpy_functions.items()
+                         for call in _walk_scope(function.body)
+                         if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                         and call.func.id == callee]
+                formals = [arg.arg for arg in [*self.numpy_functions[callee].args.posonlyargs,
+                                                *self.numpy_functions[callee].args.args,
+                                                *self.numpy_functions[callee].args.kwonlyargs]]
+                for formal in tuple(parameters):
+                    proven_at_every_call = bool(sites)
+                    for caller, function, call in sites:
+                        caller_names = _integer_names_at_node(
+                            function.body, call, self.numpy_integer_parameters[caller], self.module_numpy_literals)
+                        actuals = dict(zip(formals, call.args))
+                        actuals.update({keyword.arg: keyword.value for keyword in call.keywords
+                                        if keyword.arg in formals})
+                        actual = actuals.get(formal)
+                        if actual is None or not _integer_expression(actual, caller_names, self.module_numpy_literals):
+                            proven_at_every_call = False
+                            break
+                    if not proven_at_every_call:
+                        parameters.remove(formal)
+                        changed = True
+        self.numpy_integer_functions_with_parameters = {
+            name for name, parameters in self.numpy_integer_parameters.items() if parameters
+        }
+        self.admitted_integer_function_loads = set()
         changed = True
         while changed:
             changed = False
@@ -1548,6 +1684,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id in self.numpy_array_functions_with_parameters
                 and id(node) not in self.admitted_numpy_function_loads):
             raise _OpaqueSource(node, "unproven_function_reference")
+        if (isinstance(node.ctx, ast.Load) and node.id in self.numpy_integer_functions_with_parameters
+                and id(node) not in self.admitted_integer_function_loads):
+            raise _OpaqueSource(node, "unproven_integer_helper_reference")
         if (isinstance(node.ctx, ast.Load) and node.id == "LaggedStartMap"
                 and id(node) not in self.admitted_lagged_map_loads):
             raise _OpaqueSource(node, "unproven_callback_factory")
@@ -2059,7 +2198,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.admitted_plot_loads.add(id(node.func))
         if isinstance(node.func, ast.Name):
             name = node.func.id
-            if name in {"int", "float", "complex", "abs", "round", "min", "max", "len", "range"} and (
+            if name in {"int", "float", "complex", "abs", "round", "min", "max", "len", "range", "enumerate"} and (
                     name in self.module_bindings or any(name in scope for scope in self.scopes[1:])):
                 raise _OpaqueSource(node.func, "unproven_shadowed_numeric_builtin")
             if name in {"VMobject", "SVGMobject"} and (
@@ -2166,6 +2305,23 @@ class _SceneOnlySource(ast.NodeVisitor):
                         actuals[formal], arrays, self.numpy_safe_containers[-1],
                         self.module_numpy_literals, self.numpy_scalar_names[-1])):
                     raise _OpaqueSource(node, "unproven_numpy_argument_origin")
+        if (isinstance(node.func, ast.Name)
+                and node.func.id in self.numpy_integer_functions_with_parameters):
+            if (node.func.id in self.local_scope_names[-1]
+                    and node.func.id not in self.local_function_names[-1]):
+                raise _OpaqueSource(node, "unproven_shadowed_function")
+            function = self.numpy_functions[node.func.id]
+            formals = [arg.arg for arg in [*function.args.posonlyargs, *function.args.args,
+                                            *function.args.kwonlyargs]]
+            actuals = dict(zip(formals, node.args))
+            actuals.update({keyword.arg: keyword.value for keyword in node.keywords
+                            if keyword.arg in formals})
+            for formal in self.numpy_integer_parameters[node.func.id]:
+                if (formal not in actuals
+                        or not _integer_expression(actuals[formal], self.numpy_integer_names[-1],
+                                                   self.module_numpy_literals)):
+                    raise _OpaqueSource(node, "unproven_integer_argument_origin")
+            self.admitted_integer_function_loads.add(id(node.func))
         if isinstance(node.func, ast.Attribute) and node.func.attr == "audio":
             if id(node.func) not in self.admitted_scene_audio_calls:
                 raise _OpaqueSource(node, "unproven_audio_declaration")
@@ -2630,7 +2786,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             body, set(integer_parameters) | integer_names, self.module_numpy_literals)
         for nested in (node for statement in body for node in ast.walk(statement)
                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))):
-            integer_names.update(self.numpy_integer_parameters.get(nested.name, ()))
+            integer_names.update(name for name in self.numpy_integer_parameters.get(nested.name, ())
+                                 if name not in bindings.names and name not in self.module_bindings)
         self.numpy_integer_names.append(integer_names)
         image_pixel_sources = self._image_pixel_source_names(body, bindings, parameters)
         self.scopes.append(bindings.names | parameters)
@@ -2677,7 +2834,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         integer_names.update(_integer_index_container_names(
             body, array_names, integer_names, self.module_numpy_literals))
         if _nested_scope_references(body, array_names, self.numpy_safe_containers[-1],
-                                    integer_names, self.module_numpy_literals):
+                                    integer_names, self.module_numpy_literals, self.numpy_integer_parameters):
             raise _OpaqueSource(None, "unproven_numpy_closure")
         self.numpy_array_names.append(array_names)
         self.owned_containers[-1].update(array_names - set(array_parameters))
@@ -2913,6 +3070,7 @@ class _SceneOnlySource(ast.NodeVisitor):
     def _comprehension(self, node):
         self.scopes.append(set())
         self.owned_containers.append(set())
+        self.numpy_integer_names.append(set(self.numpy_integer_names[-1]))
         self.image_pixel_sources.append(self.image_pixel_sources[-1].copy())
         self.shader_values.append({})
         try:
@@ -2924,6 +3082,11 @@ class _SceneOnlySource(ast.NodeVisitor):
                 bindings = _SourceBindings()
                 bindings.visit(generator.target)
                 self.scopes[-1].update(bindings.names)
+                proven_integer_targets = _integer_iteration_targets(
+                    generator.iter, generator.target, self.numpy_integer_names[-1], self.module_numpy_literals)
+                target_names = {item.id for item in ast.walk(generator.target) if isinstance(item, ast.Name)}
+                self.numpy_integer_names[-1].difference_update(target_names)
+                self.numpy_integer_names[-1].update(proven_integer_targets)
                 self.image_pixel_sources[-1].difference_update(bindings.names)
                 if isinstance(generator.target, (ast.Tuple, ast.List)):
                     values = [self._loop_shader_value(iterable, index)
@@ -2943,6 +3106,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         finally:
             self.shader_values.pop()
             self.image_pixel_sources.pop()
+            self.numpy_integer_names.pop()
             self.scopes.pop()
             self.owned_containers.pop()
 
