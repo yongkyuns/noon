@@ -47,8 +47,9 @@ export class AuthoringWorkerGeneration {
 
     const candidate = this.#ensureCandidate();
     try {
-      await candidate.readyPromise;
+      await Promise.race([candidate.readyPromise, candidate.cancelledPromise]);
     } catch (error) {
+      if (this.#candidate !== candidate || this.#disposed || !this.#isCurrentRun(token)) return null;
       this.#discardCandidate(candidate);
       throw error;
     }
@@ -77,6 +78,15 @@ export class AuthoringWorkerGeneration {
     return true;
   }
 
+  retireCandidate() {
+    const candidate = this.#candidate;
+    if (candidate === null) return false;
+    this.#candidate = null;
+    candidate.cancel(new Error("replacement Python worker startup was superseded"));
+    candidate.client.terminate();
+    return true;
+  }
+
   dispose() {
     if (this.#disposed) return;
     this.#disposed = true;
@@ -85,7 +95,10 @@ export class AuthoringWorkerGeneration {
     this.#activeClient = null;
     this.#candidate = null;
     active?.terminate();
-    if (candidate?.client !== active) candidate?.client.terminate();
+    if (candidate?.client !== active) {
+      candidate?.cancel(new Error("authoring worker generation disposed"));
+      candidate?.client.terminate();
+    }
   }
 
   #ensureCandidate() {
@@ -94,7 +107,12 @@ export class AuthoringWorkerGeneration {
     if (client === null || typeof client.ready !== "function" || typeof client.terminate !== "function") {
       throw new TypeError("authoring worker factory must return a readyable client");
     }
-    const candidate = { client, readyPromise: null };
+    let cancel;
+    const cancelledPromise = new Promise((_, reject) => { cancel = reject; });
+    // A pending worker bootstrap must not keep a superseded Run alive forever.
+    // The existing replacement watchdog calls retireCandidate at its normal
+    // retirement point; this promise makes that termination observable here.
+    const candidate = { client, readyPromise: null, cancelledPromise, cancel };
     candidate.readyPromise = Promise.resolve().then(() => client.ready());
     this.#candidate = candidate;
     return candidate;

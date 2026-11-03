@@ -171,6 +171,30 @@ test("a terminated pristine owner is replaced instead of being reused", async ()
   f.owner.dispose();
 });
 
+test("retiring a never-ready candidate releases a superseded run and lets the latest run retry", async () => {
+  let currentToken = "initial";
+  const old = client(1);
+  const neverReady = deferred();
+  const candidate = client(2, "pristine", neverReady.promise);
+  const retry = client(3);
+  const clients = [old, candidate, retry];
+  const owner = new AuthoringWorkerGeneration({
+    createClient: () => clients.shift(),
+    isCurrentRun: token => token === currentToken,
+  });
+  await owner.clientForRun(currentToken);
+  old.setTrust("tainted");
+  const superseded = owner.clientForRun(currentToken);
+  await Promise.resolve();
+  currentToken = "latest";
+  assert.equal(owner.retireCandidate(), true);
+  assert.equal(await superseded, null);
+  assert.equal(candidate.terminated, true);
+  assert.equal(await owner.clientForRun(currentToken), retry);
+  assert.equal(owner.activeClient, retry);
+  owner.dispose();
+});
+
 test("dispose retires the active owner and its single pending candidate", async () => {
   let currentToken = "run-1";
   const old = client(1);

@@ -1068,6 +1068,7 @@ function retireActiveRunForReplacement() {
   let watchdog = null;
   const retireAuthoring = () => {
     if (client !== null) authoringWorkers.retire(client);
+    authoringWorkers.retireCandidate();
   };
   if (priorRun !== null) {
     if (continuation === null) retireAuthoring();
@@ -1131,9 +1132,6 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
   const source = sourceSnapshot ?? sceneSourceEditor.value;
   const runRequest = { token: runToken, source, exampleId: example.id };
   activeRunRequest = runRequest;
-  activeRunIdentity = {
-    token: runToken, source, exampleId: example.id, title: example.title, outcome: "running",
-  };
   updateDraftStatus();
   const releaseBusy = beginBusy();
   const task = (async () => {
@@ -1243,6 +1241,10 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
               throw new Error("Python semantic continuation was superseded during startup");
             }
             adoptRuntimeCanvas(attachedPlayer);
+            activeRunIdentity = {
+              token: runToken, source, exampleId: example.id, title: example.title, outcome: "running",
+            };
+            updateDraftStatus();
             previousPreview.showLive();
             startMetricsPolling();
             updatePlaybackControls({
@@ -1398,6 +1400,9 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
       const report = await player.metrics();
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-metrics");
       adoptRuntimeCanvas(player);
+      activeRunIdentity = {
+        token: runToken, source, exampleId: example.id, title: example.title, outcome: "running",
+      };
       startMetricsPolling();
 
       const operation = result.preparedPlayback === true ? "Prepared history retained"

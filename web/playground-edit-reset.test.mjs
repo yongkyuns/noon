@@ -125,6 +125,35 @@ test("late status from the active run cannot overwrite a newer selected draft", 
   assert.match(context.draftStatus.value, /Two draft not applied/);
 });
 
+test("a failed Run before runtime adoption keeps the displayed run identity", () => {
+  const runStart = main.indexOf("async function runScene(");
+  const runEnd = main.indexOf("const runRequestRouter =", runStart);
+  const run = main.slice(runStart, runEnd);
+  const firstAdoption = run.indexOf("adoptRuntimeCanvas(attachedPlayer)");
+  const finalAdoption = run.indexOf("adoptRuntimeCanvas(player)");
+  const identityWrites = [...run.matchAll(/activeRunIdentity = \{/g)].map(match => match.index);
+
+  assert.ok(runStart >= 0 && runEnd > runStart);
+  assert.equal(identityWrites.length, 2, "identity changes only when a runtime is adopted");
+  assert.ok(identityWrites[0] > firstAdoption);
+  assert.ok(identityWrites[1] > finalAdoption);
+
+  const context = {
+    draftStatus: { value: "", dataset: {} },
+    activeRunIdentity: {
+      source: "last accepted source", exampleId: "one", title: "One", outcome: "complete",
+      token: { runGeneration: 8 },
+    },
+    selectedExampleId: "two",
+    sceneSourceEditor: { value: "another draft" },
+    currentExample: () => ({ id: "two", title: "Two" }),
+  };
+  vm.runInNewContext(main.slice(runStatusStart, runStatusEnd), context);
+  context.updateDraftStatus();
+  assert.match(context.draftStatus.value, /Two draft not applied · One remains active/);
+  assert.equal(context.activeRunIdentity.exampleId, "one");
+});
+
 test("editor lifecycle has no automatic source replacement path", () => {
   const editorStart = main.indexOf('sceneSourceEditor.addEventListener("input"');
   const editorEnd = main.indexOf('window.addEventListener("popstate"', editorStart);
