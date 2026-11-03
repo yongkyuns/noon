@@ -28,6 +28,7 @@ const manifest = JSON.parse(await readFile(path.join(root, "web/python/examples/
 const entry = manifest.entries.find(entry => entry.id === "showcase-background-music");
 assert.ok(entry);
 const source = await readFile(path.join(root, "web", entry.path));
+const fourierMusicPreview = await readFile(path.join(root, "scripts/fixtures/noon_fourier_music_preview.py"));
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const json = value => `${JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2)}\n`;
 const report = {
@@ -508,6 +509,59 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     await command("pause");
     await quiet();
     return { fixtureSha256: hash(fixture), prepared, running };
+  });
+
+  await record("original 34.65-second Fourier soundtrack preview uses the finite viewer route", async () => {
+    assert.equal(hash(fourierMusicPreview), "573d4e94e81707925632f158bdb5d99f0c044eaf86ab0d25a4420fc4735013d4",
+      "the Fourier music preview stays byte-for-byte identical to the original issue fixture");
+    const before = await state();
+    await page.evaluate(async fixture => {
+      const editor = document.querySelector("#python-scene-source");
+      if (!(editor instanceof HTMLTextAreaElement)) throw new Error("ordinary Python editor is unavailable");
+      window.audioQualification.previewRunError = null;
+      window.audioQualification.previewRunDone = false;
+      editor.value = fixture;
+      try {
+        await window.__noonExampleGallery.run();
+      } catch (error) {
+        window.audioQualification.previewRunError = String(error?.stack ?? error);
+      } finally {
+        window.audioQualification.previewRunDone = true;
+      }
+    }, fourierMusicPreview.toString());
+    await page.waitForFunction(() => window.audioQualification.previewRunDone === true, null,
+      { timeout: 180_000 });
+    const runError = await page.evaluate(() => window.audioQualification.previewRunError);
+    assert.equal(runError, null, runError ?? undefined);
+    const preview = await state();
+    assert.equal(preview.transport.hasAudio, true);
+    assert.equal(preview.transport.durationSeconds, 34.65);
+    assert.equal(preview.transport.playing, false, "finite immutable preparation remains silent before Play");
+    assert.equal(preview.starts.length, before.starts.length, "Run does not autoplay the original soundtrack");
+    assert.equal(preview.transport.preparedPlayback, undefined,
+      "the standalone source retains its finite immutable route instead of claiming open-prefix playback");
+    assert.equal("preparedFrontier" in preview.transport, false,
+      "the immutable result does not report an incremental reader frontier");
+    assert.equal(await page.locator(".playback-audio-controls").isVisible(), true);
+    near(Number(await page.locator(".playback-scrubber").getAttribute("max")), 34.65,
+      "finite immutable soundtrack endpoint", 0);
+    const poster = await page.locator("#scene").screenshot();
+    assert.ok(poster.length > 0, "the Fourier preview picture is available before playback");
+    await pausedSeek(2.0);
+    const running = await play();
+    const voices = running.starts.slice(before.starts.length);
+    assert.ok(voices.length > 0, "ordinary Play starts the retained original soundtrack");
+    assert.equal(running.transport.hasAudio, true);
+    assert.equal(running.transport.durationSeconds, 34.65);
+    await command("pause");
+    await quiet();
+    return {
+      sourceSha256: hash(fourierMusicPreview),
+      profile: { preparedPlayback: preview.transport.preparedPlayback ?? null,
+        replaySupported: preview.transport.replaySupported, durationSeconds: preview.transport.durationSeconds },
+      startsBeforePlay: preview.starts.length - before.starts.length,
+      voice: voices[0], pictureBytes: poster.length,
+    };
   });
 
   await record("open prepared Python audio starts from the displayed scene and extends its admitted voice", async () => {
