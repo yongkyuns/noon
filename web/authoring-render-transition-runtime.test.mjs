@@ -1518,6 +1518,26 @@ test("WebGL recovery waits for later restoration listeners, beyond a microtask c
 });
 
 
+test("effect preparation waits for cold renderer bootstrap and respects cancellation", async () => {
+  for (const cancel of [false, true]) {
+    const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
+    let preparations = 0;
+    harness.createdRenderer.prepareEffectPrograms = async () => {
+      preparations++;
+      return { free() {} };
+    };
+    harness.createdRenderer.cacheEffectPrograms = () => {};
+    harness.context.bytes = new Uint8Array([1]);
+    const pending = vm.runInContext("prepareEffectPrograms({session:11, requestId:1, bytes})", harness.context);
+    assert.equal(preparations, 0);
+    if (cancel) vm.runInContext("handleEngineMessage({type:'release_effect_programs', session:11, requestId:1})", harness.context);
+    harness.creation.resolve(harness.createdRenderer);
+    await pending;
+    assert.equal(preparations, cancel ? 0 : 1);
+    assert.equal(harness.nextPort.messages.some(message => message.type === "effect_programs_prepared"), !cancel);
+  }
+});
+
 test("owned effect jobs drop late results and retain modules until source acknowledgement", async () => {
   const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
   harness.creation.resolve(harness.createdRenderer);

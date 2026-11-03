@@ -531,16 +531,21 @@ export function createAuthoringRenderController(host) {
   }
 
   async function prepareEffectPrograms(message) {
-    const port = renderPort, owner = renderer;
+    const port = renderPort;
     const entry = { session: message.session, requestId: message.requestId, prepared: null };
     try {
-      requireBootstrappedRenderer("prepare effect programs");
       if (!Number.isSafeInteger(message.requestId) || message.requestId <= 0 ||
           !Number.isInteger(message.session) || message.session < 0 || message.session > 0xffffffff ||
           !(message.bytes instanceof Uint8Array) || effectPreparation !== null) {
         throw new Error("invalid effect preparation request");
       }
       effectPreparation = entry;
+      // Prepared source may reach a later attachment while the initial retained
+      // snapshot is still creating its GPU owner. Reuse that bootstrap barrier.
+      if (bootstrapPromise !== null) await bootstrapPromise;
+      if (stopped || renderPort !== port || effectPreparation !== entry) return;
+      requireBootstrappedRenderer("prepare effect programs");
+      const owner = renderer;
       const prepared = await owner.prepareEffectPrograms(message.bytes);
       if (renderPort !== port || renderer !== owner || effectPreparation !== entry) {
         prepared.free();
