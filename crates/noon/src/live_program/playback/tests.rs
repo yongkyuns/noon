@@ -6,6 +6,7 @@ use std::{
     rc::Rc,
 };
 
+#[cfg(feature = "wgsl-effects")]
 #[test]
 fn late_shader_resources_pause_the_prepared_source_without_reader_handoff() {
     let program = crate::example_scenes::shader_sweep::late_program().unwrap();
