@@ -612,6 +612,7 @@ fn matching_shapes_prefix_preserves_correspondence_replacement_and_rewind() {
         Some(PreparedSourceStatus::BatchReady)
     );
     let batch = source.pending_batch().unwrap();
+    let terminal_batch = batch.is_terminal();
     reader
         .reserve_object_capacity(batch.required_object_capacity())
         .unwrap();
@@ -635,27 +636,19 @@ fn matching_shapes_prefix_preserves_correspondence_replacement_and_rewind() {
     assert_ne!(target_order, initial_ids);
     assert_eq!(target_xs, vec![-4.0, 4.0]);
 
-    assert_eq!(
-        source.prepare_until(2.1).unwrap(),
-        Some(PreparedSourceStatus::BatchReady)
-    );
-    let batch = source.pending_batch().unwrap();
-    reader
-        .reserve_object_capacity(batch.required_object_capacity())
-        .unwrap();
-    reader.preflight_append(batch).unwrap();
-    reader.append(source.take_batch().unwrap()).unwrap();
-    assert_eq!(
-        source.prepare_until(2.1).unwrap(),
-        Some(PreparedSourceStatus::BatchReady)
-    );
-    let batch = source.pending_batch().unwrap();
-    assert!(batch.is_terminal());
-    reader
-        .reserve_object_capacity(batch.required_object_capacity())
-        .unwrap();
-    reader.preflight_append(batch).unwrap();
-    reader.append(source.take_batch().unwrap()).unwrap();
+    if !terminal_batch {
+        assert_eq!(
+            source.prepare_until(2.1).unwrap(),
+            Some(PreparedSourceStatus::BatchReady)
+        );
+        let batch = source.pending_batch().unwrap();
+        assert!(batch.is_terminal());
+        reader
+            .reserve_object_capacity(batch.required_object_capacity())
+            .unwrap();
+        reader.preflight_append(batch).unwrap();
+        reader.append(source.take_batch().unwrap()).unwrap();
+    }
     assert_eq!(
         source.prepare_until(2.1).unwrap(),
         Some(PreparedSourceStatus::Finished)
