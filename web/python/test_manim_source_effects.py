@@ -347,7 +347,9 @@ class SourceEffectsTests(unittest.TestCase):
                         arg_creator=lambda member: (member,),
                     ))
         ''')
-        self.assertTrue(source_is_scene_only(alias))
+        alias_proof = source_execution_proof(alias)
+        self.assertFalse(alias_proof["admitted"])
+        self.assertEqual(alias_proof["reason"]["code"], "unproven_callback_factory")
 
         identity = dedent('''
             from noon import *

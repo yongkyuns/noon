@@ -94,38 +94,6 @@ class _OpaqueSource(Exception):
         self.reason = reason
 
 
-def _inert_factory_aliases(tree):
-    stores = {}
-    assignments = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            stores[node.id] = stores.get(node.id, 0) + 1
-        elif isinstance(node, ast.arg):
-            stores[node.arg] = stores.get(node.arg, 0) + 1
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            stores[node.name] = stores.get(node.name, 0) + 1
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            stores[node.name] = stores.get(node.name, 0) + 1
-        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            stores[node.name] = stores.get(node.name, 0) + 1
-        elif isinstance(node, ast.MatchMapping) and node.rest:
-            stores[node.rest] = stores.get(node.rest, 0) + 1
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                if alias.name != "*":
-                    name = alias.asname or alias.name.split(".")[0]
-                    stores[name] = stores.get(name, 0) + 1
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    assignments[target.id] = node.value if isinstance(node.value, ast.Name) else None
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            assignments[node.target.id] = node.value if isinstance(node.value, ast.Name) else None
-    return {name: value.id for name, value in assignments.items()
-            if stores.get(name) == 1 and value is not None
-            and value.id in _SOURCE_MAPPED_ANIMATION_FACTORIES}
-
-
 class _SourceBindings(ast.NodeVisitor):
     """Lexical bindings only; nested functions/classes/comprehensions own theirs."""
     def __init__(self, integer_names=()):
@@ -204,7 +172,6 @@ class _SourceBindings(ast.NodeVisitor):
 
 class _SceneOnlySource(ast.NodeVisitor):
     def __init__(self, tree, star_exports):
-        factory_aliases = _inert_factory_aliases(tree)
         self.admitted_lagged_map_loads = set()
         bindings = _SourceBindings()
         for node in tree.body:
@@ -217,10 +184,6 @@ class _SceneOnlySource(ast.NodeVisitor):
             name = next(name for name in bindings.locations if name in blocked)
             raise _OpaqueSource(bindings.locations[name], "unproven_binding")
         self.module_bindings = bindings.names
-        self.inert_factory_aliases = {
-            alias: target for alias, target in factory_aliases.items()
-            if target not in self.module_bindings
-        }
         noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
         imported = frozenset().union(*star_exports.values())
         conflicts = (imported - noon_names).intersection(bindings.names | _SOURCE_BUILTINS | {"context", "__name__"})
@@ -297,10 +260,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                     factory.id not in self.module_bindings
                     and not any(factory.id in scope for scope in self.scopes[1:])
                 )
-                direct_alias = factory.id in self.inert_factory_aliases and not any(
-                    factory.id in scope for scope in self.scopes[1:]
-                )
-                if not direct_constructor and not direct_alias:
+                if not direct_constructor:
                     raise _OpaqueSource(factory, "unproven_callback_factory")
             creators = ([node.args[2]] if len(node.args) > 2 else []) + [
                 keyword.value for keyword in node.keywords if keyword.arg == "arg_creator"
