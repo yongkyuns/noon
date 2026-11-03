@@ -25,6 +25,8 @@ on:
       - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/playground-profile-expectations.mjs"
+      - "scripts/playground-profile-expectations.test.mjs"
       - "scripts/ci-install-playwright-browser.sh"
       - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
@@ -74,6 +76,8 @@ on:
       - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/playground-profile-expectations.mjs"
+      - "scripts/playground-profile-expectations.test.mjs"
       - "scripts/ci-install-playwright-browser.sh"
       - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
@@ -438,6 +442,7 @@ jobs:
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_GALLERY_SHARD_INDEX: "${{ matrix.shard }}"
           NOON_GALLERY_SHARD_COUNT: "3"
+          NOON_SHOWCASE_PROFILE_GATE: strict
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery/${{ matrix.browser }}/shard-${{ matrix.shard }}
         run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
       # Keep exact shard evidence on failures, not on every passing run.
