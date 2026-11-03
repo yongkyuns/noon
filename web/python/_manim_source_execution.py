@@ -368,13 +368,12 @@ class _SceneOnlySource(ast.NodeVisitor):
                 return None
         return None
 
-    def _shader_container_reference(self, node, *, skip_zip=False):
+    def _shader_container_reference(self, node, *, skip_calls=()):
         """Whether an expression can carry a proven program/key collection."""
         pending = [node]
         while pending:
             item = pending.pop()
-            if (skip_zip and isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
-                    and item.func.id == "zip"):
+            if id(item) in skip_calls:
                 continue
             value = self._shader_value(item)
             if value is not None and value[0] in {"programs", "keys"}:
@@ -507,9 +506,38 @@ class _SceneOnlySource(ast.NodeVisitor):
             return ("number",)
         if isinstance(node, ast.ListComp):
             return self.shader_expression_values.get(id(node))
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "zip":
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "zip" and self._shader_role_unshadowed("zip")):
             return ("zip", tuple(self._shader_value(arg) for arg in node.args))
         return None
+
+    def _play_shader_zip_iterators(self, node):
+        """Allow only the showcase's direct zipped set_effect generator in play."""
+        if (not isinstance(node.func, ast.Attribute) or node.func.attr != "play"
+                or not isinstance(node.func.value, ast.Name) or node.func.value.id != "self"):
+            return set()
+        allowed = set()
+        for argument in node.args:
+            if not isinstance(argument, ast.Starred) or not isinstance(argument.value, ast.GeneratorExp):
+                continue
+            generator = argument.value
+            if (len(generator.generators) != 1
+                    or not isinstance(generator.elt, ast.Call)
+                    or not isinstance(generator.elt.func, ast.Attribute)
+                    or generator.elt.func.attr != "set_effect"):
+                continue
+            clause = generator.generators[0]
+            iterator = clause.iter
+            if (not isinstance(clause.target, (ast.Tuple, ast.List)) or len(clause.target.elts) != 2
+                    or not isinstance(iterator, ast.Call) or not isinstance(iterator.func, ast.Name)
+                    or iterator.func.id != "zip" or not self._shader_role_unshadowed("zip")
+                    or len(iterator.args) != 2 or iterator.keywords
+                    or not all(isinstance(value, ast.Name) for value in iterator.args)):
+                continue
+            collection = self._shader_value(iterator.args[1])
+            if collection and collection[0] in {"programs", "keys"}:
+                allowed.add(id(iterator))
+        return allowed
 
     @staticmethod
     def _merge_shader_values(values):
@@ -1091,9 +1119,12 @@ class _SceneOnlySource(ast.NodeVisitor):
     def visit_Call(self, node):
         if isinstance(node.func, ast.Attribute):
             self._reject_shader_collection_mutation(node, node.func.value)
+        if isinstance(node.func, ast.Name) and node.func.id == "zip" \
+                and not self._shader_role_unshadowed("zip"):
+            raise _OpaqueSource(node.func, "unproven_shadowed_builtin")
+        play_zip_iterators = self._play_shader_zip_iterators(node)
         if (not (isinstance(node.func, ast.Name) and node.func.id == "zip")
-                and any(self._shader_container_reference(
-                    argument, skip_zip=isinstance(node.func, ast.Attribute) and node.func.attr == "play")
+                and any(self._shader_container_reference(argument, skip_calls=play_zip_iterators)
                         for argument in [*node.args, *(keyword.value for keyword in node.keywords)])):
             raise _OpaqueSource(node, "unproven_shader_collection_escape")
         if isinstance(node.func, ast.Name) and node.func.id == "LinearGradient":

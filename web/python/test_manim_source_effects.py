@@ -427,6 +427,29 @@ class Example(Scene):
                     source.replace(key_insertion, mutation + key_insertion, 1)
                 )["admitted"])
 
+    def test_shader_zip_proof_requires_builtin_and_qualified_play_generator(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_shader_material.py"
+        ).read_text()
+        shadowed = source.replace(
+            '        programs = [material("local"), material("scene")]\n',
+            '        zip = self.add\n        programs = [material("local"), material("scene")]\n',
+            1,
+        )
+        nested_escape = source.replace(
+            "for panel, key in zip(panels, phase))",
+            "for panel, key in zip(panels, zip(programs, phase)))",
+            1,
+        )
+        wrong_generator = source.replace(
+            "for panel, key in zip(panels, phase))",
+            "for panel in zip(panels, programs))",
+            1,
+        )
+        for candidate in (shadowed, nested_escape, wrong_generator):
+            with self.subTest(candidate=candidate[-250:]):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
         huge = "9" * 400
         overflow = (
             'from noon import *\nclass Example(Scene):\n'
