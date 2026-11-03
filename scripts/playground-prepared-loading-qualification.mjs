@@ -15,21 +15,19 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
-import { sceneInkPixels, summarizeLoading } from "./playground-prepared-loading-observation.mjs";
+import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
+  validateReadinessResults, validateReadinessTrace } from "./playground-prepared-loading-observation.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = process.env;
-const trials = Number(env.NOON_PLAYBACK_LOADING_TRIALS ?? 6);
+const readinessMode = env.NOON_PLAYBACK_LOADING_READINESS ?? "baseline";
+assert.ok(["baseline", "strict"].includes(readinessMode));
+const trials = Number(env.NOON_PLAYBACK_LOADING_TRIALS ?? 20);
 assert.ok(Number.isSafeInteger(trials) && trials > 0);
 const backend = env.NOON_PLAYBACK_LOADING_BACKEND ?? "webgpu";
 assert.ok(["webgpu", "webgl"].includes(backend));
-const comparisonArm = env.NOON_PLAYBACK_LOADING_COMPARISON ?? "prepared";
-assert.ok(["prepared", "live-control"].includes(comparisonArm));
-const wasmAccounting = env.NOON_PLAYBACK_LOADING_WASM_ACCOUNTING === "1";
-const seekProbe = env.NOON_PLAYBACK_LOADING_SEEK === "1";
 const output = path.resolve(env.NOON_PLAYBACK_LOADING_OUTPUT ?? path.join(os.tmpdir(), "noon-playback-loading"));
-const examples = (env.NOON_PLAYBACK_LOADING_EXAMPLES ??
-  "parity-create-circle,showcase-code-blocks,showcase-gpu-glow,showcase-cuda-transpose,showcase-triangle-light,showcase-pointer-selection,showcase-always-redraw,showcase-translation-drag").split(",");
 const encode = value => JSON.stringify(value, (_key, item) => typeof item === "bigint" ? String(item) : item, 2);
 const digest = value => createHash("sha256").update(value).digest("hex");
 function gitObject(name) {
@@ -39,20 +37,60 @@ function gitObject(name) {
 }
 const revision = gitObject("HEAD");
 const runtimeTrees = commit => ({ crates: gitObject(`${commit}:crates`), web: gitObject(`${commit}:web`), lock: gitObject(`${commit}:Cargo.lock`) });
-const inventory = (await Promise.all(["manim_tutorial_manifest.json", "manim_compatibility_manifest.json",
-  "manim_stress_manifest.json", "noon_showcase_manifest.json"].map(async name =>
-  JSON.parse(await readFile(path.join(root, "web/python/examples", name), "utf8")).entries))).flat();
+const inventory = JSON.parse(await readFile(path.join(root, "web/python/examples/noon_showcase_manifest.json"), "utf8")).entries;
+const readinessContractPath = path.join(root, "scripts/fixtures/playground-readiness-contract.json");
+const readinessContractBytes = await readFile(readinessContractPath);
+const readinessContract = JSON.parse(readinessContractBytes);
+assert.deepEqual(validateReadinessContract(readinessContract), [], "invalid readiness measurement contract");
+assert.deepEqual(readinessContract.sources.map(source => source.id),
+  ["showcase-first-scene", "showcase-dynamic-scene"]);
+assert.equal(backend.toLowerCase(), readinessContract.reference.backend.toLowerCase(),
+  "readiness backend differs from its contract");
+assert.ok(trials >= readinessContract.sampling.measuredStartsPerArmPerStratum,
+  "readiness measurements require the contracted number of starts");
+if (readinessMode === "strict") {
+  assert.deepEqual(validateReadinessContract(readinessContract, { strict: true }), [],
+    "strict readiness requires a reviewed contract with approved bounds");
+}
+for (const source of readinessContract.sources) {
+  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === source.id);
+  const entry = inventory.find(row => row.id === source.id);
+  assert.ok(expected && entry, `readiness source is absent from the showcase ledger: ${source.id}`);
+  assert.deepEqual([source.path, source.sha256, source.durationSeconds],
+    [expected.path, expected.sha256, entry.duration], `readiness source binding changed: ${source.id}`);
+}
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
-const report = { status: "running", scope: "loading observations on unchanged catalog sources; fresh browser process followed by reload/new workers; not a warm-interpreter, cold-network, physical-scanout, full-source or total-memory qualification",
+const report = { status: "running", readinessMode,
+  scope: "W7/W8 same-package profile measurements; source pass plus retained replay; warm-resource-cache strata only; not cold-network, physical-scanout or total-memory qualification",
+  instrumentationMode: "bounded-diagnostics",
+  instrumentationLimitations: [
+    "first useful capture is an observed upper bound; the current API exposes no renderer-submission or separate runtime-acceptance timestamp",
+    "command completion uses the observed busy-clear upper bound plus renderer session/time evidence; no engine acceptance time is inferred",
+    "renderer presentedAtMs follows render submission and does not represent physical scanout",
+    "bounded probes can perturb timings; this report is diagnostic, not minimally instrumented timing",
+  ],
   harnessRevision: revision, runtimeSourceTrees: runtimeTrees(revision), harnessSha256: digest(await readFile(fileURLToPath(import.meta.url))),
-  backend, trials, comparisonArm, wasmAccounting, seekProbe,
+  readinessContract: { path: path.relative(root, readinessContractPath), sha256: digest(readinessContractBytes), status: readinessContract.status },
+  readinessSampling: {
+    strata: readinessContract.strata,
+    arms: readinessMode === "baseline" ? readinessContract.baselineArms : Object.keys(readinessContract.arms),
+    samplePlan: readinessContract.sampling,
+    bounds: readinessContract.bounds,
+  },
+  backend, trials,
   launchArgs: browserArgs(backend, { gpuMode: "hardware" }), observer: { inkThreshold: 128, channelDifference: 8, edgeMargin: 8, pollIntervalMs: 25,
     usefulTiming: "upper bound at completion of the first positive canvas capture; native first-any-frame time is separate",
-    memoryWindow: "navigation/reload through first visible observation plus the recorded post-observation window and optional seek; aggregate sampled process-tree RSS",
-    progress: "sampled renderer publications and UI observations; short buffering episodes can fall between samples",
-    runPromise: "inFlight is the page run promise, including continuation and handoff waits; it does not measure source CPU activity or prove parallel preparation",
-    wasmCapacity: "optional probe changes worker entrypoints and HTTP caching; instrumented timings are diagnostic only. Linear memory capacity is not live allocation, RSS, GPU or total memory." },
+    memoryWindow: "paired source and retained replay plus 750 ms after context close; aggregate sampled browser-process-tree RSS",
+    presentation: "bounded renderer publication samples and playback-control buffering events; physical scanout is not measured" },
+  clockOrigins: {
+    pageEvents: "performance.timeOrigin + performance.now(), epoch milliseconds",
+    rendererEvents: "renderer performance.timeOrigin + presentedAtMs; per-session gaps use one renderer clock origin",
+    processLifecycle: "Node performance.now() for durations and Date.now() for audit timestamps",
+    runMilestones: "page or renderer epoch timestamp minus page source-run-start epoch timestamp",
+  },
   host: { platform: os.platform(), release: os.release(), arch: os.arch(), cpu: os.cpus()[0]?.model,
+    macOSVersion: os.platform() === "darwin" ? spawnSync("sw_vers", ["-productVersion"],
+      { encoding: "utf8" }).stdout.trim() || null : null,
     logicalCpus: os.cpus().length, totalMemoryBytes: os.totalmem() }, packages: {}, cases: [] };
 await mkdir(output, { recursive: true });
 let overlay, browser, browserServer;
@@ -96,11 +134,16 @@ async function packageHost(arm, folder) {
 async function observation(page) {
   return observationDeadline(page.evaluate(async () => {
     const gallery = globalThis.__noonExampleGallery;
+    globalThis.__noonReadinessPresentationProbe?.requestMetrics();
     let response = null;
     try { response = await gallery?.executionMetrics?.(); } catch {}
     const controls = document.querySelector(".playback-controls");
     const scrubber = controls?.querySelector(".playback-scrubber");
+    const renderProbe = globalThis.__noonReadinessPresentationProbe;
     return { metrics: response?.metrics, run: gallery?.runPhaseMetrics,
+      executionDiagnostics: gallery?.executionDiagnostics ?? null,
+      presentationProbe: renderProbe ? { count: renderProbe.samples.length, error: renderProbe.error,
+        uiEventCount: renderProbe.uiEvents.length, droppedUiEvents: renderProbe.droppedUiEvents } : null,
       controls: controls ? { ...controls.dataset,
         seekEnd: scrubber && !scrubber.disabled ? Number(scrubber.max) : null } : null,
       inFlight: gallery?.runInFlight, selected: gallery?.selectedExampleId,
@@ -119,186 +162,574 @@ async function observationDeadline(pending) {
   } finally { clearTimeout(timer); }
 }
 
-async function installWasmAccounting(page) {
-  const entries = new Set(["/web/python-worker.js", "/web/execution-render-worker.js"]);
-  await page.route(url => entries.has(new URL(url).pathname), async route => {
-    // Preserve the worker's later integrity-verification fetch unchanged.
-    if (!["script", "worker"].includes(route.request().resourceType())) return route.continue();
-    const response = await route.fetch(), headers = { ...response.headers() };
-    delete headers["content-length"]; delete headers["content-encoding"];
-    await route.fulfill({ response, headers,
-      body: `import "./playground-cold-start-wasm-accounting.js";\n${await response.text()}` });
+async function installReadinessPresentationProbe(context) {
+  await context.addInitScript(maxSamples => {
+    const NativeWorker = window.Worker;
+    const requestId = Number.MAX_SAFE_INTEGER;
+    const probe = { worker: null, pending: false, samples: [], keys: new Set(), error: null,
+      uiEvents: [], droppedUiEvents: 0,
+      recordUiEvent(event) {
+        if (probe.uiEvents.length >= maxSamples) { probe.droppedUiEvents++; return; }
+        probe.uiEvents.push(event);
+      },
+      requestMetrics() {
+        if (probe.worker === null || probe.pending) return;
+        probe.pending = true;
+        probe.worker.postMessage({ channel: "noon.render", protocolVersion: 1,
+          type: "metrics", requestId, profilePublicationStages: true });
+      } };
+    window.__noonReadinessPresentationProbe = probe;
+    const uiState = () => {
+      const controls = document.querySelector(".playback-controls");
+      return controls ? { playing: controls.dataset.playing ?? null,
+        busy: controls.dataset.busy ?? null, buffering: controls.dataset.buffering ?? null,
+        elapsedSeconds: controls.dataset.elapsedSeconds ?? null,
+        preparedFrontier: controls.dataset.durationKnown === "false"
+          ? Number(controls.querySelector(".playback-scrubber")?.max) : null } : null;
+    };
+    document.addEventListener("click", event => {
+      const control = event.target?.closest?.(".playback-toggle, .playback-restart, .playback-scrubber");
+      if (control) probe.recordUiEvent({ kind: "request", control: control.className,
+        epochMs: performance.timeOrigin + performance.now(), state: uiState() });
+    }, true);
+    document.addEventListener("input", event => {
+      if (event.target?.matches?.(".playback-scrubber")) probe.recordUiEvent({ kind: "request",
+        control: "playback-scrubber", epochMs: performance.timeOrigin + performance.now(),
+        requestedTime: Number(event.target.value), state: uiState() });
+    }, true);
+    const observeUi = () => {
+      const observer = new MutationObserver(records => {
+        for (const record of records) {
+          if (!record.target?.closest?.(".playback-controls")) continue;
+          probe.recordUiEvent({ kind: "state", attribute: record.attributeName,
+            epochMs: performance.timeOrigin + performance.now(), state: uiState() });
+        }
+      });
+      observer.observe(document.documentElement, { subtree: true, attributes: true,
+        attributeFilter: ["data-playing", "data-busy", "data-buffering", "data-elapsed-seconds"] });
+    };
+    if (document.documentElement) observeUi();
+    else document.addEventListener("DOMContentLoaded", observeUi, { once: true });
+    class ObservedWorker extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        if (!String(url).includes("execution-render-worker.js")) return;
+        probe.worker = this;
+        probe.pending = false;
+        this.addEventListener("message", event => {
+          const message = event.data;
+          if (message?.channel !== "noon.render" || message.requestId !== requestId) return;
+          event.stopImmediatePropagation();
+          if (probe.worker !== this) return;
+          probe.pending = false;
+          if (message.type !== "metrics" || !Number.isFinite(message.metrics?.presentedFrames)) {
+            probe.error = `invalid renderer metrics response: ${message.message ?? message.type}`;
+            return;
+          }
+          for (const sample of message.metrics.publicationStageSamples ?? []) {
+            const key = `${message.metrics.performanceTimeOriginMs}:${sample.session}:${sample.sequence}`;
+            if (probe.keys.has(key)) continue;
+            if (probe.samples.length >= maxSamples) { probe.error = "presentation sample bound exceeded"; return; }
+            probe.keys.add(key);
+            probe.samples.push({ ...sample, clockOriginMs: message.metrics.performanceTimeOriginMs });
+          }
+        });
+      }
+    }
+    Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: ObservedWorker });
+  }, 4096);
+}
+
+function readinessTraceState(row, sample) {
+  const diagnostics = sample.executionDiagnostics;
+  if (!diagnostics || !Array.isArray(diagnostics.events)) return;
+  row.diagnosticIdentity = {
+    schemaVersion: diagnostics.schemaVersion ?? null,
+    interpreterGeneration: diagnostics.interpreterGeneration ?? null,
+    runRequestId: diagnostics.runRequestId ?? null,
+    context: diagnostics.context ?? null,
+    requestedProfile: diagnostics.requestedProfile ?? null,
+    droppedEvents: diagnostics.droppedEvents ?? null,
+  };
+  row.actualProfileTransitions = diagnostics.events
+    .filter(event => event.stage === "attached" || event.stage === "profile-change")
+    .map(event => ({ sequence: event.sequence, stage: event.stage, profile: event.profile ?? null,
+      reason: event.reason ?? null, contextId: event.contextId ?? null, time: event.time ?? null }));
+  row.dispositionEvents = diagnostics.events.filter(event => event.stage === "disposition");
+  row.traceCompleteness = {
+    droppedEvents: diagnostics.droppedEvents,
+    hasAttached: diagnostics.events.some(event => event.stage === "attached"),
+    hasSourceComplete: diagnostics.events.some(event => event.stage === "source-complete"),
+    hasTerminalAdopted: diagnostics.events.some(event => event.stage === "terminal-adopted"),
+    hasDisposition: row.dispositionEvents.length > 0,
+  };
+}
+
+function presentationGapsMs(samples) {
+  const ordered = samples.filter(sample => Number.isFinite(sample.presentedAtMs) &&
+    Number.isFinite(sample.session) && Number.isFinite(sample.clockOriginMs))
+    .slice().sort((left, right) => left.clockOriginMs - right.clockOriginMs ||
+      left.session - right.session || left.sequence - right.sequence);
+  return ordered.slice(1).flatMap((sample, index) => {
+    const previous = ordered[index];
+    return sample.session === previous.session && sample.clockOriginMs === previous.clockOriginMs &&
+      sample.presentedAtMs > previous.presentedAtMs ? [sample.presentedAtMs - previous.presentedAtMs] : [];
   });
 }
 
-async function measureSeek(page, settled) {
-  if (settled.controls?.controllable !== "true") {
-    return { available: false, reason: "source-owned forward execution has no retained seek range" };
+function bufferingEpisodes(uiEvents) {
+  const episodes = [];
+  let startedAtEpochMs = null;
+  for (const event of uiEvents) {
+    if (event.kind !== "state" || event.attribute !== "data-buffering") continue;
+    if (event.state?.buffering === "true" && startedAtEpochMs === null) startedAtEpochMs = event.epochMs;
+    else if (event.state?.buffering === "false" && startedAtEpochMs !== null) {
+      episodes.push({ startedAtEpochMs, endedAtEpochMs: event.epochMs,
+        durationMs: event.epochMs - startedAtEpochMs, observer: "playback-controls mutation" });
+      startedAtEpochMs = null;
+    }
   }
-  if (settled.controls.playing === "true") await page.getByRole("button", { name: "Pause animation", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "false");
-  const issued = await page.evaluate(() => {
-    const controls = document.querySelector(".playback-controls");
-    if (controls.dataset.controllable !== "true") return null;
-    const input = controls.querySelector(".playback-scrubber");
-    const epochMs = performance.timeOrigin + performance.now();
-    input.value = "0";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    return { epochMs, target: 0 };
-  });
-  if (issued === null) return { available: false, reason: "the source retired its reader before the seek" };
-  await page.waitForFunction(() => {
-    const controls = document.querySelector(".playback-controls");
-    return controls.dataset.busy === "false" && controls.dataset.elapsedSeconds === "0" &&
-      !controls.querySelector(".playback-live-status")?.textContent.includes("waiting for display");
-  });
-  const after = await observation(page);
-  assert.notEqual(after.status, "error", after.problem);
-  assert.equal(after.controls.elapsedSeconds, "0");
-  assert.equal(after.controls.playing, "false");
-  return { available: true, ...issued, commandCompletionUpperMs: after.epochMs - issued.epochMs,
-    meaning: "cached UI seek to zero through its actual command/presentation acknowledgement, plus polling and observation; no physical scanout claim", after };
+  if (startedAtEpochMs !== null) episodes.push({ startedAtEpochMs, endedAtEpochMs: null,
+    durationMs: null, open: true, observer: "playback-controls mutation" });
+  return episodes;
 }
 
-async function measure(page, workers, example, arm, phase, trial, warmup) {
-  const postObservationWindowMs = ["showcase-pointer-selection", "showcase-translation-drag"].includes(example) ? 4000 : 500;
-  const row = { example, arm, phase, trial, warmup, status: "running", inkAttempts: 0, captures: [],
-    postObservationWindowMs, preparedPlaybackRequested: arm === "prepared", progress: [], loadAvg: os.loadavg(),
-    freeMemoryBytes: os.freemem(), pageErrors: [], consoleErrors: [] };
-  report.cases.push(row);
-  const onPageError = error => row.pageErrors.push(String(error));
-  const onConsole = message => { if (message.type() === "error") row.consoleErrors.push(message.text()); };
-  page.on("pageerror", onPageError); page.on("console", onConsole);
-  const sampler = createProcessTreeRssSampler(browserServer.process().pid); sampler.start();
-  workers.length = 0;
+async function retiredWorkerObservation(worker, timeoutMs = 500) {
+  let timer;
+  const startedAtEpochMs = Date.now();
   try {
-    const catalog = example.startsWith("showcase-") ? "&catalog=showcase" : "";
-    if (phase === "fresh-process") await page.goto(`${servers[arm].baseUrl}/web/index.html?example=${example}${catalog}`);
-    else await page.reload();
-    await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; } #scene { border-radius: 0 !important; box-shadow: none !important; }" });
-    const deadline = performance.now() + 180_000;
-    let last;
-    while (performance.now() < deadline) {
-      const started = performance.now();
-      last = await observation(page);
-      row.lastObservation = last;
-      if (last.status === "error") throw new Error(last.problem || "source failed");
-      const metrics = last.metrics;
-      if (metrics?.ready && Number.isFinite(metrics.firstPresentedSessionAtMs) && metrics.objectCount > 0
-          && last.run?.exampleId === example && last.selected === example) {
-        const captureStarted = performance.now();
-        const bytes = await page.locator("#scene").screenshot();
-        const after = await observation(page);
-        row.inkAttempts++;
-        const ink = sceneInkPixels(PNG.sync.read(bytes));
-        row.captures.push({ beforeEpochMs: last.epochMs, afterEpochMs: after.epochMs,
-          sceneInkPixels: ink, captureAndObservationMs: performance.now() - captureStarted,
-          presentedSession: metrics.presentedSession, frameTimeBefore: metrics.time, frameTimeAfter: after.metrics?.time });
-        if (ink >= 128 && after.run?.runGeneration === last.run.runGeneration && after.selected === example
-            && after.metrics?.presentedSession === metrics.presentedSession) {
-          if (after.status === "error") throw new Error(after.problem || "source failed during capture");
-          const sourceEpoch = last.originMs + last.run.sourceRunStartedAtMs;
-          const firstAnyEpoch = metrics.performanceTimeOriginMs + metrics.firstPresentedSessionAtMs;
-          assert.ok(Number.isFinite(sourceEpoch) && Number.isFinite(firstAnyEpoch) && firstAnyEpoch >= sourceEpoch,
-            "authored render needs a coherent native/page timing association");
-          Object.assign(row, { sourceToFirstAnyPresentedMs: firstAnyEpoch - sourceEpoch,
-            sourceToUsefulObservationUpperMs: after.epochMs - sourceEpoch,
-            navigationToUsefulObservationUpperMs: after.epochMs - last.originMs,
-            captureAndObservationMs: performance.now() - captureStarted,
-            observationRoundTripMs: captureStarted - started, sceneInkPixels: ink,
-            runPromisePendingAtUsefulObservation: after.inFlight,
-            usefulObservation: after, presentedBeforeCapture: metrics });
-          assert.equal(metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
-          await writeFile(path.join(output, `${example}-${trial}-${arm}-${phase}.png`), bytes);
-          break;
+    const retired = await Promise.race([
+      worker.evaluate(() => true).then(() => false, () => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), timeoutMs); }),
+    ]);
+    return { url: worker.url(), retired, checkedAtEpochMs: Date.now(),
+      upperMs: Date.now() - startedAtEpochMs };
+  } finally { clearTimeout(timer); }
+}
+
+async function readinessCommand(page, row, desiredPlaying) {
+  const before = await observation(page);
+  assert.notEqual(before.controls?.playing === "true", desiredPlaying, "requested transport state is already active");
+  const requestEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
+  const button = page.locator(".playback-toggle");
+  assert.equal(await button.isDisabled(), false, "play/pause command is unavailable");
+  await button.click();
+  await page.waitForFunction(desired =>
+    document.querySelector(".playback-controls")?.dataset.playing === String(desired), desiredPlaying);
+  const uiFeedback = await page.evaluate(requestEpoch => ({
+    epochMs: performance.timeOrigin + performance.now(),
+    event: [...(window.__noonReadinessPresentationProbe?.uiEvents ?? [])].reverse().find(event =>
+      event.kind === "state" && event.attribute === "data-playing" && event.epochMs >= requestEpoch),
+  }), requestEpochMs);
+  await page.waitForFunction(desired => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.busy === "false" && controls.dataset.playing === String(desired);
+  }, desiredPlaying);
+  const commandCompleted = await page.evaluate(requestEpoch =>
+    [...(window.__noonReadinessPresentationProbe?.uiEvents ?? [])].reverse().find(event =>
+      event.kind === "state" && event.attribute === "data-busy" && event.state?.busy === "false" &&
+      event.epochMs >= requestEpoch) ?? null, requestEpochMs);
+  assert.ok(commandCompleted, "playback command completion transition was not observed");
+  const after = await observation(page);
+  const displayedTime = Number(after.controls?.elapsedSeconds);
+  const receiptTime = after.metrics?.time;
+  const matchesDisplayedTime = Number.isFinite(displayedTime) && Number.isFinite(receiptTime) &&
+    Math.abs(displayedTime - receiptTime) <= 0.001 &&
+    Number.isSafeInteger(after.metrics?.presentedSession) && after.metrics.presentedSession >= 0;
+  const command = {
+    name: desiredPlaying ? "play" : "pause",
+    requestEpochMs,
+    uiFeedbackEpochMs: uiFeedback.event?.epochMs ?? uiFeedback.epochMs,
+    uiFeedbackMs: (uiFeedback.event?.epochMs ?? uiFeedback.epochMs) - requestEpochMs,
+    commandCompletedUiEpochMs: commandCompleted.epochMs,
+    commandCompletionObservedEpochMs: after.epochMs,
+    commandCompletionUpperMs: after.epochMs - requestEpochMs,
+    runtimeAcceptanceEpochMs: null,
+    runtimeAcceptanceLimitation: "no separate engine command-acceptance receipt is currently exposed",
+    matchingPresentation: matchesDisplayedTime ? {
+      session: after.metrics.presentedSession,
+      presentationId: after.metrics.presentedFrames ?? null,
+      time: receiptTime,
+      sampledAtMs: after.metrics.sampledAtMs ?? null,
+      clockOriginMs: after.metrics.performanceTimeOriginMs ?? null,
+      reusedAlreadyDisplayedFrame: after.metrics.presentedFrames === before.metrics?.presentedFrames,
+    } : null,
+    presentedStateMatched: matchesDisplayedTime,
+  };
+  row.commands.push(command);
+  assert.ok(matchesDisplayedTime, "command did not settle on a matching renderer session/time");
+  return after;
+}
+
+async function measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, warmup) {
+  const startedAtEpochMs = Date.now();
+  const sourceRow = { sourceId: source.id, sourcePath: source.path, sourceSha256: source.sha256,
+    durationSeconds: source.durationSeconds, arm: initialArm, pairedReplayArm: replayArm,
+    stratum, trial, warmup, status: "running", startup: {}, commands: [],
+    rendererSamples: [], pageErrors: [], consoleErrors: [],
+    sourceInvocationIds: [], profileValidationErrors: [], limitation: [] };
+  const replayRow = { ...sourceRow, arm: replayArm, pairedInitialArm: initialArm, startup: {},
+    commands: [], rendererSamples: [], pageErrors: [],
+    consoleErrors: [], sourceInvocationIds: [], profileValidationErrors: [], limitation: [] };
+  report.cases.push(sourceRow, replayRow);
+  let activeRow = sourceRow;
+  const onPageError = error => activeRow.pageErrors.push(String(error));
+  const onConsole = message => { if (message.type() === "error") activeRow.consoleErrors.push(message.text()); };
+  page.on("pageerror", onPageError); page.on("console", onConsole);
+  const sampler = createProcessTreeRssSampler(browserServer.process().pid);
+  sampler.start();
+  const sourceStarted = performance.now();
+  const retirementStartedAtEpochMs = Date.now();
+  const previousWorkers = workers.slice();
+  const catalog = "&catalog=showcase";
+  try {
+    if (stratum === "reload-new-workers-warm-resource-cache") await page.reload();
+    else await page.goto(`${servers.runtime.baseUrl}/web/index.html?example=${source.id}${catalog}`);
+    await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+    if (previousWorkers.length > 0) {
+      const retired = await Promise.all(previousWorkers.map(worker => retiredWorkerObservation(worker)));
+      sourceRow.previousWorkersRetirement = { requestedAtEpochMs: retirementStartedAtEpochMs,
+        observations: retired, allRetired: retired.every(value => value.retired === true),
+        observedUpperMs: Math.max(...retired.map(value => value.upperMs)) };
+      if (!sourceRow.previousWorkersRetirement.allRetired) {
+        sourceRow.profileValidationErrors.push("previous page workers were not confirmed retired");
+      }
+    }
+    sourceRow.startup.shellReadyMs = performance.now() - sourceStarted;
+    replayRow.startup.shellReadyMs = sourceRow.startup.shellReadyMs;
+    const navigation = await observation(page);
+    let sourceRunStart = Number.isFinite(navigation.run?.sourceRunStartedAtMs)
+      ? navigation.originMs + navigation.run.sourceRunStartedAtMs : null;
+    let lastCaptureKey = null;
+    const read = async (targetRow = sourceRow) => {
+      const sample = await observation(page);
+      targetRow.lastObservation = sample;
+      readinessTraceState(targetRow, sample);
+      const diagnostic = sample.executionDiagnostics;
+      if (diagnostic?.runRequestId !== null && diagnostic?.runRequestId !== undefined &&
+          !targetRow.sourceInvocationIds.includes(diagnostic.runRequestId)) {
+        targetRow.sourceInvocationIds.push(diagnostic.runRequestId);
+      }
+      if (sourceRunStart === null && Number.isFinite(sample.run?.sourceRunStartedAtMs)) {
+        sourceRunStart = sample.originMs + sample.run.sourceRunStartedAtMs;
+      }
+      const events = diagnostic?.events ?? [];
+      if (targetRow === sourceRow && targetRow.startup.interpreterReadyMs === undefined &&
+          Number.isSafeInteger(diagnostic?.interpreterGeneration) &&
+          sourceRunStart !== null) {
+        targetRow.startup.interpreterReadyMs = sample.epochMs - sourceRunStart;
+      }
+      if (targetRow === sourceRow && targetRow.startup.firstReaderMs === undefined &&
+          events.some(event => event.stage === "attached") &&
+          sourceRunStart !== null) {
+        targetRow.startup.firstReaderMs = sample.epochMs - sourceRunStart;
+      }
+      if (targetRow === sourceRow && Number.isFinite(sample.metrics?.firstPresentedSessionAtMs) &&
+          targetRow.startup.firstRendererReportedFrameMs === undefined &&
+          sourceRunStart !== null) {
+        targetRow.startup.firstRendererReportedFrameMs = sample.metrics.performanceTimeOriginMs +
+          sample.metrics.firstPresentedSessionAtMs - sourceRunStart;
+      }
+      const metric = sample.metrics;
+      targetRow.rendererGpuIdentity = metric?.rendererGpuIdentity ?? targetRow.rendererGpuIdentity ?? null;
+      if (targetRow.rendererGpuIdentity !== null) {
+        targetRow.gpuClassification = classifyRendererGpuIdentity(targetRow.rendererGpuIdentity, backend);
+      }
+      if (metric?.backend !== undefined && metric.backend !== (backend === "webgpu" ? "WebGPU" : "WebGL2")) {
+        targetRow.profileValidationErrors.push(`actual backend ${metric.backend} differs from ${backend}`);
+      }
+      if (targetRow.startup.firstUsefulMs === undefined && metric?.ready && metric.objectCount > 0) {
+        const key = `${metric.presentedSession}:${metric.presentedFrames}:${metric.time}`;
+        if (key !== lastCaptureKey) {
+          lastCaptureKey = key;
+          const bytes = await page.locator("#scene").screenshot();
+          const ink = sceneInkPixels(PNG.sync.read(bytes));
+          const captureEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
+          if (ink >= 128 && sourceRunStart !== null) {
+            targetRow.startup.firstUsefulMs = captureEpochMs - (targetRow === sourceRow
+              ? sourceRunStart : targetRow.replayStartedAtEpochMs);
+            targetRow.startup.usefulObservationUpperMs = targetRow.startup.firstUsefulMs;
+            targetRow.firstUsefulCaptureEpochMs = captureEpochMs;
+            await writeFile(path.join(output, `${source.id}-${trial}-${targetRow.arm}-${stratum}-first.png`), bytes);
+          }
         }
       }
-      await new Promise(resolve => setTimeout(resolve, 25));
+      if (sample.status === "error") throw new Error(sample.problem || "source failed");
+      return sample;
+    };
+
+    const deadline = performance.now() + 180_000;
+    let current = navigation;
+    while (sourceRow.startup.firstUsefulMs === undefined && performance.now() < deadline) {
+      current = await read();
+      await page.waitForTimeout(25);
     }
-    assert.ok(Number.isFinite(row.sourceToUsefulObservationUpperMs), "no useful authored-scene observation");
-    const progressEnd = performance.now() + postObservationWindowMs;
-    while (performance.now() < progressEnd) {
-      const sample = await observation(page);
-      row.progress.push({ epochMs: sample.epochMs, inFlight: sample.inFlight, status: sample.status,
-        time: sample.metrics?.time, presentedFrames: sample.metrics?.presentedFrames,
-        presentedSession: sample.metrics?.presentedSession, controls: sample.controls });
-      if (sample.status === "error") throw new Error(sample.problem || "source failed in startup window");
-      await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(Number.isFinite(sourceRow.startup.firstUsefulMs), "no useful first-pass presentation");
+    const firstState = await observation(page);
+    const initiallyPlaying = firstState.controls?.playing === "true";
+    await readinessCommand(page, sourceRow, !initiallyPlaying);
+    await readinessCommand(page, sourceRow, initiallyPlaying);
+
+    const runDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
+    const lifecycleComplete = sample => {
+      const events = sample.executionDiagnostics?.events ?? [];
+      return ["source-complete", "terminal-adopted"].every(stage => events.some(event => event.stage === stage)) &&
+        events.some(event => event.stage === "disposition" && event.disposition === "looped");
+    };
+    while (!(Number.isFinite(current.run?.sourceRunCompletedAtMs) && current.inFlight === false &&
+             lifecycleComplete(current)) && performance.now() < runDeadline) {
+      current = await read();
+      await page.waitForTimeout(25);
     }
-    const settled = await observation(page);
-    row.settledObservation = settled;
-    if (settled.status === "error") throw new Error(settled.problem || "source failed in startup window");
-    assert.deepEqual(row.pageErrors, []);
-    assert.deepEqual(row.consoleErrors, []);
-    if (seekProbe) row.seek = await measureSeek(page, settled);
-    if (wasmAccounting) row.wasm = await Promise.all(workers.filter(worker => /\/(python-worker|execution-render-worker)\.js/.test(worker.url())).map(async worker => ({
-      url: worker.url(), accounting: await worker.evaluate(() => {
-        const probe = globalThis.__noonColdStartWasmAccounting;
-        return probe ? { records: probe.records, linearMemory: probe.snapshot() } : null;
-      }),
-    })));
-    row.status = "observed";
+    assert.ok(Number.isFinite(current.run?.sourceRunCompletedAtMs) && current.inFlight === false &&
+      lifecycleComplete(current), "source cleanup, terminal adoption, or disposition was not observed before timeout");
+    assert.ok(sourceRunStart !== null, "source invocation start time is unavailable");
+    sourceRow.startup.sourceCompleteMs = navigation.originMs + current.run.sourceRunCompletedAtMs - sourceRunStart;
+    sourceRow.startup.sourceRunTiming = current.run.pythonWorkerRunTiming ?? null;
+    sourceRow.startup.renderPreparation = current.run.renderPreparation ?? null;
+    sourceRow.endTrace = current.executionDiagnostics;
+    sourceRow.traceCompleteness = sourceRow.traceCompleteness ?? null;
+    sourceRow.rendererSamples = await page.evaluate(() =>
+      globalThis.__noonReadinessPresentationProbe?.samples ?? []);
+    sourceRow.presentationSampleEnd = sourceRow.rendererSamples.length;
+    sourceRow.presentationGapsMs = presentationGapsMs(sourceRow.rendererSamples);
+    sourceRow.uiEvents = await page.evaluate(() => globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []);
+    sourceRow.bufferingEpisodes = bufferingEpisodes(sourceRow.uiEvents);
+    replayRow.presentationSampleStart = sourceRow.presentationSampleEnd;
+    replayRow.uiEventStart = sourceRow.uiEvents.length;
+    const expectedProfile = initialArm === "A" ? "incremental" : "observed";
+    const trace = current.executionDiagnostics;
+    sourceRow.profileValidationErrors.push(...validateReadinessTrace(trace, {
+      sourceId: source.id, requestedProfile: expectedProfile, attachedProfile: expectedProfile, disposition: "looped",
+    }));
+    if (trace && Array.isArray(trace.events)) {
+      sourceRow.requestedProfile = trace.requestedProfile;
+      sourceRow.actualProfileTransitions = trace.events.filter(event =>
+        event.stage === "attached" || event.stage === "profile-change");
+      sourceRow.disposition = trace.events.findLast(event => event.stage === "disposition") ?? null;
+      replayRow.requestedProfile = trace.requestedProfile;
+      replayRow.actualProfileTransitions = sourceRow.actualProfileTransitions;
+      replayRow.disposition = sourceRow.disposition;
+    }
+    const sourceIdentity = sourceRow.diagnosticIdentity;
+    assert.ok(sourceIdentity?.runRequestId !== null && sourceIdentity?.runRequestId !== undefined,
+      "source run identity missing");
+    assert.equal(new Set(sourceRow.sourceInvocationIds).size, 1,
+      "source run identity changed before retained replay");
+    sourceRow.status = sourceRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
+    replayRow.previousWorkersRetirement = sourceRow.previousWorkersRetirement ?? null;
+
+    const controls = await observation(page);
+    assert.equal(controls.controls?.controllable, "true", "completed deterministic source cannot replay");
+    activeRow = replayRow;
+    if (controls.controls.playing === "true") await readinessCommand(page, replayRow, false);
+    const identityBeforeReplay = await observation(page);
+    const replayStartedAtEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
+    replayRow.replayStartedAtEpochMs = replayStartedAtEpochMs;
+    const beforeFrames = identityBeforeReplay.metrics?.presentedFrames;
+    await page.locator(".playback-restart").click();
+    await page.waitForFunction(() => {
+      const state = document.querySelector(".playback-controls")?.dataset;
+      return state?.busy === "false" && Number(state.elapsedSeconds) === 0;
+    });
+    const restartCompleted = await page.evaluate(requestEpoch =>
+      [...(window.__noonReadinessPresentationProbe?.uiEvents ?? [])].reverse().find(event =>
+        event.kind === "state" && event.attribute === "data-busy" && event.state?.busy === "false" &&
+        event.epochMs >= requestEpoch) ?? null, replayStartedAtEpochMs);
+    assert.ok(restartCompleted, "restart command completion transition was not observed");
+    const restartPresented = await observation(page);
+    assert.ok(Number.isFinite(restartPresented.metrics?.time) && Math.abs(restartPresented.metrics.time) <= 0.001 &&
+      Number.isSafeInteger(restartPresented.metrics?.presentedSession),
+    "restart command did not resolve to its displayed start frame");
+    replayRow.startup.restartCompletedUiEpochMs = restartCompleted.epochMs;
+    replayRow.commands.push({ name: "restart", requestEpochMs: replayStartedAtEpochMs,
+      commandCompletedUiEpochMs: replayRow.startup.restartCompletedUiEpochMs,
+      commandCompletionUpperMs: restartPresented.epochMs - replayStartedAtEpochMs,
+      runtimeAcceptanceEpochMs: null,
+      runtimeAcceptanceLimitation: "no separate engine command-acceptance receipt is currently exposed",
+      matchingPresentation: { session: restartPresented.metrics.presentedSession,
+        presentationId: restartPresented.metrics.presentedFrames ?? null, time: restartPresented.metrics.time,
+        sampledAtMs: restartPresented.metrics.sampledAtMs ?? null,
+        clockOriginMs: restartPresented.metrics.performanceTimeOriginMs ?? null } });
+    if (restartPresented.controls?.playing !== "true") await readinessCommand(page, replayRow, true);
+    let replayCurrent = await read(replayRow);
+    let replayMaxTime = Number(replayCurrent.metrics?.time ?? -Infinity);
+    const replayDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
+    while (!(Number.isFinite(replayRow.startup.firstUsefulMs) && replayMaxTime >= source.durationSeconds - 0.1) &&
+           performance.now() < replayDeadline) {
+      replayCurrent = await read(replayRow);
+      replayMaxTime = Math.max(replayMaxTime, Number(replayCurrent.metrics?.time ?? -Infinity));
+      await page.waitForTimeout(25);
+    }
+    assert.ok(replayCurrent.metrics?.presentedFrames > beforeFrames,
+      "retained replay produced no new presentation");
+    assert.ok(Number.isFinite(replayRow.startup.firstUsefulMs), "retained replay produced no useful picture");
+    replayRow.startup.replayRequestToRestartCompletionMs =
+      replayRow.startup.restartCompletedUiEpochMs - replayStartedAtEpochMs;
+    replayRow.startup.replayToEndpointMs = replayCurrent.epochMs - replayStartedAtEpochMs;
+    const replayTrace = replayCurrent.executionDiagnostics;
+    replayRow.endTrace = replayTrace;
+    const replayExpectedProfile = replayArm === "B" ? "incremental" : "observed";
+    replayRow.profileValidationErrors.push(...validateReadinessTrace(replayTrace, {
+      sourceId: source.id, requestedProfile: replayExpectedProfile,
+      attachedProfile: replayExpectedProfile, disposition: "looped",
+    }));
+    if (replayTrace?.runRequestId !== null && replayTrace?.runRequestId !== undefined &&
+        !replayRow.sourceInvocationIds.includes(replayTrace.runRequestId)) {
+      replayRow.sourceInvocationIds.push(replayTrace.runRequestId);
+    }
+    if (replayTrace?.runRequestId !== sourceIdentity.runRequestId ||
+        replayTrace?.interpreterGeneration !== sourceIdentity.interpreterGeneration) {
+      replayRow.profileValidationErrors.push("replay replaced the original source/interpreter identity");
+    }
+    if (replayRow.previousWorkersRetirement && !replayRow.previousWorkersRetirement.allRetired) {
+      replayRow.profileValidationErrors.push("previous page workers were not confirmed retired");
+    }
+    replayRow.status = replayRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
+    replayRow.rendererSamples = await page.evaluate(start =>
+      (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
+    replayRow.presentationGapsMs = presentationGapsMs(replayRow.rendererSamples);
+    replayRow.uiEvents = await page.evaluate(start =>
+      (globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(start), sourceRow.uiEventStart);
+    replayRow.bufferingEpisodes = bufferingEpisodes(replayRow.uiEvents);
+    replayRow.startup.firstSubmittedMs = null;
+    replayRow.startup.firstSubmittedLimitation = "renderer submission timestamp is not exposed by the current browser API";
+    replayRow.startup.runtimeAcceptanceMs = null;
+    replayRow.startup.runtimeAcceptanceLimitation = "engine command-acceptance timestamp is not exposed by the current browser API";
+    sourceRow.startup.firstSubmittedMs = null;
+    sourceRow.startup.firstSubmittedLimitation = replayRow.startup.firstSubmittedLimitation;
+    sourceRow.startup.runtimeAcceptanceMs = null;
+    sourceRow.startup.runtimeAcceptanceLimitation = replayRow.startup.runtimeAcceptanceLimitation;
+    assert.equal((await page.evaluate(() => globalThis.__noonReadinessPresentationProbe?.droppedUiEvents ?? 0)), 0,
+      "bounded UI event observer dropped state transitions");
+    const probeStatus = await page.evaluate(() => ({ error: globalThis.__noonReadinessPresentationProbe?.error ?? null,
+      droppedUiEvents: globalThis.__noonReadinessPresentationProbe?.droppedUiEvents ?? null }));
+    assert.equal(probeStatus.error, null);
+    assert.equal(probeStatus.droppedUiEvents, 0);
+    assert.deepEqual(sourceRow.pageErrors, []);
+    assert.deepEqual(sourceRow.consoleErrors, []);
   } catch (error) {
-    row.status = "failed"; row.error = String(error.stack ?? error);
-    await page.screenshot({ path: path.join(output, `${example}-${trial}-${arm}-${phase}-failure.png`) }).catch(() => {});
+    sourceRow.status = "failed";
+    sourceRow.error = String(error.stack ?? error);
+    sourceRow.endTrace = sourceRow.lastObservation?.executionDiagnostics ?? null;
+    replayRow.status = "failed";
+    replayRow.error = sourceRow.error;
+    replayRow.endTrace = replayRow.lastObservation?.executionDiagnostics ?? null;
+    await page.screenshot({ path: path.join(output,
+      `${source.id}-${trial}-${initialArm}-${stratum}-failure.png`) }).catch(() => {});
   } finally {
-    row.memory = await sampler.stop();
-    if (!row.memory.enabled || row.memory.sampleCount === 0 || row.memory.samplingError) {
-      row.status = "failed"; row.memoryError = row.memory.samplingError ?? "no RSS observations";
-    }
+    sourceRow.memory = await sampler.stop();
+    replayRow.memory = sourceRow.memory;
+    sourceRow.startedAtEpochMs = startedAtEpochMs;
+    replayRow.startedAtEpochMs = startedAtEpochMs;
+    sourceRow.finishedAtEpochMs = Date.now();
+    replayRow.finishedAtEpochMs = sourceRow.finishedAtEpochMs;
     page.off("pageerror", onPageError); page.off("console", onConsole);
     await writeFile(path.join(output, "report.json"), encode(report));
-    console.log(JSON.stringify({ example, trial, arm, phase, warmup, status: row.status,
-      sourceToUsefulObservationUpperMs: row.sourceToUsefulObservationUpperMs, error: row.error }));
+    console.log(JSON.stringify({ source: source.id, arms: [initialArm, replayArm], stratum, trial,
+      initialStatus: sourceRow.status, replayStatus: replayRow.status, error: sourceRow.error }));
   }
-  return row;
 }
 
 try {
   overlay = await mkdtemp(path.join(os.tmpdir(), "noon-playback-loading-host-"));
-  servers.live = await packageHost("live", env.NOON_PLAYBACK_LOADING_LIVE_ROOT);
-  servers[comparisonArm] = await packageHost(comparisonArm, comparisonArm === "prepared"
-    ? env.NOON_PLAYBACK_LOADING_PREPARED_ROOT : env.NOON_PLAYBACK_LOADING_LIVE_ROOT);
-  for (const example of examples) {
-    const entry = inventory.find(item => item.id === example);
-    assert.ok(entry, `unknown unchanged example ${example}`);
-    const sourceHash = await fileHash(path.join(root, "web", entry.path));
-    for (let trial = -1; trial < trials; trial++) {
-      // Retain warm-up evidence but exclude its dependency downloads from timing summaries.
-      for (const arm of trial % 2 === 0 ? ["live", comparisonArm] : [comparisonArm, "live"]) {
-        browserServer = await playwright.chromium.launchServer({ headless: true,
-          ...(env.NOON_PLAYBACK_LOADING_EXECUTABLE ? { executablePath: env.NOON_PLAYBACK_LOADING_EXECUTABLE } : { channel: "chromium" }),
-          args: browserArgs(backend, { gpuMode: "hardware" }) });
-        try {
-          browser = await playwright.chromium.connect(browserServer.wsEndpoint());
-          report.browserVersion = browser.version();
-          const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 });
-          await cache.install(context);
-          await context.addInitScript(({ prepared }) => {
-            globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: prepared, preparationLookaheadSeconds: 1 }) };
-          }, { prepared: arm === "prepared" });
-          const page = await context.newPage(); page.setDefaultTimeout(180_000);
-          const workers = []; page.on("worker", worker => workers.push(worker));
-          if (wasmAccounting) await installWasmAccounting(page);
-          for (const phase of ["fresh-process", "reload-new-workers"]) {
-            const row = await measure(page, workers, example, arm, phase, trial, trial < 0);
-            row.sourcePath = entry.path; row.sourceSha256 = sourceHash;
-            if (row.status === "failed") break;
+  servers.runtime = await packageHost("runtime", env.NOON_PLAYBACK_LOADING_RUNTIME_ROOT);
+  const strata = ["fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"];
+  for (const source of readinessContract.sources) {
+      const entry = inventory.find(item => item.id === source.id);
+      assert.ok(entry && entry.path === source.path && entry.duration === source.durationSeconds,
+        `readiness source metadata changed: ${source.id}`);
+      const sourceFile = path.join(root, "web", entry.path);
+      const sourceHash = await fileHash(sourceFile);
+      assert.equal(sourceHash, source.sha256, `${source.id} readiness source bytes changed`);
+      for (let trial = -1; trial < trials; trial++) {
+        const pairs = readinessMode === "baseline" ? [["C", "D"]] :
+          (trial % 2 === 0 ? [["A", "B"], ["C", "D"]] : [["C", "D"], ["A", "B"]]);
+        for (const [initialArm, replayArm] of pairs) {
+          browserServer = await playwright.chromium.launchServer({ headless: false,
+            ...(env.NOON_PLAYBACK_LOADING_EXECUTABLE ? { executablePath: env.NOON_PLAYBACK_LOADING_EXECUTABLE } : { channel: "chromium" }),
+            args: browserArgs(backend, { gpuMode: "hardware" }) });
+          try {
+            browser = await playwright.chromium.connect(browserServer.wsEndpoint());
+            report.browserVersion = browser.version();
+            const context = await browser.newContext({
+              viewport: readinessContract.reference.viewport,
+              deviceScaleFactor: readinessContract.reference.deviceScaleFactor,
+            });
+            await cache.install(context);
+            await installReadinessPresentationProbe(context);
+            if (initialArm === "C") await context.addInitScript(() => {
+              globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+                authoringRunOptions: () => ({ preparedPlayback: false }),
+              };
+            });
+            const page = await context.newPage(); page.setDefaultTimeout(180_000);
+            assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""),
+              "readiness browser version differs from the pinned reference");
+            const workers = []; page.on("worker", worker => workers.push(worker));
+            for (const stratum of strata) {
+              await measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, trial < 0);
+              assert.equal(await fileHash(sourceFile), sourceHash, "source changed during measurement");
+            }
+            const pairRows = report.cases.filter(row => row.sourceId === source.id && row.trial === trial &&
+              (row.arm === initialArm || row.arm === replayArm));
+            const identity = await page.evaluate(async () =>
+              (await __noonExampleGallery.executionMetrics({ includeGpuIdentity: true })).metrics.rendererGpuIdentity).catch(() => null);
+            report.observedReference ??= { browserVersion: browser.version(), rendererGpuIdentity: identity,
+              gpuClassification: identity ? classifyRendererGpuIdentity(identity, backend) : null,
+              hostCpu: report.host.cpu, hostRelease: report.host.release };
+            if (readinessMode === "strict") {
+              assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""));
+              assert.deepEqual(identity, readinessContract.reference.actualAdapterIdentity,
+                "actual GPU adapter identity differs from the pinned reference");
+              assert.equal(classifyRendererGpuIdentity(identity, backend), "hardware-like-unverified",
+                "strict readiness rejects unknown or software GPU adapters");
+              assert.match(report.host.cpu ?? "", /Apple M6/, "strict readiness requires the pinned Apple M6 host");
+              assert.equal(report.host.macOSVersion, readinessContract.reference.os.replace(/^macOS /, ""),
+                "strict readiness requires the pinned macOS version");
+            }
+            const retirementStartedAt = performance.now();
+            const retirementSampler = createProcessTreeRssSampler(browserServer.process().pid);
+            retirementSampler.start();
+            await context.close();
+            const workerRetirement = await Promise.all(workers.map(worker => retiredWorkerObservation(worker)));
+            await new Promise(resolve => setTimeout(resolve, 750));
+            const postRetirementMemory = await retirementSampler.stop();
+            const allWorkersRetired = workerRetirement.length > 0 && workerRetirement.every(item => item.retired === true);
+            const retirement = { contextCloseMs: performance.now() - retirementStartedAt,
+              ownerRetirementMs: allWorkersRetired
+                ? performance.now() - retirementStartedAt : null,
+              workers: workerRetirement, allWorkersRetired,
+              postRetirementMemory };
+            for (const row of pairRows) {
+              row.retirement = retirement;
+              row.retirementMs = retirement.ownerRetirementMs;
+              row.postRetirementMemory = postRetirementMemory;
+              if (!retirement.allWorkersRetired && row.status === "observed") {
+                row.status = "profile-mismatch";
+                row.profileValidationErrors.push("context teardown did not confirm worker retirement");
+              }
+            }
+            for (const row of pairRows) {
+              row.rendererGpuIdentity ??= identity;
+              if (row.rendererGpuIdentity !== null) row.gpuClassification = classifyRendererGpuIdentity(row.rendererGpuIdentity, backend);
+              row.browserVersion = browser.version();
+            }
+          } finally {
+            try { await browser?.close(); }
+            finally { await browserServer.close(); browser = null; browserServer = null; }
           }
-          const identity = await page.evaluate(async () => (await __noonExampleGallery.executionMetrics({ includeGpuIdentity: true })).metrics.rendererGpuIdentity).catch(() => null);
-          const rows = report.cases.filter(row => row.example === example && row.arm === arm && row.trial === trial);
-          for (const row of rows) { row.rendererGpuIdentity = identity; row.gpuClassification = identity ? classifyRendererGpuIdentity(identity, backend) : null; }
-          await context.close();
-        } finally {
-          try { await browser?.close(); }
-          finally { await browserServer.close(); browser = null; browserServer = null; }
         }
       }
-    }
-    assert.equal(await fileHash(path.join(root, "web", entry.path)), sourceHash, "source changed during measurement");
   }
-  report.status = report.cases.every(row => row.status === "observed") ? "observed" : "incomplete";
-  report.summaries = summarizeLoading(report.cases, examples, trials, comparisonArm);
+  report.summaries = summarizeReadiness(report.cases, readinessContract);
+  const casesObserved = report.cases.every(row => row.status === "observed");
+  const strictErrors = readinessMode === "strict" ? validateReadinessResults(report.cases, readinessContract) : [];
+  if (readinessMode === "strict") report.readinessValidationErrors = strictErrors;
+  if (strictErrors.length > 0) process.exitCode = 1;
+  report.status = readinessMode === "baseline"
+    ? casesObserved ? "baseline-observed" : "baseline-incomplete"
+    : casesObserved && strictErrors.length === 0 ? "observed" : "incomplete";
 } catch (error) {
   report.status = "failed"; report.error = String(error.stack ?? error); process.exitCode = 1;
 } finally {
@@ -313,4 +744,4 @@ try {
     }
   }
 }
-if (report.status !== "observed") process.exitCode = 1;
+if (!(readinessMode === "baseline" && report.status === "baseline-observed") && report.status !== "observed") process.exitCode = 1;

@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sceneInkPixels, distribution, summarizeLoading } from "./playground-prepared-loading-observation.mjs";
+import { readFile } from "node:fs/promises";
+import { sceneInkPixels, distribution, summarizeReadiness,
+  validateReadinessContract, validateReadinessTrace, validateReadinessResults } from "./playground-prepared-loading-observation.mjs";
 
 function canvas() {
   const data = new Uint8Array(40 * 40 * 4);
@@ -30,41 +32,106 @@ test("visible interior content qualifies while imperceptible byte noise does not
 
 test("timing summaries retain sample count and nearest-rank tails", () => {
   assert.deepEqual(distribution([9, 1, 5, 3]), {
-    n: 4, min: 1, median: 4, p90: 9, p95: 9, max: 9, percentileMethod: "midpoint median; nearest-rank tails",
+    n: 4, min: 1, median: 4, p90: 9, p95: 9, p99: 9, max: 9, percentileMethod: "midpoint median; nearest-rank tails",
   });
   assert.equal(distribution([]).median, null);
 });
 
-test("failed runs retain counts without contributing initial pictures to successful timings", () => {
-  const common = { example: "scene", phase: "fresh-process", warmup: false, trial: 0,
-    sourceToUsefulObservationUpperMs: 20, sourceToFirstAnyPresentedMs: 10,
-    memory: { peakSampledRssBytes: 100 } };
-  const summaries = summarizeLoading([
-    { ...common, arm: "live", status: "observed" },
-    { ...common, arm: "prepared", status: "failed" },
-    { ...common, arm: "prepared", status: "observed", warmup: true },
-  ], ["scene"], 1);
-  assert.equal(summaries[0].live.usefulUpperMs.n, 1);
-  assert.equal(summaries[0].prepared.expected, 1);
-  assert.equal(summaries[0].prepared.requested, 1);
-  assert.equal(summaries[0].prepared.observed, 0);
-  for (const metric of ["usefulUpperMs", "firstAnyMs", "peakSampledRssBytes"]) {
-    assert.equal(summaries[0].prepared[metric].n, 0);
+test("readiness draft pins the unchanged first and dense sources and freezes Product Gate thresholds", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  assert.deepEqual(validateReadinessContract(contract), []);
+  assert.ok(validateReadinessContract(contract, { strict: true }).some(error => /not been reviewed and frozen/.test(error)));
+  const ready = structuredClone(contract);
+  ready.status = "ready";
+  ready.reference.actualAdapterIdentity = { backend: "BrowserWebGpu", vendor: 1, device: 2 };
+  ready.bounds = Object.fromEntries(Object.keys(ready.bounds).map(key => [key, 1]));
+  assert.deepEqual(validateReadinessContract(ready, { strict: true }), []);
+  for (const mutate of [
+    value => { value.sources[0].sha256 = "0".repeat(64); },
+    value => { value.sources[1].durationSeconds++; },
+    value => { value.arms.C = "incremental"; },
+    value => { value.productGateAnchor.thresholds.minFpsRatio = 0.5; },
+    value => { value.sampling.measuredStartsPerArmPerStratum = 3; },
+    value => { value.sampling.startupPopulationP99 = true; },
+    value => { value.sampling.startupPercentiles.push("p99"); },
+  ]) {
+    const changed = structuredClone(contract);
+    mutate(changed);
+    assert.notDeepEqual(validateReadinessContract(changed), [], JSON.stringify(changed));
   }
-  assert.equal(summaries[0].pairedComparisonMinusLiveMs.n, 0);
-  assert.equal(summaries[1].prepared.expected, 1);
-  assert.equal(summaries[1].prepared.requested, 0);
 });
 
-test("live controls retain their own arm and paired noise distribution", () => {
-  const common = { example: "scene", phase: "fresh-process", warmup: false, trial: 0, status: "observed" };
-  const [summary] = summarizeLoading([
-    { ...common, arm: "live", sourceToUsefulObservationUpperMs: 20 },
-    { ...common, arm: "live-control", sourceToUsefulObservationUpperMs: 25 },
-    { ...common, arm: "prepared", sourceToUsefulObservationUpperMs: 100 },
-  ], ["scene"], 1, "live-control");
-  assert.equal(summary.comparisonArm, "live-control");
-  assert.equal(summary["live-control"].observed, 1);
-  assert.equal(summary.pairedComparisonMinusLiveMs.median, 5);
-  assert.equal(summary.prepared, undefined);
+test("readiness summaries keep failed and warmup starts out of timing samples", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  const sourceId = contract.sources[0].id, stratum = "fresh-process-warm-resource-cache";
+  const row = (arm, overrides = {}) => ({ sourceId, arm, stratum, warmup: false, status: "observed",
+    startup: { firstUsefulMs: 20 }, commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12 }],
+    presentationGapsMs: [16, 17], bufferingEpisodes: [{ durationMs: 40 }],
+    memory: { peakSampledRssBytes: 100 }, ...overrides });
+  const summary = summarizeReadiness([
+    row("A"), row("A", { warmup: true, startup: { firstUsefulMs: 1 } }),
+    row("A", { status: "failed", startup: { firstUsefulMs: 2 } }),
+  ], contract).find(value => value.sourceId === sourceId && value.arm === "A" && value.stratum === stratum);
+  assert.equal(summary.expectedStarts, 20);
+  assert.equal(summary.attemptedStarts, 2);
+  assert.equal(summary.observedStarts, 1);
+  assert.equal(summary.failedStarts, 1);
+  assert.equal(summary.startup.firstUsefulMs.n, 1);
+  assert.equal("p99" in summary.startup.firstUsefulMs, false,
+    "twenty-start strata do not publish an unsupported startup population p99");
+  assert.equal(summary.commands.pause.feedback.n, 1);
+  assert.equal(summary.presentationGapMs.n, 2);
+  assert.equal(summary.buffering.episodes, 1);
+  assert.equal(summary.peakProcessRssBytes.n, 1);
+});
+
+test("readiness requires actual attachment and ordered cleanup/disposition, not requested profile", () => {
+  const expected = { sourceId: "showcase-first-scene", requestedProfile: "incremental",
+    attachedProfile: "incremental", disposition: "looped" };
+  const trace = { schemaVersion: 1, interpreterGeneration: 2, runRequestId: 7,
+    context: { exampleId: expected.sourceId, selectionGeneration: 3, runGeneration: 4 }, droppedEvents: 0,
+    requestedProfile: "incremental", events: [
+      { sequence: 0, stage: "attached", profile: "incremental" },
+      { sequence: 1, stage: "terminal-adopted" },
+      { sequence: 2, stage: "source-complete" },
+      { sequence: 3, stage: "disposition", disposition: "looped" },
+    ] };
+  assert.deepEqual(validateReadinessTrace(trace, expected), []);
+  const requestedIsNotActual = structuredClone(trace);
+  requestedIsNotActual.events[0].profile = "observed";
+  assert.ok(validateReadinessTrace(requestedIsNotActual, expected).includes("unexpected actual attached profile"));
+  const lateFallback = structuredClone(trace);
+  lateFallback.events.splice(3, 0, { sequence: 3, stage: "profile-change", profile: "observed" });
+  lateFallback.events[4].sequence = 4;
+  assert.ok(validateReadinessTrace(lateFallback, expected).includes("unexpected actual profile transition"));
+  const duplicateAttach = structuredClone(trace);
+  duplicateAttach.events.splice(1, 0, { sequence: 1, stage: "attached", profile: "incremental" });
+  duplicateAttach.events.slice(2).forEach((event, index) => { event.sequence = index + 2; });
+  assert.ok(validateReadinessTrace(duplicateAttach, expected).includes("trace must contain one initial actual attachment"));
+  for (const mutate of [
+    value => { value.events = value.events.filter(event => event.stage !== "attached"); },
+    value => { value.events = value.events.filter(event => event.stage !== "source-complete"); },
+    value => { value.events = value.events.filter(event => event.stage !== "terminal-adopted"); },
+    value => { value.events = value.events.filter(event => event.stage !== "disposition"); },
+    value => { value.droppedEvents = 1; },
+    value => { value.events[3].sequence = 1; },
+    value => { value.events[3].sequence = 0; },
+  ]) {
+    const invalid = structuredClone(trace);
+    mutate(invalid);
+    assert.notDeepEqual(validateReadinessTrace(invalid, expected), []);
+  }
+});
+
+test("strict readiness fails closed when acceptance and submission receipts are unavailable", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  const sourceId = contract.sources[0].id;
+  const cases = [{ sourceId, arm: "A", stratum: "fresh-process-warm-resource-cache", warmup: false,
+    status: "observed", sourceInvocationIds: [1], profileValidationErrors: [], retirementMs: 2,
+    startup: { firstUsefulMs: 10, firstSubmittedMs: null, runtimeAcceptanceMs: null }, commands: [],
+    bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 }, presentationGapsMs: [] }];
+  const errors = validateReadinessResults(cases, contract);
+  assert.ok(errors.some(error => /missing firstSubmittedMs/.test(error)));
+  assert.ok(errors.some(error => /missing runtimeAcceptanceMs/.test(error)));
+  assert.ok(errors.some(error => /incomplete starts/.test(error)));
 });

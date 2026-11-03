@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "status": "baseline-pending",
+  "reference": {
+    "host": "Apple M6, 24 GB RAM, 12 GPU cores",
+    "os": "macOS 27.0.1",
+    "browser": "Chromium 151.0.7922.34",
+    "refreshHz": 60,
+    "viewport": { "width": 1280, "height": 900 },
+    "deviceScaleFactor": 1,
+    "backend": "WebGPU",
+    "gpuMode": "hardware",
+    "actualAdapterIdentity": null
+  },
+  "sources": [
+    {
+      "id": "showcase-first-scene",
+      "path": "python/examples/showcase_first_scene.py",
+      "sha256": "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8",
+      "durationSeconds": 8,
+      "window": "full-authored-first-pass"
+    },
+    {
+      "id": "showcase-dynamic-scene",
+      "path": "python/examples/showcase_dynamic_scene.py",
+      "sha256": "bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca",
+      "durationSeconds": 19,
+      "window": "full-authored-first-pass"
+    }
+  ],
+  "arms": {
+    "A": "default-incremental-first-pass",
+    "B": "default-completed-history-replay",
+    "C": "explicit-observed-first-pass",
+    "D": "observed-completed-history-replay"
+  },
+  "baselineArms": ["C", "D"],
+  "strata": {
+    "fresh-process-warm-resource-cache": "new browser process and workers; browser resource cache may already be primed",
+    "reload-new-workers-warm-resource-cache": "same browser process, reloaded page and new workers; resource cache remains warm",
+    "cold-network": "not measured; requires a separately identified run with network cache disabled"
+  },
+  "sampling": {
+    "warmupsPerArmPerStratum": 1,
+    "measuredStartsPerArmPerStratum": 20,
+    "minimumCommandObservationsPerSource": 100,
+    "startupPercentiles": ["median", "p90", "p95"],
+    "commandPercentiles": ["median", "p95", "p99"],
+    "presentationGapPercentiles": ["median", "p95", "p99"],
+    "tailMethod": "nearest-rank",
+    "startupPopulationP99": false
+  },
+  "bounds": {
+    "firstUsefulMs": null,
+    "commandFeedbackMs": null,
+    "commandAcceptanceMs": null,
+    "commandPresentationMs": null,
+    "bufferingEpisodeMs": null,
+    "frameGapMs": null,
+    "peakProcessRssBytes": null,
+    "liveOwnerRetirementMs": null
+  },
+  "failurePolicy": "retain every attempt; missing identities, traces, samples or required arm results fail strict qualification",
+  "productGateAnchor": {
+    "sourceRevision": "9a5781ebf09f3029e402a331528c657419d1bba5",
+    "runnerSha256": "19ceae9aca559ccec9324094bf71a5c9d941e6ecf720369b1641b7f4813e7d2b",
+    "workloadSha256": "5137eef8aa71b8d70df845ad769278d934fd8eca53f585ca09c4f8d5e3ddbe96",
+    "comparisonSha256": "94cf8fd9ecec1d4c7d4f7fe4af123595e7d0b7f788ed422187e650bda64125a0",
+    "thresholds": {
+      "maxLatencyRatio": 1.25,
+      "latencySlackMs": 350,
+      "minFpsRatio": 0.8,
+      "maxVisualDiffRatio": 0.015
+    },
+    "preserveOriginalWorkloadAndThresholds": true
+  }
+}
