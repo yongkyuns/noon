@@ -55,6 +55,12 @@ impl PrefixReader {
         self.receiver.contains_time(time)
     }
 
+    /// Shared selectable timeline bounds. Unlike a displayed frontier, the
+    /// open upper value is a concrete timestamp this exact reader can admit.
+    pub fn selectable_time_bounds(&self) -> Result<Option<(f64, f64)>, PrefixError> {
+        self.receiver.selectable_time_bounds(&self.session.runtime)
+    }
+
     pub fn runtime_identity(&self) -> RuntimeIdentity {
         self.session.runtime_identity()
     }

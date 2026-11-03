@@ -334,6 +334,37 @@ impl PrefixReceiver {
         self.validate_time(time).is_ok()
     }
 
+    /// Inclusive endpoints suitable for a timeline control. The open endpoint
+    /// is the last representable timestamp admitted by this receiver, not a
+    /// guessed frame time. Runtime identity and complete retained history are
+    /// checked before exposing the bounds.
+    pub fn selectable_time_bounds(
+        &self,
+        runtime: &SceneInstance,
+    ) -> Result<Option<(f64, f64)>, PrefixError> {
+        self.validate_runtime(runtime)?;
+        let end = if self.finished {
+            self.frontier
+        } else {
+            if self.frontier <= self.start {
+                return Ok(None);
+            }
+            // The immediate predecessor keeps the exclusive frontier itself
+            // out of the inclusive UI range without inventing a time step.
+            if self.frontier == 0.0 {
+                -f64::from_bits(1)
+            } else if self.frontier > 0.0 {
+                f64::from_bits(self.frontier.to_bits() - 1)
+            } else {
+                f64::from_bits(self.frontier.to_bits() + 1)
+            }
+        };
+        if end < self.start || !self.contains_time(end) {
+            return Ok(None);
+        }
+        Ok(Some((self.start, end)))
+    }
+
     fn validate_time(&self, time: f64) -> Result<(), PrefixError> {
         if !time.is_finite()
             || time < self.start

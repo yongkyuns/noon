@@ -77,6 +77,23 @@ fn prepared_canvas_frontier_buffers_without_speculative_frame_or_busy_wake() {
 }
 
 #[test]
+fn prepared_observation_exposes_only_exact_selectable_bounds() {
+    let (mut source, mut publisher, mut playback, _) = fixture();
+    let open = playback.observation();
+    assert_eq!(open.seek_range.as_ref().unwrap().start, 0.0);
+    assert_eq!(
+        open.seek_range.as_ref().unwrap().end,
+        f64::from_bits(1.0_f64.to_bits() - 1)
+    );
+    playback
+        .append(next(&mut source, &mut publisher, true))
+        .unwrap();
+    let closed = playback.observation();
+    assert_eq!(closed.seek_range.as_ref().unwrap().start, 0.0);
+    assert_eq!(closed.seek_range.as_ref().unwrap().end, 2.0);
+}
+
+#[test]
 fn prepared_clock_rejects_backwards_explicit_advance_but_ignores_stale_raf_sample() {
     let (mut source, mut publisher, mut playback, _) = fixture();
     playback
@@ -318,6 +335,13 @@ fn prepared_canvas_zero_duration_is_an_idle_snapshot_without_loop_cadence() {
     let reader = source.create_finished_prepared_reader().unwrap();
     let mut playback = PreparedCanvasPlayback::new(reader);
     assert_eq!(playback.reader.end_time(), Some(0.0));
+    assert_eq!(
+        playback
+            .observation()
+            .seek_range
+            .map(|range| (range.start, range.end)),
+        Some((0.0, 0.0))
+    );
     assert!(playback.completed());
     assert!(playback.completed());
     assert!(!playback.playing());

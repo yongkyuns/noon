@@ -10,6 +10,7 @@ pub(crate) struct PreparedPlaybackObservation {
     pub(crate) time: f64,
     pub(crate) frontier: f64,
     pub(crate) end: Option<f64>,
+    pub(crate) seek_range: Option<PreparedSeekRange>,
     pub(crate) playing: bool,
     pub(crate) buffering: bool,
     pub(crate) completed: bool,
@@ -18,6 +19,13 @@ pub(crate) struct PreparedPlaybackObservation {
     pub(crate) loop_count: u64,
     pub(crate) loop_error: Option<&'static str>,
     pub(crate) interactions: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreparedSeekRange {
+    pub(crate) start: f64,
+    pub(crate) end: f64,
 }
 
 pub(crate) struct PreparedCanvasPlayback {
@@ -81,10 +89,16 @@ impl PreparedCanvasPlayback {
         }
     }
     pub(crate) fn observation(&self) -> PreparedPlaybackObservation {
+        let seek_range = self
+            .reader
+            .selectable_time_bounds()
+            .expect("prepared reader keeps its runtime and retained history scope")
+            .map(|(start, end)| PreparedSeekRange { start, end });
         PreparedPlaybackObservation {
             time: self.reader.frame().time,
             frontier: self.reader.frontier(),
             end: self.reader.end_time(),
+            seek_range,
             playing: self.playing,
             buffering: self.buffering,
             completed: self.completed(),
