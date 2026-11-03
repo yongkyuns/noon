@@ -17,12 +17,12 @@ use std::{
 use noon_core::{
     Color, DRect, DVec2, FontFaceIdentity, FontResourceArena, FontResourceLookup,
     FontVariationSetting, GeometryRef, GeometryResource, GeometryResourceArena,
-    GeometryResourceHandle, GeometryResourceLookup, GlyphOutlineProfile, GlyphRun, MeshResource,
-    PositionedGlyph, StrokeCap, StrokeJoin, Style, TextAffineTransform, TextClusterIdentity,
-    TextDirection, TextGlyphStroke, TextLayoutArtifact, TextLayoutBackend, TextLayoutBackendKind,
-    TextPart, TextRenderItem, TextResource, TextResourceArena, TextResourceHandle,
-    TextResourceLookup, TextResourceReplacementStaging, TextSourceKind, TextSourceSpan,
-    TextVectorItem, TextVectorStyle, Transform2D, VectorPath,
+    GeometryResourceHandle, GeometryResourceInsertionStaging, GeometryResourceLookup,
+    GlyphOutlineProfile, GlyphRun, MeshResource, PositionedGlyph, StrokeCap, StrokeJoin, Style,
+    TextAffineTransform, TextClusterIdentity, TextDirection, TextGlyphStroke, TextLayoutArtifact,
+    TextLayoutBackend, TextLayoutBackendKind, TextPart, TextRenderItem, TextResource,
+    TextResourceArena, TextResourceHandle, TextResourceLookup, TextResourceReplacementStaging,
+    TextSourceKind, TextSourceSpan, TextVectorItem, TextVectorStyle, Transform2D, VectorPath,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1136,6 +1136,7 @@ impl InstalledRetainedResources {
         let composed_sources = install_composed_sources(bundle.composed_sources)?;
         let (images, image_handles) = install_images(bundle.images)?;
         let mut geometries = GeometryResourceArena::new();
+        let mut mesh_insertions = self.geometries.stage_insertions();
         let mut geometry_handles = HashMap::with_capacity(bundle.geometries.len());
         for entry in bundle.geometries {
             if geometry_handles.contains_key(&entry.handle) {
@@ -1144,7 +1145,15 @@ impl InstalledRetainedResources {
                 ));
             }
             let handle = entry.handle;
-            let local = install_geometry(&mut geometries, entry)?;
+            let mut local = install_geometry(&mut geometries, entry)?;
+            if matches!(geometries.get(local), Some(GeometryResource::Mesh(_))) {
+                // Spatial renderer references are bare IDs. Allocate meshes in
+                // the existing common arena, never an ambiguous addition layer.
+                let mesh = geometries.remove(local.id).expect("newly installed mesh");
+                local = mesh_insertions
+                    .insert(&self.geometries, mesh)
+                    .map_err(|_| RetainedResourceTransportError::InvalidGeometry(handle))?;
+            }
             geometry_handles.insert(handle, local);
         }
         for entry in &bundle.texts {
@@ -1303,6 +1312,7 @@ impl InstalledRetainedResources {
             .collect();
         Ok(PreparedRetainedResourceAdditions {
             installed,
+            mesh_insertions,
             staged_texts,
             staged_text_arenas,
             text_handle_remap,
@@ -1313,11 +1323,15 @@ impl InstalledRetainedResources {
     pub(crate) fn commit_additions(&mut self, additions: PreparedRetainedResourceAdditions) {
         let PreparedRetainedResourceAdditions {
             mut installed,
+            mesh_insertions,
             staged_texts,
             staged_text_arenas,
             text_handle_remap,
             superseded_text_handles,
         } = additions;
+        self.geometries
+            .commit_insertions(mesh_insertions)
+            .expect("prepared mesh insertions must remain current until commit");
         self.commit_staged_text_replacements(staged_texts)
             .expect("prepared retained text replacements must remain current until commit");
         // Plans live in this table alone, not retained addition layers. A plan
@@ -1364,7 +1378,9 @@ impl InstalledRetainedResources {
             self.text_layers.insert(arena, layer);
         }
         for handle in installed.geometry_handles.values() {
-            self.geometry_layers.insert(handle.arena, layer);
+            if self.geometries.get(*handle).is_none() {
+                self.geometry_layers.insert(handle.arena, layer);
+            }
         }
         for &arena in &installed.font_arenas {
             self.font_layers.insert(arena, layer);
@@ -1686,6 +1702,7 @@ impl StagedTextReplacements {
 
 pub(crate) struct PreparedRetainedResourceAdditions {
     installed: InstalledRetainedResources,
+    mesh_insertions: GeometryResourceInsertionStaging,
     staged_texts: StagedTextReplacements,
     staged_text_arenas: HashSet<u64>,
     text_handle_remap: HashMap<TransportTextResourceHandle, TextResourceHandle>,
@@ -1697,7 +1714,10 @@ impl PreparedRetainedResourceAdditions {
         &self,
         handle: TransportGeometryResourceHandle,
     ) -> Option<&GeometryResource> {
-        self.installed.geometry_for_transport(handle)
+        let local = *self.installed.geometry_handles.get(&handle)?;
+        self.mesh_insertions
+            .get(local)
+            .or_else(|| self.installed.geometry_for_transport(handle))
     }
 
     pub(crate) fn text_handle_remap(
@@ -1869,6 +1889,7 @@ pub enum RetainedResourceTransportError {
     DuplicateGeometry(TransportGeometryResourceHandle),
     UnsupportedMeshGeometry(TransportGeometryResourceHandle),
     InvalidGeometry(TransportGeometryResourceHandle),
+    GeometryReservation(String),
     GeometryPayloadLimit(TransportGeometryResourceHandle),
     DuplicateFont {
         face_key: String,
@@ -1953,6 +1974,9 @@ impl fmt::Display for RetainedResourceTransportError {
             ),
             Self::UnknownGeometryId(id) => {
                 write!(formatter, "unknown retained geometry resource {}", id.get())
+            }
+            Self::GeometryReservation(reason) => {
+                write!(formatter, "geometry reservation failed: {reason}")
             }
             Self::UnknownGeometry(handle) => write!(
                 formatter,
