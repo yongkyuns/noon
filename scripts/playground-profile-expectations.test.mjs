@@ -102,6 +102,19 @@ test('diagnostics accept actual profile attachment and required capabilities', (
   assert.throws(() => validateShowcaseDiagnostics(immutable, wrongEnd), /unexpected terminal disposition/);
 });
 
+test('callback reasons may refine at a later barrier of the same observed source', () => {
+  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-camera-follows-path');
+  const diagnostics = diagnosticsFor(expected);
+  const attachment = diagnostics.events[0];
+  attachment.reason = { code: 'host_effects' };
+  assert.throws(() => validateShowcaseDiagnostics(expected, diagnostics), /expected callback reason/);
+  diagnostics.events.splice(1, 0, { ...attachment, stage: 'source-requirement', reason: { code: 'host_callbacks' } });
+  diagnostics.events.forEach((event, sequence) => { event.sequence = sequence; });
+  validateShowcaseDiagnostics(expected, diagnostics);
+  diagnostics.events[1].continuationGeneration++;
+  assert.throws(() => validateShowcaseDiagnostics(expected, diagnostics), /expected callback reason/);
+});
+
 test('diagnostics reject unexpected late fallback and requested-versus-attached mismatch', () => {
   const expected = SHOWCASE_PROFILE_EXPECTATIONS[0];
   const fallback = diagnosticsFor(expected);

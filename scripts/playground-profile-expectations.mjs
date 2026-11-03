@@ -179,8 +179,14 @@ export function validateShowcaseDiagnostics(expected, diagnostics) {
     .map(event => event.profile);
   assert.deepEqual(changes, expected.transitions, `${expected.id}: unexpected profile transition`);
   if (expected.dispositionKind === 'callback') {
-    assert.ok(events.some(event => event.stage === 'attached' && event.reason?.code === 'host_callbacks'),
-      `${expected.id}: observed attachment lacks the expected callback reason`);
+    const reason = events.find(event => ['attached', 'source-requirement'].includes(event.stage) &&
+      event.reason?.code === 'host_callbacks');
+    assert.ok(reason && reason.profile === 'observed' && reason.contextId === attached[0].contextId &&
+      reason.continuationGeneration === attached[0].continuationGeneration &&
+      reason.sequence < events.find(event => event.stage === 'disposition')?.sequence,
+    `${expected.id}: observed source lacks the expected callback reason`);
+    assert.ok(events.filter(event => event.stage === 'source-requirement').length <= 1,
+      `${expected.id}: duplicate callback requirement observation`);
   }
   if (expected.dispositionKind === 'input-handoff') {
     const attachment = attached[0];
