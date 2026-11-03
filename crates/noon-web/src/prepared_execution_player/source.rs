@@ -37,11 +37,6 @@ pub(super) struct SourceDelivery {
 }
 
 impl PreparedExecutionPlayer {
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = sourceExecutionRequirementJson))]
-    pub fn source_execution_requirement_json(&self) -> String {
-        source_execution_requirement_json(self.source.as_ref().and_then(|source| source.required))
-    }
-
     /// Bootstrap only after the interpreter's actual first segment is complete.
     /// The canonical source keeps its existing live player and semantic store.
     pub fn from_completed_source(
@@ -173,6 +168,11 @@ impl PreparedExecutionPlayer {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl PreparedExecutionPlayer {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = sourceExecutionRequirementJson))]
+    pub fn source_execution_requirement_json(&self) -> String {
+        source_execution_requirement_json(self.source.as_ref().and_then(|source| source.required))
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sourceExecutionReady))]
     pub fn source_execution_ready(&self) -> bool {
         self.source

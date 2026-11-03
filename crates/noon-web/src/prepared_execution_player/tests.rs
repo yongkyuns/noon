@@ -672,6 +672,25 @@ fn prepared_worker_loop_reanchors_the_existing_wall_clock_at_each_wrap() {
 }
 
 #[test]
+fn prepared_worker_pause_before_tick_commits_elapsed_loop_wrap() {
+    let mut f = Fixture::new(852);
+    let terminal = f.next(true);
+    f.deliver(terminal);
+    f.player.set_prepared_loop_duration(Some(2.0)).unwrap();
+    let expected_frame = f.player.playback.reader.frame().clone();
+    f.player.seek_delta_json(2.0).unwrap();
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(1_000.0).unwrap();
+
+    assert_eq!(f.player.prepared_playback_time_at(1_500.0).unwrap(), 0.5);
+    f.player.pause_prepared_at(1_500.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(f.player.playback.reader.frame(), &expected_frame);
+    assert_eq!(playback_state(&f.player)["loopCount"], 1);
+    assert!(!f.player.prepared_playing());
+}
+
+#[test]
 fn prepared_worker_static_time_controls_reject_invalid_wall_time_atomically() {
     let mut f = Fixture::new(86);
     ready(&mut f.player);

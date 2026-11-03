@@ -361,7 +361,16 @@ impl PreparedExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pausePreparedAt))]
     pub fn pause_prepared_at(&mut self, wall_time_ms: f64) -> Result<(), String> {
         let time = self.prepared_playback_time_at(wall_time_ms)?;
-        if time > self.prepared_time() {
+        let looping = self.playback.loop_duration().is_some()
+            && self.playback.reader.end_time().is_some_and(|end| end > 0.0);
+        if looping {
+            if let Some(requested) = self.clock.scene_time_at(wall_time_ms) {
+                self.playback
+                    .advance_clock_sample(requested)
+                    .map_err(|error| error.to_string())?;
+            }
+            self.playback.take_clock_reanchor();
+        } else if time > self.prepared_time() {
             self.playback
                 .advance(time)
                 .map_err(|error| error.to_string())?;
