@@ -95,6 +95,35 @@ class SourceEffectsTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertFalse(source_execution_proof(source)["admitted"])
 
+    def test_painted_image_uses_only_a_closed_local_pixel_expression(self):
+        example = Path(__file__).with_name("examples").joinpath(
+            "showcase_painted_surfaces.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(example), {"admitted": True, "reason": None})
+
+        for source in (
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        pixels = "texture.png"\n'
+            '        paint = ImagePaint(pixels)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        palette = [(1, 2, 3)]\n'
+            '        palette_alias = palette\n'
+            '        pixels = [[[*palette_alias[0], 255] for x in range(1)] for y in range(1)]\n'
+            '        paint = ImagePaint(pixels)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        palette = [(1, 2, 3)]\n'
+            '        pixels = [[[*palette[0], 255] for x in range(1)] for y in range(1)]\n'
+            '        palette.append((4, 5, 6))\n        paint = ImagePaint(pixels)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        pixels = [[[1, 2, 3, 255]]]\n'
+            '        paint = ImagePaint(pixels, sampling="nearest")\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        pixels = [[[1, 2, 3, 255]]]\n'
+            '        paint = ImagePaint(*[pixels])\n',
+        ):
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
     def test_procedural_paint_examples_use_resource_free_rust_values(self):
         examples = Path(__file__).with_name("examples")
         for name in ("radial_gradient.py", "noise_paint.py", "hatch_paint.py"):
@@ -103,13 +132,13 @@ class SourceEffectsTests(unittest.TestCase):
                 self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
 
         external_image = source_execution_proof(
-            'from noon import ImagePaint\n'
+            'from noon import *\n'
             'class Example(Scene):\n'
             '    def construct(self):\n'
             '        paint = ImagePaint("https://example.test/texture.png")\n'
         )
         self.assertFalse(external_image["admitted"])
-        self.assertEqual(external_image["reason"]["code"], "unsupported_import")
+        self.assertEqual(external_image["reason"]["code"], "unproven_image_paint_source")
 
     def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
         source = Path(__file__).with_name("examples").joinpath(

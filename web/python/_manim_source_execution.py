@@ -38,8 +38,7 @@ _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
-ImageMobject
-RadialGradient NoisePaint HatchPaint
+ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes
@@ -68,7 +67,7 @@ add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back repl
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value
-set_value increment_value copy become add_updater remove_updater clear_updaters
+set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
 animate id width height radius append extend insert pop count index get keys values
 items update union intersection difference join split strip lower upper replace
@@ -193,16 +192,18 @@ class _SceneOnlySource(ast.NodeVisitor):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         self.admitted_image_loads = set()
+        self.admitted_image_paint_loads = set()
         self.image_pixel_sources = [set()]
         self.pixel_factory_names = set()
         self.admitted_pixel_factory_loads = set()
+        self.empty_pixel_list = object()
         self.has_image_constructor = any(
             isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "ImageMobject" for node in ast.walk(tree)
+            and node.func.id in {"ImageMobject", "ImagePaint"} for node in ast.walk(tree)
         )
         if self.has_image_constructor:
             self.closed_pixel_factory_names = {
-                name for name in self.module_functions if self._closed_pixel_factory(name)
+                name for name in self.module_functions if self._closed_pixel_proof(name)
             }
             for function in ast.walk(tree):
                 if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -261,6 +262,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id == "ImageMobject"
                 and id(node) not in self.admitted_image_loads):
             raise _OpaqueSource(node, "unproven_image_reference")
+        if (isinstance(node.ctx, ast.Load) and node.id == "ImagePaint"
+                and id(node) not in self.admitted_image_paint_loads):
+            raise _OpaqueSource(node, "unproven_image_paint_reference")
         if (isinstance(node.ctx, ast.Load) and node.id in self.pixel_factory_names
                 and id(node) not in self.admitted_pixel_factory_loads):
             raise _OpaqueSource(node, "unproven_image_factory_reference")
@@ -270,29 +274,30 @@ class _SceneOnlySource(ast.NodeVisitor):
         if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
             raise _OpaqueSource(node, "unknown_name")
 
-    def _closed_pixel_factory(self, name):
-        """Prove one zero-argument helper returns only fresh builtin int lists.
-
-        This is an AST type pass: it never invokes source or iterates a range.
-        """
-        function = self.module_functions.get(name)
-        if (not isinstance(function, ast.FunctionDef) or self.module_binding_counts.get(name) != 1
-                or self.module_binding_locations.get(name) is not function):
-            return False
-        args = function.args
-        if (args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg
-                or len(args.defaults) != len(args.args)
-                or any(not isinstance(value, ast.Constant) or type(value.value) is not int
-                       for value in args.defaults)):
-            return False
-        bindings = _SourceBindings()
-        for statement in function.body:
-            bindings.visit(statement)
-        if {"range", "abs"}.intersection(bindings.names | {arg.arg for arg in args.args}):
-            return False
-        values = {arg.arg: "int" for arg in args.args}
+    def _closed_pixel_proof(self, name=None, *, expression=None, initial_values=None, return_type=False):
+        """Type-check fresh numeric pixel data without running source or ranges."""
+        function = self.module_functions.get(name) if expression is None else None
+        if expression is None:
+            if (not isinstance(function, ast.FunctionDef) or self.module_binding_counts.get(name) != 1
+                    or self.module_binding_locations.get(name) is not function):
+                return False
+            args = function.args
+            if (args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg
+                    or len(args.defaults) != len(args.args)
+                    or any(not isinstance(value, ast.Constant) or type(value.value) is not int
+                           for value in args.defaults)):
+                return False
+            bindings = _SourceBindings()
+            for statement in function.body:
+                bindings.visit(statement)
+            if {"range", "abs"}.intersection(bindings.names | {arg.arg for arg in args.args}):
+                return False
+            values = {arg.arg: "int" for arg in args.args}
+        else:
+            function = None
+            values = dict(initial_values or {})
         transferred = set()
-        empty_list = object()
+        empty_list = self.empty_pixel_list
 
         def merge(left, right, empty_item=False):
             if left is empty_list:
@@ -306,6 +311,9 @@ class _SceneOnlySource(ast.NodeVisitor):
             if left[0] == "list":
                 item = merge(left[1], right[1], empty_item=True)
                 return ("list", item)
+            if left[0] == "tuple" and len(left[1]) == len(right[1]):
+                items = tuple(merge(a, b) for a, b in zip(left[1], right[1]))
+                return ("tuple", items) if all(item is not None for item in items) else None
             return left
 
         def value(node, state):
@@ -313,14 +321,44 @@ class _SceneOnlySource(ast.NodeVisitor):
                 return "int" if type(node.value) is int else "float"
             if isinstance(node, ast.Name):
                 return state.get(node.id)
+            if isinstance(node, ast.Tuple):
+                items = tuple(value(item, state) for item in node.elts)
+                return ("tuple", items) if all(item is not None for item in items) else None
             if isinstance(node, ast.List):
-                items = [value(item, state) for item in node.elts]
-                if any(item and item[0] == "list" and not isinstance(node.elts[index], ast.List)
-                       for index, item in enumerate(items)):
-                    return None
+                items = []
+                for element in node.elts:
+                    if isinstance(element, ast.Starred):
+                        expanded = value(element.value, state)
+                        if expanded is None or expanded[0] != "tuple":
+                            return None
+                        items.extend(expanded[1])
+                    else:
+                        items.append(value(element, state))
                 return (("list", items[0] if items else empty_list)
                         if all(item is not None for item in items)
                         and all(item == items[0] for item in items[1:]) else None)
+            if isinstance(node, ast.Subscript):
+                container, index = value(node.value, state), value(node.slice, state)
+                if index != "int" or container is None:
+                    return None
+                if container[0] == "list":
+                    return container[1]
+                if container[0] == "tuple" and container[1] \
+                        and all(item == container[1][0] for item in container[1][1:]):
+                    return container[1][0]
+                return None
+            if isinstance(node, ast.ListComp):
+                local = state.copy()
+                for generator in node.generators:
+                    if (generator.is_async or generator.ifs or not isinstance(generator.target, ast.Name)
+                            or not isinstance(generator.iter, ast.Call)
+                            or not isinstance(generator.iter.func, ast.Name)
+                            or generator.iter.func.id != "range" or len(generator.iter.args) != 1
+                            or generator.iter.keywords or value(generator.iter.args[0], local) != "int"):
+                        return None
+                    local[generator.target.id] = "int"
+                item = value(node.elt, local)
+                return ("list", item) if item is not None else None
             if isinstance(node, ast.BinOp):
                 left, right = value(node.left, state), value(node.right, state)
                 if left not in {"int", "float"} or right not in {"int", "float"}:
@@ -401,6 +439,21 @@ class _SceneOnlySource(ast.NodeVisitor):
                     return None
             return state
 
+        def numeric_tree(kind, tuples=False):
+            if kind is empty_list or kind == "int":
+                return True
+            if not isinstance(kind, tuple):
+                return False
+            if kind[0] == "list":
+                return numeric_tree(kind[1], tuples)
+            if kind[0] == "tuple":
+                return tuples and all(numeric_tree(item, tuples) for item in kind[1])
+            return False
+
+        if expression is not None:
+            result = value(expression, values)
+            return result if return_type else numeric_tree(result, tuples=True)
+
         body = function.body
         if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
                 and isinstance(body[0].value.value, str):
@@ -412,12 +465,6 @@ class _SceneOnlySource(ast.NodeVisitor):
         result = values.get(body[-1].value.id)
         if result is None or result[0] != "list" or body[-1].value.id in transferred:
             return False
-
-        def numeric_tree(kind):
-            return kind is empty_list or kind == "int" or (
-                isinstance(kind, tuple) and kind[0] == "list" and numeric_tree(kind[1])
-            )
-
         return numeric_tree(result)
 
     def _image_pixel_source_names(self, body, bindings, parameters):
@@ -426,6 +473,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         class Uses(ast.NodeVisitor):
             def __init__(self):
                 self.calls = []
+                self.paint_calls = []
                 self.loads = []
 
             def visit_FunctionDef(self, node):
@@ -436,6 +484,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             def visit_Call(self, node):
                 if isinstance(node.func, ast.Name) and node.func.id == "ImageMobject":
                     self.calls.append(node)
+                elif isinstance(node.func, ast.Name) and node.func.id == "ImagePaint":
+                    self.paint_calls.append(node)
                 self.generic_visit(node)
 
             def visit_Name(self, node):
@@ -445,7 +495,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         uses = Uses()
         for statement in body:
             uses.visit(statement)
-        if not uses.calls:
+        if not uses.calls and not uses.paint_calls:
             return set()
 
         requested_sources = {
@@ -477,22 +527,87 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or call.args[0].id not in sources):
                 raise _OpaqueSource(call, "unproven_image_source")
             for keyword in call.keywords:
-                value = keyword.value
+                option = keyword.value
                 if keyword.arg == "resampling_algorithm":
-                    allowed = (isinstance(value, ast.Constant)
-                        and ((type(value.value) is str and value.value.lower() in
+                    allowed = (isinstance(option, ast.Constant)
+                        and ((type(option.value) is str and option.value.lower() in
                               {"nearest", "none", "bilinear", "linear", "bicubic", "cubic"})
-                             or (type(value.value) is int and value.value in {0, 2, 3})))
+                             or (type(option.value) is int and option.value in {0, 2, 3})))
                 else:
-                    allowed = isinstance(value, ast.Constant) and type(value.value) in (int, float)
+                    allowed = isinstance(option, ast.Constant) and type(option.value) in (int, float)
                 if not allowed:
-                    raise _OpaqueSource(value, "unproven_image_option")
+                    raise _OpaqueSource(option, "unproven_image_option")
             accepted.add(id(call.args[0]))
+
+        paint_sources = set()
+        paint_palette_loads = {}
+        for call in uses.paint_calls:
+            if (len(call.args) != 1 or call.keywords or not isinstance(call.args[0], ast.Name)):
+                raise _OpaqueSource(call, "unproven_image_paint_source")
+            target = call.args[0].id
+            data_statement = next((statement for statement in body
+                if isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name) and statement.targets[0].id == target
+                and isinstance(statement.value, ast.ListComp)), None)
+            if data_statement is None or bindings.binding_counts.get(target) != 1:
+                raise _OpaqueSource(call, "unproven_image_paint_source")
+            if "range" in bindings.names or "range" in parameters:
+                raise _OpaqueSource(data_statement.value, "unproven_image_paint_source")
+            expression = data_statement.value
+            target_names = {generator.target.id for generator in ast.walk(expression)
+                if isinstance(generator, ast.comprehension)
+                and isinstance(generator.target, ast.Name)}
+            dependencies = {node.id for node in ast.walk(expression)
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+            dependencies.difference_update(target_names | {"range"})
+            if len(dependencies) != 1:
+                raise _OpaqueSource(expression, "unproven_image_paint_source")
+            palette_name = next(iter(dependencies))
+            palette_statement = next((statement for statement in body
+                if isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == palette_name), None)
+            if (palette_statement is None or body.index(palette_statement) >= body.index(data_statement)
+                    or bindings.binding_counts.get(palette_name) != 1 or palette_name in parameters
+                    or not isinstance(palette_statement.value, ast.List)
+                    or any(not isinstance(row, ast.Tuple) or len(row.elts) != 3
+                           or any(not isinstance(channel, ast.Constant) or type(channel.value) is not int
+                                  for channel in row.elts)
+                           for row in palette_statement.value.elts)):
+                raise _OpaqueSource(expression, "unproven_image_palette")
+            palette_type = self._closed_pixel_proof(
+                expression=palette_statement.value, return_type=True
+            )
+            if (palette_type is None or palette_type[0] != "list"
+                    or not isinstance(palette_type[1], tuple) or palette_type[1][0] != "tuple"
+                    or len(palette_type[1][1]) != 3
+                    or any(item != "int" for item in palette_type[1][1])):
+                raise _OpaqueSource(palette_statement.value, "unproven_image_palette")
+            pixel_type = self._closed_pixel_proof(
+                expression=expression, initial_values={palette_name: palette_type}, return_type=True
+            )
+            if pixel_type != ("list", ("list", ("list", "int"))):
+                raise _OpaqueSource(expression, "unproven_image_paint_source")
+            paint_palette_loads.setdefault(palette_name, set()).update(id(node) for node in ast.walk(expression)
+                if isinstance(node, ast.Name) and node.id == palette_name
+                and isinstance(node.ctx, ast.Load))
+            paint_sources.add(target)
+            self.admitted_image_paint_loads.add(id(call.func))
+            accepted.add(id(call.args[0]))
+
         for name in sources:
             if any(node.id == name and id(node) not in accepted for node in uses.loads):
                 raise _OpaqueSource(next(node for node in uses.loads if node.id == name),
                                     "unproven_image_source")
-        return sources
+        for name in paint_sources:
+            if any(node.id == name and id(node) not in accepted for node in uses.loads):
+                raise _OpaqueSource(next(node for node in uses.loads if node.id == name),
+                                    "unproven_image_paint_source")
+        for name, allowed_loads in paint_palette_loads.items():
+            if any(node.id == name and id(node) not in allowed_loads for node in uses.loads):
+                raise _OpaqueSource(next(node for node in uses.loads if node.id == name),
+                                    "unproven_image_palette")
+        return sources | paint_sources
 
     def visit_Call(self, node):
         if isinstance(node.func, ast.Name) and node.func.id == "ImageMobject":
@@ -504,6 +619,15 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or node.args[0].id not in self.image_pixel_sources[-1]):
                 raise _OpaqueSource(node, "unproven_image_source")
             self.admitted_image_loads.add(id(node.func))
+        if isinstance(node.func, ast.Name) and node.func.id == "ImagePaint":
+            if "ImagePaint" in self.module_bindings or any(
+                "ImagePaint" in scope for scope in self.scopes[1:]
+            ):
+                raise _OpaqueSource(node.func, "unproven_shadowed_image_paint_constructor")
+            if (len(node.args) != 1 or node.keywords or not isinstance(node.args[0], ast.Name)
+                    or node.args[0].id not in self.image_pixel_sources[-1]):
+                raise _OpaqueSource(node, "unproven_image_paint_source")
+            self.admitted_image_paint_loads.add(id(node.func))
         if isinstance(node.func, ast.Name) and node.func.id == "LaggedStartMap":
             shadowed = "LaggedStartMap" in self.module_bindings or any(
                 "LaggedStartMap" in scope for scope in self.scopes[1:]
@@ -580,6 +704,10 @@ class _SceneOnlySource(ast.NodeVisitor):
             alias.name == "ImageMobject" and alias.asname is not None for alias in node.names
         ):
             raise _OpaqueSource(node, "unproven_image_constructor")
+        if node.module in {"noon", "manim"} and any(
+            alias.name == "ImagePaint" and alias.asname is not None for alias in node.names
+        ):
+            raise _OpaqueSource(node, "unproven_image_paint_constructor")
         noon_names = _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
         allowed = noon_names if node.module in {"noon", "manim"} else _SOURCE_MODULES.get(node.module, ())
         for alias in node.names:
