@@ -482,10 +482,84 @@ def _safe_numpy_containers(body):
                     and _attribute_path(generator.iter.func) == "np.linspace"
                     and bindings.binding_counts.get(statement.targets[0].id) == 1):
                 safe_lists.add(statement.targets[0].id)
+    if not safe_lists or len(safe_contours) != 1 or len(safe_paths) != 1:
+        return set()
+
+    parents = {}
+    for statement in body:
+        for parent in ast.walk(statement):
+            for child in ast.iter_child_nodes(parent):
+                parents[child] = parent
+
+    def closed_uses(name, permitted):
+        for node in _walk_scope(body):
+            if not isinstance(node, ast.Name) or node.id != name:
+                continue
+            parent = parents.get(node)
+            if not permitted(node, parent, parents):
+                return False
+        return True
+
+    contours_name = next(iter(safe_contours))
+    path_name = next(iter(safe_paths))
+    sampled_name = next(iter(safe_lists))
+
+    def contours_use(node, parent, parents):
+        if isinstance(node.ctx, ast.Store):
+            return (isinstance(parent, ast.Assign) and isinstance(parent.value, ast.List)
+                    and not parent.value.elts and node in parent.targets)
+        if (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
+                and parent.func.id == "len" and parent.args == [node]):
+            return True
+        if not isinstance(parent, (ast.Attribute, ast.Subscript)):
+            return False
+        if isinstance(parent, ast.Attribute) and parent.value is node:
+            return (parent.attr in {"append", "sort"} and isinstance(parents.get(parent), ast.Call)
+                    and (parent.attr == "sort" or id(parents[parent]) in safe_appends))
+        if isinstance(parent, ast.Subscript) and parent.value is node:
+            assignment = parents.get(parent)
+            return (isinstance(parent.ctx, ast.Load) and isinstance(assignment, ast.Assign)
+                    and len(assignment.targets) == 1 and isinstance(assignment.targets[0], ast.Name)
+                    and assignment.targets[0].id == path_name)
+        return False
+
+    def sampled_use(node, parent, parents):
+        if isinstance(node.ctx, ast.Store):
+            return (isinstance(parent, ast.Assign) and isinstance(parent.value, ast.ListComp)
+                    and node in parent.targets)
+        if isinstance(parent, ast.comprehension) and parent.iter is node:
+            comp = parents.get(parent)
+            call = parents.get(comp) if comp is not None else None
+            return (isinstance(comp, ast.ListComp) and isinstance(call, ast.Call)
+                    and _attribute_path(call.func) == "np.array")
+        return False
+
+    def path_use(node, parent, parents):
+        if isinstance(node.ctx, ast.Store):
+            return (isinstance(parent, ast.Assign) and isinstance(parent.value, ast.Subscript)
+                    and node in parent.targets)
+        if isinstance(parent, ast.Attribute) and parent.value is node and parent.attr == "point_from_proportion":
+            call = parents.get(parent)
+            return isinstance(call, ast.Call) and isinstance(parents.get(call), ast.ListComp)
+        if isinstance(parent, ast.Attribute) and parent.value is node and parent.attr == "get_arc_length":
+            call = parents.get(parent)
+            current = parents.get(call)
+            while current is not None:
+                if (isinstance(current, ast.Call) and isinstance(current.func, ast.Attribute)
+                        and current.func.attr == "sort" and isinstance(current.func.value, ast.Name)
+                        and current.func.value.id == contours_name):
+                    return True
+                current = parents.get(current)
+        return False
+
+    if not (closed_uses(contours_name, contours_use)
+            and closed_uses(path_name, path_use)
+            and closed_uses(sampled_name, sampled_use)):
+        return set()
     return safe_lists
 
 
-def _fresh_numpy_writes(body, arrays, array_functions):
+def _fresh_numpy_writes(body, arrays, array_functions, containers=(), module_literals=None, scalars=()):
     fresh_calls = _NUMPY_ARRAY_CALLS
     safe_writes = set()
     state = {}
@@ -523,7 +597,15 @@ def _fresh_numpy_writes(body, arrays, array_functions):
                     targets = target.elts if isinstance(target, (ast.Tuple, ast.List)) else [target]
                     for item in targets:
                         if isinstance(item, ast.Subscript) and isinstance(item.value, ast.Name):
-                            if current.get(item.value.id) == "fresh":
+                            index = item.slice
+                            integer_index = (isinstance(index, ast.Constant) and type(index.value) is int
+                                             or isinstance(index, ast.UnaryOp)
+                                             and isinstance(index.op, (ast.UAdd, ast.USub))
+                                             and isinstance(index.operand, ast.Constant)
+                                             and type(index.operand.value) is int)
+                            if (current.get(item.value.id) == "fresh" and integer_index
+                                    and _numpy_numeric_expression(statement.value, arrays, set(containers),
+                                                                  module_literals or {}, set(scalars))):
                                 safe_writes.add(id(item))
                         elif isinstance(item, ast.Name) and item.id in arrays:
                             current[item.id] = value_origin
@@ -1784,6 +1866,9 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.admitted_plot_loads.add(id(node.func))
         if isinstance(node.func, ast.Name):
             name = node.func.id
+            if name in {"VMobject", "SVGMobject"} and (
+                    name in self.module_bindings or any(name in scope for scope in self.scopes[1:])):
+                raise _OpaqueSource(node.func, "unproven_shadowed_svg_constructor")
             safe_direct = (name in _SOURCE_BUILTINS | _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS
                            | self.source_callable_imports | self.code_constructors
                            | self.module_callable_aliases
@@ -1957,7 +2042,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_svg_source")
         if (isinstance(node.func, ast.Attribute) and node.func.attr == "from_string"
                 and isinstance(node.func.value, ast.Name) and node.func.value.id == "SVGMobject"):
-            if any("SVGMobject" in scope for scope in self.scopes[1:]):
+            if ("SVGMobject" in self.module_bindings
+                    or any("SVGMobject" in scope for scope in self.scopes[1:])):
                 raise _OpaqueSource(node, "unproven_shadowed_svg_constructor")
             self._prepare_svg_from_string(node)
             self.admitted_svg_from_string_attributes.add(id(node.func))
@@ -2388,7 +2474,11 @@ class _SceneOnlySource(ast.NodeVisitor):
                                            self.numpy_function_outputs)
         self.numpy_array_names.append(array_names)
         self.owned_containers[-1].update(array_names - set(array_parameters))
-        self.safe_numpy_writes.append(_fresh_numpy_writes(body, array_names, self.numpy_array_functions))
+        scalar_names = _numpy_scalar_names_in_body(
+            body, scalar_parameters, array_names, self.numpy_safe_containers[-1], self.module_numpy_literals)
+        self.safe_numpy_writes.append(_fresh_numpy_writes(
+            body, array_names, self.numpy_array_functions, self.numpy_safe_containers[-1],
+            self.module_numpy_literals, scalar_names))
         self.numpy_scalar_names.append(_numpy_scalar_names_in_body(
             body, scalar_parameters, array_names, self.numpy_safe_containers[-1], self.module_numpy_literals))
         discards = set()

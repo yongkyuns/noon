@@ -251,6 +251,32 @@ class SourceEffectsTests(unittest.TestCase):
             source.replace("import numpy as np", "import numpy as np\ndef leak(value):\n    return value.real", 1),
             source.replace("def resample_outline(points, count):",
                            "def resample_outline(points, count):\n    np = math", 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    sampled.append(context.get("payload"))\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    alias = sampled\n    alias.append(context.get("payload"))\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    sampled[0] = context.get("payload")\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    path = contours[CONTOUR_INDEX]",
+                           '    alias = contours\n    alias.append(context.get("payload"))\n'
+                           '    path = contours[CONTOUR_INDEX]', 1),
+            source.replace("    path = contours[CONTOUR_INDEX]",
+                           '    contours[0] = context.get("payload")\n'
+                           '    path = contours[CONTOUR_INDEX]', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    values = np.array([0])\n    values[0] = context.get("payload")\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("from noon import *", "from noon import *\nVMobject = context.get('factory')", 1),
+            source.replace("from noon import *", "from noon import *\nSVGMobject = context.get('factory')", 1),
+            source.replace("    imported = SVGMobject.from_string(SVG_SOURCE, height=4)",
+                           "    VMobject = context.get('factory')\n"
+                           "    imported = SVGMobject.from_string(SVG_SOURCE, height=4)", 1),
+            source.replace("    imported = SVGMobject.from_string(SVG_SOURCE, height=4)",
+                           "    SVGMobject = context.get('factory')\n"
+                           "    imported = SVGMobject.from_string(SVG_SOURCE, height=4)", 1),
         )
         for candidate in unsafe:
             with self.subTest(source_mutation=candidate[:120]):
