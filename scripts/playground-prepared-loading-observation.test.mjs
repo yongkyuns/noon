@@ -167,22 +167,38 @@ test("strict readiness fails closed when acceptance and submission receipts are 
   assert.ok(errors.some(error => /no command-correlated renderer receipt/.test(error)));
   assert.ok(errors.some(error => /missing ordered presentation-settled receipt/.test(error)));
   assert.ok(errors.some(error => /incomplete starts/.test(error)));
+  const wrongSequence = structuredClone(cases);
+  wrongSequence[0].commands[0].commandPublication = { session: 1, sequence: 1 };
+  wrongSequence[0].commands[0].matchingPresentation = {
+    session: 1, sequence: 2, time: 1, source: "renderer-publication-stage",
+  };
+  assert.ok(validateReadinessResults(wrongSequence, contract)
+    .some(error => /does not match the command publication/.test(error)));
 });
 
 test("readiness command receipts use endpoint timing and matching publication metadata", async () => {
   const measured = readinessCommandReceipt({
     commandTiming: { acceptedEpochMs: 1012, presentationSettledEpochMs: 1018 },
     presentationReceipt: { session: 7, sequence: 9, time: 1.5, unchanged: false } }, 1010);
-  assert.deepEqual(measured, { runtimeAcceptanceEpochMs: 1012, runtimeAcceptanceMs: 2,
+  assert.deepEqual(measured, { commandPublication: null, runtimeAcceptanceEpochMs: 1012, runtimeAcceptanceMs: 2,
     presentationSettledEpochMs: 1018, commandPresentationMs: 8,
     matchingPresentation: { session: 7, sequence: 9, time: 1.5, unchanged: false } });
+  const joined = readinessCommandReceipt({ commandTiming: { acceptedEpochMs: 1012 },
+    commandPublication: { session: 7, sequence: 9, time: 1.5 } }, 1010,
+  { session: 7, sequence: 9, time: 1.75, presentedAtMs: 22, clockOriginMs: 1000 });
+  assert.deepEqual(joined.commandPublication, { session: 7, sequence: 9 });
+  assert.equal(joined.presentationSettledEpochMs, 1022);
+  assert.deepEqual(joined.matchingPresentation, { session: 7, sequence: 9, time: 1.75,
+    source: "renderer-publication-stage" }, "publication identity joins without authored-time equality");
+  assert.equal(readinessCommandReceipt({ commandPublication: { session: 7, sequence: 9 } }, 1010,
+    { session: 8, sequence: 9, time: 1.75, presentedAtMs: 22, clockOriginMs: 1000 }).matchingPresentation, null);
   assert.equal(readinessCommandReceipt(null, 1010).matchingPresentation, null);
   const source = await readFile(new URL("./playground-prepared-loading-qualification.mjs", import.meta.url), "utf8");
   assert.match(source, /requestEpochMs: request\.epochMs/);
   assert.match(source, /automationIssuedEpochMs: marker\.epochMs/);
   assert.match(source, /event\.attribute === "data-busy" &&\s*event\.state\?\.busy === "true"/);
   assert.match(source, /probe\.recordCommandResult\(message\)/);
-  assert.match(source, /readinessCommandReceipt\(engineResult, requestEpochMs\)/);
+  assert.match(source, /readinessCommandReceipt\(engineResult, requestEpochMs, publicationSample\)/);
   assert.doesNotMatch(source, /Math\.abs\(displayedTime - receiptTime\)/);
   assert.match(source, /value\.epochMs >= replayStartedAtEpochMs/);
 });

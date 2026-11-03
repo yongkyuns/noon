@@ -1091,6 +1091,7 @@ export async function attachSemanticEngine(
       let pointerInputAccepted;
       let sampleTiming = null;
       let commandTiming = null;
+      let commandPublication = null;
       let audioAnchor;
       let presentationReceipt = null;
       let noTargetSectionQuery = false;
@@ -1162,15 +1163,7 @@ export async function attachSemanticEngine(
             const acceptedEpochMs = performance.timeOrigin + performance.now();
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else observeExecutionWake(performance.now(), true);
-            if (hasAudio) {
-              const presented = await awaitPresentation(null);
-              if (presented !== null) {
-                presentationReceipt = { session: presented.session, sequence: presented.sequence,
-                  time: presented.time, unchanged: true };
-                commandTiming = { acceptedEpochMs,
-                  presentationSettledEpochMs: performance.timeOrigin + performance.now() };
-              }
-            }
+            commandTiming = { acceptedEpochMs };
             break;
           }
           case "resume": {
@@ -1188,6 +1181,7 @@ export async function attachSemanticEngine(
             if (prepared !== null) player.setPreparedPlaying(true);
             else player.resume();
             const acceptedEpochMs = performance.timeOrigin + performance.now();
+            commandTiming = { acceptedEpochMs };
             if (prepared !== null) {
               const publication = drainAndSendDelta();
               presentationReceipt = await settlePreparedControlPresentation(
@@ -1197,14 +1191,6 @@ export async function attachSemanticEngine(
                 acceptedEpochMs,
                 presentationSettledEpochMs: performance.timeOrigin + performance.now(),
               };
-            } else if (hasAudio) {
-              const presented = await awaitPresentation(null);
-              if (presented !== null) {
-                presentationReceipt = { session: presented.session, sequence: presented.sequence,
-                  time: presented.time, unchanged: true };
-                commandTiming = { acceptedEpochMs,
-                  presentationSettledEpochMs: performance.timeOrigin + performance.now() };
-              }
             }
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else if (!hasAudio) observeExecutionWake(performance.now(), true);
@@ -1240,6 +1226,11 @@ export async function attachSemanticEngine(
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             const acceptedEpochMs = performance.timeOrigin + performance.now();
             const publication = send(delta);
+            if (publication !== null && prepared === null && !hasAudio) {
+              commandPublication = { session: publication.session, sequence: publication.sequence,
+                time: publication.time ?? null };
+            }
+            commandTiming = { acceptedEpochMs };
             if (prepared !== null) {
               const selectedTime = player.preparedTime();
               presentationReceipt = await settlePreparedControlPresentation(publication, selectedTime, "seek");
@@ -1386,6 +1377,7 @@ export async function attachSemanticEngine(
           ...(sampleTiming === null ? {} : { sampleTiming }),
           ...(commandTiming === null ? {} : { commandTiming }),
           ...(audioAnchor === undefined ? {} : { audioAnchor }),
+          ...(commandPublication === null ? {} : { commandPublication }),
           ...(presentationReceipt === null ? {} : { presentationReceipt }),
           ...(finiteExport === undefined ? {} : { finiteExport }),
           ...(audioBlock === undefined ? {} : { audioBlock }),

@@ -10,18 +10,29 @@ export const PRODUCT_GATE_THRESHOLD_ENVS = {
   maxVisualDiffRatio: "NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO",
 };
 
-export function readinessCommandReceipt(result, requestEpochMs) {
+export function readinessCommandReceipt(result, requestEpochMs, rendererSample = null) {
   const timing = result?.commandTiming;
   const acceptedEpochMs = Number.isFinite(timing?.acceptedEpochMs) ? timing.acceptedEpochMs : null;
+  const publication = result?.commandPublication;
+  const commandPublication = Number.isSafeInteger(publication?.session) && publication.session >= 0 &&
+    Number.isSafeInteger(publication?.sequence) && publication.sequence >= 0
+    ? { session: publication.session, sequence: publication.sequence } : null;
+  const sampleMatches = rendererSample !== null && commandPublication !== null &&
+    rendererSample.session === commandPublication.session && rendererSample.sequence === commandPublication.sequence &&
+    Number.isFinite(rendererSample.time) && Number.isFinite(rendererSample.presentedAtMs) &&
+    Number.isFinite(rendererSample.clockOriginMs);
   const presentationSettledEpochMs = Number.isFinite(timing?.presentationSettledEpochMs)
-    ? timing.presentationSettledEpochMs : null;
+    ? timing.presentationSettledEpochMs : sampleMatches
+      ? rendererSample.clockOriginMs + rendererSample.presentedAtMs : null;
   const receipt = result?.presentationReceipt;
   const matchingPresentation = Number.isSafeInteger(receipt?.session) && receipt.session >= 0 &&
     Number.isSafeInteger(receipt?.sequence) && receipt.sequence >= 0 && Number.isFinite(receipt?.time) &&
     typeof receipt?.unchanged === "boolean"
     ? { session: receipt.session, sequence: receipt.sequence, time: receipt.time, unchanged: receipt.unchanged }
-    : null;
+    : sampleMatches ? { session: rendererSample.session, sequence: rendererSample.sequence,
+      time: rendererSample.time, source: "renderer-publication-stage" } : null;
   return {
+    commandPublication,
     runtimeAcceptanceEpochMs: acceptedEpochMs,
     runtimeAcceptanceMs: Number.isFinite(acceptedEpochMs) && Number.isFinite(requestEpochMs)
       ? acceptedEpochMs - requestEpochMs : null,
@@ -247,6 +258,16 @@ export function validateReadinessResults(cases, contract) {
           if (!Number.isFinite(command.commandPresentationMs)) errors.push(`${source.id}/${arm}: missing command presentation timing`);
           if (!command.matchingPresentation) {
             errors.push(`${source.id}/${arm}: command has no command-correlated renderer receipt`);
+          } else {
+            const receipt = command.matchingPresentation;
+            if (!Number.isSafeInteger(receipt.session) || receipt.session < 0 ||
+                !Number.isSafeInteger(receipt.sequence) || receipt.sequence < 0 || !Number.isFinite(receipt.time)) {
+              errors.push(`${source.id}/${arm}: malformed command presentation receipt`);
+            } else if (command.commandPublication &&
+                (receipt.session !== command.commandPublication.session ||
+                 receipt.sequence !== command.commandPublication.sequence)) {
+              errors.push(`${source.id}/${arm}: renderer presentation does not match the command publication`);
+            }
           }
           const acceptanceMs = command.runtimeAcceptanceMs ?? command.acceptedMs;
           if (Number.isFinite(contract.bounds.commandAcceptanceMs) &&

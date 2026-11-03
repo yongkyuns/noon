@@ -2805,7 +2805,12 @@ test("seek acknowledgements retain the exact evaluated time", async () => {
   try {
     const ready = next(f.control.port2);
     endpoint = await f.attach(); await ready;
-    assert.equal((await request(f.control.port2, "seek", 904, { time: 0.25 })).time, 0.25);
+    const result = await request(f.control.port2, "seek", 904, { time: 0.25 });
+    assert.equal(result.time, 0.25);
+    assert.ok(Number.isFinite(result.commandTiming.acceptedEpochMs));
+    assert.equal(result.commandTiming.presentationSettledEpochMs, undefined,
+      "nonblocking command acknowledgement does not claim a presentation before its receipt arrives");
+    assert.deepEqual(result.commandPublication, { session: 7, sequence: 1, time: 0.25 });
   } finally { endpoint?.stop(); f.close(); }
 });
 
@@ -3213,8 +3218,10 @@ test("finite audio prepares silently and anchors resume/seek only after matching
     assert.equal(playing.audioAnchor.playing, true);
     assert.equal(playing.audioAnchor.time, 0);
     assert.ok(Number.isFinite(playing.audioAnchor.sampledEpochMs));
-    assert.ok(playing.commandTiming.presentationSettledEpochMs >= playing.commandTiming.acceptedEpochMs);
-    assert.deepEqual(playing.presentationReceipt, { session: 7, sequence: 0, time: 0, unchanged: true });
+    assert.ok(Number.isFinite(playing.commandTiming.acceptedEpochMs));
+    assert.equal(playing.commandTiming.presentationSettledEpochMs, undefined,
+      "resume does not reuse a prior frame without Rust no-change proof");
+    assert.equal(playing.presentationReceipt, undefined);
     const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
     settled = false;
     const seeking = request(f.control.port2, "seek", 2, { time: 1.25 }).then(result => { settled = true; return result; });

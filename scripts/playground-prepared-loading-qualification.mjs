@@ -201,7 +201,8 @@ async function installReadinessPresentationProbe(context) {
         if (probe.commandResults.length >= maxSamples) { probe.error = "command result bound exceeded"; return; }
         probe.commandResults.push({ type: message.type, requestId: message.requestId,
           clockOriginMs: performance.timeOrigin, receivedEpochMs: performance.timeOrigin + performance.now(),
-          commandTiming: message.commandTiming ?? null, presentationReceipt: message.presentationReceipt ?? null });
+          commandTiming: message.commandTiming ?? null, commandPublication: message.commandPublication ?? null,
+          presentationReceipt: message.presentationReceipt ?? null });
       },
       requestMetrics() {
         if (probe.worker === null || probe.pending) return;
@@ -378,6 +379,21 @@ async function readinessCommandResult(page, startIndex, expectedType) {
   { startIndex, expectedType });
 }
 
+async function readinessPublicationSample(page, publication) {
+  if (!Number.isSafeInteger(publication?.session) || !Number.isSafeInteger(publication?.sequence)) return null;
+  const deadline = performance.now() + 30_000;
+  while (performance.now() < deadline) {
+    await observation(page);
+    const sample = await page.evaluate(({ session, sequence }) =>
+      [...(window.__noonReadinessPresentationProbe?.samples ?? [])].findLast(value =>
+        value.session === session && value.sequence === sequence) ?? null,
+    publication);
+    if (sample !== null) return sample;
+    await page.waitForTimeout(25);
+  }
+  return null;
+}
+
 function rendererSnapshot(metrics) {
   return metrics ? { session: metrics.presentedSession ?? null, frame: metrics.presentedFrames ?? null,
     logicalTime: metrics.time ?? null, sampledAtMs: metrics.sampledAtMs ?? null,
@@ -405,7 +421,8 @@ async function readinessCommand(page, row, desiredPlaying) {
   assert.ok(commandCompleted, "playback command completion transition was not observed");
   const engineResult = await readinessCommandResult(page, issued.commandResultIndex,
     desiredPlaying ? "resume" : "pause");
-  const runtimeReceipt = readinessCommandReceipt(engineResult, requestEpochMs);
+  const publicationSample = await readinessPublicationSample(page, engineResult?.commandPublication);
+  const runtimeReceipt = readinessCommandReceipt(engineResult, requestEpochMs, publicationSample);
   const after = await observation(page);
   const command = {
     name: desiredPlaying ? "play" : "pause",
@@ -611,7 +628,9 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         event.epochMs >= requestEpoch) ?? null, replayStartedAtEpochMs);
     assert.ok(restartCompleted, "restart command completion transition was not observed");
     const restartEngineResult = await readinessCommandResult(page, restartIssued.commandResultIndex, "restart_playback");
-    const restartRuntimeReceipt = readinessCommandReceipt(restartEngineResult, replayStartedAtEpochMs);
+    const restartPublicationSample = await readinessPublicationSample(page, restartEngineResult?.commandPublication);
+    const restartRuntimeReceipt = readinessCommandReceipt(restartEngineResult, replayStartedAtEpochMs,
+      restartPublicationSample);
     const restartPresented = await observation(page);
     replayRow.startup.restartCompletedUiEpochMs = restartCompleted.epochMs;
     replayRow.commands.push({ name: "restart", automationIssuedEpochMs: restartIssued.automationIssuedEpochMs,
