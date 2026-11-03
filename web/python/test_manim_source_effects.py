@@ -160,11 +160,30 @@ class SourceEffectsTests(unittest.TestCase):
         for source in (
             'from noon import *\ndata = []; data[0] = 1\n',
             'from noon import *\ndef edit(data):\n    data[0] = 1\n',
+            'from noon import *\ndef edit(data):\n    data[0] = 1\n    data = []\n',
             'from noon import *\ndef outer():\n    data = []\n'
             '    def edit(data):\n        data[0] = 1\n',
         ):
             with self.subTest(source=source):
                 self.assertFalse(source_is_scene_only(source))
+
+    def test_list_repetition_requires_a_dominating_builtin_integer_guard(self):
+        template = 'from noon import *\ndef histogram(bins):\n%s\n    counts = [0] * bins\n    counts[0] += 1\n'
+        self.assertTrue(source_is_scene_only(template %
+            '    if isinstance(bins, bool) or not isinstance(bins, int) or bins < 1:\n        raise ValueError("bins")'))
+        for guard in (
+            '    if not isinstance(bins, int) and bins < 1:\n        raise ValueError("bins")',
+            '    if not isinstance(bins, int):\n        pass',
+            '    if not isinstance(bins, int):\n        counts = [0] * bins\n        raise ValueError("bins")',
+            '    bins = context\n    if not isinstance(bins, int):\n        raise ValueError("bins")',
+            '    isinstance = lambda value, kind: False\n    if not isinstance(bins, int):\n        raise ValueError("bins")',
+        ):
+            with self.subTest(guard=guard):
+                self.assertFalse(source_is_scene_only(template % guard))
+        self.assertFalse(source_is_scene_only('from noon import *\n'
+            'def outer(isinstance):\n    def histogram(bins):\n'
+            '        if not isinstance(bins, int):\n            raise ValueError("bins")\n'
+            '        counts = [0] * bins\n        counts[0] = 1\n'))
 
     def test_unknown_host_work_and_dispatch_cannot_be_proven(self):
         for statement in (

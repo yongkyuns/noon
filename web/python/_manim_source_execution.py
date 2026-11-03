@@ -92,20 +92,22 @@ class _OpaqueSource(Exception):
 
 class _SourceBindings(ast.NodeVisitor):
     """Lexical bindings only; nested functions/classes/comprehensions own theirs."""
-    def __init__(self):
+    def __init__(self, integer_names=()):
         self.names = set()
         self.locations = {}
         self.container_stores = set()
         self.container_names = set()
         self.other_names = set()
+        self.integer_names = frozenset(integer_names)
 
     def visit_Assign(self, node):
         def record(target, value):
             if isinstance(target, ast.Name):
                 fresh = isinstance(value, (ast.List, ast.Dict, ast.ListComp, ast.DictComp))
                 if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
-                    fresh = any(isinstance(items, ast.List) and isinstance(count, ast.Constant)
-                        and type(count.value) is int for items, count in
+                    fresh = any(isinstance(items, ast.List) and (
+                        isinstance(count, ast.Constant) and type(count.value) is int
+                        or isinstance(count, ast.Name) and count.id in self.integer_names) for items, count in
                         ((value.left, value.right), (value.right, value.left)))
                 if fresh:
                     self.container_stores.add(id(target))
@@ -255,14 +257,45 @@ class _SceneOnlySource(ast.NodeVisitor):
             elif alias.name not in allowed:
                 raise _OpaqueSource(node, "unsupported_import")
 
+    def _guarded_integer_parameters(self, body, parameters, bindings):
+        shadowed = bindings.names | parameters | set().union(*self.scopes[1:])
+        if {"int", "isinstance"}.intersection(shadowed):
+            return set()
+        if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body = body[1:]
+        if (not body or not isinstance(body[0], ast.If) or len(body[0].body) != 1
+                or not isinstance(body[0].body[0], (ast.Raise, ast.Return))):
+            return set()
+        test = body[0].test
+        clauses = test.values if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or) else [test]
+        names = set()
+        for clause in clauses:
+            if not isinstance(clause, ast.UnaryOp) or not isinstance(clause.op, ast.Not):
+                continue
+            call = clause.operand
+            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "isinstance"
+                    and len(call.args) == 2 and not call.keywords and isinstance(call.args[0], ast.Name)
+                    and isinstance(call.args[1], ast.Name) and call.args[1].id == "int"):
+                names.add(call.args[0].id)
+        return names.intersection(parameters) - bindings.names
+
     def _scope(self, body, parameters=()):
+        parameters = set(parameters)
         bindings = _SourceBindings()
         for node in body:
             bindings.visit(node)
-        self.scopes.append(bindings.names | set(parameters))
+        integer_names = self._guarded_integer_parameters(body, parameters, bindings)
+        if integer_names:
+            # Only a leading, terminating builtin guard proves parameter type.
+            # Re-scan origins with that fact; no source statement is executed.
+            bindings = _SourceBindings(integer_names)
+            for node in body:
+                bindings.visit(node)
+        self.scopes.append(bindings.names | parameters)
         # Every lexical binding must have a fresh origin; a parameter, alias,
         # conditional rebind or loop target cannot inherit another value's proof.
-        self.owned_containers.append(bindings.container_names - bindings.other_names - set(parameters))
+        self.owned_containers.append(bindings.container_names - bindings.other_names - parameters)
         try:
             for node in body:
                 self.visit(node)
