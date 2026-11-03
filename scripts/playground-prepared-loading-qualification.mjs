@@ -16,7 +16,8 @@ import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
 import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
-  validateReadinessResults, validateReadinessTrace } from "./playground-prepared-loading-observation.mjs";
+  validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
+  PRODUCT_GATE_THRESHOLD_ENVS } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -41,6 +42,10 @@ const inventory = JSON.parse(await readFile(path.join(root, "web/python/examples
 const readinessContractPath = path.join(root, "scripts/fixtures/playground-readiness-contract.json");
 const readinessContractBytes = await readFile(readinessContractPath);
 const readinessContract = JSON.parse(readinessContractBytes);
+const productAnchorPath = path.join(root, ".github/ci/product-performance-anchor.json");
+const productAnchorBytes = await readFile(productAnchorPath);
+const productAnchor = JSON.parse(productAnchorBytes);
+const productAnchorLockBytes = await readFile(path.join(path.dirname(productAnchorPath), productAnchor.dependencyLock.file));
 assert.deepEqual(validateReadinessContract(readinessContract), [], "invalid readiness measurement contract");
 assert.deepEqual(readinessContract.sources.map(source => source.id),
   ["showcase-first-scene", "showcase-dynamic-scene"]);
@@ -48,6 +53,25 @@ assert.equal(backend.toLowerCase(), readinessContract.reference.backend.toLowerC
   "readiness backend differs from its contract");
 assert.ok(trials >= readinessContract.sampling.measuredStartsPerArmPerStratum,
   "readiness measurements require the contracted number of starts");
+assert.equal(readinessContract.productGateAnchor.sourceRevision, productAnchor.source,
+  "Product Gate cumulative source anchor changed");
+assert.equal(readinessContract.productGateAnchor.manifestSha256, digest(productAnchorBytes),
+  "Product Gate anchor manifest changed");
+assert.equal(readinessContract.productGateAnchor.dependencyLockSha256, digest(productAnchorLockBytes),
+  "Product Gate anchor dependency lock changed");
+assert.deepEqual(readinessContract.productGateAnchor.workloads, productAnchor.workloads,
+  "Product Gate workload set changed");
+const gateHashes = { runnerSha256: "scripts/playground-product-e2e.mjs",
+  workloadSha256: "scripts/playground-product-fps.mjs", comparisonSha256: "scripts/playground-product-compare.mjs" };
+for (const [key, filename] of Object.entries(gateHashes)) {
+  assert.equal(readinessContract.productGateAnchor[key], digest(await readFile(path.join(root, filename))), `Product Gate ${key} changed`);
+}
+const compareSource = await readFile(path.join(root, gateHashes.comparisonSha256), "utf8");
+for (const [key, envName] of Object.entries(PRODUCT_GATE_THRESHOLD_ENVS)) {
+  const match = compareSource.match(new RegExp(`threshold\\("${envName}",\\s*"([^"]+)"\\)`));
+  assert.ok(match, `Product Gate default threshold ${envName} is missing`);
+  assert.equal(readinessContract.productGateAnchor.thresholds[key], Number(match[1]), `Product Gate threshold ${envName} changed`);
+}
 if (readinessMode === "strict") {
   assert.deepEqual(validateReadinessContract(readinessContract, { strict: true }), [],
     "strict readiness requires a reviewed contract with approved bounds");
@@ -66,7 +90,7 @@ const report = { status: "running", readinessMode,
   instrumentationLimitations: [
     "first useful capture is an observed upper bound; the current API exposes no renderer-submission or separate runtime-acceptance timestamp",
     "command completion uses the observed busy-clear upper bound plus renderer session/time evidence; no engine acceptance time is inferred",
-    "renderer presentedAtMs follows render submission and does not represent physical scanout",
+    "renderer frame timing is a renderer.render() call-completion timestamp after submission, not GPU completion or physical scanout",
     "bounded probes can perturb timings; this report is diagnostic, not minimally instrumented timing",
   ],
   harnessRevision: revision, runtimeSourceTrees: runtimeTrees(revision), harnessSha256: digest(await readFile(fileURLToPath(import.meta.url))),
@@ -307,20 +331,36 @@ async function retiredWorkerObservation(worker, timeoutMs = 500) {
   } finally { clearTimeout(timer); }
 }
 
+async function issueReadinessClick(page, button, controlClass) {
+  const marker = await page.evaluate(() => ({ index: window.__noonReadinessPresentationProbe?.uiEvents.length ?? 0,
+    epochMs: performance.timeOrigin + performance.now() }));
+  await button.click();
+  const events = await page.evaluate(index =>
+    (window.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(index), marker.index);
+  const request = events.find(event => event.kind === "request" &&
+    String(event.control).split(/\s+/).includes(controlClass));
+  assert.ok(request, `actual ${controlClass} DOM request was not captured`);
+  const feedback = events.find(event => event.kind === "state" && event.attribute === "data-busy" &&
+    event.state?.busy === "true" && event.epochMs >= request.epochMs) ?? null;
+  return { automationIssuedEpochMs: marker.epochMs, requestEpochMs: request.epochMs, feedback };
+}
+
+function rendererSnapshot(metrics) {
+  return metrics ? { session: metrics.presentedSession ?? null, frame: metrics.presentedFrames ?? null,
+    logicalTime: metrics.time ?? null, sampledAtMs: metrics.sampledAtMs ?? null,
+    clockOriginMs: metrics.performanceTimeOriginMs ?? null, ready: metrics.ready ?? null,
+    needsPresent: metrics.needsPresent ?? null } : null;
+}
+
 async function readinessCommand(page, row, desiredPlaying) {
   const before = await observation(page);
   assert.notEqual(before.controls?.playing === "true", desiredPlaying, "requested transport state is already active");
-  const requestEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
   const button = page.locator(".playback-toggle");
   assert.equal(await button.isDisabled(), false, "play/pause command is unavailable");
-  await button.click();
+  const issued = await issueReadinessClick(page, button, "playback-toggle");
+  const requestEpochMs = issued.requestEpochMs;
   await page.waitForFunction(desired =>
     document.querySelector(".playback-controls")?.dataset.playing === String(desired), desiredPlaying);
-  const uiFeedback = await page.evaluate(requestEpoch => ({
-    epochMs: performance.timeOrigin + performance.now(),
-    event: [...(window.__noonReadinessPresentationProbe?.uiEvents ?? [])].reverse().find(event =>
-      event.kind === "state" && event.attribute === "data-playing" && event.epochMs >= requestEpoch),
-  }), requestEpochMs);
   await page.waitForFunction(desired => {
     const controls = document.querySelector(".playback-controls");
     return controls?.dataset.busy === "false" && controls.dataset.playing === String(desired);
@@ -331,33 +371,23 @@ async function readinessCommand(page, row, desiredPlaying) {
       event.epochMs >= requestEpoch) ?? null, requestEpochMs);
   assert.ok(commandCompleted, "playback command completion transition was not observed");
   const after = await observation(page);
-  const displayedTime = Number(after.controls?.elapsedSeconds);
-  const receiptTime = after.metrics?.time;
-  const matchesDisplayedTime = Number.isFinite(displayedTime) && Number.isFinite(receiptTime) &&
-    Math.abs(displayedTime - receiptTime) <= 0.001 &&
-    Number.isSafeInteger(after.metrics?.presentedSession) && after.metrics.presentedSession >= 0;
   const command = {
     name: desiredPlaying ? "play" : "pause",
+    automationIssuedEpochMs: issued.automationIssuedEpochMs,
     requestEpochMs,
-    uiFeedbackEpochMs: uiFeedback.event?.epochMs ?? uiFeedback.epochMs,
-    uiFeedbackMs: (uiFeedback.event?.epochMs ?? uiFeedback.epochMs) - requestEpochMs,
+    uiFeedbackEpochMs: issued.feedback?.epochMs ?? null,
+    uiFeedbackMs: issued.feedback ? issued.feedback.epochMs - requestEpochMs : null,
+    uiFeedbackKind: issued.feedback ? "data-busy=true" : null,
     commandCompletedUiEpochMs: commandCompleted.epochMs,
     commandCompletionObservedEpochMs: after.epochMs,
     commandCompletionUpperMs: after.epochMs - requestEpochMs,
+    rendererObservation: rendererSnapshot(after.metrics),
     runtimeAcceptanceEpochMs: null,
     runtimeAcceptanceLimitation: "no separate engine command-acceptance receipt is currently exposed",
-    matchingPresentation: matchesDisplayedTime ? {
-      session: after.metrics.presentedSession,
-      presentationId: after.metrics.presentedFrames ?? null,
-      time: receiptTime,
-      sampledAtMs: after.metrics.sampledAtMs ?? null,
-      clockOriginMs: after.metrics.performanceTimeOriginMs ?? null,
-      reusedAlreadyDisplayedFrame: after.metrics.presentedFrames === before.metrics?.presentedFrames,
-    } : null,
-    presentedStateMatched: matchesDisplayedTime,
+    matchingPresentation: null,
+    presentationReceiptLimitation: "no command-correlated renderer receipt exists; elapsed-time equality is not a receipt",
   };
   row.commands.push(command);
-  assert.ok(matchesDisplayedTime, "command did not settle on a matching renderer session/time");
   return after;
 }
 
@@ -395,8 +425,9 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         sourceRow.profileValidationErrors.push("previous page workers were not confirmed retired");
       }
     }
-    sourceRow.startup.shellReadyMs = performance.now() - sourceStarted;
-    replayRow.startup.shellReadyMs = sourceRow.startup.shellReadyMs;
+    sourceRow.startup.shellReadyObservedUpperMs = performance.now() - sourceStarted;
+    replayRow.startup.shellReadyLimitation = "retained replay reuses the loaded page and interpreter";
+    replayRow.startup.firstReaderLimitation = "retained replay reuses the original source reader";
     const navigation = await observation(page);
     let sourceRunStart = Number.isFinite(navigation.run?.sourceRunStartedAtMs)
       ? navigation.originMs + navigation.run.sourceRunStartedAtMs : null;
@@ -414,20 +445,21 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         sourceRunStart = sample.originMs + sample.run.sourceRunStartedAtMs;
       }
       const events = diagnostic?.events ?? [];
-      if (targetRow === sourceRow && targetRow.startup.interpreterReadyMs === undefined &&
+      if (targetRow === sourceRow && targetRow.startup.interpreterReadyObservedUpperMs === undefined &&
           Number.isSafeInteger(diagnostic?.interpreterGeneration) &&
           sourceRunStart !== null) {
-        targetRow.startup.interpreterReadyMs = sample.epochMs - sourceRunStart;
+        targetRow.startup.interpreterReadyObservedUpperMs = sample.epochMs - sourceRunStart;
       }
-      if (targetRow === sourceRow && targetRow.startup.firstReaderMs === undefined &&
+      if (targetRow === sourceRow && initialArm === "A" &&
+          targetRow.startup.firstReaderAttachedObservedUpperMs === undefined &&
           events.some(event => event.stage === "attached") &&
           sourceRunStart !== null) {
-        targetRow.startup.firstReaderMs = sample.epochMs - sourceRunStart;
+        targetRow.startup.firstReaderAttachedObservedUpperMs = sample.epochMs - sourceRunStart;
       }
       if (targetRow === sourceRow && Number.isFinite(sample.metrics?.firstPresentedSessionAtMs) &&
-          targetRow.startup.firstRendererReportedFrameMs === undefined &&
+          targetRow.startup.firstRenderSubmissionCompleteUpperMs === undefined &&
           sourceRunStart !== null) {
-        targetRow.startup.firstRendererReportedFrameMs = sample.metrics.performanceTimeOriginMs +
+        targetRow.startup.firstRenderSubmissionCompleteUpperMs = sample.metrics.performanceTimeOriginMs +
           sample.metrics.firstPresentedSessionAtMs - sourceRunStart;
       }
       const metric = sample.metrics;
@@ -517,6 +549,10 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assert.equal(new Set(sourceRow.sourceInvocationIds).size, 1,
       "source run identity changed before retained replay");
     sourceRow.status = sourceRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
+    if (initialArm === "C") {
+      sourceRow.startup.firstReaderAttachedObservedUpperMs = null;
+      sourceRow.startup.firstReaderLimitation = "observed source has no independent incremental-prefix reader milestone";
+    }
     replayRow.previousWorkersRetirement = sourceRow.previousWorkersRetirement ?? null;
 
     const controls = await observation(page);
@@ -524,10 +560,10 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     activeRow = replayRow;
     if (controls.controls.playing === "true") await readinessCommand(page, replayRow, false);
     const identityBeforeReplay = await observation(page);
-    const replayStartedAtEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
-    replayRow.replayStartedAtEpochMs = replayStartedAtEpochMs;
     const beforeFrames = identityBeforeReplay.metrics?.presentedFrames;
-    await page.locator(".playback-restart").click();
+    const restartIssued = await issueReadinessClick(page, page.locator(".playback-restart"), "playback-restart");
+    const replayStartedAtEpochMs = restartIssued.requestEpochMs;
+    replayRow.replayStartedAtEpochMs = replayStartedAtEpochMs;
     await page.waitForFunction(() => {
       const state = document.querySelector(".playback-controls")?.dataset;
       return state?.busy === "false" && Number(state.elapsedSeconds) === 0;
@@ -538,19 +574,19 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         event.epochMs >= requestEpoch) ?? null, replayStartedAtEpochMs);
     assert.ok(restartCompleted, "restart command completion transition was not observed");
     const restartPresented = await observation(page);
-    assert.ok(Number.isFinite(restartPresented.metrics?.time) && Math.abs(restartPresented.metrics.time) <= 0.001 &&
-      Number.isSafeInteger(restartPresented.metrics?.presentedSession),
-    "restart command did not resolve to its displayed start frame");
     replayRow.startup.restartCompletedUiEpochMs = restartCompleted.epochMs;
-    replayRow.commands.push({ name: "restart", requestEpochMs: replayStartedAtEpochMs,
+    replayRow.commands.push({ name: "restart", automationIssuedEpochMs: restartIssued.automationIssuedEpochMs,
+      requestEpochMs: replayStartedAtEpochMs,
+      uiFeedbackEpochMs: restartIssued.feedback?.epochMs ?? null,
+      uiFeedbackMs: restartIssued.feedback ? restartIssued.feedback.epochMs - replayStartedAtEpochMs : null,
+      uiFeedbackKind: restartIssued.feedback ? "data-busy=true" : null,
       commandCompletedUiEpochMs: replayRow.startup.restartCompletedUiEpochMs,
       commandCompletionUpperMs: restartPresented.epochMs - replayStartedAtEpochMs,
+      rendererObservation: rendererSnapshot(restartPresented.metrics),
       runtimeAcceptanceEpochMs: null,
       runtimeAcceptanceLimitation: "no separate engine command-acceptance receipt is currently exposed",
-      matchingPresentation: { session: restartPresented.metrics.presentedSession,
-        presentationId: restartPresented.metrics.presentedFrames ?? null, time: restartPresented.metrics.time,
-        sampledAtMs: restartPresented.metrics.sampledAtMs ?? null,
-        clockOriginMs: restartPresented.metrics.performanceTimeOriginMs ?? null } });
+      matchingPresentation: null,
+      presentationReceiptLimitation: "no command-correlated renderer receipt exists" });
     if (restartPresented.controls?.playing !== "true") await readinessCommand(page, replayRow, true);
     let replayCurrent = await read(replayRow);
     let replayMaxTime = Number(replayCurrent.metrics?.time ?? -Infinity);
@@ -589,11 +625,21 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     replayRow.rendererSamples = await page.evaluate(start =>
       (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
     replayRow.presentationGapsMs = presentationGapsMs(replayRow.rendererSamples);
+    const firstReplayRender = replayRow.rendererSamples.map(sample => ({ sample,
+      epochMs: sample.clockOriginMs + sample.presentedAtMs })).filter(value =>
+      Number.isFinite(value.epochMs) && value.epochMs >= replayStartedAtEpochMs &&
+      Number.isSafeInteger(value.sample.session) && Number.isSafeInteger(value.sample.sequence))
+      .sort((left, right) => left.epochMs - right.epochMs)[0];
+    replayRow.startup.firstRenderSubmissionCompleteUpperMs = firstReplayRender
+      ? firstReplayRender.epochMs - replayStartedAtEpochMs : null;
+    replayRow.startup.firstRenderSubmissionLimitation = firstReplayRender
+      ? "renderer call completion after replay publication; not GPU completion or physical scanout"
+      : "no renderer publication was observed after the actual replay request";
     replayRow.uiEvents = await page.evaluate(start =>
       (globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(start), sourceRow.uiEventStart);
     replayRow.bufferingEpisodes = bufferingEpisodes(replayRow.uiEvents);
     replayRow.startup.firstSubmittedMs = null;
-    replayRow.startup.firstSubmittedLimitation = "renderer submission timestamp is not exposed by the current browser API";
+    replayRow.startup.firstSubmittedLimitation = "queue-submit start is unavailable; renderer call completion is reported separately";
     replayRow.startup.runtimeAcceptanceMs = null;
     replayRow.startup.runtimeAcceptanceLimitation = "engine command-acceptance timestamp is not exposed by the current browser API";
     sourceRow.startup.firstSubmittedMs = null;
@@ -634,7 +680,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
 try {
   overlay = await mkdtemp(path.join(os.tmpdir(), "noon-playback-loading-host-"));
   servers.runtime = await packageHost("runtime", env.NOON_PLAYBACK_LOADING_RUNTIME_ROOT);
-  const strata = ["fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"];
+  const strata = READINESS_STRATA;
   for (const source of readinessContract.sources) {
       const entry = inventory.find(item => item.id === source.id);
       assert.ok(entry && entry.path === source.path && entry.duration === source.durationSeconds,
@@ -677,16 +723,18 @@ try {
               (await __noonExampleGallery.executionMetrics({ includeGpuIdentity: true })).metrics.rendererGpuIdentity).catch(() => null);
             report.observedReference ??= { browserVersion: browser.version(), rendererGpuIdentity: identity,
               gpuClassification: identity ? classifyRendererGpuIdentity(identity, backend) : null,
-              hostCpu: report.host.cpu, hostRelease: report.host.release };
+              hostCpu: report.host.cpu, macOSVersion: report.host.macOSVersion };
+            assert.ok(identity, "readiness requires the actual renderer adapter identity");
+            assert.equal(classifyRendererGpuIdentity(identity, backend), "hardware-like-unverified",
+              "readiness rejects unknown or software GPU adapters");
+            const referenceMachine = readinessContract.reference.host.split(",", 1)[0];
+            assert.ok(report.host.cpu?.includes(referenceMachine), "readiness host differs from the pinned machine");
+            assert.equal(report.host.macOSVersion, readinessContract.reference.os.replace(/^macOS /, ""),
+              "readiness host differs from the pinned macOS version");
             if (readinessMode === "strict") {
               assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""));
               assert.deepEqual(identity, readinessContract.reference.actualAdapterIdentity,
                 "actual GPU adapter identity differs from the pinned reference");
-              assert.equal(classifyRendererGpuIdentity(identity, backend), "hardware-like-unverified",
-                "strict readiness rejects unknown or software GPU adapters");
-              assert.match(report.host.cpu ?? "", /Apple M6/, "strict readiness requires the pinned Apple M6 host");
-              assert.equal(report.host.macOSVersion, readinessContract.reference.os.replace(/^macOS /, ""),
-                "strict readiness requires the pinned macOS version");
             }
             const retirementStartedAt = performance.now();
             const retirementSampler = createProcessTreeRssSampler(browserServer.process().pid);

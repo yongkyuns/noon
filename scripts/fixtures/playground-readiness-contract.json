@@ -62,7 +62,16 @@
   },
   "failurePolicy": "retain every attempt; missing identities, traces, samples or required arm results fail strict qualification",
   "productGateAnchor": {
-    "sourceRevision": "9a5781ebf09f3029e402a331528c657419d1bba5",
+    "sourceRevision": "58135c4069a6f8d700dcaaee677d7c8c7a48d6c5",
+    "manifestSha256": "1e56fbc77b7d845bcb183f2dee47cacbfb81e429dc8f6ea578046e5616393849",
+    "dependencyLockSha256": "d2945ca9867fff1ef9656739912db19e2a84eebfdeb8131d1d56251b8f1535c5",
+    "workloads": [
+      "parity-square-and-circle",
+      "showcase-camera-follows-path",
+      "showcase-first-scene",
+      "showcase-raster-images",
+      "showcase-bezier-paths"
+    ],
     "runnerSha256": "19ceae9aca559ccec9324094bf71a5c9d941e6ecf720369b1641b7f4813e7d2b",
     "workloadSha256": "5137eef8aa71b8d70df845ad769278d934fd8eca53f585ca09c4f8d5e3ddbe96",
     "comparisonSha256": "94cf8fd9ecec1d4c7d4f7fe4af123595e7d0b7f788ed422187e650bda64125a0",

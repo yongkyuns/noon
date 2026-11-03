@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { sceneInkPixels, distribution, summarizeReadiness,
-  validateReadinessContract, validateReadinessTrace, validateReadinessResults } from "./playground-prepared-loading-observation.mjs";
+  validateReadinessContract, validateReadinessTrace, validateReadinessResults,
+  PRODUCT_GATE_THRESHOLD_ENVS } from "./playground-prepared-loading-observation.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 function canvas() {
   const data = new Uint8Array(40 * 40 * 4);
@@ -37,20 +40,43 @@ test("timing summaries retain sample count and nearest-rank tails", () => {
   assert.equal(distribution([]).median, null);
 });
 
-test("readiness draft pins the unchanged first and dense sources and freezes Product Gate thresholds", async () => {
+test("readiness draft binds showcase sources and the cumulative Product Gate anchor", async () => {
   const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
   assert.deepEqual(validateReadinessContract(contract), []);
   assert.ok(validateReadinessContract(contract, { strict: true }).some(error => /not been reviewed and frozen/.test(error)));
+  const manifest = JSON.parse(await readFile(new URL("../web/python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
+  assert.deepEqual(contract.sources.map(source => source.id), ["showcase-first-scene", "showcase-dynamic-scene"]);
+  for (const source of contract.sources) {
+    const profile = SHOWCASE_PROFILE_EXPECTATIONS.find(value => value.id === source.id);
+    const entry = manifest.entries.find(value => value.id === source.id);
+    assert.deepEqual([source.path, source.sha256, source.durationSeconds],
+      [profile.path, profile.sha256, entry.duration]);
+  }
+  const anchor = JSON.parse(await readFile(new URL("../.github/ci/product-performance-anchor.json", import.meta.url), "utf8"));
+  const anchorLock = new URL(`../.github/ci/${anchor.dependencyLock.file}`, import.meta.url);
+  const sha256 = async url => createHash("sha256").update(await readFile(url)).digest("hex");
+  assert.equal(contract.productGateAnchor.sourceRevision, anchor.source);
+  assert.equal(contract.productGateAnchor.manifestSha256, await sha256(new URL("../.github/ci/product-performance-anchor.json", import.meta.url)));
+  assert.equal(contract.productGateAnchor.dependencyLockSha256, await sha256(anchorLock));
+  assert.deepEqual(contract.productGateAnchor.workloads, anchor.workloads);
+  for (const [key, filename] of Object.entries({ runnerSha256: "../scripts/playground-product-e2e.mjs",
+    workloadSha256: "../scripts/playground-product-fps.mjs", comparisonSha256: "../scripts/playground-product-compare.mjs" })) {
+    assert.equal(contract.productGateAnchor[key], await sha256(new URL(filename, import.meta.url)));
+  }
+  const compareSource = await readFile(new URL("../scripts/playground-product-compare.mjs", import.meta.url), "utf8");
+  for (const [key, envName] of Object.entries(PRODUCT_GATE_THRESHOLD_ENVS)) {
+    const match = compareSource.match(new RegExp(`threshold\\("${envName}",\\s*"([^"]+)"\\)`));
+    assert.ok(match, `missing Product Gate default ${envName}`);
+    assert.equal(contract.productGateAnchor.thresholds[key], Number(match[1]));
+  }
   const ready = structuredClone(contract);
   ready.status = "ready";
   ready.reference.actualAdapterIdentity = { backend: "BrowserWebGpu", vendor: 1, device: 2 };
   ready.bounds = Object.fromEntries(Object.keys(ready.bounds).map(key => [key, 1]));
   assert.deepEqual(validateReadinessContract(ready, { strict: true }), []);
   for (const mutate of [
-    value => { value.sources[0].sha256 = "0".repeat(64); },
-    value => { value.sources[1].durationSeconds++; },
-    value => { value.arms.C = "incremental"; },
-    value => { value.productGateAnchor.thresholds.minFpsRatio = 0.5; },
+    value => { value.sources[1].sha256 = "invalid"; },
+    value => { delete value.productGateAnchor.thresholds.minFpsRatio; },
     value => { value.sampling.measuredStartsPerArmPerStratum = 3; },
     value => { value.sampling.startupPopulationP99 = true; },
     value => { value.sampling.startupPercentiles.push("p99"); },
@@ -59,6 +85,9 @@ test("readiness draft pins the unchanged first and dense sources and freezes Pro
     mutate(changed);
     assert.notDeepEqual(validateReadinessContract(changed), [], JSON.stringify(changed));
   }
+  const missingBounds = structuredClone(ready);
+  missingBounds.bounds = {};
+  assert.ok(validateReadinessContract(missingBounds, { strict: true }).some(error => /missing approved bound/.test(error)));
 });
 
 test("readiness summaries keep failed and warmup starts out of timing samples", async () => {
@@ -128,10 +157,23 @@ test("strict readiness fails closed when acceptance and submission receipts are 
   const sourceId = contract.sources[0].id;
   const cases = [{ sourceId, arm: "A", stratum: "fresh-process-warm-resource-cache", warmup: false,
     status: "observed", sourceInvocationIds: [1], profileValidationErrors: [], retirementMs: 2,
-    startup: { firstUsefulMs: 10, firstSubmittedMs: null, runtimeAcceptanceMs: null }, commands: [],
+    startup: { firstUsefulMs: 10, firstSubmittedMs: null, runtimeAcceptanceMs: null },
+    commands: [{ uiFeedbackMs: 2, commandCompletionUpperMs: 4, runtimeAcceptanceEpochMs: null,
+      matchingPresentation: null }],
     bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 }, presentationGapsMs: [] }];
   const errors = validateReadinessResults(cases, contract);
   assert.ok(errors.some(error => /missing firstSubmittedMs/.test(error)));
   assert.ok(errors.some(error => /missing runtimeAcceptanceMs/.test(error)));
+  assert.ok(errors.some(error => /no command-correlated renderer receipt/.test(error)));
   assert.ok(errors.some(error => /incomplete starts/.test(error)));
+});
+
+test("readiness command timings use the captured DOM request and do not infer a display receipt", async () => {
+  const source = await readFile(new URL("./playground-prepared-loading-qualification.mjs", import.meta.url), "utf8");
+  assert.match(source, /requestEpochMs: request\.epochMs/);
+  assert.match(source, /automationIssuedEpochMs: marker\.epochMs/);
+  assert.match(source, /event\.attribute === "data-busy" &&\s*event\.state\?\.busy === "true"/);
+  assert.match(source, /matchingPresentation: null/);
+  assert.doesNotMatch(source, /Math\.abs\(displayedTime - receiptTime\)/);
+  assert.match(source, /value\.epochMs >= replayStartedAtEpochMs/);
 });

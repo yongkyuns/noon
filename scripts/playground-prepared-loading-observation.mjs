@@ -1,3 +1,15 @@
+export const READINESS_ARMS = ["A", "B", "C", "D"];
+export const READINESS_BASELINE_ARMS = ["C", "D"];
+export const READINESS_STRATA = ["fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"];
+export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceMs",
+  "commandPresentationMs", "bufferingEpisodeMs", "frameGapMs", "peakProcessRssBytes", "liveOwnerRetirementMs"];
+export const PRODUCT_GATE_THRESHOLD_ENVS = {
+  maxLatencyRatio: "NOON_PRODUCT_MAX_LATENCY_RATIO",
+  latencySlackMs: "NOON_PRODUCT_LATENCY_SLACK_MS",
+  minFpsRatio: "NOON_PRODUCT_MIN_FPS_RATIO",
+  maxVisualDiffRatio: "NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO",
+};
+
 // A measurement oracle for the selected nonuniform gallery scenes, not a renderer
 // or a general definition of visual usefulness. Ignore CSS decoration and alpha-zero
 // bytes; require scene ink distinguishable from the dominant canvas background.
@@ -30,42 +42,31 @@ export function distribution(values) {
 
 export function validateReadinessContract(contract, { strict = false } = {}) {
   const errors = [];
-  const expectedSources = [
-    ["showcase-first-scene", "python/examples/showcase_first_scene.py",
-      "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8", 8],
-    ["showcase-dynamic-scene", "python/examples/showcase_dynamic_scene.py",
-      "bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca", 19],
-  ];
   if (contract?.schemaVersion !== 1) errors.push("unsupported readiness contract schema");
-  const expectedArms = {
-    A: "default-incremental-first-pass",
-    B: "default-completed-history-replay",
-    C: "explicit-observed-first-pass",
-    D: "observed-completed-history-replay",
-  };
-  if (JSON.stringify(contract?.arms) !== JSON.stringify(expectedArms)) {
-    errors.push("readiness contract arm definitions changed");
+  if (JSON.stringify(Object.keys(contract?.arms ?? {}).sort()) !== JSON.stringify(READINESS_ARMS) ||
+      Object.values(contract?.arms ?? {}).some(value => typeof value !== "string" || value.length === 0)) {
+    errors.push("readiness contract must define arms A through D");
   }
   const reference = contract?.reference;
-  if (reference?.host !== "Apple M6, 24 GB RAM, 12 GPU cores" || reference.os !== "macOS 27.0.1" ||
-      reference.browser !== "Chromium 151.0.7922.34" || reference.refreshHz !== 60 ||
-      reference.viewport?.width !== 1280 || reference.viewport?.height !== 900 ||
-      reference.deviceScaleFactor !== 1 || reference.backend !== "WebGPU" || reference.gpuMode !== "hardware") {
-    errors.push("reference hardware target changed");
+  if (!["host", "os", "browser", "backend", "gpuMode"].every(key => typeof reference?.[key] === "string" &&
+      reference[key].length > 0) || !Number.isFinite(reference?.refreshHz) ||
+      !Number.isSafeInteger(reference?.viewport?.width) || !Number.isSafeInteger(reference?.viewport?.height) ||
+      !Number.isFinite(reference?.deviceScaleFactor) || reference.refreshHz <= 0 ||
+      reference.viewport.width <= 0 || reference.viewport.height <= 0 || reference.deviceScaleFactor <= 0) {
+    errors.push("readiness hardware reference is incomplete");
   }
-  if (JSON.stringify(contract?.baselineArms) !== JSON.stringify(["C", "D"]) ||
-      JSON.stringify(Object.keys(contract?.strata ?? {}).sort()) !==
-        JSON.stringify(["cold-network", "fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"])) {
-    errors.push("readiness baseline arms or cache strata changed");
+  if (JSON.stringify(contract?.baselineArms) !== JSON.stringify(READINESS_BASELINE_ARMS) ||
+      READINESS_STRATA.some(name => typeof contract?.strata?.[name] !== "string" || contract.strata[name].length === 0) ||
+      typeof contract?.strata?.["cold-network"] !== "string") {
+    errors.push("readiness baseline arms or cache strata are incomplete");
   }
-  if (!Array.isArray(contract?.sources) || contract.sources.length !== 2) {
+  if (!Array.isArray(contract?.sources) || contract.sources.length !== 2 ||
+      new Set(contract.sources.map(source => source?.id)).size !== 2) {
     errors.push("readiness contract must name the first and dense sources");
-  } else if (contract.sources.some((source, index) => {
-    const [id, path, sha256, duration] = expectedSources[index];
-    return source.id !== id || source.path !== path || source.sha256 !== sha256 ||
-      source.durationSeconds !== duration || source.window !== "full-authored-first-pass";
-  })) {
-    errors.push("source IDs, paths, hashes, durations and full-pass windows must match the unchanged catalog");
+  } else if (contract.sources.some(source => typeof source.id !== "string" || typeof source.path !== "string" ||
+      !/^[0-9a-f]{64}$/.test(source.sha256 ?? "") || !Number.isFinite(source.durationSeconds) ||
+      source.durationSeconds <= 0 || source.window !== "full-authored-first-pass")) {
+    errors.push("source identity or full-pass duration is malformed");
   }
   const sampling = contract?.sampling;
   if (!(Number.isSafeInteger(sampling?.warmupsPerArmPerStratum) && sampling.warmupsPerArmPerStratum >= 1 &&
@@ -80,19 +81,20 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
     errors.push("readiness percentile plan is inconsistent with the sample size");
   }
   const anchor = contract?.productGateAnchor;
-  if (anchor?.preserveOriginalWorkloadAndThresholds !== true ||
-      anchor.sourceRevision !== "9a5781ebf09f3029e402a331528c657419d1bba5" ||
-      anchor.runnerSha256 !== "19ceae9aca559ccec9324094bf71a5c9d941e6ecf720369b1641b7f4813e7d2b" ||
-      anchor.workloadSha256 !== "5137eef8aa71b8d70df845ad769278d934fd8eca53f585ca09c4f8d5e3ddbe96" ||
-      anchor.comparisonSha256 !== "94cf8fd9ecec1d4c7d4f7fe4af123595e7d0b7f788ed422187e650bda64125a0" ||
-      JSON.stringify(anchor.thresholds) !== JSON.stringify({ maxLatencyRatio: 1.25, latencySlackMs: 350,
-        minFpsRatio: 0.8, maxVisualDiffRatio: 0.015 })) {
-    errors.push("Product Gate anchor, workload and thresholds must remain unchanged");
+  if (!/^[0-9a-f]{40}$/.test(anchor?.sourceRevision ?? "") ||
+      !/^[0-9a-f]{64}$/.test(anchor?.manifestSha256 ?? "") ||
+      !/^[0-9a-f]{64}$/.test(anchor?.dependencyLockSha256 ?? "") ||
+      anchor?.preserveOriginalWorkloadAndThresholds !== true ||
+      !Array.isArray(anchor?.workloads) || !anchor.workloads.every(value => typeof value === "string") ||
+      JSON.stringify(Object.keys(anchor?.thresholds ?? {}).sort()) !== JSON.stringify(Object.keys(PRODUCT_GATE_THRESHOLD_ENVS).sort()) ||
+      Object.values(anchor?.thresholds ?? {}).some(value => !Number.isFinite(value))) {
+    errors.push("Product Gate anchor metadata is malformed");
   }
   if (strict) {
     if (contract.status !== "ready") errors.push("readiness contract has not been reviewed and frozen");
     if (!contract.reference?.actualAdapterIdentity) errors.push("actual reference GPU adapter is not pinned");
-    for (const [name, value] of Object.entries(contract.bounds ?? {})) {
+    for (const name of READINESS_BOUND_KEYS) {
+      const value = contract.bounds?.[name];
       if (!Number.isFinite(value) || value <= 0) errors.push(`missing approved bound: ${name}`);
     }
   }
@@ -143,8 +145,7 @@ export function summarizeReadiness(cases, contract) {
     delete summary.p99;
     return summary;
   };
-  return contract.sources.flatMap(source => arms.flatMap(arm => Object.keys(contract.strata)
-    .filter(stratum => stratum !== "cold-network")
+  return contract.sources.flatMap(source => arms.flatMap(arm => READINESS_STRATA
     .map(stratum => {
       const rows = cases.filter(row => row.sourceId === source.id && row.arm === arm && row.stratum === stratum && !row.warmup);
       const observed = rows.filter(row => row.status === "observed");
@@ -168,8 +169,9 @@ export function summarizeReadiness(cases, contract) {
         attemptedStarts: rows.length,
         observedStarts: observed.length,
         failedStarts: rows.filter(row => row.status !== "observed").length,
-        startup: Object.fromEntries(["shellReadyMs", "interpreterReadyMs", "firstReaderMs",
-          "firstSubmittedMs", "runtimeAcceptanceMs", "firstRendererReportedFrameMs", "firstUsefulMs"].map(key =>
+        startup: Object.fromEntries(["shellReadyObservedUpperMs", "interpreterReadyObservedUpperMs",
+          "firstReaderAttachedObservedUpperMs", "firstSubmittedMs", "firstRenderSubmissionCompleteUpperMs",
+          "runtimeAcceptanceMs", "firstUsefulMs"].map(key =>
           [key, startupDistribution(observed.map(row => row.startup?.[key]))])),
         commands: commandSummary,
         presentationGapMs: distribution(gaps),
@@ -186,7 +188,7 @@ export function validateReadinessResults(cases, contract) {
   const errors = [];
   const expected = contract.sampling.measuredStartsPerArmPerStratum;
   for (const source of contract.sources) for (const arm of Object.keys(contract.arms)) {
-    for (const stratum of ["fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"]) {
+    for (const stratum of READINESS_STRATA) {
       const rows = cases.filter(row => row.sourceId === source.id && row.arm === arm &&
         row.stratum === stratum && !row.warmup);
       if (rows.length < expected || rows.some(row => row.status !== "observed")) {
@@ -195,9 +197,11 @@ export function validateReadinessResults(cases, contract) {
       for (const row of rows) {
         if ((row.sourceInvocationIds ?? []).length !== 1) errors.push(`${source.id}/${arm}: source invocation identity changed`);
         if ((row.profileValidationErrors ?? []).length) errors.push(`${source.id}/${arm}: profile trace invalid`);
-        const startupFields = ["firstUsefulMs", "firstSubmittedMs", "runtimeAcceptanceMs"];
+        const startupFields = ["firstUsefulMs", "firstSubmittedMs", "runtimeAcceptanceMs",
+          "firstRenderSubmissionCompleteUpperMs"];
         if (row.arm === "A" || row.arm === "C") startupFields.push(
-          "shellReadyMs", "interpreterReadyMs", "firstReaderMs", "firstRendererReportedFrameMs");
+          "shellReadyObservedUpperMs", "interpreterReadyObservedUpperMs");
+        if (row.arm === "A") startupFields.push("firstReaderAttachedObservedUpperMs");
         for (const key of startupFields) {
           if (!Number.isFinite(row.startup?.[key])) errors.push(`${source.id}/${arm}: missing ${key}`);
         }
@@ -210,8 +214,8 @@ export function validateReadinessResults(cases, contract) {
           if (!Number.isFinite(command.uiFeedbackMs)) errors.push(`${source.id}/${arm}: missing UI feedback timing`);
           if (!Number.isFinite(command.commandCompletionUpperMs)) errors.push(`${source.id}/${arm}: missing command completion timing`);
           if (!Number.isFinite(command.runtimeAcceptanceEpochMs)) errors.push(`${source.id}/${arm}: missing command acceptance receipt`);
-          if (command.presentedStateMatched !== true && !command.matchingPresentation) {
-            errors.push(`${source.id}/${arm}: command has no matching presentation evidence`);
+          if (!command.matchingPresentation) {
+            errors.push(`${source.id}/${arm}: command has no command-correlated renderer receipt`);
           }
           const acceptanceMs = command.runtimeAcceptanceMs ?? command.acceptedMs;
           if (Number.isFinite(contract.bounds.commandAcceptanceMs) &&
@@ -250,7 +254,7 @@ export function validateReadinessResults(cases, contract) {
         errors.push(`${source.id}/${arm}/${stratum}: process RSS p95 exceeds its bound`);
       }
     }
-    for (const stratum of ["fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"]) {
+    for (const stratum of READINESS_STRATA) {
       const commands = cases.filter(row => row.sourceId === source.id && row.stratum === stratum && !row.warmup)
         .flatMap(row => row.commands ?? []);
       if (commands.length < contract.sampling.minimumCommandObservationsPerSource) {
