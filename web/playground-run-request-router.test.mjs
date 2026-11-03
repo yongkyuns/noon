@@ -15,6 +15,7 @@ async function flush() {
 
 function harness({ source = "first source", activeContinuation = false, cancellation = null } = {}) {
   let currentSource = source;
+  let currentSelection = "scene";
   let active = null;
   let continuation = activeContinuation ? {} : null;
   let nextToken = 0;
@@ -23,7 +24,7 @@ function harness({ source = "first source", activeContinuation = false, cancella
   const starts = [];
   const run = () => {
     const gate = deferred();
-    const request = { token: ++nextToken, source: currentSource };
+    const request = { token: ++nextToken, source: currentSource, exampleId: currentSelection };
     active = { gate, request };
     starts.push({ gate, source: currentSource, request });
     gate.promise.finally(() => {
@@ -33,11 +34,17 @@ function harness({ source = "first source", activeContinuation = false, cancella
   };
   const router = createRunRequestRouter({
     currentSource: () => currentSource,
+    currentSelection: () => currentSelection,
+    currentSelectionGeneration: () => 0,
     currentRun: () => active?.gate.promise ?? null,
     activeSourceContinuation: () => continuation,
     activeRunRequest: () => active?.request ?? null,
     isActiveRunCurrent: (token) => active?.request.token === token,
-    run,
+    run: (runSource, exampleId) => {
+      if (runSource !== undefined) currentSource = runSource;
+      if (exampleId !== undefined) currentSelection = exampleId;
+      return run();
+    },
     async supersede() {
       if (continuation === null) return false;
       supersedes += 1;
@@ -50,6 +57,7 @@ function harness({ source = "first source", activeContinuation = false, cancella
   return {
     router, starts,
     setSource(value) { currentSource = value; },
+    setSelection(value) { currentSelection = value; },
     setContinuation(value) { continuation = value ? {} : null; },
     resolveActive() { active?.gate.resolve(); },
     get supersedes() { return supersedes; },
@@ -85,6 +93,42 @@ test("changed source during a build queues exactly one replacement using the lat
   state.resolveActive();
   await Promise.all([first, changed, duplicateChanged]);
   assert.equal(state.starts.length, 2);
+});
+
+test("Run replacement captures the latest explicit source and selection once", async () => {
+  const cancellation = deferred();
+  const state = harness({ activeContinuation: true, cancellation });
+  const initial = state.router.request();
+  state.setSource("clicked draft");
+  state.setSelection("clicked example");
+  const clicked = state.router.request();
+  state.setSource("later unsubmitted edit");
+  state.setSelection("later draft");
+  state.setSource("newest clicked draft");
+  state.setSelection("newest clicked example");
+  const newest = state.router.request();
+  cancellation.resolve();
+  state.resolveActive();
+  await flush();
+  assert.equal(state.starts.length, 2);
+  assert.equal(state.starts[1].source, "newest clicked draft");
+  assert.equal(state.starts[1].request.exampleId, "newest clicked example");
+  state.resolveActive();
+  await Promise.all([initial, clicked, newest]);
+});
+
+test("same source from a different selected example does not join the old run", async () => {
+  const state = harness();
+  const first = state.router.request();
+  state.setSelection("another example");
+  const replacement = state.router.request();
+  state.resolveActive();
+  await flush();
+  assert.equal(state.starts.length, 2);
+  assert.equal(state.starts[1].request.exampleId, "another example");
+  assert.equal(state.queued, 1, "the different example must be admitted as a replacement");
+  state.resolveActive();
+  await Promise.all([first, replacement]);
 });
 
 test("unchanged Run during an active continuation supersedes once", async () => {

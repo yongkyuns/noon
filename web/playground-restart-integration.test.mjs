@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-import { createSourceRestart } from "./playground-source-restart.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
 import { AuthoringWorkerGeneration } from "./authoring-worker-generation.js";
@@ -17,83 +16,13 @@ function deferred() {
 async function flush() {
   for (let i = 0; i < 30; i += 1) await Promise.resolve();
 }
-function fixture() {
-  let source = "original";
-  let selection = "one";
-  let active = null;
-  const cancellation = deferred();
-  const starts = [];
-  const timers = new Map();
-  const errors = [];
-  let timerId = 0;
-  const run = () => {
-    const gate = deferred();
-    const request = { token: {}, source };
-    active = { gate, request };
-    starts.push({ gate, source });
-    return gate.promise.finally(() => { if (active?.gate === gate) active = null; });
-  };
-  const router = createRunRequestRouter({
-    currentSource: () => source,
-    currentRun: () => active?.gate.promise ?? null,
-    activeSourceContinuation: () => active,
-    activeRunRequest: () => active?.request,
-    isActiveRunCurrent: (token) => token === active?.request.token,
-    run,
-    supersede: () => cancellation.promise.then(() => true),
-    onQueued() {},
-  });
-  const restart = createSourceRestart({
-    stop: () => Promise.all([cancellation.promise, active?.gate.promise]),
-    run: (isCurrent) => router.request(isCurrent),
-    currentSelection: () => selection,
-    onError: (error) => errors.push(error),
-    setTimer(callback) { const id = ++timerId; timers.set(id, callback); return id; },
-    clearTimer(id) { timers.delete(id); },
-  });
-  return {
-    restart, starts, errors,
-    edit() { source = "edited"; restart.edited(); },
-    select() { selection = "two"; restart.cancel(); },
-    retire() { cancellation.resolve(); active?.gate.resolve(); },
-    tick() { const pending = [...timers.values()]; timers.clear(); for (const callback of pending) callback(); },
-  };
-}
-
-test("an edit during an explicit Run's cancellation cannot bypass the new typing debounce", async () => {
-  const f = fixture();
-  const initial = f.restart.runNow(); await flush();
-  const explicit = f.restart.runNow(); await flush();
-  f.edit();
-  f.retire(); await flush();
-  assert.equal(f.starts.length, 1, "the obsolete explicit request must not restart before the edit timer");
-  f.tick(); await flush();
-  assert.deepEqual(f.starts.map((entry) => entry.source), ["original", "edited"]);
-  f.retire();
-  await Promise.all([initial, explicit]);
-  assert.deepEqual(f.errors, []);
-});
-
-test("selection change and disposal prevent a queued explicit Run from reviving source", async () => {
-  for (const dispose of [false, true]) {
-    const f = fixture();
-    const initial = f.restart.runNow(); await flush();
-    const explicit = f.restart.runNow(); await flush();
-    if (dispose) f.restart.dispose(); else f.select();
-    f.retire(); await flush();
-    assert.equal(f.starts.length, 1);
-    await Promise.all([initial, explicit]);
-    assert.deepEqual(f.errors, []);
-  }
-});
-
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 const hookStart = main.indexOf("async function runPlaygroundTestHook(");
 const hookEnd = main.indexOf("async function loadDemoAuthoringSource(", hookStart);
 const profileStart = main.indexOf("function isPreparedPlayback(");
 const profileEnd = main.indexOf("function playbackPresentation(", profileStart);
 assert.ok(hookStart >= 0 && hookEnd > hookStart && profileStart >= 0 && profileEnd > profileStart);
-const runStart = main.indexOf("async function runScene()");
+const runStart = main.indexOf("async function runScene(");
 const runEnd = main.indexOf("const runRequestRouter =", runStart);
 const discardStart = main.indexOf("function discardEarlyContinuationRuntime(");
 const discardEnd = main.indexOf("async function supersedeActiveSourceContinuation()", discardStart);
@@ -104,14 +33,21 @@ assert.ok(runStart >= 0 && runEnd > runStart && hideStart >= 0 && hideEnd > hide
 // Execute the actual Run and navigation handlers: worker retirement rejects an
 // in-flight authoring request, as it does when Safari caches a gallery document.
 function navigationFixture() {
-  const errors = [], clients = [], owners = [], requests = [], timers = new Map();
+  const errors = [], clients = [], owners = [], requests = [];
   const authoringStarts = [];
   const authoringStart = index => authoringStarts[index] ??= deferred();
-  let timerId = 0, fullscreenDisposals = 0, diagnosticInvalidations = 0, diagnosticDisposals = 0;
+  let fullscreenDisposals = 0, diagnosticInvalidations = 0, diagnosticDisposals = 0;
   const diagnosticBegins = [];
   const window = new EventTarget();
   const diagnostics = { hidden: false };
   const context = {
+    SCENE_EXAMPLES: [{ id: "one", title: "One", parityStatus: "candidate" }],
+    activeRunIdentity: null,
+    updateDraftStatus() {},
+    setRunPatchStatus(_token, message, state) {
+      context.patchStatus.value = message;
+      context.patchStatus.dataset.state = state;
+    },
     __NOON_PLAYGROUND_TEST_HOOKS__: { authoringRunOptions: () => ({ preparedPlayback: false }) },
     window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" },
     generations: new PlaygroundGeneration(), status: { dataset: {} }, patchStatus: { dataset: {} },
@@ -170,19 +106,13 @@ function navigationFixture() {
     createClient: () => context.createAuthoringClient(),
     isCurrentRun: token => context.isCurrentRun(token),
   });
-  context.sourceRestart = createSourceRestart({
-    stop: () => context.generations.invalidateRun(), run: () => context.runScene(),
-    currentSelection: () => "one", onError: error => errors.push(error),
-    setTimer(callback) { const id = ++timerId; timers.set(id, callback); return id; },
-    clearTimer(id) { timers.delete(id); },
-  });
   vm.runInNewContext(
     main.slice(hookStart, hookEnd) + main.slice(profileStart, profileEnd) +
       main.slice(discardStart, discardEnd) + main.slice(runStart, runEnd) + main.slice(hideStart, hideEnd),
     context,
   );
   return {
-    context, errors, clients, owners, requests, timers,
+    context, errors, clients, owners, requests,
     async waitForAuthoring(run, index = 0) {
       assert.ok(run && typeof run.then === "function", "an actual Run must be pending");
       // Observe the request, not an assumed number of startup microtasks. A
@@ -200,7 +130,6 @@ function navigationFixture() {
       const event = new Event(type); Object.defineProperty(event, "persisted", { value: persisted });
       window.dispatchEvent(event);
     },
-    tick() { const pending = [...timers.values()]; timers.clear(); for (const callback of pending) callback(); },
   };
 }
 
@@ -244,8 +173,10 @@ test("edited Run retires pre-continuation warmup before admitting its replacemen
     activeSourceContinuation: () => f.context.activeSourceContinuation,
     activeRunRequest: () => f.context.activeRunRequest,
     isActiveRunCurrent: token => token !== undefined && f.context.isCurrentRun(token),
-    run: () => f.context.runScene(),
+    run: (source, exampleId, selectionGeneration) => f.context.runScene(source, exampleId, selectionGeneration),
     supersede: () => f.context.supersedeActiveSourceContinuation(),
+    currentSelection: () => f.context.selectedExampleId,
+    currentSelectionGeneration: () => f.context.generations.diagnostics.selectionGeneration,
     onQueued() {},
   });
   const replacement = router.request(() => current);
@@ -269,8 +200,7 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
   for (let cycle = 0; cycle < 3; cycle += 1) {
     let run;
     if (cycle === 0) run = f.context.runScene();
-    else if (cycle === 1) run = f.context.sourceRestart.runNow();
-    else { f.context.sourceRestart.edited(); f.tick(); await flush(); run = f.context.sceneRunPromise; }
+    else run = f.context.runScene();
     await f.waitForAuthoring(run, cycle);
     assert.equal(f.clients.length, cycle + 1, "restored controls must start a fresh authoring request");
     f.dispatch("pagehide", true);
@@ -294,19 +224,17 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
   assert.ok(f.diagnosticBegins.length >= 3, "each restored explicit source run reopens diagnostics");
   assert.ok(f.diagnosticBegins.every(x => x.document.filename.startsWith("noon-s")),
     "diagnostic runs retain actual host-owned source identities");
-  await f.context.sourceRestart.runNow();
+  await f.context.runScene();
   assert.equal(f.clients.length, 3, "a permanently retired document must not start another worker");
 });
 
-test("navigation cancels a queued edit restart before the cached document returns", async () => {
+test("navigation after a draft change does not create an authoring request", async () => {
   const f = navigationFixture();
-  f.context.sourceRestart.edited();
-  assert.equal(f.timers.size, 1);
-  f.dispatch("pagehide", true); f.dispatch("pageshow", true); f.tick(); await flush();
+  f.context.sceneSourceEditor.value = "unsubmitted draft";
+  f.dispatch("pagehide", true); f.dispatch("pageshow", true);
   assert.equal(f.diagnosticInvalidations, 1);
   assert.equal(f.diagnosticDisposals, 0);
   assert.equal(f.clients.length, 0, "restoration must not launch a cancelled edit timer");
-  assert.equal(f.timers.size, 0);
   assert.deepEqual(f.errors, []);
 });
 
@@ -372,7 +300,7 @@ for (const persisted of [false, true]) {
         assert.equal(JSON.stringify([f.context.status, f.context.patchStatus, f.context.runtimeStatus]), status);
         assert.deepEqual(f.errors, []);
         delete f.context.__NOON_PLAYGROUND_TEST_HOOKS__;
-        replacement = f.context.sourceRestart.runNow();
+        replacement = f.context.runScene();
         if (persisted) {
           await f.waitForAuthoring(replacement);
           assert.equal(f.clients.length, 1, "cached return still permits an explicit fresh Run");

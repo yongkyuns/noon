@@ -153,9 +153,14 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
       resetButton, gallerySearch, categorySelect, paritySelect, previousGalleryPage, nextGalleryPage,
       galleryGrid, previousPreview, diagnosticPanel, metricObjects, metricTime, recoverButton } = env;
     const globalThis = { __NOON_PLAYGROUND_TEST_HOOKS__: env.hooks };
+    const SCENE_EXAMPLES = [env.example];
     const console = { warn() {}, debug() {}, error() {} };
     let canvas = env.initialCanvas, player = null, preparedPlaybackPlayer = null, playbackControls = null;
-    let selectedExampleId = "test", canonicalSource = "";
+    let selectedExampleId = "test", canonicalSource = "", activeRunIdentity = null;
+    const updateDraftStatus = () => {};
+    const setRunPatchStatus = (_token, message, state) => {
+      patchStatus.value = message; patchStatus.dataset.state = state;
+    };
     const authoringWorkers = {
       activeClient: authoring,
       async clientForRun() { return authoring; },
@@ -186,7 +191,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     };
     const recordStale = (token, stage) => { generations.recordStale(token, stage); return { stale: true, stage }; };
     ${lifecycle}
-    return { runScene, stopForSourceEdit, playbackPresentation, updateWorkerMetrics, ensureExecutionReady,
+    return { runScene, retireActiveRunForReplacement, playbackPresentation, updateWorkerMetrics, ensureExecutionReady,
       supersedeActiveSourceContinuation,
       markFailed: () => { playerNeedsRestart = true; runtimeFailureRevision++; updatePreviewRecoveryControl(); },
       inspect: () => ({ player, preparedPlaybackPlayer, playbackControls, busyDepth, activeSourceContinuation,
@@ -286,11 +291,11 @@ test("a new runtime failure during recovery cannot be cleared by stale readiness
 });
 
 for (const rejected of [false, true]) {
-  test(`source edit supersedes preview recovery ${rejected ? "failure" : "readiness"}`, async () => {
+  test(`explicit Run supersedes preview recovery ${rejected ? "failure" : "readiness"}`, async () => {
     const f = fixture(), { promise } = await f.start(); await f.register();
     f.env.allowRecovery = true; f.env.recoveryGate = deferred(); f.markFailed();
     const recovering = assert.rejects(f.ensureExecutionReady(), { name: "AbortError" });
-    await f.stopForSourceEdit(); await promise;
+    await f.retireActiveRunForReplacement(); await promise;
     const adoptions = f.count("adopt-canvas"), status = f.env.patchStatus.value;
     if (rejected) f.env.recoveryGate.reject(new Error("obsolete receiver failed"));
     else f.env.recoveryGate.resolve();
@@ -417,17 +422,17 @@ test("a genuine rerun retires completed prepared history instead of attempting r
   assert.equal(f.count("reconcile"), 0); assert.equal(f.count("restart"), 0);
 });
 
-test("editing completed prepared history pauses its preview and keeps the renderer and warm interpreter", async () => {
+test("explicit Run replacement pauses completed prepared history and keeps the renderer and warm interpreter", async () => {
   const f = fixture(), first = await f.start(); await f.register(); f.finish(); await first.promise;
   const owner = f.inspect().player;
-  await f.stopForSourceEdit();
+  await f.retireActiveRunForReplacement();
   assert.equal(f.inspect().player, owner); assert.equal(owner.status.playing, false);
   assert.equal(f.count("terminate-authoring"), 0); assert.equal(f.count("terminate-runtime"), 0);
 });
 
-test("editing a demand-paused source cancels its original context and suppresses stale source errors", async () => {
+test("explicit Run replacement cancels a demand-paused source and suppresses stale errors", async () => {
   const f = fixture(), { promise, job } = await f.start(); await f.register();
-  await f.stopForSourceEdit(); const cancelled = await promise;
+  await f.retireActiveRunForReplacement(); const cancelled = await promise;
   assert.equal(cancelled.stale, true); assert.deepEqual(f.errors, []);
   assert.deepEqual(f.calls.find(call => call[0] === "cancel").slice(1),
     [job.descriptor.contextId, job.descriptor.continuationGeneration]);

@@ -43,6 +43,8 @@ for (const loadGalleryManifest of [
     installPreviewFullscreen: () => () => {},
     PresentationRate: class { reset() {} },
     loadGalleryManifest,
+    AuthoringWorkerGeneration: class {},
+    PythonAuthoringClient: class {},
   };
   let failure;
   try {
@@ -150,7 +152,7 @@ assert.match(
   "runtime startup must expose its on-demand state for browser diagnostics",
 );
 
-const runSceneStart = main.indexOf("async function runScene()");
+const runSceneStart = main.indexOf("async function runScene(");
 const selectExampleStart = main.indexOf("async function selectExample(", runSceneStart);
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);

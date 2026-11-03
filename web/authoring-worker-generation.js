@@ -32,8 +32,11 @@ export class AuthoringWorkerGeneration {
     if (typeof requirePristine !== "boolean") {
       throw new TypeError("requirePristine must be a boolean");
     }
-    if (this.#disposed) throw new Error("authoring worker generation is disposed");
     if (!this.#isCurrentRun(token)) return null;
+    // A permanently navigated-away playground cannot admit another Run.
+    // Returning null keeps a late explicit call from surfacing teardown as a
+    // Python error; cached documents keep this owner undisposed and reusable.
+    if (this.#disposed) return null;
     this.#latestToken = token;
 
     if (this.#activeClient !== null &&

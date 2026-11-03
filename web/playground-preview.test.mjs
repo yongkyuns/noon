@@ -233,7 +233,7 @@ async function editBoundaryFixture({ prepared = false, pause = Promise.resolve()
     setTimeout() { assert.fail("a completed source needs no cancellation watchdog"); },
     clearTimeout() { assert.fail("no watchdog should be allocated"); },
   };
-  const stop = vm.runInNewContext(`${code}\n(() => stopForSourceEdit())`, context);
+  const stop = vm.runInNewContext(`${code}\n(() => retireActiveRunForReplacement())`, context);
   return { ...f, context, order, retained, client, controls, replacementCanvas, stop,
     counts: () => ({ terminated, authoringTerminated, pollsStopped }) };
 }

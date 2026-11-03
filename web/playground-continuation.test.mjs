@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
-const runStart = main.indexOf("async function runScene()");
+const runStart = main.indexOf("async function runScene(");
 const runEnd = main.indexOf("async function selectExample(", runStart);
 const runScene = main.slice(runStart, runEnd);
 const adoptionStart = runScene.lastIndexOf("if (earlyContinuation !== null)");

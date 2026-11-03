@@ -6,7 +6,7 @@ import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
 import { AuthoringWorkerGeneration } from "./authoring-worker-generation.js";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
-const runStart = main.indexOf("async function runScene()");
+const runStart = main.indexOf("async function runScene(");
 const runEnd = main.indexOf("const runRequestRouter =", runStart);
 const discardStart = main.indexOf("function discardEarlyContinuationRuntime(");
 const discardEnd = main.indexOf("async function supersedeActiveSourceContinuation()", discardStart);
@@ -58,6 +58,13 @@ function fixture({ retire = () => Promise.resolve(), started = true, prepared = 
     return Promise.reject(failure);
   } };
   const context = {
+    SCENE_EXAMPLES: [{ id: "one", title: "One", parityStatus: "candidate" }],
+    activeRunIdentity: null,
+    updateDraftStatus() {},
+    setRunPatchStatus(_token, message, state) {
+      context.patchStatus.value = message;
+      context.patchStatus.dataset.state = state;
+    },
     performance, canvas: oldCanvas, player: started ? oldPlayer : null, playerNeedsRestart: false,
     preparedPlaybackPlayer: started && prepared ? oldPlayer : null,
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,

@@ -35,7 +35,7 @@ assert.doesNotMatch(
   "cold startup must not commit the global duration before runScene accepts the current result",
 );
 
-const runStart = main.indexOf("async function runScene()");
+const runStart = main.indexOf("async function runScene(");
 const runEnd = main.indexOf("async function selectExample(", runStart);
 assert.ok(runStart >= 0 && runEnd > runStart, "runScene boundary must exist");
 const runBody = main.slice(runStart, runEnd);
