@@ -28,6 +28,21 @@ class SourceEffectsTests(unittest.TestCase):
                 self.assertEqual(source_execution_proof((examples / filename).read_text()),
                                  {"admitted": True, "reason": None})
 
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import ThreeDScene, ThreeDAxes, Typst
+            class Example(ThreeDScene):
+                def construct(self):
+                    axes = ThreeDAxes()
+                    Typst("caption")
+        ''')))
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import Scene, Circle, Color
+            class Example(Scene):
+                def construct(self):
+                    Color(0.1, 0.2, 0.3)
+                    Circle()
+        ''')))
+
         unsafe_sources = (
             # A wildcard import cannot authorize a subsequently shadowed base.
             ('from noon import *\nThreeDScene = Scene\n'

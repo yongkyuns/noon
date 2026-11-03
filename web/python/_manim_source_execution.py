@@ -192,6 +192,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_lagged_map_loads = set()
         self.admitted_plot_loads = set()
         self.admitted_spatial_constructor_loads = set()
+        self.spatial_method_depth = 0
         bindings = _SourceBindings()
         for node in tree.body:
             bindings.visit(node)
@@ -316,10 +317,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_SPATIAL_CONSTRUCTORS
                 and id(node) not in self.admitted_spatial_constructor_loads):
             raise _OpaqueSource(node, "unproven_spatial_constructor")
-        if (isinstance(node.ctx, ast.Load)
+        if (self.spatial_method_depth and isinstance(node.ctx, ast.Load)
                 and node.id in (_SOURCE_SPATIAL_CONSTRUCTORS | _SOURCE_COLOR_CONSTANTS | {"Color"})
-                and (node.id in self.module_bindings
-                     or any(node.id in scope for scope in self.scopes[1:]))):
+                and self._spatial_symbol_shadowed(node.id)):
             raise _OpaqueSource(node, "unproven_shadowed_spatial_constructor")
         if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
             raise _OpaqueSource(node, "unknown_name")
@@ -767,6 +767,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unproven_resource_input")
             self.admitted_code_loads.add(id(node.func))
         if self._spatial_constructor_call(node):
+            if not self.spatial_method_depth:
+                raise _OpaqueSource(node, "unproven_spatial_constructor")
             if not self._valid_spatial_constructor_call(node):
                 raise _OpaqueSource(node, "unproven_spatial_constructor")
             if isinstance(node.func, ast.Name):
@@ -792,6 +794,16 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(call, "unproven_resource_preparation")
             self.admitted_resource_preparation_loads.add(id(call.func))
         self.generic_visit(node)
+
+    def _spatial_symbol_shadowed(self, name):
+        if any(name in scope for scope in self.scopes[1:]):
+            return True
+        if name not in self.module_bindings:
+            return False
+        origin = self.module_binding_locations.get(name)
+        return not (origin in self.module_imports and isinstance(origin, ast.ImportFrom)
+                    and origin.module == "noon" and self.module_binding_counts.get(name) == 1
+                    and any(alias.name == name and alias.asname is None for alias in origin.names))
 
     @staticmethod
     def _spatial_constructor_call(node):
@@ -961,7 +973,12 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_resource_preparation")
         noon_names = (_SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS | _SOURCE_CONSTANTS
                       | _SOURCE_RESOURCE_PREPARATIONS | _SOURCE_CONTROLLED_TEXT_COMPILERS)
-        allowed = noon_names if node.module in {"noon", "manim"} else _SOURCE_MODULES.get(node.module, ())
+        if node.module in {"noon", "manim"} and any(
+            alias.name in _SOURCE_SPATIAL_CONSTRUCTORS and alias.asname is not None for alias in node.names
+        ):
+            raise _OpaqueSource(node, "unproven_spatial_constructor")
+        allowed = (noon_names | _SOURCE_SPATIAL_CONSTRUCTORS if node.module == "noon"
+                   else noon_names if node.module == "manim" else _SOURCE_MODULES.get(node.module, ()))
         for alias in node.names:
             if alias.name == "*" and node.module in {"noon", "manim"}:
                 self.scopes[0].update(noon_names)
@@ -1087,7 +1104,14 @@ class _SceneOnlySource(ast.NodeVisitor):
                 if spatial and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                         and member.name == "__init__":
                     continue
-                self.visit(member)
+                if spatial and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    self.spatial_method_depth += 1
+                    try:
+                        self.visit(member)
+                    finally:
+                        self.spatial_method_depth -= 1
+                else:
+                    self.visit(member)
         finally:
             self.members = previous_members
             self.scopes[0] = previous_module_scope
