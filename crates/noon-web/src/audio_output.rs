@@ -68,6 +68,19 @@ fn device_time(origin: f64, offset: f64) -> Result<f64, &'static str> {
     Ok(value)
 }
 
+fn schedulable_device_interval(
+    origin: f64,
+    start_delay: f64,
+    duration: f64,
+) -> Result<Option<(f64, f64)>, &'static str> {
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err("audio interval duration is invalid");
+    }
+    let start = device_time(origin, start_delay)?;
+    let end = device_time(start, duration)?;
+    Ok((end > start).then_some((start, end)))
+}
+
 fn bounded_voice_duration(
     start_delay: f64,
     duration: f64,
@@ -109,7 +122,7 @@ mod wasm {
     };
 
     use super::{
-        bounded_voice_duration, device_gain, device_time,
+        bounded_voice_duration, device_gain, device_time, schedulable_device_interval,
         transition::{GainRamp, ATTACK_SECONDS, RELEASE_SECONDS, VIEWER_RAMP_SECONDS},
         ViewerAudioControls,
     };
@@ -222,7 +235,7 @@ mod wasm {
         source_offset: f64,
         loop_region: Option<(f64, f64)>,
         gain_points: Vec<(f64, f32)>,
-        authored_end: Option<f64>,
+        has_authored_end: bool,
     }
 
     pub(crate) struct WebAudioOutput {
@@ -504,8 +517,7 @@ mod wasm {
                     source_offset: clip.source_offset,
                     loop_region: clip.loop_region.map(|region| (region.start, region.end)),
                     gain_points,
-                    authored_end: authorization
-                        .map(|(scene_time, _)| scene_time + clip.start_delay + clip.duration),
+                    has_authored_end: authorization.is_some(),
                 });
             }
             Ok(prepared)
@@ -576,13 +588,12 @@ mod wasm {
                 return Ok(());
             }
             for voice in prepared {
-                let start = device_time(now, voice.start_delay).map_err(js_error)?;
-                let end = device_time(start, voice.scheduled_duration).map_err(js_error)?;
-                if end <= start {
-                    return Err(JsValue::from_str(
-                        "audio interval is too short for the current Web Audio clock",
-                    ));
-                }
+                let Some((start, end)) =
+                    schedulable_device_interval(now, voice.start_delay, voice.scheduled_duration)
+                        .map_err(js_error)?
+                else {
+                    continue;
+                };
                 if let Some(device) = graph
                     .voices
                     .iter_mut()
@@ -638,6 +649,20 @@ mod wasm {
             if prepared.is_empty() {
                 return Ok(());
             }
+            let origin = self.context.current_time();
+            let mut schedulable = Vec::with_capacity(prepared.len());
+            for voice in prepared {
+                if let Some((start, end)) =
+                    schedulable_device_interval(origin, voice.start_delay, voice.scheduled_duration)
+                        .map_err(js_error)?
+                {
+                    schedulable.push((voice, start, end));
+                }
+            }
+            let prepared = schedulable;
+            if prepared.is_empty() {
+                return Ok(());
+            }
             let bus = self.context.create_gain()?;
             bus.gain().set_value(0.0);
             bus.connect_with_audio_node(&self.master)?;
@@ -649,7 +674,7 @@ mod wasm {
                 natural_end: 0.0,
                 ended: None,
             };
-            for voice in &prepared {
+            for (voice, _, _) in &prepared {
                 let source = self.context.create_buffer_source()?;
                 let gain = self.context.create_gain()?;
                 graph.voices.push(DeviceVoice {
@@ -668,28 +693,19 @@ mod wasm {
                 device.source.connect_with_audio_node(&device.gain)?;
                 device.gain.connect_with_audio_node(&graph.bus)?;
             }
-            let origin = self.context.current_time();
             // Check the complete device-time conversion before starting even a
             // muted source. Extremely large finite authored times can overflow
             // or collapse when added to a device clock.
-            for (index, voice) in prepared.iter().enumerate() {
-                let start = device_time(origin, voice.start_delay).map_err(js_error)?;
-                let end = device_time(start, voice.scheduled_duration).map_err(js_error)?;
-                if end <= start {
-                    return Err(JsValue::from_str(
-                        "audio interval is too short for the current Web Audio clock",
-                    ));
-                }
+            for (index, (voice, start, end)) in prepared.iter().enumerate() {
                 for &(offset, _) in &voice.gain_points {
-                    device_time(start, offset).map_err(js_error)?;
+                    device_time(*start, offset).map_err(js_error)?;
                 }
-                if end > graph.natural_end {
-                    graph.natural_end = end;
+                if *end > graph.natural_end {
+                    graph.natural_end = *end;
                     graph.last_voice = index;
                 }
             }
-            for (voice, device) in prepared.iter().zip(&graph.voices) {
-                let start = origin + voice.start_delay;
+            for ((voice, start, _), device) in prepared.iter().zip(&graph.voices) {
                 for (index, &(offset, gain)) in voice.gain_points.iter().enumerate() {
                     if index == 0 {
                         device.gain.gain().set_value_at_time(gain, start + offset)?;
@@ -701,24 +717,22 @@ mod wasm {
                     }
                 }
             }
-            for (voice, device) in prepared.iter().zip(&mut graph.voices) {
-                let start = origin + voice.start_delay;
-                let end = start + voice.scheduled_duration;
-                if voice.authored_end.is_some() {
+            for ((voice, start, end), device) in prepared.iter().zip(&mut graph.voices) {
+                if voice.has_authored_end {
                     device
                         .source
-                        .start_with_when_and_grain_offset(start, voice.source_offset)?;
-                    AudioScheduledSourceNode::stop_with_when(device.source.as_ref(), end)?;
+                        .start_with_when_and_grain_offset(*start, voice.source_offset)?;
+                    AudioScheduledSourceNode::stop_with_when(device.source.as_ref(), *end)?;
                 } else {
                     device
                         .source
                         .start_with_when_and_grain_offset_and_grain_duration(
-                            start,
+                            *start,
                             voice.source_offset,
                             voice.duration,
                         )?;
                 }
-                device.scheduled_end = end;
+                device.scheduled_end = *end;
             }
             let now = self.context.current_time();
             self.release_at(now)?;
@@ -810,6 +824,19 @@ mod tests {
         assert!(device_time(f64::MAX, f64::MAX).is_err());
         assert!(device_time(1.0, -0.5).is_err());
         assert!(device_time(f64::INFINITY, 0.0).is_err());
+    }
+
+    #[test]
+    fn collapsed_open_prefix_interval_waits_for_more_device_time() {
+        let frontier: f64 = 0.5;
+        let scene_time = f64::from_bits(frontier.to_bits() - 1);
+        let duration = frontier - scene_time;
+        assert!(duration > 0.0);
+        assert_eq!(schedulable_device_interval(15.0, 0.0, duration), Ok(None));
+        assert_eq!(
+            schedulable_device_interval(15.0, 0.0, 0.01),
+            Ok(Some((15.0, 15.01)))
+        );
     }
 
     #[test]
