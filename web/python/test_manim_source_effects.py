@@ -6,6 +6,24 @@ from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_linear_scene_requires_closed_base_initializer_and_text(self):
+        source = Path(__file__).with_name("examples").joinpath("showcase_linear_algebra.py").read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        variants = (
+            source.replace("from noon import *", "from noon import Scene, LinearTransformationScene, prepare_latex, YELLOW"),
+            source.replace("from noon import *", "from manim import *"),
+            source.replace("class LinearAlgebra", "LinearTransformationScene = Scene\nclass LinearAlgebra"),
+            source.replace("leave_ghost_vectors=True", "leave_ghost_vectors=context.get('value')"),
+            source.replace("leave_ghost_vectors=True", "leave_ghost_vectors=1"),
+            source + "\n    def apply_matrix(self, matrix): pass\n",
+            source.replace('        caption = Typst', '        Typst = self.wait\n        caption = Typst'),
+            source.replace('        caption = Typst', '        Mesh3D.sphere(radius=1)\n        caption = Typst'),
+            source.replace('        caption = Typst("Swap the coordinates")', '        caption = Typst(context.get("caption"))'),
+        )
+        for unsafe in variants:
+            with self.subTest(source=unsafe):
+                self.assertFalse(source_is_scene_only(unsafe))
+
     def test_moving_camera_scene_requires_the_canonical_closed_wrapper(self):
         examples = Path(__file__).with_name("examples")
         bloom = (examples / "showcase_bloom_emission.py").read_text()

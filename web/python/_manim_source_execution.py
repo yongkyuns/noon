@@ -39,7 +39,7 @@ _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform
-ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene
+ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes
@@ -84,6 +84,7 @@ set_camera_orientation move_camera point_light add_world_mobjects
 add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
 """.split())
 _SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
+_SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
 _SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
@@ -194,6 +195,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_plot_loads = set()
         self.admitted_spatial_constructor_loads = set()
         self.spatial_method_depth = 0
+        self.linear_method_depth = 0
         bindings = _SourceBindings()
         for node in tree.body:
             bindings.visit(node)
@@ -318,7 +320,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_SPATIAL_CONSTRUCTORS
                 and id(node) not in self.admitted_spatial_constructor_loads):
             raise _OpaqueSource(node, "unproven_spatial_constructor")
-        if (self.spatial_method_depth and isinstance(node.ctx, ast.Load)
+        if ((self.spatial_method_depth or self.linear_method_depth) and isinstance(node.ctx, ast.Load)
                 and node.id in (_SOURCE_SPATIAL_CONSTRUCTORS | _SOURCE_COLOR_CONSTANTS | {"Color"})
                 and self._spatial_symbol_shadowed(node.id)):
             raise _OpaqueSource(node, "unproven_shadowed_spatial_constructor")
@@ -768,7 +770,9 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unproven_resource_input")
             self.admitted_code_loads.add(id(node.func))
         if self._spatial_constructor_call(node):
-            if not self.spatial_method_depth:
+            linear_text = (self.linear_method_depth and isinstance(node.func, ast.Name)
+                           and node.func.id == "Typst" and self._trusted_noon_binding("Typst"))
+            if not self.spatial_method_depth and not linear_text:
                 raise _OpaqueSource(node, "unproven_spatial_constructor")
             if not self._valid_spatial_constructor_call(node):
                 raise _OpaqueSource(node, "unproven_spatial_constructor")
@@ -1074,22 +1078,24 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unsupported_class_contract")
         spatial = node.bases[0].id == "ThreeDScene"
         moving_camera = node.bases[0].id == "MovingCameraScene"
-        if spatial:
-            if not self._trusted_three_d_scene_base():
+        linear = node.bases[0].id == "LinearTransformationScene"
+        if spatial or linear:
+            if not self._trusted_noon_binding(node.bases[0].id):
                 raise _OpaqueSource(node, "unsupported_class_contract")
             methods = [member for member in node.body
                        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))]
             if (any(member.name not in {"__init__", "construct"} for member in methods)
                     or sum(member.name == "construct" for member in methods) > 1
                     or sum(member.name == "__init__" for member in methods) > 1
-                    or any(member.name == "construct" and not self._simple_three_d_construct(member)
+                    or any(member.name == "construct" and not self._simple_construct(member)
                            for member in methods)):
                 raise _OpaqueSource(node, "unsupported_class_contract")
             for member in methods:
                 if member.name == "__init__":
-                    self._validate_three_d_super_init(member)
+                    self._validate_super_init(member, {"leave_ghost_vectors": bool} if linear
+                                              else {"near": (int, float), "far": (int, float)})
         elif moving_camera:
-            if not self._trusted_moving_camera_scene_base():
+            if not self._trusted_noon_binding(node.bases[0].id):
                 raise _OpaqueSource(node, "unsupported_class_contract")
             methods = [member for member in node.body
                        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))]
@@ -1111,45 +1117,36 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.scopes[0] = self.scopes[0] | _SOURCE_SPATIAL_CONSTRUCTORS
         elif moving_camera:
             self.members = self.members | _SOURCE_MOVING_CAMERA_MEMBERS
+        elif linear:
+            self.members = self.members | _SOURCE_LINEAR_MEMBERS
+            self.scopes[0] = self.scopes[0] | {"Typst"}
         try:
             for member in node.body:
-                if spatial and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                if (spatial or linear) and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                         and member.name == "__init__":
                     continue
-                if spatial and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    self.spatial_method_depth += 1
+                if (spatial or linear) and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    self.spatial_method_depth += spatial
+                    self.linear_method_depth += linear
                     try:
                         self.visit(member)
                     finally:
-                        self.spatial_method_depth -= 1
+                        self.spatial_method_depth -= spatial
+                        self.linear_method_depth -= linear
                 else:
                     self.visit(member)
         finally:
             self.members = previous_members
             self.scopes[0] = previous_module_scope
 
-    def _trusted_three_d_scene_base(self):
-        if any("ThreeDScene" in scope for scope in self.scopes[1:]):
-            return False
-        origin = self.module_binding_locations.get("ThreeDScene")
-        if origin is None:
-            return "ThreeDScene" in self.scopes[0]
-        return (origin in self.module_imports and isinstance(origin, ast.ImportFrom)
-                and origin.module == "noon"
-                and self.module_binding_counts.get("ThreeDScene") == 1
-                and any(alias.name == "ThreeDScene" and alias.asname is None
-                        for alias in origin.names))
-
-    def _trusted_moving_camera_scene_base(self):
-        name = "MovingCameraScene"
+    def _trusted_noon_binding(self, name):
         if any(name in scope for scope in self.scopes[1:]):
             return False
         origin = self.module_binding_locations.get(name)
         if origin is None:
-            return (name in self.scopes[0]
-                    and any(isinstance(imported, ast.ImportFrom) and imported.module == "noon"
-                            and any(alias.name == "*" for alias in imported.names)
-                            for imported in self.module_imports))
+            return any(isinstance(imported, ast.ImportFrom) and imported.module == "noon"
+                       and any(alias.name == "*" for alias in imported.names)
+                       for imported in self.module_imports)
         return (origin in self.module_imports and isinstance(origin, ast.ImportFrom)
                 and origin.module == "noon"
                 and self.module_binding_counts.get(name) == 1
@@ -1165,16 +1162,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and node.args.vararg is None and node.args.kwarg is None)
 
     @staticmethod
-    def _simple_three_d_construct(node):
-        return _SceneOnlySource._simple_construct(node)
-
-    @staticmethod
-    def _validate_three_d_super_init(node):
-        if (not isinstance(node, ast.FunctionDef) or node.decorator_list or node.returns is not None
-                or getattr(node, "type_params", ()) or node.args.posonlyargs
-                or len(node.args.args) != 1 or node.args.args[0].arg != "self"
-                or node.args.args[0].annotation or node.args.defaults or node.args.kwonlyargs
-                or node.args.kw_defaults or node.args.vararg or node.args.kwarg):
+    def _validate_super_init(node, options):
+        if not isinstance(node, ast.FunctionDef) or not _SceneOnlySource._simple_construct(node):
             raise _OpaqueSource(node, "unsupported_class_contract")
         body = node.body
         if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
@@ -1187,10 +1176,11 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (not isinstance(target, ast.Attribute) or target.attr != "__init__"
                 or not isinstance(target.value, ast.Call) or not isinstance(target.value.func, ast.Name)
                 or target.value.func.id != "super" or target.value.args or target.value.keywords
-                or call.args or any(keyword.arg not in {"near", "far"} for keyword in call.keywords)
+                or call.args or any(keyword.arg not in options for keyword in call.keywords)
                 or len({keyword.arg for keyword in call.keywords}) != len(call.keywords)
                 or any(not isinstance(keyword.value, ast.Constant)
-                       or type(keyword.value.value) not in (int, float)
+                       or not isinstance(keyword.value.value, options[keyword.arg])
+                       or type(keyword.value.value) is bool and options[keyword.arg] is not bool
                        for keyword in call.keywords)):
             raise _OpaqueSource(node, "unsupported_class_contract")
 
