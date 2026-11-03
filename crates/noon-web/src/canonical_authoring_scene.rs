@@ -10398,6 +10398,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        /// Observe the current source requirement at an actual continuation
+        /// boundary without changing the active source or its playback policy.
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = observedSourceExecutionRequirementJson)]
+        pub fn observed_source_execution_requirement_json(&mut self) -> Result<String, JsValue> {
+            self.inner
+                .observed_source_execution_requirement()
+                .map(crate::prepared_execution_player::source::source_execution_requirement_json)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = liveCompleteSegment)]
         pub fn live_complete_segment(&mut self) -> Result<(), JsValue> {
             self.inner

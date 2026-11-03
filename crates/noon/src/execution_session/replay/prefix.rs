@@ -45,6 +45,30 @@ fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
 }
 
 #[cfg(test)]
+#[test]
+fn opaque_continuation_reports_callbacks_only_when_the_schedule_exists() {
+    use crate::Scene;
+    use noon_core::{HostCallbackId, SemanticMutationTransaction};
+
+    let mut scene = Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    scene.add(&target).unwrap();
+    let mut source = scene.execution_session().unwrap();
+    assert_eq!(
+        source.continuation_execution_requirement(crate::ContinuationEffects::Opaque),
+        Some(SourceExecutionRequirement::HostEffects)
+    );
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(target.node_id(), HostCallbackId::new(72), 1.0, None);
+    scene.live(&mut source).apply(transaction).unwrap();
+    assert_eq!(
+        source.continuation_execution_requirement(crate::ContinuationEffects::Opaque),
+        Some(SourceExecutionRequirement::HostCallbacks)
+    );
+}
+
+#[cfg(test)]
 mod backdrop_tests;
 #[cfg(test)]
 mod camera_prefix_tests;
@@ -74,6 +98,9 @@ impl ExecutionSession {
         &self,
         effects: crate::ContinuationEffects,
     ) -> Option<SourceExecutionRequirement> {
+        if !self.callback_schedule.is_empty() {
+            return Some(SourceExecutionRequirement::HostCallbacks);
+        }
         match effects {
             crate::ContinuationEffects::Opaque => Some(SourceExecutionRequirement::HostEffects),
             crate::ContinuationEffects::SceneOnly => self.source_execution_requirement(),

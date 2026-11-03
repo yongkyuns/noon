@@ -29,9 +29,10 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false, staticAdmission = true } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false, staticAdmission = true, opaque = false, lateCallbacks = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
+  let callbackSchedule = observed && !lateCallbacks;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
   let pending, freed = false;
   const alive = () => assert.equal(freed, false, "retired WASM handle must never be reused");
@@ -59,7 +60,16 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   };
   const context = {
     prepareFinishedSource() { events.push("finished-admission"); return staticAdmission; },
-    beginObservedPreparedSource() { return JSON.stringify(observed ? { code: "host_callbacks" } : null); },
+    beginObservedPreparedSource() {
+      if (opaque || lateCallbacks) {
+        observed = true;
+        return JSON.stringify({ code: "host_effects" });
+      }
+      return JSON.stringify(observed ? { code: "host_callbacks" } : null);
+    },
+    observedSourceExecutionRequirementJson() {
+      return JSON.stringify(callbackSchedule ? { code: "host_callbacks" } : { code: "host_effects" });
+    },
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
     createFinishedPreparedExecutionPlayer(session) {
       assert.equal(session, 3); events.push("static-reader");
@@ -200,6 +210,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
           continuation_generation: api.run().continuation.generation, callback_session_id: null } });
     },
     endpoint: () => endpoint,
+    registerCallback() { callbackSchedule = true; },
   };
 }
 
@@ -506,6 +517,59 @@ test("initial observed admission relays callbacks to the original stack without 
   assert.ok(h.posts.some(post => post.type === "execution_diagnostic" && post.event.stage === "source-complete" &&
     post.event.contextId === attached.event.contextId));
   assert.equal(h.tasks.size, 0);
+});
+
+test("opaque external source without a callback keeps its host-effects reason", async () => {
+  const h = host({ opaque: true });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  });
+  await microtasks();
+  const initial = h.tick();
+  await h.attach({ initiallyPaused: false });
+  const continuation = h.run().continuation;
+  h.completeContinuation(continuation, continuation.generation);
+  await initial;
+  await microtasks();
+  const second = h.tick();
+  h.completeContinuation(continuation, continuation.generation);
+  await second; await done;
+
+  const diagnostics = h.posts.filter(post => post.type === "execution_diagnostic").map(post => post.event);
+  assert.equal(diagnostics.find(event => event.stage === "attached").reason.code, "host_effects");
+  assert.equal(diagnostics.some(event => event.stage === "source-requirement"), false);
+  assert.deepEqual(h.errors, []);
+});
+
+test("a later Rust callback schedule refines an opaque source reason at its next barrier", async () => {
+  const h = host({ lateCallbacks: true });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    h.registerCallback();
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  });
+  await microtasks();
+  const initial = h.tick();
+  await h.attach({ initiallyPaused: false });
+  const continuation = h.run().continuation;
+  h.completeContinuation(continuation, continuation.generation);
+  await initial;
+  await microtasks();
+
+  const diagnostics = h.posts.filter(post => post.type === "execution_diagnostic").map(post => post.event);
+  assert.equal(diagnostics.find(event => event.stage === "attached").reason.code, "host_effects");
+  const requirement = diagnostics.find(event => event.stage === "source-requirement");
+  assert.equal(requirement.reason.code, "host_callbacks");
+  assert.equal(requirement.profile, "observed");
+  assert.equal(requirement.continuationGeneration, continuation.generation);
+
+  const second = h.tick();
+  h.completeContinuation(continuation, continuation.generation);
+  await second; await done;
+  assert.deepEqual(h.errors, []);
 });
 
 test("observed preparation forwards the original resource-start handshake", async () => {

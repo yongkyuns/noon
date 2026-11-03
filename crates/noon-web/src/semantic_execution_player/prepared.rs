@@ -8,6 +8,13 @@ fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
 }
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn observed_source_execution_requirement(
+        &self,
+    ) -> Option<noon::SourceExecutionRequirement> {
+        self.session
+            .continuation_execution_requirement(noon::ContinuationEffects::Opaque)
+    }
+
     pub(crate) fn prefix_source_requirement(
         &self,
         publisher: &PrefixPublisher,

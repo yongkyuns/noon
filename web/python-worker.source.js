@@ -696,6 +696,24 @@ async function prepareSemanticEffectRequest(continuation, context, staged) {
   await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
 }
 
+function observeContinuationSourceRequirement(continuation) {
+  if (!continuation.observedExecution) return;
+  const entry = semanticContexts.get(continuation.contextId);
+  if (!entry || entry.released || entry.sourceRequirement?.code === "host_callbacks") return;
+  const requirement = sourceExecutionRequirement(invokePreparedEngine(
+    () => continuation.context.observedSourceExecutionRequirementJson(),
+  ));
+  if (requirement?.code !== "host_callbacks") return;
+  entry.sourceRequirement = requirement;
+  executionDiagnostic(entry, {
+    stage: "source-requirement",
+    reason: requirement,
+    profile: "observed",
+    contextId: continuation.contextId,
+    continuationGeneration: continuation.generation,
+  });
+}
+
 function registerContinuationContext(context) {
   if (activeAuthoringRun === null) {
     throw new Error("semantic continuation requires an active Python authoring run");
@@ -713,6 +731,7 @@ function registerContinuationContext(context) {
     if (activeAuthoringRun.continuation.context !== context) {
       throw new Error("one Python authoring run cannot suspend multiple semantic contexts");
     }
+    observeContinuationSourceRequirement(activeAuthoringRun.continuation);
     return activeAuthoringRun.continuation;
   }
   if (activeAuthoringRun.preparedPlayback) invokePreparedEngine(() => context.prepareExecutionRun());

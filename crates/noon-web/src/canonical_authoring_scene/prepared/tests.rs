@@ -49,6 +49,39 @@ fn interpreter_host_effect_admission_retains_a_quiet_original_source_at_its_actu
 }
 
 #[test]
+fn opaque_source_reason_refines_only_after_a_callback_is_registered() {
+    let (mut context, target) = fixture();
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
+    assert_eq!(
+        context.observed_source_execution_requirement().unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
+
+    let player = context.active_live_player().unwrap();
+    player.live_advance_segment_to(1.0).unwrap();
+    player.live_complete_segment().unwrap();
+    context
+        .add_updater(&target, HostCallbackId::new(92), 1.0, None)
+        .unwrap();
+    assert_eq!(
+        context.observed_source_execution_requirement().unwrap(),
+        Some(noon::SourceExecutionRequirement::HostCallbacks)
+    );
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert_eq!(context.active_live_player().unwrap().time(), 1.0);
+    assert!(context
+        .active_live_player()
+        .unwrap()
+        .has_pending_live_segment());
+}
+
+#[test]
 fn completed_observed_source_keeps_original_history_for_replay() {
     let (mut context, target) = fixture();
     context

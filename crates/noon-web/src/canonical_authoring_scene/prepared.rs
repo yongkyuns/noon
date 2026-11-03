@@ -4,6 +4,14 @@ use super::{AuthoringFailure, CanonicalAuthoringScene};
 use noon::{PrefixBatch, PrefixPublisher, PrefixReader};
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn observed_source_execution_requirement(
+        &mut self,
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        Ok(self
+            .active_live_player()?
+            .observed_source_execution_requirement())
+    }
+
     pub(crate) fn prefix_source_requirement(
         &mut self,
         publisher: &PrefixPublisher,
