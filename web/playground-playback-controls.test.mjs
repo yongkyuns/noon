@@ -25,7 +25,7 @@ test("source-owned progress moves despite busy/paused flags, without permitting 
   f.controls.setBusy(true);
   f.controls.observe({ time: 0.4, playing: false, durationSeconds: 2 });
   assert.equal(f.controls.element.dataset.elapsedSeconds, "0.4");
-  assert.equal(f.range.hidden, true);
+  assert.equal(f.range.hidden, false);
   assert.equal(f.output.value, "0.40 / — s");
   f.controls.observe({ time: 2.5, playing: true, durationSeconds: 4 });
   assert.equal(f.controls.element.dataset.elapsedSeconds, "2.5");
@@ -57,7 +57,7 @@ test("an observed source can pause and resume without enabling replay or inventi
   f.controls.setUnavailable("source execution is not retained for replay");
   const button = f.preview.querySelector(".playback-toggle");
   assert.equal(button.disabled, false);
-  assert.equal(f.range.hidden, true);
+  assert.equal(f.range.hidden, false);
   assert.equal(f.preview.querySelector(".playback-restart").disabled, true);
   assert.equal(f.output.value, "0.50 / — s");
   button.dispatchEvent(new Event("click")); await flush();
@@ -171,7 +171,7 @@ test("first-pass segment changes never expose a misleading percentage, and compl
     f.controls.observe({ ...state, playing: false });
     assert.equal(f.controls.element.dataset.elapsedSeconds, String(state.time));
     assert.equal(f.controls.durationSeconds, null);
-    assert.equal(f.range.hidden, true);
+    assert.equal(f.range.hidden, false);
     assert.equal(f.preview.querySelector(".playback-live-status").hidden, false);
   }
   f.controls.setDuration(5.7);

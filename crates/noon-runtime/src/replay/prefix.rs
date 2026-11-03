@@ -351,13 +351,7 @@ impl PrefixReceiver {
             }
             // The immediate predecessor keeps the exclusive frontier itself
             // out of the inclusive UI range without inventing a time step.
-            if self.frontier == 0.0 {
-                -f64::from_bits(1)
-            } else if self.frontier > 0.0 {
-                f64::from_bits(self.frontier.to_bits() - 1)
-            } else {
-                f64::from_bits(self.frontier.to_bits() + 1)
-            }
+            self.frontier.next_down()
         };
         if end < self.start || !self.contains_time(end) {
             return Ok(None);

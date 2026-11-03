@@ -212,8 +212,8 @@ try {
   assert.ok(
     diagnostics.lifecycle.samples
       .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
-      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && sample.scrubberHidden),
-    "source-owned playback must expose live progress but reject host commands",
+      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && !sample.scrubberHidden),
+    "source-owned playback must keep the shared timeline visible while rejecting host commands",
   );
   const liveTimes = diagnostics.lifecycle.samples
     .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")

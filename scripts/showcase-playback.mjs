@@ -70,12 +70,20 @@ export async function qualifyPlayheadEndpoints(page, controlsModule = "./playgro
     for (const duration of [2.5999999999999996, 2.6, 2.6000000000000005, 7.999999999999999, 8, 0.0004]) {
       const pane = document.createElement("section");
       document.body.append(pane);
-      const calls = [], errors = [];
+      const calls = [], presentations = [], errors = [];
       const player = {
         pause: async () => ({ time: 0, playing: false }),
         resume: async () => ({ time: 0, playing: true }),
         restartPlayback: async () => ({ time: 0, playing: true }),
-        seek: async (time) => { calls.push(time); return { time, playing: false }; },
+        seek: (time) => {
+          calls.push(time);
+          const sequence = calls.length;
+          return new Promise(resolve => requestAnimationFrame(() => {
+            const receipt = { session: 1, sequence, time, unchanged: false };
+            presentations.push(receipt);
+            resolve({ time, playing: false, presentationReceipt: receipt });
+          }));
+        },
       };
       const controls = new PlaygroundPlaybackControls(player, pane, {
         durationSeconds: duration, onError: (error) => errors.push(String(error)),
@@ -87,16 +95,18 @@ export async function qualifyPlayheadEndpoints(page, controlsModule = "./playgro
           slider.value = String(requested);
           const actualInput = Number(slider.value);
           slider.dispatchEvent(new Event("input", { bubbles: true }));
-          await Promise.resolve();
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          await new Promise(resolve => requestAnimationFrame(resolve));
           const expected = requested === duration ? duration : actualInput;
           if (Math.abs(actualInput - requested) > 8 * Number.EPSILON * duration ||
               calls.at(-1) !== expected || errors.length ||
+              presentations.at(-1)?.time !== expected ||
               Number(controls.element.dataset.elapsedSeconds) !== expected ||
               controls.element.dataset.busy !== "false" || controls.durationSeconds !== duration ||
               Number(slider.max) !== duration) {
             throw new Error(`Playhead changed an authored time: ${JSON.stringify({ duration, requested, actualInput, calls, errors })}`);
           }
-          cases.push({ duration, requested, actualInput, forwarded: calls.at(-1) });
+          cases.push({ duration, requested, actualInput, forwarded: calls.at(-1), receipt: presentations.at(-1) });
         }
       } finally {
         controls.destroy();

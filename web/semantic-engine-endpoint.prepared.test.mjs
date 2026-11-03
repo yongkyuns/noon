@@ -28,6 +28,13 @@ function fixture(mode = "transferable", options = {}) {
     sequence: sequence++, snapshot: sequence === 1, time, objects: [], padding: payloadPadding,
   });
   let loopDuration = null, loopCount = 0;
+  const seekDeltaJson = value => {
+    if (!Number.isFinite(value) || value < 0 || (end === undefined ? value >= frontier : value > end)) {
+      throw new Error("prepared target is unavailable");
+    }
+    record("seek", value); time = value;
+    return json();
+  };
   const player = {
     resourceBundleBytes() { record("resources"); return new Uint8Array([1]); },
     initialDeltaJson() { record("initial"); return json(); },
@@ -44,19 +51,15 @@ function fixture(mode = "transferable", options = {}) {
       if (tickFailure) throw tickFailure;
       return tickDelta ? json() : null;
     },
-    seekDeltaJson(value) {
-      if (!Number.isFinite(value) || value < 0 || (end === undefined ? value >= frontier : value > end)) {
-        throw new Error("prepared target is unavailable");
-      }
-      record("seek", value); time = value;
-      return json();
-    },
+    seekDeltaJson,
     preparedTime: () => time,
+    time: () => time,
     preparedFrontier: () => frontier,
     preparedEndTime: () => end,
     preparedPlaying: () => playing,
     preparedBuffering: () => buffering,
     preparedPlaybackStateJson: () => JSON.stringify({ time, frontier, end: end ?? null,
+      seekRange: { start: 0, end: end ?? Math.max(0, frontier - Number.EPSILON * Math.max(1, frontier)) },
       playing, buffering, completed: end === 0 || (end != null && loopDuration === null && time >= end),
       advancing: playing && !buffering, loopDuration, loopCount, loopError: null }),
     setPreparedLoopDuration(value) { record("loop", value); loopDuration = value ?? null; },
@@ -125,6 +128,10 @@ function fixture(mode = "transferable", options = {}) {
       await when(() => count("wake") > prior);
     },
     observe(value) { observation = value; },
+    noDeltaSeek() {
+      player.seekDeltaJson = value => { record("seek", value); time = value; return null; };
+    },
+    restoreDeltaSeek() { player.seekDeltaJson = seekDeltaJson; },
     buffer() { buffering = true; },
     publishOnTick(value = true) { tickDelta = value; },
     oversizePayload(bytes = 4096) { payloadPadding = "x".repeat(bytes); },
@@ -190,6 +197,8 @@ for (const mode of ["transferable", "shared"]) {
     try {
       await f.attach();
       assert.equal(f.replies.find(value => value.type === "ready").preparedPlayback, true);
+      assert.deepEqual(f.replies.find(value => value.type === "ready").seekRange,
+        { start: 0, end: 4 - Number.EPSILON * 4 });
       assert.equal(f.messages[0].type, "retained_resources");
       assert.equal(f.deltas[0].snapshot, true);
       assert.equal(f.count("wake"), 0);
@@ -199,6 +208,7 @@ for (const mode of ["transferable", "shared"]) {
       const cold = await f.request("state");
       assert.equal(cold.preparedPlayback, true);
       assert.equal(cold.preparedFrontier, 4);
+      assert.deepEqual(cold.seekRange, { start: 0, end: 4 - Number.EPSILON * 4 });
       assert.equal(cold.durationSeconds, null);
       assert.equal(cold.time, 0);
       assert.equal(f.count("observe-time"), 0);
@@ -231,6 +241,7 @@ for (const mode of ["transferable", "shared"]) {
       f.deliver(8); f.deliver(8, true);
       const state = await f.request("state");
       assert.equal(state.preparedFrontier, 8);
+      assert.deepEqual(state.seekRange, { start: 0, end: 8 });
       assert.equal(state.durationSeconds, 8);
       assert.equal(state.time, 0);
       assert.equal(f.count("drain"), drains);
@@ -241,7 +252,10 @@ for (const mode of ["transferable", "shared"]) {
       const release = { ...press, kind: "release", sequence: 2 };
       assert.equal((await f.request("browser_pointer_input", release)).pointerInputAccepted, true);
       assert.deepEqual(f.calls.filter(call => call[0] === "pointer").map(call => call[1]), [press, release]);
-      assert.equal((await f.request("seek", { time: 8 })).time, 8);
+      const seeking = f.request("seek", { time: 8 });
+      await f.when(() => f.deltas.length === 2);
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
+      assert.equal((await seeking).time, 8);
     } finally { f.close(); }
   });
 }
@@ -251,17 +265,18 @@ test("prepared backpressure preserves accepted control order and never extracts 
   try {
     await f.attach();
     await f.present(); // Intentionally withhold transport acknowledgements.
-    assert.equal((await f.request("seek", { time: 1 })).time, 1);
+    const first = f.request("seek", { time: 1 });
     await f.when(() => f.deltas.length === 2);
     const wakes = f.count("source-wake");
     const blocked = f.request("seek", { time: 2 });
-    const observed = await f.request("state");
-    assert.equal(observed.time, 1);
     assert.equal(f.count("seek"), 1);
     assert.equal(f.count("source-wake"), wakes);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
+    assert.equal((await first).time, 1);
     f.acknowledge(f.deltas[0]);
-    assert.equal((await blocked).time, 2);
     await f.when(() => f.deltas.length === 3);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 2 });
+    assert.equal((await blocked).time, 2);
     assert.deepEqual(f.deltas.map(value => value.sequence), [0, 1, 2]);
     assert.deepEqual(f.calls.filter(call => call[0] === "seek").map(call => call[1]), [1, 2]);
     f.publishOnTick(); f.tick();
@@ -278,22 +293,71 @@ test("cold prepared seek starts its clock only after the newly selected frame pr
   const f = fixture();
   try {
     await f.attach();
-    assert.equal((await f.request("seek", { time: 1 })).time, 1);
+    const seeking = f.request("seek", { time: 1 });
     await f.when(() => f.deltas.length === 2);
     f.acknowledge(f.deltas[0]);
     f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0,
       pointerReceipt: { session: 7, sequence: 0, presentation: 1 } });
     await f.when(() => f.count("presented") === 1);
-    assert.equal((await f.request("state")).time, 1);
+    assert.equal(f.replies.some(reply => reply.requestId === 1), false,
+      "the seek stays pending until its own publication is displayed");
+    assert.equal(f.player.preparedTime(), 1);
     assert.equal(f.count("wake"), 0);
     assert.equal(f.count("observe-time"), 0);
     f.tick();
-    await f.request("state");
     assert.equal(f.count("tick"), 0);
     await f.present(f.deltas[1]);
+    assert.equal((await seeking).time, 1);
     assert.equal(f.count("wake"), 1);
     await f.request("state");
     assert.equal(f.count("observe-time"), 1);
+  } finally { f.close(); }
+});
+
+test("prepared seek returns a display receipt only for its matching publication", { timeout: 3000 }, async () => {
+  const f = fixture();
+  try {
+    await f.attach();
+    const seeking = f.request("seek", { time: 1 });
+    await f.when(() => f.deltas.length === 2);
+    assert.equal(f.replies.some(reply => reply.type === "seek"), false);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
+    const result = await seeking;
+    assert.equal(result.time, 1);
+    assert.deepEqual(result.presentationReceipt, { session: 7, sequence: 1, time: 1, unchanged: false });
+  } finally { f.close(); }
+});
+
+test("no-delta seek joins the latest publication and a stale receipt cannot settle it", { timeout: 3000 }, async () => {
+  const f = fixture();
+  try {
+    await f.attach();
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0 });
+    await f.when(() => f.count("wake") > 0);
+
+    f.publishOnTick();
+    await f.request("resume");
+    f.tick();
+    await f.when(() => f.deltas.length === 2);
+    f.acknowledge(f.deltas[0]); // Free transport capacity without presenting the newer frame.
+    f.noDeltaSeek();
+    const seekingUnchanged = f.request("seek", { time: 0 });
+    await new Promise(resolve => setImmediate(resolve));
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0 });
+    assert.equal(f.replies.some(reply => reply.type === "seek"), false,
+      "an older displayed frame cannot settle a no-delta seek while a newer publication is pending");
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
+    const result = await seekingUnchanged;
+    assert.deepEqual(result.presentationReceipt, { session: 7, sequence: 1, time: 0, unchanged: true });
+
+    f.restoreDeltaSeek();
+    const seeking = f.request("seek", { time: 1 });
+    await f.when(() => f.deltas.length === 3);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1 });
+    assert.equal(f.replies.some(reply => reply.requestId === 3), false);
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 2 });
+    const next = await seeking;
+    assert.deepEqual(next.presentationReceipt, { session: 7, sequence: 2, time: 1, unchanged: false });
   } finally { f.close(); }
 });
 
@@ -481,7 +545,7 @@ test("prepared shared chunks do not admit the selected clock before the complete
     await f.attach();
     const wakes = f.count("wake");
     f.oversizePayload();
-    assert.equal((await f.request("seek", { time: 1 })).type, "seek");
+    const seeking = f.request("seek", { time: 1 });
     await f.when(() => f.deltas.length === 2);
     assert.equal(f.deltas[1].padding.length, 4096);
     assert.equal(f.count("seek"), 1);
@@ -489,6 +553,7 @@ test("prepared shared chunks do not admit the selected clock before the complete
     assert.equal(f.count("free"), 0);
     assert.equal(f.count("wake"), wakes, "chunk credit is not a displayed-frame receipt");
     await f.present(f.deltas[1]);
+    assert.equal((await seeking).type, "seek");
     assert.ok(f.count("wake") > wakes);
   } finally { f.close(); }
 });

@@ -1298,6 +1298,26 @@ test("a retired device unlock cannot resume its former worker", async t => {
   assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
 });
 
+test("a queued playback activation unlock is synchronous and remains owner-qualified", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  let completeUnlock;
+  const unlock = new Promise(resolve => { completeUnlock = resolve; });
+  let unlockCalls = 0;
+  t.mock.method(WorkerAudioDevice.prototype, "unlock", () => {
+    unlockCalls += 1;
+    return unlock;
+  });
+  const { client, engine } = await startClient();
+  const activation = client.preparePlaybackActivation();
+  assert.equal(unlockCalls, 1, "the click's turn starts unlocking before any seek can be awaited");
+  const resumed = client.resume(activation);
+  assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+  client.terminate();
+  completeUnlock();
+  await assert.rejects(resumed, error => error.name === "AbortError");
+  assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+});
+
 test("pause supersedes an outstanding device unlock without a delayed restart", async t => {
   const { WorkerAudioDevice } = await import("./worker-audio-device.js");
   let completeUnlock;

@@ -577,9 +577,33 @@ export class ExecutionWorkerClient {
     return this.#audioCommand("pause", {});
   }
 
-  async resume() {
-    // Web Audio resume must be initiated in the click's activation turn.
-    const unlocked = this.#audioDevice.unlock();
+  preparePlaybackActivation() {
+    // Start the device unlock synchronously in the user activation turn. Store
+    // only its result plus the worker owner identity for a later queued resume.
+    const session = this.#session;
+    const lifecycle = this.#lifecycleGeneration;
+    const unlock = this.#audioDevice.unlock().then(
+      () => ({ ok: true }), error => ({ error }),
+    );
+    return Object.freeze({ session, lifecycle, unlock });
+  }
+
+  async resume(activation = null) {
+    let unlocked;
+    if (activation === null) {
+      // Direct callers retain the same activation-turn contract.
+      unlocked = this.#audioDevice.unlock();
+    } else {
+      if (activation.session !== this.#session || activation.lifecycle !== this.#lifecycleGeneration ||
+          !(activation.unlock instanceof Promise)) {
+        const error = new Error("audio playback activation belongs to a retired execution");
+        error.name = "AbortError";
+        throw error;
+      }
+      unlocked = activation.unlock.then(result => {
+        if (result.error !== undefined) throw result.error;
+      });
+    }
     return this.#audioCommand("resume", {}, unlocked);
   }
 

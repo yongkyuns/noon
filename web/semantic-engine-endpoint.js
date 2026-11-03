@@ -115,6 +115,8 @@ export async function attachSemanticEngine(
   let callbackFault = null;
   let lastSentPublication = null;
   let lastPresentedPublication = null;
+  let lastPresentedDeltaMetadata = null;
+  const sentPublicationMetadata = new Map();
   let preparedClockAdmitted = false;
   let pendingPresentation = null;
   let pendingPointerInvalidation = null;
@@ -182,7 +184,10 @@ export async function attachSemanticEngine(
     try {
       const metadataStartedAtMs = timing === null ? 0 : performance.now();
       const carrier = workerCarrier ? prepareExecutionDeltaTransportForSend(json) : null;
-      const publication = carrier?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
+      const metadata = carrier?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
+      const rustTime = player?.time?.();
+      const publication = Number.isFinite(rustTime)
+        ? Object.freeze({ ...metadata, time: rustTime }) : metadata;
       if (carrier !== null) json = carrier.json;
       if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
       const transportStartedAtMs = timing === null ? 0 : performance.now();
@@ -191,6 +196,7 @@ export async function attachSemanticEngine(
       }
       if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
       lastSentPublication = publication;
+      sentPublicationMetadata.set(publication.sequence, publication);
       if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
       return publication;
     } catch (error) {
@@ -273,8 +279,11 @@ export async function attachSemanticEngine(
     // publication may still be waiting for the surface. Reuse its transport
     // metadata as the barrier without retaining a scene or frame mirror.
     const requiredPublication = publication ?? lastSentPublication;
-    if (requiredPublication === null || publicationAlreadyPresented(requiredPublication)) {
-      return Promise.resolve();
+    if (requiredPublication === null) {
+      return Promise.resolve(null);
+    }
+    if (publicationAlreadyPresented(requiredPublication)) {
+      return Promise.resolve(lastPresentedDeltaMetadata);
     }
     if (pendingPresentation !== null) {
       // Resource preparation and continuation progression may retain the same
@@ -306,7 +315,19 @@ export async function attachSemanticEngine(
       return;
     }
     const firstPresentation = lastPresentedPublication === null;
+    const samePresentedPublication = lastPresentedPublication !== null &&
+      samePublication(lastPresentedPublication, publication);
+    const priorPresentedMetadata = lastPresentedDeltaMetadata;
     lastPresentedPublication = publication;
+    lastPresentedDeltaMetadata = sentPublicationMetadata.get(publication.sequence) ??
+      (samePresentedPublication ? priorPresentedMetadata : null);
+    if (lastPresentedDeltaMetadata === null) {
+      fail(new Error("renderer acknowledged an unknown execution publication"));
+      return;
+    }
+    for (const sequence of sentPublicationMetadata.keys()) {
+      if (sequence <= publication.sequence) sentPublicationMetadata.delete(sequence);
+    }
     if (publication.pointerReceipt) {
       // The render port is ordered. An invalidation received before this repaint
       // must cancel the old gesture before the repaint can authorize any input.
@@ -320,7 +341,7 @@ export async function attachSemanticEngine(
         samePublication(pendingPresentation.publication, publication)) {
       const { resolve } = pendingPresentation;
       pendingPresentation = null;
-      resolve();
+      resolve(lastPresentedDeltaMetadata);
     }
     const admitsPreparedClock = prepared !== null && !preparedClockAdmitted &&
       samePublication(publication, lastSentPublication);
@@ -350,6 +371,7 @@ export async function attachSemanticEngine(
           ? player.preparedPlaybackTimeAt(performance.now()) : observation.time,
         playing: observation.playing,
         preparedFrontier: observation.frontier,
+        seekRange: observation.seekRange,
         durationSeconds: observation.end,
         buffering: observation.buffering,
         completed: observation.completed, advancing: observation.advancing,
@@ -1026,6 +1048,7 @@ export async function attachSemanticEngine(
       let pointerInputAccepted;
       let sampleTiming = null;
       let audioAnchor;
+      let presentationReceipt = null;
       let finiteExport;
       let audioBlock;
       try {
@@ -1125,7 +1148,22 @@ export async function attachSemanticEngine(
               ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             const publication = send(delta);
-            if (hasAudio) {
+            if (prepared !== null) {
+              const presented = await awaitPresentation(publication);
+              const selectedTime = player.time();
+              // A no-delta result may reuse the most recently encoded frame,
+              // but only when that exact publication represents Rust's
+              // selected time. The barrier joins lastSentPublication when the
+              // command itself produced no publication.
+              if (presented === null || !Number.isFinite(presented.time) ||
+                  presented.time !== selectedTime) {
+                throw new Error("prepared seek did not receive a matching displayed-time receipt");
+              }
+              presentationReceipt = {
+                session: presented.session, sequence: presented.sequence, time: selectedTime,
+                unchanged: publication === null,
+              };
+            } else if (hasAudio) {
               await awaitPresentation(publication);
               if (playing) player.resume();
             } else observeExecutionWake(performance.now());
@@ -1239,6 +1277,7 @@ export async function attachSemanticEngine(
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
           ...(sampleTiming === null ? {} : { sampleTiming }),
           ...(audioAnchor === undefined ? {} : { audioAnchor }),
+          ...(presentationReceipt === null ? {} : { presentationReceipt }),
           ...(finiteExport === undefined ? {} : { finiteExport }),
           ...(audioBlock === undefined ? {} : { audioBlock }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),

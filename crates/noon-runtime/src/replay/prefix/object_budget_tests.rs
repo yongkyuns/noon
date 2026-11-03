@@ -149,29 +149,31 @@ fn selectable_bounds_are_exact_and_bound_to_the_adopted_reader() {
 
 #[test]
 fn selectable_bounds_preserve_tiny_open_ranges_without_rounding() {
-    let make = || {
-        let mut scene =
+    for horizon in [f64::MIN_POSITIVE, f64::from_bits(1)] {
+        let mut tiny =
             SceneInstance::new(CompiledScene::compile_objects(vec![object(0)], &[]).unwrap());
-        scene
-            .begin_replay_retention(ReplayLimits {
-                revisions: 16,
-                payloads: usize::MAX,
-            })
-            .unwrap();
-        scene
-    };
-
-    let mut tiny = make();
-    tiny.advance_to(f64::MIN_POSITIVE).unwrap();
-    let (_, tiny_runtime, tiny_reader) = tiny.create_prefix_projection().unwrap();
-    let frontier = tiny_reader.frontier();
-    let end = f64::from_bits(frontier.to_bits() - 1);
-    assert_eq!(
-        tiny_reader.selectable_time_bounds(&tiny_runtime).unwrap(),
-        Some((0.0, end))
-    );
-    assert!(frontier < f64::MIN_POSITIVE * 4.0);
-    assert!(tiny_reader.contains_time(end));
+        tiny.begin_replay_retention(ReplayLimits {
+            revisions: 16,
+            payloads: usize::MAX,
+        })
+        .unwrap();
+        tiny.advance_to(horizon).unwrap();
+        let (_, tiny_runtime, tiny_reader) = tiny.create_prefix_projection().unwrap();
+        let frame_time = tiny_runtime.frame().time;
+        let publication = tiny_runtime.publication_context();
+        let resource_bytes = tiny_reader.retained_resource_bytes();
+        let frontier = tiny_reader.frontier();
+        let end = frontier.next_down();
+        assert_eq!(
+            tiny_reader.selectable_time_bounds(&tiny_runtime).unwrap(),
+            Some((0.0, end))
+        );
+        assert!(frontier < f64::MIN_POSITIVE * 4.0);
+        assert!(tiny_reader.contains_time(end));
+        assert_eq!(tiny_runtime.frame().time, frame_time);
+        assert_eq!(tiny_runtime.publication_context(), publication);
+        assert_eq!(tiny_reader.retained_resource_bytes(), resource_bytes);
+    }
 }
 
 #[test]
