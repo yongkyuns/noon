@@ -70,7 +70,7 @@ _SOURCE_MEMBERS = frozenset("""
 add remove clear play wait on_click set_drag_targets next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
-set_fill set_stroke set_color set_opacity set_emission set_z_index set_glow remove_glow set_effect
+set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value
 set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
 plot plot_samples
@@ -428,6 +428,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 for part in [node.left, *node.comparators]
             ):
                 return "bool"
+            if isinstance(node, ast.IfExp) and value(node.test, state) in {"bool", "int", "float"}:
+                return merge(value(node.body, state), value(node.orelse, state))
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                     and node.func.id == "abs" and len(node.args) == 1 and not node.keywords:
                 kind = value(node.args[0], state)
@@ -455,10 +457,10 @@ class _SceneOnlySource(ast.NodeVisitor):
                     owner_type, item_type = state.get(owner), value(item, state)
                     if (owner in moved or owner_type is None or owner_type[0] != "list" or item_type is None
                             or owner_type[1] not in (None, empty_list) and owner_type[1] != item_type
-                            or item_type[0] == "list" and (not isinstance(item, ast.Name) or item.id in moved)):
+                            or item_type[0] == "list" and isinstance(item, ast.Name) and item.id in moved):
                         return None
                     state[owner] = ("list", item_type)
-                    if item_type[0] == "list":
+                    if item_type[0] == "list" and isinstance(item, ast.Name):
                         moved.add(item.id)
                 elif isinstance(statement, ast.For) and isinstance(statement.target, ast.Name) \
                         and isinstance(statement.iter, ast.Call) and isinstance(statement.iter.func, ast.Name) \
@@ -551,6 +553,16 @@ class _SceneOnlySource(ast.NodeVisitor):
         if not uses.calls and not uses.paint_calls:
             return set()
 
+        for call in uses.calls:
+            if (len(call.args) == 1 and isinstance(call.args[0], ast.Call)
+                    and isinstance(call.args[0].func, ast.Name)
+                    and not call.args[0].args and not call.args[0].keywords):
+                helper = call.args[0].func.id
+                if (helper not in bindings.names and helper not in parameters
+                        and helper in self.closed_pixel_factory_names):
+                    self.pixel_factory_names.add(helper)
+                    self.admitted_pixel_factory_loads.add(id(call.args[0].func))
+
         requested_sources = {
             call.args[0].id for call in uses.calls
             if len(call.args) == 1 and isinstance(call.args[0], ast.Name)
@@ -559,25 +571,42 @@ class _SceneOnlySource(ast.NodeVisitor):
         for statement in body:
             if (not isinstance(statement, ast.Assign) or len(statement.targets) != 1
                     or not isinstance(statement.targets[0], ast.Name)
-                    or statement.targets[0].id not in requested_sources
-                    or not isinstance(statement.value, ast.Call)
-                    or not isinstance(statement.value.func, ast.Name)
-                    or statement.value.args or statement.value.keywords):
+                    or statement.targets[0].id not in requested_sources):
                 continue
-            target, helper = statement.targets[0].id, statement.value.func.id
-            if (bindings.binding_counts.get(target) == 1 and helper not in bindings.names
-                    and helper not in parameters and helper in self.closed_pixel_factory_names):
+            target = statement.targets[0].id
+            if bindings.binding_counts.get(target) != 1 or target in parameters:
+                continue
+            if (isinstance(statement.value, ast.ListComp)
+                    and self._bounded_direct_pixel_array(statement.value, bindings, parameters)
+                    and self._closed_pixel_proof(expression=statement.value, return_type=True)
+                    == ("list", ("list", ("list", "int")))
+                    and all(statement.lineno < call.lineno for call in uses.calls
+                            if len(call.args) == 1 and isinstance(call.args[0], ast.Name)
+                            and call.args[0].id == target)):
                 sources.add(target)
-                self.pixel_factory_names.add(helper)
-                self.admitted_pixel_factory_loads.add(id(statement.value.func))
+                continue
+            if (isinstance(statement.value, ast.Call)
+                    and isinstance(statement.value.func, ast.Name)
+                    and not statement.value.args and not statement.value.keywords):
+                helper = statement.value.func.id
+                if (helper not in bindings.names and helper not in parameters
+                        and helper in self.closed_pixel_factory_names):
+                    sources.add(target)
+                    self.pixel_factory_names.add(helper)
+                    self.admitted_pixel_factory_loads.add(id(statement.value.func))
         accepted = set()
         for call in uses.calls:
             keywords = {keyword.arg for keyword in call.keywords}
+            source_arg = call.args[0] if len(call.args) == 1 else None
+            source_name = (isinstance(source_arg, ast.Name) and source_arg.id in sources)
+            source_factory = (isinstance(source_arg, ast.Call)
+                and isinstance(source_arg.func, ast.Name)
+                and id(source_arg.func) in self.admitted_pixel_factory_loads
+                and not source_arg.args and not source_arg.keywords)
             if (len(call.args) != 1 or any(keyword.arg is None for keyword in call.keywords)
                     or not keywords.issubset({"height", "resampling_algorithm", "opacity", "z_index",
                                                "scale_to_resolution"})
-                    or not isinstance(call.args[0], ast.Name)
-                    or call.args[0].id not in sources):
+                    or (not source_name and not source_factory)):
                 raise _OpaqueSource(call, "unproven_image_source")
             for keyword in call.keywords:
                 option = keyword.value
@@ -590,7 +619,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                     allowed = isinstance(option, ast.Constant) and type(option.value) in (int, float)
                 if not allowed:
                     raise _OpaqueSource(option, "unproven_image_option")
-            accepted.add(id(call.args[0]))
+            if source_name:
+                accepted.add(id(source_arg))
 
         paint_sources = set()
         paint_palette_loads = {}
@@ -662,6 +692,25 @@ class _SceneOnlySource(ast.NodeVisitor):
                                     "unproven_image_palette")
         return sources | paint_sources
 
+    def _bounded_direct_pixel_array(self, expression, bindings, parameters):
+        if {"range", "abs"}.intersection(bindings.names | set(parameters)):
+            return False
+        ranges = [node for node in ast.walk(expression)
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                  and node.func.id == "range"]
+        if not ranges:
+            return False
+        pixel_count = 1
+        for call in ranges:
+            if (len(call.args) != 1 or call.keywords or not isinstance(call.args[0], ast.Constant)
+                    or type(call.args[0].value) is not int
+                    or not 0 < call.args[0].value <= 256):
+                return False
+            pixel_count *= call.args[0].value
+            if pixel_count > 65_536:
+                return False
+        return True
+
     def visit_Call(self, node):
         if isinstance(node.func, ast.Attribute) and node.func.attr == "plot":
             # The canonical axes API samples this scalar callable once into a
@@ -676,8 +725,14 @@ class _SceneOnlySource(ast.NodeVisitor):
                 "ImageMobject" in scope for scope in self.scopes[1:]
             ):
                 raise _OpaqueSource(node.func, "unproven_shadowed_image_constructor")
-            if (len(node.args) != 1 or not isinstance(node.args[0], ast.Name)
-                    or node.args[0].id not in self.image_pixel_sources[-1]):
+            pixel_source = len(node.args) == 1 and isinstance(node.args[0], ast.Name) \
+                and node.args[0].id in self.image_pixel_sources[-1]
+            pixel_factory = (len(node.args) == 1 and isinstance(node.args[0], ast.Call)
+                and isinstance(node.args[0].func, ast.Name)
+                and node.args[0].func.id in self.closed_pixel_factory_names
+                and id(node.args[0].func) in self.admitted_pixel_factory_loads
+                and not node.args[0].args and not node.args[0].keywords)
+            if not pixel_source and not pixel_factory:
                 raise _OpaqueSource(node, "unproven_image_source")
             self.admitted_image_loads.add(id(node.func))
         if isinstance(node.func, ast.Name) and node.func.id == "ImagePaint":

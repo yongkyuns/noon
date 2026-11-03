@@ -43,7 +43,8 @@ fn local_property(property: Property) -> bool {
 }
 
 /// The bounded built-in history profile: optional Blur, then optional Glow,
-/// then optional stack-owned visibility NoiseDissolve. Arbitrary stacks and
+/// followed by optional stack-owned visibility NoiseDissolve; BackdropBlur may
+/// stand alone or own that trailing visibility attachment. Arbitrary stacks and
 /// shader programs remain outside this profile.
 pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
     use noon_core::EffectDefinition::{BackdropBlur, Blur, Glow, NoiseDissolve};
@@ -57,7 +58,8 @@ pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
         ([NoiseDissolve(_)], Some(visibility))
         | ([Blur(_), NoiseDissolve(_)], Some(visibility))
         | ([Glow(_), NoiseDissolve(_)], Some(visibility))
-        | ([Blur(_), Glow(_), NoiseDissolve(_)], Some(visibility)) => {
+        | ([Blur(_), Glow(_), NoiseDissolve(_)], Some(visibility))
+        | ([BackdropBlur(_), NoiseDissolve(_)], Some(visibility)) => {
             stack.attachments().last() == Some(&visibility.attachment)
         }
         _ => false,
@@ -374,8 +376,8 @@ impl CompiledScene {
     /// Append-only glyph plans travel through the existing immutable plan table.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry the bounded ordered Blur/Glow profile with optional
-    /// trailing visibility NoiseDissolve, or a standalone BackdropBlur with typed
-    /// radius tracks. Authored-view Bloom history is limited to the actual linear-HDR
+    /// trailing visibility NoiseDissolve, or BackdropBlur with optional trailing
+    /// visibility and typed radius tracks. Authored-view Bloom history is limited to the actual linear-HDR
     /// camera owner and its typed radius, intensity and threshold channels. Other
     /// effect definitions remain outside this suffix profile.
     /// Ordering reconstruction visits only affected rows and their neighbours;

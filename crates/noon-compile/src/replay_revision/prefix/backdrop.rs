@@ -1,4 +1,4 @@
-//! The isolated built-in BackdropBlur history slice.
+//! Built-in BackdropBlur history with optional owned visibility.
 use super::*;
 use noon_core::{EffectDefinition, EffectTrackValue};
 
@@ -19,7 +19,7 @@ mod tests {
     }
 
     #[test]
-    fn backdrop_history_is_one_standalone_blur_with_only_typed_radius_tracks() {
+    fn backdrop_history_requires_owned_visibility_and_typed_radius_tracks() {
         let id = SemanticNodeId::new(3, 1);
         let blur = EffectDefinition::from(
             BackdropBlur::new(EffectUpdate::default().radius(Pixels(4.0))).unwrap(),
@@ -39,7 +39,13 @@ mod tests {
             Some(noise),
         )
         .unwrap();
-        assert!(!local_effect_stack(&mixed));
+        assert!(local_effect_stack(&mixed));
+        let unowned_dissolve = CompiledEffectStack::new([
+            effect(1, Blur::default()),
+            effect(2, NoiseDissolve::default()),
+        ])
+        .unwrap();
+        assert!(!local_effect_stack(&unowned_dissolve));
 
         let mut object = crate::CompiledObject::new(
             noon_core::ObjectId::new(0),

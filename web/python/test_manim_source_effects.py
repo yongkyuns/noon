@@ -206,6 +206,18 @@ class Example(Scene):
             "showcase_raster_images.py"
         ).read_text()
         self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        glass = Path(__file__).with_name("examples").joinpath(
+            "showcase_glass_lens.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(glass), {"admitted": True, "reason": None})
+
+        direct_pixels = '''from noon import *
+class Example(Scene):
+    def construct(self):
+        pixels = [[[x, y, 0, 255] for x in range(2)] for y in range(3)]
+        ImageMobject(pixels)
+'''
+        self.assertEqual(source_execution_proof(direct_pixels), {"admitted": True, "reason": None})
 
         for source in (
             'from noon import *\ndef pixels():\n    return "image.png"\n'
@@ -255,6 +267,13 @@ class Example(Scene):
             '        ImageMobject(data, height=context)\n',
             'from noon import *\ndef pixels():\n    return open("image.png")\n'
             'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            direct_pixels.replace('        ImageMobject(pixels)\n',
+                                  '        alias = pixels\n        ImageMobject(pixels)\n'),
+            direct_pixels.replace('        ImageMobject(pixels)\n',
+                                  '        pixels[0][0][0] = 7\n        ImageMobject(pixels)\n'),
+            direct_pixels.replace('range(2)', 'range(1000000)'),
+            direct_pixels.replace('pixels = [[[x, y, 0, 255] for x in range(2)] for y in range(3)]',
+                                  'pixels = [[x, y, 0, 255] for x in range(2)]'),
         ):
             with self.subTest(source=source):
                 self.assertFalse(source_execution_proof(source)["admitted"])
