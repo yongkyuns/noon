@@ -110,6 +110,12 @@ class SourceEffectsTests(unittest.TestCase):
             ('from noon import *\nclass Example(Scene):\n'
              '    def construct(self):\n        _ += 1\n', "private_name"),
             ('from noon import *\nclass Example(Scene):\n'
+             '    _ = 1\n    def construct(self):\n        pass\n', "unsupported_class_contract"),
+            ('from noon import *\ndef helper():\n    global _\n    _ = 1\n',
+             "unproven_scope_effect"),
+            ('from noon import *\ndef outer():\n    _ = 1\n    def inner():\n'
+             '        nonlocal _\n        _ = 2\n', "unproven_scope_effect"),
+            ('from noon import *\nclass Example(Scene):\n'
              '    def construct(self):\n        values = [1]\n        values[0] = 2\n',
              "unproven_ownership"),
             ('from noon import *\nclass Example(Scene):\n'
@@ -186,10 +192,11 @@ class SourceEffectsTests(unittest.TestCase):
         ''')))
         self.assertFalse(source_is_scene_only('from noon import Code as __builtins__\n'))
 
-    def test_unchanged_scene_gallery_sources_use_the_closed_subset(self):
+    def test_unchanged_gallery_and_stress_sources_use_the_closed_subset(self):
         examples = Path(__file__).parent / 'examples'
         for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py',
-                     'showcase_gpu_glow.py', 'showcase_dynamic_scene.py'):
+                     'showcase_gpu_glow.py', 'showcase_dynamic_scene.py',
+                     'manim_parity_stress_grid.py'):
             with self.subTest(name=name):
                 self.assertTrue(source_is_scene_only((examples / name).read_text()))
 
