@@ -678,10 +678,13 @@ const expectedTypeSurface = [
 if (javascript.includes("export class PreparedExecutionPlayer") || declarations.includes("export class PreparedExecutionPlayer")) {
   expectedJavascriptSurface.push("prepareFinishedSource(");
   expectedTypeSurface.push("prepareFinishedSource(): boolean");
-  expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(");
+  expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(",
+    "preparedPlaybackStateJson(", "setPreparedLoopDuration(", "get sourceExecutionRequirementJson()");
   expectedTypeSurface.push("export class PreparedExecutionPlayer",
     "resetReceiver(transport_session: number): void",
-    "beginObservedPreparedSource(scene_only_source?: boolean | null): boolean",
+    "beginObservedPreparedSource(scene_only_source?: boolean | null): string",
+    "preparedPlaybackStateJson(): string", "setPreparedLoopDuration(duration?: number | null): void",
+    "readonly sourceExecutionRequirementJson: string",
     "createFinishedPreparedExecutionPlayer(transport_session: number): PreparedExecutionPlayer | undefined",
     "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
     "finishSourcePreparation(context: CanonicalAuthoringSceneContext): boolean",
