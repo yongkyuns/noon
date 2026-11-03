@@ -33,6 +33,9 @@ export class PlaygroundPlaybackControls {
   #preparedFrontier = null;
   #seekRange = null;
   #gestureRange = null;
+  #nativeEndpointProbe = null;
+  #nativeEndpointRange = null;
+  #nativeEndpointCoordinate = null;
   #buffering = false;
   #seekNotice = null;
   #confirmedTimeSeconds = 0;
@@ -272,6 +275,20 @@ export class PlaygroundPlaybackControls {
     return { start: 0, end: this.#durationSeconds };
   }
 
+  #nativeRangeEndpoint(range) {
+    if (this.#nativeEndpointRange?.start === range.start &&
+        this.#nativeEndpointRange.end === range.end) return this.#nativeEndpointCoordinate;
+    this.#nativeEndpointProbe ??= document.createElement("input");
+    this.#nativeEndpointProbe.type = "range";
+    this.#nativeEndpointProbe.min = String(range.start);
+    this.#nativeEndpointProbe.max = String(range.end);
+    this.#nativeEndpointProbe.step = this.#scrubber.step;
+    this.#nativeEndpointProbe.value = String(range.end);
+    this.#nativeEndpointRange = { start: range.start, end: range.end };
+    this.#nativeEndpointCoordinate = Number(this.#nativeEndpointProbe.value);
+    return this.#nativeEndpointCoordinate;
+  }
+
   sync(state) {
     const pendingPlaying = this.#commandPending ? this.#desiredPlaying : null;
     const pendingActivation = pendingPlaying === null ? null : this.#pendingActivation;
@@ -419,7 +436,11 @@ export class PlaygroundPlaybackControls {
     if (this.#scrubber.disabled) return;
     const range = this.#currentSeekRange();
     if (range === null) return;
-    this.#gestureRange = { ...range, pointerId: event.pointerId ?? null };
+    this.#gestureRange = {
+      ...range,
+      nativeEnd: this.#nativeRangeEndpoint(range),
+      pointerId: event.pointerId ?? null,
+    };
   };
 
   #handlePointerEnd = event => {
@@ -489,16 +510,16 @@ export class PlaygroundPlaybackControls {
     const range = this.#gestureRange ?? this.#currentSeekRange();
     if (range === null || range.end < range.start) return;
     const domTarget = Number(this.#scrubber.value);
-    const domEnd = Number(this.#scrubber.max);
-    // Some native range controls round an authored endpoint when storing its
-    // value. Recognize only the control's actual terminal coordinate, then map
-    // it back to the exact endpoint admitted by the Rust reader.
-    const target = domTarget === domEnd && domEnd > range.end ? range.end : domTarget;
-    if (!Number.isFinite(target)) {
+    if (!Number.isFinite(domTarget)) {
       this.#seekNotice = `Choose a time from ${formatTime(range.start)} to ${formatTime(range.end)} s`;
       this.#render();
       return;
     }
+    // Native range controls can round the value at either side of their exact
+    // endpoint. Recognize their canonical edge value and map it back to the
+    // frozen Rust endpoint without changing the live slider or active gesture.
+    const nativeEnd = this.#gestureRange?.nativeEnd ?? this.#nativeRangeEndpoint(range);
+    const target = domTarget === nativeEnd ? range.end : domTarget;
     if (target < range.start || target > range.end) {
       this.#seekNotice = `Choose a time from ${formatTime(range.start)} to ${formatTime(range.end)} s`;
       this.#render();

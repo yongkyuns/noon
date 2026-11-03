@@ -98,9 +98,7 @@ export async function qualifyPlayheadEndpoints(page, controlsModule = "./playgro
           slider.dispatchEvent(new Event("input", { bubbles: true }));
           await new Promise(resolve => requestAnimationFrame(resolve));
           await new Promise(resolve => requestAnimationFrame(resolve));
-          const domEnd = Number(slider.max);
-          const expected = requested === duration ||
-            (actualInput === domEnd && domEnd > duration) ? duration : actualInput;
+          const expected = requested === duration ? duration : actualInput;
           if (Math.abs(actualInput - requested) > 8 * Number.EPSILON * duration ||
               calls.at(-1) !== expected || errors.length ||
               presentations.at(-1)?.time !== expected ||

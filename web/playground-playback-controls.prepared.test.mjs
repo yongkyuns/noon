@@ -149,7 +149,7 @@ test("observed source handoff retires history controls and preserves forward pau
   f.controls.setDuration(3); // No stale reader capability blocks later source updates.
 });
 
-test("open boundary and invalid input never send a guessed last-frame or queued future seek", async () => {
+test("open frontier and invalid input never send a future time or queue a refused seek", async () => {
   const f = fixture();
   for (const value of [2, 3, -1, "NaN", "Infinity"]) {
     f.seek(value); await flush();
@@ -160,9 +160,9 @@ test("open boundary and invalid input never send a guessed last-frame or queued 
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.errors, []);
   f.setState(prepared({ preparedFrontier: 3 })); await flush();
-  assert.deepEqual(f.calls, [], "delivery cannot replay a previously refused request");
+  assert.deepEqual(f.calls, [], "delivery does not repeat an earlier refused request");
   f.seek(2); await flush();
-  assert.deepEqual(f.calls, [["seek", 2]], "a new explicit request uses the exact target");
+  assert.deepEqual(f.calls, [["seek", 2]], "a new explicit request uses its exact in-range target");
 });
 
 test("tiny positive prefixes still admit zero without inventing an epsilon endpoint", async () => {
@@ -207,16 +207,48 @@ test("adopted terminal metadata alone enables the full slider and exact endpoint
   assert.equal(f.output.value, "2.60 / 2.60 s");
 });
 
-test("native range endpoint rounding maps to the exact admitted terminal time", async () => {
+test("native range endpoint rounding maps to the authorized edge, not a future time", async () => {
+  const mockNativeEndpoint = (document, end, nativeEnd) => {
+    const createElement = document.createElement.bind(document);
+    document.createElement = tag => {
+      const element = createElement(tag);
+      if (tag === "input") {
+        let value = element.value;
+        Object.defineProperty(element, "value", {
+          get: () => value,
+          set: next => { value = Number(next) === end ? String(nativeEnd) : String(next); },
+        });
+      }
+      return element;
+    };
+  };
+
   const end = 7.999999999999997;
   const f = fixture(prepared({ time: 0.12, preparedFrontier: end, durationSeconds: end,
     seekRange: { start: 0, end } }));
-  // Model a native range implementation exposing its terminal coordinate as 8.
-  f.range.max = "8";
-  f.seek(8); await flush();
+  mockNativeEndpoint(f.document, end, 8);
+  assert.equal(f.range.max, String(end));
+  // Chromium and WebKit return 8 here although the max attribute remains exact.
+  f.input.value = "8";
+  f.input.dispatchEvent(new Event("input")); await flush();
   assert.deepEqual(f.calls, [["seek", end]]);
+  assert.equal(f.range.max, String(end));
   assert.equal(Number(f.controls.element.dataset.elapsedSeconds), end);
   assert.equal(f.errors.length, 0);
+
+  const frontier = 4;
+  const openEnd = nextDown(frontier);
+  const open = fixture(prepared({ preparedFrontier: frontier,
+    seekRange: { start: 0, end: openEnd } }));
+  mockNativeEndpoint(open.document, openEnd, frontier);
+  assert.equal(open.range.max, String(openEnd));
+  open.input.value = String(frontier);
+  open.input.dispatchEvent(new Event("input")); await flush();
+  assert.deepEqual(open.calls, [["seek", openEnd]]);
+  assert.ok(open.calls[0][1] < frontier, "the exclusive frontier never reaches Rust");
+  open.input.value = String(frontier + Number.EPSILON * 4);
+  open.input.dispatchEvent(new Event("input")); await flush();
+  assert.deepEqual(open.calls, [["seek", openEnd]], "a value beyond the native edge is rejected");
 });
 
 test("static elapsed-time observation may equal the open boundary without authorizing that seek", async () => {
