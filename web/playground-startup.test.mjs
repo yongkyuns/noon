@@ -221,7 +221,7 @@ assert.match(
 );
 assert.doesNotMatch(
   bootBody,
-  /ensureAuthoringClient\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
+  /authoringWorkers\.clientForRun\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
   "initial main boot must not synchronously create Python or GPU runtime resources before the post-paint preload",
 );
 assert.doesNotMatch(
@@ -305,7 +305,7 @@ assert.match(
 );
 assert.match(
   bootBody,
-  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringClient\?\.terminate\(\)[\s\S]*preparation\.candidate\.terminate\(\)[\s\S]*discardEarlyContinuationRuntime\(player\)/,
+  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringWorkers\.activeClient[\s\S]*authoringWorkers\.retire\(activeAuthoringClient\)[\s\S]*preparation\.candidate\.terminate\(\)[\s\S]*discardEarlyContinuationRuntime\(player\)/,
   "page teardown must release metrics, Python, unpublished preparation, and execution resources",
 );
 

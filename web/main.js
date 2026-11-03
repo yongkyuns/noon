@@ -1,5 +1,6 @@
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { AuthoringWorkerGeneration } from "./authoring-worker-generation.js";
 import { createPlaygroundPreview } from "./playground-preview.js";
 import { createPlaygroundDiagnostics } from "./playground-diagnostics.js";
 import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
@@ -364,7 +365,10 @@ toolbarActions.prepend(resetButton);
 
 let selectedExampleId = null;
 let canonicalSource = "";
-let authoringClient = null;
+const authoringWorkers = new AuthoringWorkerGeneration({
+  createClient: () => new PythonAuthoringClient(),
+  isCurrentRun: (token) => isCurrentRun(token),
+});
 const drafts = new Map();
 const sourceCache = new Map();
 const generations = new PlaygroundGeneration();
@@ -543,14 +547,6 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function ensureAuthoringClient() {
-  if (authoringClient?.terminated) {
-    authoringClient = null;
-  }
-  authoringClient ??= new PythonAuthoringClient();
-  return authoringClient;
 }
 
 function adoptRuntimeCanvas(candidate) {
@@ -983,9 +979,7 @@ async function supersedeActiveSourceContinuation() {
     if (!continuation.client.terminated) {
       continuation.client.terminate();
     }
-    if (authoringClient === continuation.client) {
-      authoringClient = null;
-    }
+    authoringWorkers.retire(continuation.client);
   }
 
   if (activeSourceContinuation === continuation) {
@@ -1005,7 +999,7 @@ function stopForSourceEdit() {
   playbackControls?.setControllable(false);
   generations.invalidateRun();
   const priorRun = sceneRunPromise;
-  const client = authoringClient;
+  const client = authoringWorkers.activeClient;
   const continuation = activeSourceContinuation;
   let cancellation = continuation === null ? null : supersedeActiveSourceContinuation();
   if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart) {
@@ -1037,8 +1031,7 @@ function stopForSourceEdit() {
   }
   let watchdog = null;
   const retireAuthoring = () => {
-    client?.terminate();
-    if (authoringClient === client) authoringClient = null;
+    if (client !== null) authoringWorkers.retire(client);
   };
   if (priorRun !== null) {
     if (continuation === null) retireAuthoring();
@@ -1148,7 +1141,14 @@ async function runScene() {
       patchStatus.value = `Building ${example.title} in the Python worker…`;
       patchStatus.dataset.state = "running";
       const preparation = player === null ? ensureRuntimePreparation() : null;
-      const client = ensureAuthoringClient();
+      const client = await authoringWorkers.clientForRun(runToken, {
+        // Explicit qualification arms may request the original observed path.
+        // The product default always starts proof in a pristine interpreter.
+        requirePristine: preparedPlayback,
+      });
+      if (client === null || !isCurrentRun(runToken)) {
+        return recordStale(runToken, "before-authoring-worker");
+      }
       status.dataset.authoringWarmup = "started";
       let authored;
       try {
@@ -1237,9 +1237,7 @@ async function runScene() {
       } catch (error) {
         authoringFailed = true;
         if (isCurrentRun(runToken)) status.dataset.authoringWarmup = "failed";
-        if (client.terminated && authoringClient === client) {
-          authoringClient = null;
-        }
+        if (client.terminated) authoringWorkers.retire(client);
         throw error;
       }
 
@@ -1785,7 +1783,7 @@ try {
       return latestRunPhaseMetrics;
     },
     get executionDiagnostics() {
-      return authoringClient?.executionDiagnostics ?? null;
+      return authoringWorkers.activeClient?.executionDiagnostics ?? null;
     },
     async select(id) {
       return selectExample(id, { run: true, updateUrl: true });
@@ -1815,8 +1813,9 @@ try {
       stopMetricsPolling();
       playbackControls?.destroy();
       playbackControls = null;
-      authoringClient?.terminate();
-      authoringClient = null;
+      const activeAuthoringClient = authoringWorkers.activeClient;
+      if (activeAuthoringClient !== null) authoringWorkers.retire(activeAuthoringClient);
+      if (!event.persisted) authoringWorkers.dispose();
       const preparation = runtimePreparation;
       runtimePreparation = null;
       if (preparation !== null) {

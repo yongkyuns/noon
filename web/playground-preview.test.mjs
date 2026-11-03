@@ -217,7 +217,8 @@ async function editBoundaryFixture({ prepared = false, pause = Promise.resolve()
   const context = {
     canvas, player: retained, preparedPlaybackPlayer: prepared ? retained : null,
     playerNeedsRestart: false, sceneRunPromise: null, activeSourceContinuation: null,
-    authoringClient: client, runtimePreparation: null, playbackControls: controls,
+    authoringWorkers: { activeClient: client, retire(owner) { return owner === client; } },
+    runtimePreparation: null, playbackControls: controls,
     previousPreview: { hold(source) {
       assert.equal(source, canvas);
       assert.equal(source.style.visibility, undefined, "freeze before hiding");
@@ -250,7 +251,7 @@ for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"
   assert.equal(f.canvas.style.visibility, "hidden");
   assert.equal(f.context.player, f.retained);
   assert.equal(f.context.canvas, f.canvas);
-  assert.equal(f.context.authoringClient, f.client);
+  assert.equal(f.context.authoringWorkers.activeClient, f.client);
   assert.deepEqual(f.counts(), { terminated: 0, authoringTerminated: 0, pollsStopped: 1 });
   assertStopped(f.context);
   assert.equal(f.overlay.hidden, true, "an unfinished optional encode must not block pausing");
@@ -277,7 +278,7 @@ test("a failed completed renderer is frozen and retired rather than paused", asy
   assert.deepEqual(f.order, ["snapshot", "terminate", "destroy-controls"]);
   assert.equal(f.context.player, null);
   assert.equal(f.context.playerNeedsRestart, false);
-  assert.equal(f.context.authoringClient, f.client);
+  assert.equal(f.context.authoringWorkers.activeClient, f.client);
   assert.equal(f.counts().authoringTerminated, 0);
 });
 
@@ -319,7 +320,7 @@ for (const replaced of [false, true]) {
     assert.equal(f.context.canvas, replaced ? successor.canvas : f.replacementCanvas);
     assert.equal(f.context.playbackControls, replaced ? successorControls : null);
     assert.equal(f.context.preparedPlaybackPlayer, replaced ? successor : null);
-    assert.equal(f.context.authoringClient, f.client);
+    assert.equal(f.context.authoringWorkers.activeClient, f.client);
     assert.deepEqual(f.counts(), { terminated: 1, authoringTerminated: 0, pollsStopped: replaced ? 1 : 2 });
   });
 }

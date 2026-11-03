@@ -155,7 +155,13 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     const globalThis = { __NOON_PLAYGROUND_TEST_HOOKS__: env.hooks };
     const console = { warn() {}, debug() {}, error() {} };
     let canvas = env.initialCanvas, player = null, preparedPlaybackPlayer = null, playbackControls = null;
-    let selectedExampleId = "test", canonicalSource = "", authoringClient = authoring;
+    let selectedExampleId = "test", canonicalSource = "";
+    const authoringWorkers = {
+      activeClient: authoring,
+      async clientForRun() { return authoring; },
+      retire(client) { return client === authoring; },
+      dispose() {},
+    };
     let sceneRunPromise = null, latestRunPhaseMetrics = null, activeSourceContinuation = null;
     let activeRunRequest = null, runtimeStartPromise = null, runtimePreparation = null;
     let playerNeedsRestart = false, busyDepth = 0, galleryPage = 0, playbackDurationSeconds = 4;
@@ -168,7 +174,6 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     const showSceneError = error => errors.push(error);
     const showError = showSceneError, showPlaybackError = showSceneError;
     const authoringSourceDocument = value => value;
-    const ensureAuthoringClient = () => authoringClient ??= authoring;
     const adoptRuntimeCanvas = candidate => { calls.push(["adopt-canvas", candidate]); canvas = candidate.canvas; };
     const startMetricsPolling = () => calls.push(["poll"]);
     const stopMetricsPolling = () => { metricsEpoch++; calls.push(["stop-poll"]); };

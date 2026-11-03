@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { createSourceRestart } from "./playground-source-restart.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
 import { PlaygroundGeneration } from "./playground-generation.js";
+import { AuthoringWorkerGeneration } from "./authoring-worker-generation.js";
 import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
 
 function deferred() {
@@ -115,7 +116,7 @@ function navigationFixture() {
     window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" },
     generations: new PlaygroundGeneration(), status: { dataset: {} }, patchStatus: { dataset: {} },
     player: null, playerNeedsRestart: false, playbackControls: null, runtimePreparation: null,
-    authoringClient: null, preparedPlaybackPlayer: null,
+    authoringWorkers: null, preparedPlaybackPlayer: null,
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,
     latestRunPhaseMetrics: null, canvas: { id: "original", style: {} }, playbackDurationSeconds: 1,
     document: { querySelector: () => diagnostics },
@@ -135,24 +136,23 @@ function navigationFixture() {
     isCurrentRun: token => context.generations.isRunCurrent(token, "one"),
     adoptRuntimeCanvas: owner => { context.canvas = owner.canvas; },
     disposeFullscreen: () => { fullscreenDisposals += 1; },
-    ensureAuthoringClient() {
-      if (context.authoringClient === null || context.authoringClient === undefined) {
-        const gate = deferred(), index = clients.length;
-        const client = {
-          terminated: false,
-          run(source, sourceContext, options) {
-            requests.push({ source, sourceContext, options });
-            authoringStart(index).resolve();
-            return gate.promise;
-          },
-          terminate() {
-            this.terminated = true;
-            gate.reject(new Error("Python authoring client was terminated"));
-          },
-        };
-        clients.push(client); context.authoringClient = client;
-      }
-      return context.authoringClient;
+    createAuthoringClient() {
+      const gate = deferred(), index = clients.length;
+      const client = {
+        terminated: false, interpreterGeneration: index + 1, libraryTrust: "pristine",
+        ready: async () => {},
+        run(source, sourceContext, options) {
+          requests.push({ source, sourceContext, options });
+          authoringStart(index).resolve();
+          return gate.promise;
+        },
+        terminate() {
+          this.terminated = true;
+          gate.reject(new Error("Python authoring client was terminated"));
+        },
+      };
+      clients.push(client);
+      return client;
     },
     ensureRuntimePreparation() {
       const candidate = {
@@ -166,6 +166,10 @@ function navigationFixture() {
       return context.runtimePreparation;
     },
   };
+  context.authoringWorkers = new AuthoringWorkerGeneration({
+    createClient: () => context.createAuthoringClient(),
+    isCurrentRun: token => context.isCurrentRun(token),
+  });
   context.sourceRestart = createSourceRestart({
     stop: () => context.generations.invalidateRun(), run: () => context.runScene(),
     currentSelection: () => "one", onError: error => errors.push(error),
