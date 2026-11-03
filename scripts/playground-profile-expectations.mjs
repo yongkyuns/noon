@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 // This ledger binds exact source bytes; it does not grant runtime admission.
 const replayCommands = Object.freeze(["play", "pause", "seek", "restart"]);
 const ordinaryCommands = Object.freeze([...replayCommands, "loop"]);
+const sectionCommands = Object.freeze([...ordinaryCommands, "sections"]);
 const audioCommands = Object.freeze([...replayCommands, "sections"]);
 const initialObservedCommands = Object.freeze(["play", "pause"]);
 const rows = [
@@ -39,8 +40,8 @@ const rows = [
   ['showcase-cuda-transpose','cuda_transpose_banks.py','a23e6193d0609ce1c3f9528e8d8e6d8cf28d97fb443f7deba015c3d1cdd4d73a','incremental','ordinary',[], 'looped'],
   ['showcase-shader-material','showcase_shader_material.py','cfe0de84b5e1ae00e010ec40155267ad14cdf6066d4209f82149978910348689','incremental','ordinary',[], 'looped'],
   ['showcase-glass-lens','showcase_glass_lens.py','33103a1db643b62d5c14384046a5ea5f4e33e75052048b2c783c85a70ca10d52','incremental','ordinary',[], 'looped'],
-  ['showcase-wave-interference','showcase_wave_interference.py','90222ca44bc6c821bdae34453bca323b532090aca125637c0fabea455f4fa128','incremental','ordinary',[], 'looped'],
-  ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',[], 'looped'],
+  ['showcase-wave-interference','showcase_wave_interference.py','90222ca44bc6c821bdae34453bca323b532090aca125637c0fabea455f4fa128','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',['sections'], 'looped'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
@@ -65,8 +66,10 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
       : id === 'showcase-pointer-selection' ? 'selection-inspection' : 'none',
     capabilities: Object.freeze({
       attachedCommands: dispositionKind === 'callback' ? initialObservedCommands
-        : dispositionKind === 'immutable' ? audioCommands : ordinaryCommands,
-      dispositionCommands: dispositionKind === 'ordinary' ? ordinaryCommands
+        : dispositionKind === 'immutable' ? audioCommands
+          : requiredDomains.includes('sections') ? sectionCommands : ordinaryCommands,
+      dispositionCommands: dispositionKind === 'ordinary'
+        ? requiredDomains.includes('sections') ? sectionCommands : ordinaryCommands
         : dispositionKind === 'immutable' ? audioCommands : [],
       replayAtDisposition: dispositionKind === 'ordinary' || dispositionKind === 'immutable',
       audio: requiredDomains.includes('audio'),

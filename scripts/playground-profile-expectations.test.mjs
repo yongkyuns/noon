@@ -57,6 +57,10 @@ test('inventory binds all 33 unchanged showcase IDs, paths and exact source byte
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-pointer-selection').inputPolicy, 'selection-inspection');
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-translation-drag').inputPolicy, 'native-input-handoff');
   validateShowcaseInventory(manifest.entries, readSource);
+  const cueSources = SHOWCASE_PROFILE_EXPECTATIONS.filter(row =>
+    /^\s*(?:self|result)\.next_section\(/m.test(readSource(row.path).toString()));
+  assert.deepEqual(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.capabilities.sections)
+    .map(row => row.id), cueSources.map(row => row.id));
 });
 
 test('inventory rejects a missing case and a changed source hash', () => {
@@ -133,6 +137,12 @@ test('diagnostics reject dropped events, missing disposition, or missing command
   const noWrap = diagnosticsFor(expected);
   delete noWrap.events.at(-1).loopCount;
   assert.throws(() => validateShowcaseDiagnostics(expected, noWrap), /completed wrap/);
+
+  const cueScene = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-editorial-cover');
+  const missingSections = diagnosticsFor(cueScene);
+  missingSections.events[0].capabilities.commands = [...expected.capabilities.attachedCommands];
+  assert.throws(() => validateShowcaseDiagnostics(cueScene, missingSections),
+    /required attached command sections unavailable/);
 });
 
 test('baseline diagnostics report failures without converting them into target expectations', () => {
