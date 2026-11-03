@@ -214,7 +214,7 @@ test("readiness command receipts use endpoint timing and matching publication me
   assert.match(source, /automationIssuedEpochMs: marker\.epochMs/);
   assert.match(source, /event\.attribute === "data-busy" &&\s*event\.state\?\.busy === "true"/);
   assert.match(source, /probe\.recordCommandResult\(message\)/);
-  assert.match(source, /preparedRetention: response\?\.metrics\?\.preparedRetention/);
+  assert.match(source, /preparedRetention: response\?\.engineMetrics\?\.preparedRetention/);
   assert.match(source, /readinessCommandReceipt\(engineResult, requestEpochMs, publicationSample\)/);
   assert.doesNotMatch(source, /Math\.abs\(displayedTime - receiptTime\)/);
   assert.match(source, /value\.epochMs >= replayStartedAtEpochMs/);
