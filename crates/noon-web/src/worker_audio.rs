@@ -11,7 +11,7 @@ use noon::ExecutionSession;
 use noon::PrefixReader;
 use noon_core::{
     AudioClipDefinition, AudioClipOptions, AudioResource, AudioResourceHandle, AudioResourceId,
-    SemanticNodeId, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+    DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET, SemanticNodeId,
 };
 use noon_runtime::AudioPlaybackClip;
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,20 @@ use serde::{Deserialize, Serialize};
 const VERSION: u32 = 1;
 const MAX_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_CLIPS: usize = 4096;
+
+fn nonnegative_delivery_delay_seconds(
+    sampled_epoch_ms: f64,
+    received_epoch_ms: f64,
+) -> Result<f64, &'static str> {
+    if !sampled_epoch_ms.is_finite() || !received_epoch_ms.is_finite() {
+        return Err("audio sample timestamps must be finite");
+    }
+    let elapsed_ms = received_epoch_ms - sampled_epoch_ms;
+    if !elapsed_ms.is_finite() {
+        return Err("audio delivery delay must be finite");
+    }
+    Ok(elapsed_ms.max(0.0) / 1000.0)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -323,16 +337,13 @@ mod wasm {
             sampled_epoch_ms: f64,
             received_epoch_ms: f64,
         ) -> Result<(), JsValue> {
-            if session != self.resources.session()
-                || !time.is_finite()
-                || time < 0.0
-                || !sampled_epoch_ms.is_finite()
-                || !received_epoch_ms.is_finite()
-                || received_epoch_ms < sampled_epoch_ms
-            {
+            if session != self.resources.session() || !time.is_finite() || time < 0.0 {
                 return Err(js_error("stale or invalid worker audio anchor"));
             }
-            let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
+            let delivery_delay =
+                nonnegative_delivery_delay_seconds(sampled_epoch_ms, received_epoch_ms)
+                    .map_err(|_| js_error("stale or invalid worker audio anchor"))?;
+            let time = time + delivery_delay;
             self.output
                 .start_clips(self.resources.at_time(time).map_err(js_error)?)
         }
@@ -353,13 +364,13 @@ mod wasm {
                 || time < 0.0
                 || !authorized_until.is_finite()
                 || authorized_until < time
-                || !sampled_epoch_ms.is_finite()
-                || !received_epoch_ms.is_finite()
-                || received_epoch_ms < sampled_epoch_ms
             {
                 return Err(js_error("stale or invalid bounded worker audio anchor"));
             }
-            let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
+            let delivery_delay =
+                nonnegative_delivery_delay_seconds(sampled_epoch_ms, received_epoch_ms)
+                    .map_err(|_| js_error("stale or invalid bounded worker audio anchor"))?;
+            let time = time + delivery_delay;
             if time >= authorized_until {
                 return Ok(());
             }
@@ -384,13 +395,13 @@ mod wasm {
                 || time < 0.0
                 || !authorized_until.is_finite()
                 || authorized_until < time
-                || !sampled_epoch_ms.is_finite()
-                || !received_epoch_ms.is_finite()
-                || received_epoch_ms < sampled_epoch_ms
             {
                 return Err(js_error("stale or invalid bounded worker audio extension"));
             }
-            let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
+            let delivery_delay =
+                nonnegative_delivery_delay_seconds(sampled_epoch_ms, received_epoch_ms)
+                    .map_err(|_| js_error("stale or invalid bounded worker audio extension"))?;
+            let time = time + delivery_delay;
             if time >= authorized_until {
                 return Ok(());
             }
@@ -435,6 +446,26 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_delay_normalizes_clock_rounding_without_hiding_invalid_timestamps() {
+        assert_eq!(
+            nonnegative_delivery_delay_seconds(10_000.1, 10_000.0),
+            Ok(0.0)
+        );
+        assert_eq!(
+            nonnegative_delivery_delay_seconds(10_000.0, 10_000.0),
+            Ok(0.0)
+        );
+        assert_eq!(
+            nonnegative_delivery_delay_seconds(10_000.0, 10_500.0),
+            Ok(0.5)
+        );
+        assert!(nonnegative_delivery_delay_seconds(f64::NAN, 10_000.0).is_err());
+        assert!(nonnegative_delivery_delay_seconds(10_000.0, f64::INFINITY).is_err());
+        assert!(nonnegative_delivery_delay_seconds(-f64::MAX, f64::MAX).is_err());
+    }
+
     #[test]
     fn round_trip_keeps_trimmed_loop_phase_fades_and_silent_gaps() {
         let mut scene = noon::Scene::new();
