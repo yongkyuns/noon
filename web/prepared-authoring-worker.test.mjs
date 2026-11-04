@@ -140,6 +140,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     return { registerSemanticExecution, failAuthoringWorker, awaitSemanticContinuation, handleRequest, handleContinuationControl,
       completeContinuation, requestContinuationCallback, completeContinuationCallback,
       failContinuation, contexts: semanticContexts, run: () => activeAuthoringRun,
+      startSourceTurn: () => startPreparedSourceTurn(activeAuthoringRun),
       fatal: () => fatalAuthoringFailure };
   `)(options => createPreparedInterpreterDriver({ ...options,
     setTimeout(callback) { const id = ++taskId; tasks.set(id, callback); return id; },
@@ -167,10 +168,10 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
         }));
       } finally { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); }
     },
-    start(sourceBody, requestId = 1) {
+    start(sourceBody, requestId = 1, diagnosticPreparationTiming = false) {
       execute = sourceBody;
       return api.handleRequest(envelope("run", { requestId, source: "test source", context: {},
-        preparedPlayback: true, preparationLookaheadSeconds: 0.75 }));
+        preparedPlayback: true, preparationLookaheadSeconds: 0.75, diagnosticPreparationTiming }));
     },
     async attach(extra = {}) {
       const control = new MessageChannel(), render = new MessageChannel();
@@ -246,9 +247,46 @@ for (const loopDurationSeconds of [null, 1]) test(`production source completes e
   assert.deepEqual(h.events.find(event => Array.isArray(event) && event[0] === "loop"), ["loop", loopDurationSeconds === null ? undefined : 2],
     "gallery looping uses the completed authored duration, not the bootstrap duration");
   assert.equal(h.errors.length, 0);
+  assert.equal(h.posts.some(post => post.event?.stage === "preparation-timing"), false,
+    "timing spans are disabled unless the run explicitly requests them");
   const result = h.posts.find(post => post.type === "result");
   assert.equal(JSON.parse(result.resultJson).semantic_execution.prepared_playback, true);
   h.endpoint().stop();
+});
+
+test("opt-in preparation timings distinguish source turns from Rust preparation and reader delivery", async () => {
+  const h = host();
+  const done = h.start(async api => {
+    api.startSourceTurn();
+    await api.awaitSemanticContinuation(h.context);
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  }, 1, true);
+  await microtasks();
+  const initial = h.tick();
+  await h.attach(); await initial;
+  h.demand(true); await h.tick(); await microtasks(); await h.tick(); await done;
+
+  const events = h.posts.filter(post => post.type === "execution_diagnostic" &&
+    post.event.stage === "preparation-timing").map(post => post.event);
+  const owners = events.map(event => event.owner);
+  assert.equal(owners.filter(owner => owner === "source-turn").length, 3);
+  for (const owner of ["segment-initial", "segment-prepare", "reader-reserve", "reader-deliver", "segment-finish"]) {
+    assert.ok(owners.includes(owner), `missing ${owner} timing`);
+  }
+  assert.deepEqual(events.map(event => event.ordinal), events.map((_, index) => index));
+  for (const event of events) {
+    assert.equal(event.runRequestId, 1);
+    assert.equal(event.contextId, "semantic-0");
+    assert.equal(event.measurement, "wall-clock");
+    assert.ok(Number.isFinite(event.startedAtEpochMs));
+    assert.ok(Number.isFinite(event.completedAtEpochMs));
+    assert.ok(Number.isFinite(event.durationMs) && event.durationMs >= 0);
+    assert.ok(event.startedAtEpochMs <= event.completedAtEpochMs);
+  }
+  assert.equal(events.filter(event => event.owner === "source-turn")[0].boundary, "barrier");
+  assert.deepEqual(events.filter(event => event.owner === "source-turn").map(event => event.boundary),
+    ["barrier", "barrier", "source-settled"]);
 });
 
 test("receiver replacement retains the original source before and after completion", async () => {

@@ -68,7 +68,8 @@ export class PythonAuthoringClient {
   async run(
     source,
     context = {},
-    { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1 } = {},
+    { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1,
+      diagnosticPreparationTiming = false } = {},
   ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
@@ -80,6 +81,12 @@ export class PythonAuthoringClient {
       throw new TypeError("onSemanticContinuation must be a function");
     }
     if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
+    if (typeof diagnosticPreparationTiming !== "boolean") {
+      throw new TypeError("diagnosticPreparationTiming must be a boolean");
+    }
+    if (diagnosticPreparationTiming && !preparedPlayback) {
+      throw new Error("preparation timing diagnostics require prepared playback");
+    }
     if (!Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0) {
       throw new TypeError("preparationLookaheadSeconds must be positive and finite");
     }
@@ -104,6 +111,7 @@ export class PythonAuthoringClient {
         source,
         context,
         ...(preparedPlayback ? { preparedPlayback, preparationLookaheadSeconds } : {}),
+        ...(diagnosticPreparationTiming ? { diagnosticPreparationTiming } : {}),
       }),
     );
     return result;

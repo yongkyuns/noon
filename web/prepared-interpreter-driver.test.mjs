@@ -79,6 +79,27 @@ test("even continuously demanded barriers yield one platform task each", async (
   assert.equal(f.events.filter(([kind]) => kind === "prepare").length, 20);
 });
 
+test("source turn hooks bracket resumed work but exclude waiting for preparation demand", async () => {
+  const turns = [];
+  const f = fixture({
+    onSourceTurnResumed: () => turns.push("resume"),
+    onSourceTurnSuspended: () => turns.push("suspend"),
+  });
+  turns.push("initial-source-start");
+  const done = f.driver.run(async () => {
+    await f.driver.awaitSegment("first");
+    turns.push("python-after-first");
+    await f.driver.awaitSegment("second");
+    turns.push("python-after-second");
+  });
+  await f.turn();
+  assert.deepEqual(turns, ["initial-source-start", "suspend"]);
+  f.demand(true); f.driver.wake(); await f.turn();
+  assert.deepEqual(turns, ["initial-source-start", "suspend", "resume", "python-after-first", "suspend"]);
+  await f.turn(); await done;
+  assert.deepEqual(turns, ["initial-source-start", "suspend", "resume", "python-after-first", "suspend", "resume", "python-after-second"]);
+});
+
 test("demand is rechecked on task delivery, not captured by an earlier wake", async () => {
   const f = fixture(); const done = f.driver.run(() => f.driver.awaitSegment("one"));
   await f.turn(); f.demand(true); f.driver.wake(); f.demand(false);

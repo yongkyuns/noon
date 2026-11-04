@@ -147,11 +147,36 @@ test("prepared source options validate before posting and require a continuation
     { preparedPlayback: "yes" },
     ...[0, -1, NaN, Infinity].map(preparationLookaheadSeconds => ({ preparationLookaheadSeconds })),
     { preparedPlayback: true },
+    { diagnosticPreparationTiming: true },
+    { diagnosticPreparationTiming: "yes", preparedPlayback: true, onSemanticContinuation() {} },
   ]) {
     await assert.rejects(client.run("class Demo(Scene): pass", {}, options),
-      /boolean|positive and finite|continuation consumer/);
+      /boolean|positive and finite|continuation consumer|preparation timing diagnostics/);
   }
   assert.equal(worker.messages.length, 0); client.terminate();
+});
+
+test("preparation timing is an opt-in prepared-run diagnostic", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  const ordinary = client.run("result = scene"); await Promise.resolve();
+  assert.equal("diagnosticPreparationTiming" in worker.messages[0], false);
+  worker.emit("message", workerMessage("result", { requestId: 0, resultJson: JSON.stringify(semanticResult()) }));
+  await ordinary;
+
+  const prepared = client.run("prepared source", {}, { preparedPlayback: true,
+    diagnosticPreparationTiming: true, onSemanticContinuation() {} });
+  await Promise.resolve();
+  assert.equal(worker.messages[1].diagnosticPreparationTiming, true);
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 1, generation: 5, duration: 0.5,
+    semanticExecution: { context_id: "timed", continuation_generation: 5, prepared_playback: true },
+  }));
+  worker.emit("message", workerMessage("result", { requestId: 1, resultJson: JSON.stringify(sceneResult({
+    duration: 0.5,
+    semantic_execution: { context_id: "timed", continuation_generation: 5, prepared_playback: true },
+  })) }));
+  await prepared; client.terminate();
 });
 
 test("prepared continuation metadata permits initial pause and prevents source reattachment", async () => {

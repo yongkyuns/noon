@@ -645,6 +645,55 @@ function executionDiagnostic(entry, event) {
     libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted", event });
 }
 
+function preparationTimingEvent(run, owner, startedAtMs, completedAtMs, boundary = null) {
+  if (!run.diagnosticPreparationTiming) return;
+  const contextId = run.continuation?.contextId ?? run.completedPreparedContextId ?? null;
+  post("execution_diagnostic", { requestId: run.requestId,
+    libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted", event: {
+    stage: "preparation-timing",
+    owner,
+    measurement: "wall-clock",
+    runRequestId: run.requestId,
+    contextId,
+    ordinal: run.preparationTimingOrdinal++,
+    startedAtEpochMs: performance.timeOrigin + startedAtMs,
+    completedAtEpochMs: performance.timeOrigin + completedAtMs,
+    durationMs: completedAtMs - startedAtMs,
+    ...(boundary === null ? {} : { boundary }),
+  } });
+}
+
+function measurePreparationOperation(run, owner, callback) {
+  if (!run.diagnosticPreparationTiming) return callback();
+  const startedAtMs = performance.now();
+  try { return callback(); }
+  finally { preparationTimingEvent(run, owner, startedAtMs, performance.now()); }
+}
+
+function startPreparedSourceTurn(run) {
+  if (run.diagnosticPreparationTiming && run.sourceTurnStartedAtMs === null) {
+    run.sourceTurnStartedAtMs = performance.now();
+  }
+}
+
+function endPreparedSourceTurn(run, boundary) {
+  if (!run.diagnosticPreparationTiming || run.sourceTurnStartedAtMs === null) return;
+  const startedAtMs = run.sourceTurnStartedAtMs;
+  run.sourceTurnStartedAtMs = null;
+  const completedAtMs = performance.now();
+  preparationTimingEvent(run, "source-turn", startedAtMs, completedAtMs, boundary);
+}
+
+async function awaitOutsidePreparedSourceTurn(run, owner, operation) {
+  endPreparedSourceTurn(run, owner);
+  const startedAtMs = performance.now();
+  try { return await operation(); }
+  finally {
+    preparationTimingEvent(run, owner, startedAtMs, performance.now());
+    startPreparedSourceTurn(run);
+  }
+}
+
 function sourceExecutionRequirement(json) {
   const requirement = JSON.parse(json);
   if (requirement !== null && (!isRecord(requirement) || ![
@@ -683,17 +732,27 @@ async function prepareSemanticEffectRequest(continuation, context, staged) {
     if (!continuation.preparedPlayer || continuation.endpoint === null) {
       throw new Error("shader resource preparation requires the active prepared source");
     }
-    await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+    const prepareEffects = () => continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+    if (activeAuthoringRun?.diagnosticPreparationTiming) {
+      await awaitOutsidePreparedSourceTurn(activeAuthoringRun, "effect-resource-wait", prepareEffects);
+    } else await prepareEffects();
     if (staged.startsSegment === true) {
       return await continuation.preparedDriver.awaitSegment(context);
     }
     return;
   }
   if (staged.startsSegment === true) {
-    return await awaitSemanticContinuation(context, () =>
+    const prepareEffects = () => awaitSemanticContinuation(context, () =>
       continuation.endpoint.prepareSourceEffects(continuation.generation, staged));
+    if (activeAuthoringRun?.diagnosticPreparationTiming) {
+      return await awaitOutsidePreparedSourceTurn(activeAuthoringRun, "continuation-presentation-wait", prepareEffects);
+    }
+    return await prepareEffects();
   }
-  await continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+  const prepareEffects = () => continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+  if (activeAuthoringRun?.diagnosticPreparationTiming) {
+    await awaitOutsidePreparedSourceTurn(activeAuthoringRun, "publication-presentation-wait", prepareEffects);
+  } else await prepareEffects();
 }
 
 function observeContinuationSourceRequirement(continuation) {
@@ -868,10 +927,12 @@ function requirePreparedContinuation(run, context, signal = null) {
   return continuation;
 }
 
-function deliverPreparedSourcePrefix(continuation) {
+function deliverPreparedSourcePrefix(run, continuation) {
   const player = continuation.preparedPlayer;
-  if (!invokePreparedEngine(() => player.reserveSourcePrefixCapacity())) return false;
-  if (!invokePreparedEngine(() => player.deliverSourcePrefix())) throw new Error("prepared source lost its retained suffix");
+  if (!measurePreparationOperation(run, "reader-reserve", () =>
+    invokePreparedEngine(() => player.reserveSourcePrefixCapacity()))) return false;
+  if (!measurePreparationOperation(run, "reader-deliver", () =>
+    invokePreparedEngine(() => player.deliverSourcePrefix()))) throw new Error("prepared source lost its retained suffix");
   // Future history is not a presentation. No transport/presentation await is
   // needed to release this source barrier, even while the reader is paused.
   continuation.endpoint.sourcePrefixDelivered();
@@ -880,6 +941,10 @@ function deliverPreparedSourcePrefix(continuation) {
 
 function createPreparedSourceDriver(run) {
   return createPreparedInterpreterDriver({
+    ...(run.diagnosticPreparationTiming ? {
+      onSourceTurnResumed: () => startPreparedSourceTurn(run),
+      onSourceTurnSuspended: () => endPreparedSourceTurn(run, "barrier"),
+    } : {}),
     async prepareSegment(context, signal) {
       const continuation = requirePreparedContinuation(run, context, signal);
       if (continuation.observedExecution) return awaitObservedContinuation(continuation);
@@ -897,7 +962,8 @@ function createPreparedSourceDriver(run) {
         // The interpreter has suspended before this queued worker turn. A zero
         // barrier releases once; source resumes on another turn, never in a loop.
         let readable;
-        try { readable = invokePreparedEngine(() => context.prepareInitialSourceSegment()); }
+        try { readable = measurePreparationOperation(run, "segment-initial",
+          () => invokePreparedEngine(() => context.prepareInitialSourceSegment())); }
         catch (error) { continuation.initialSourceReady.reject(error); throw error; }
         if (!readable) return;
         continuation.initialSourceReady.resolve();
@@ -906,7 +972,8 @@ function createPreparedSourceDriver(run) {
         continuation.preparedBootstrapObserved = true;
         return;
       }
-      const prepared = invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceSegment(context));
+      const prepared = measurePreparationOperation(run, "segment-prepare",
+        () => invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceSegment(context)));
       if (prepared === false) {
         semanticContexts.get(continuation.contextId).sourceRequirement = sourceExecutionRequirement(
           invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
@@ -916,7 +983,7 @@ function createPreparedSourceDriver(run) {
         continuation.endpoint.sourceExecutionRequired();
         return event;
       }
-      deliverPreparedSourcePrefix(continuation);
+      deliverPreparedSourcePrefix(run, continuation);
     },
     needsPreparation() {
       const continuation = requirePreparedContinuation(run, run.continuation?.context);
@@ -974,7 +1041,8 @@ function createPreparedSourceDriver(run) {
       }
       // runAuthoringSource includes the existing construct/finally/tear_down and
       // per-run globals cleanup. Seal only after that entire operation succeeds.
-      if (invokePreparedEngine(() => continuation.preparedPlayer.finishSourcePreparation(continuation.context)) === false) {
+      if (measurePreparationOperation(run, "segment-finish", () =>
+        invokePreparedEngine(() => continuation.preparedPlayer.finishSourcePreparation(continuation.context))) === false) {
         // Source and cleanup have returned. Retain their completed canonical
         // player until actual reader demand reaches its final native state.
         continuation.preparedSourceFinished = true;
@@ -990,7 +1058,7 @@ function createPreparedSourceDriver(run) {
       // adopts terminal history; an open prefix never gains a guessed period.
       invokePreparedEngine(() => continuation.preparedPlayer.setPreparedLoopDuration(
         continuation.loopPlayback && result.duration > 0 ? result.duration : undefined));
-      if (!deliverPreparedSourcePrefix(continuation)) {
+      if (!deliverPreparedSourcePrefix(run, continuation)) {
         throw new Error("prepared source did not deliver its explicit final endpoint");
       }
       continuation.terminal = true;
@@ -1373,6 +1441,9 @@ async function handleRequest(request) {
       const run = {
         requestId, continuation: null, continuationCallbackSession: null,
         preparedPlayback: request.preparedPlayback === true,
+        diagnosticPreparationTiming: request.diagnosticPreparationTiming === true,
+        preparationTimingOrdinal: 0,
+        sourceTurnStartedAtMs: null,
         sourceSceneOnly: false,
         preparationLookaheadSeconds: request.preparationLookaheadSeconds ?? 1,
         preparedDriver: null, completedPreparedContextId: null,
@@ -1383,10 +1454,14 @@ async function handleRequest(request) {
       try {
         const workerRunStartedAtMs = performance.now();
         const execute = async () => {
-          const resultJson = await runAuthoringSource(pyodide, request.source, request.context, requestId);
-          const contextId = JSON.parse(resultJson)?.semantic_execution?.context_id;
-          executionDiagnostic(semanticContexts.get(contextId), { stage: "source-complete", contextId });
-          return resultJson;
+          try {
+            const resultJson = await runAuthoringSource(pyodide, request.source, request.context, requestId);
+            const contextId = JSON.parse(resultJson)?.semantic_execution?.context_id;
+            executionDiagnostic(semanticContexts.get(contextId), { stage: "source-complete", contextId });
+            return resultJson;
+          } finally {
+            endPreparedSourceTurn(run, "source-settled");
+          }
         };
         let resultJson = await (run.preparedDriver ? run.preparedDriver.run(execute) : execute());
         const workerRunCompletedAtMs = performance.now();
@@ -1873,6 +1948,7 @@ json.dumps(source_execution_proof(__noon_source))
       event: { stage: proof.reason?.code === "interpreter_tainted" ? "interpreter-trust" : "source-proof", ...proof },
     });
     await prepareAuthoringDependencies(pyodide, source);
+    if (run.diagnosticPreparationTiming) startPreparedSourceTurn(run);
     return pyodide.runPythonAsync(diagnosedHostCode(`
 import json
 import _manim_updaters
@@ -2005,6 +2081,11 @@ function validateRequest(request) {
     }
     if (request.preparedPlayback !== undefined && typeof request.preparedPlayback !== "boolean") {
       throw new Error("preparedPlayback must be a boolean");
+    }
+    if (request.diagnosticPreparationTiming !== undefined &&
+        (typeof request.diagnosticPreparationTiming !== "boolean" ||
+         (request.diagnosticPreparationTiming && request.preparedPlayback !== true))) {
+      throw new Error("preparation timing diagnostics require prepared playback");
     }
     if (request.preparationLookaheadSeconds !== undefined &&
         (!Number.isFinite(request.preparationLookaheadSeconds) || request.preparationLookaheadSeconds <= 0)) {
