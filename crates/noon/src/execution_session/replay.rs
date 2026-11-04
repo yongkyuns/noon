@@ -90,6 +90,12 @@ impl ExecutionSession {
         {
             return Err(ReplayError::Incomplete);
         }
+        if self.reactive_projection.has_native_input_routes() {
+            // These sampled sources remain live after authored source completion.
+            // No occurrence journal exists in replay history, so sealing here
+            // would strand the observed owner behind an immutable reader guard.
+            return Err(ReplayError::UnrecordedInput);
+        }
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()
             || self.translation_drag.has_targets()
