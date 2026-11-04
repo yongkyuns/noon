@@ -187,19 +187,6 @@ try {
           "the open history slider must stop before its exclusive frontier");
         assert.equal(await page.locator(".playback-time").textContent(), "0.00 / — s");
         const selectableEnd = Number(await seekInput.getAttribute("max"));
-        const clampedTarget = await seekInput.evaluate(element => {
-          element.value = "1"; element.dispatchEvent(new Event("input", { bubbles: true }));
-          return Number(element.value);
-        });
-        assert.equal(clampedTarget, selectableEnd,
-          "the browser range input must clamp the exclusive frontier to Rust's inclusive selectable end");
-        await page.waitForFunction(target => document.querySelector(".playback-controls")?.dataset.busy === "false" &&
-          Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) === target &&
-          !document.querySelector(".playback-live-status")?.textContent.includes("waiting for display"), selectableEnd);
-        const atSelectableEnd = await state();
-        assert.equal(atSelectableEnd.time, selectableEnd);
-        assert.deepEqual(atSelectableEnd.events, ["start"]);
-        assert.deepEqual(atSelectableEnd.errors, []);
         const rejectedFrontier = await page.evaluate(async frontier => {
           const before = await preparedAuthoring.execution.state();
           let error;
@@ -208,11 +195,25 @@ try {
         }, initial.preparedFrontier);
         assert.ok(rejectedFrontier.error);
         assert.equal(rejectedFrontier.after.time, rejectedFrontier.before.time);
+        // Chromium can serialize the range's next-down maximum as the frontier.
+        // The control must still submit and present Rust's exact selectable end.
+        await seekInput.evaluate(element => {
+          element.value = "1"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await page.waitForFunction(target => document.querySelector(".playback-controls")?.dataset.busy === "false" &&
+          Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) === target &&
+          !document.querySelector(".playback-live-status")?.textContent.includes("waiting for display"), selectableEnd);
+        // The admitted seek advances reader demand; the producer may refill
+        // lookahead while the paused picture stays at that historical target.
+        await waitState(s => s.preparedFrontier === 2 && s.events.length === 2);
+        const atSelectableEnd = await state();
+        assert.equal(atSelectableEnd.time, selectableEnd);
+        assert.deepEqual(atSelectableEnd.events, ["start", "first"]);
+        assert.deepEqual(atSelectableEnd.errors, []);
         entry.checks.push("shared-controls-open-history", "selectable-end-and-exclusive-frontier");
         await seekInput.evaluate(element => {
           element.value = "0.5"; element.dispatchEvent(new Event("input", { bubbles: true }));
         });
-        await waitState(s => s.preparedFrontier === 2 && s.events.length === 2);
         await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false" &&
           !document.querySelector(".playback-live-status")?.textContent.includes("waiting for display"));
         const baseline = await capture("historical");
