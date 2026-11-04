@@ -32,10 +32,6 @@ function worker() {
     (type, value) => diagnostics.push({ type, ...value }));
   const pyodide = proof => ({
     runPython(code) {
-      if (code.includes("_noon_errors.disable_prepared_source_yield()")) {
-        events.push("yield-disabled");
-        return;
-      }
       assert.match(code, /source_execution_proof\(__noon_source\)/); events.push("proof");
       return JSON.stringify({ admitted: proof, reason: proof ? null : { code: "unknown_name", span: null } });
     },
@@ -50,7 +46,7 @@ test("source effects are checked before dependencies or source execute", async (
   const h = worker();
   assert.equal(await h.run(true, false), true);
   assert.equal(await h.run(true), true);
-  assert.deepEqual(h.events, ["proof", "dependencies", "source", "proof", "dependencies", "source", "yield-disabled"]);
+  assert.deepEqual(h.events, ["proof", "dependencies", "source", "proof", "dependencies", "source"]);
   assert.equal(h.stores.length, 3, "each admitted Run has an independent factory arena");
   assert.deepEqual(h.stores.map(store => store.freed === true), [true, true, false]);
 });
@@ -90,7 +86,7 @@ test("opt-in source timings include proof and async dependency preparation befor
     assert.ok(Number.isFinite(span.completedAtEpochMs));
     assert.ok(Number.isFinite(span.durationMs) && span.durationMs >= 0);
   }
-  assert.deepEqual(h.events, ["proof", "dependencies", "source", "yield-disabled"]);
+  assert.deepEqual(h.events, ["proof", "dependencies", "source"]);
 
   const disabled = worker();
   await disabled.run(true);

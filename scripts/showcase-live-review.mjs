@@ -98,7 +98,7 @@ export function assertNaturalFirstPassPublication(entry, authoredDuration, publi
   }
 }
 
-async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration, rendererReadbackEnabled }) {
+export async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration, rendererReadbackEnabled }) {
   const gallery = window.__noonExampleGallery;
   const runState = window.__showcaseLiveReviewRun;
   if (!runState || runState.stop) return true;
@@ -171,8 +171,11 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
     const roundoff = 8 * Number.EPSILON * Math.max(1, duration);
     const knownEndMatches = state?.durationSeconds == null || (Number.isFinite(state.durationSeconds) &&
       Math.abs(state.durationSeconds - duration) <= roundoff);
-    const rustTimeInHold = Number.isFinite(observedTime) && observedTime >= holdStart && observedTime < duration &&
-      Number.isFinite(state?.preparedFrontier) && state.preparedFrontier >= observedTime && knownEndMatches;
+    const rustTimeInHold = Number.isFinite(observedTime) &&
+      Number.isFinite(state?.preparedFrontier) && state.preparedFrontier >= observedTime && knownEndMatches &&
+      ((observedTime >= holdStart && observedTime < duration) ||
+        (observedTime === state?.durationSeconds && Number.isFinite(state.durationSeconds) &&
+          state.loopCount === 0 && Number.isFinite(receipt?.time) && receipt.time >= holdStart && receipt.time < duration));
     const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
       receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
     const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(state, receipt);

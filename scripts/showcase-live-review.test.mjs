@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, assertNaturalFirstPassPublication, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, assertNaturalFirstPassPublication, summarizeLiveReview, runOrdinaryGallery, readLiveState, observeNaturalFirstPassWrap } from "./showcase-live-review.mjs";
 import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
 
 const entry = { id: "showcase-example", duration: 8 };
@@ -495,6 +495,35 @@ test("open-prefix terminal proof uses current Rust time/frontier and rejects a k
       ],
     });
     await assert.rejects(runOrdinaryGallery(failed.page, 100, lesson), /wrapped before its terminal hold picture/);
+  }
+});
+
+test("closed Rust endpoint admits a matching in-hold receipt but rejects open, looped or stale proof", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const preparedRun = { stale: false, result: { hasAudio: false, preparedPlayback: true,
+    time: 0, playing: true, durationSeconds: 8 } };
+  const endpoint = { elapsed: 8, observedTime: 8, frontier: 8, end: 8, publishedTime: 7.25,
+    controls: { playing: "true" } };
+  const args = { duration: 8, holdStart: 7, exampleId: lesson.id,
+    runGeneration: 9, rendererReadbackEnabled: true };
+  const valid = preparedAudioPage({ run: preparedRun, observations: [endpoint] });
+  await valid.page.evaluate(() => window.__noonExampleGallery.run());
+  valid.window.__showcaseLiveReviewRun = { requestedAtEpochMs: 0, stop: false };
+  assert.equal(await valid.page.evaluate(observeNaturalFirstPassWrap, args), false);
+  assert.equal(valid.window.__showcaseLiveReviewFirstPass.captureKind, "renderer-owned");
+  assert.equal(valid.window.__showcaseLiveReviewFirstPass.executionState.time, 8);
+  assert.equal(valid.window.__showcaseLiveReviewFirstPass.rendererReceipt.time, 7.25);
+  assert.equal(valid.window.__showcaseLiveReviewFirstPass.proofReceipt.time, 7.25);
+
+  for (const invalid of [
+    { end: null }, { end: 9 }, { rustLoopCount: 1 }, { frontier: 7.9 }, { sequence: 3 },
+  ]) {
+    const failed = preparedAudioPage({ run: preparedRun, observations: [{ ...endpoint, ...invalid }] });
+    await failed.page.evaluate(() => window.__noonExampleGallery.run());
+    failed.window.__showcaseLiveReviewRun = { requestedAtEpochMs: 0, stop: false };
+    failed.window.__showcaseLiveReviewFirstPass = null;
+    assert.equal(await failed.page.evaluate(observeNaturalFirstPassWrap, args), false);
+    assert.equal(failed.window.__showcaseLiveReviewFirstPass, null);
   }
 });
 

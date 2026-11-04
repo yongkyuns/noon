@@ -2,6 +2,7 @@ import asyncio
 import ast
 import inspect
 import sys
+import time
 from types import SimpleNamespace
 from pathlib import Path
 import textwrap
@@ -11,7 +12,7 @@ import unittest
 from _manim_source_execution import (
     BARRIER_GLOBAL, bind_portable_construct, compile_authoring_source,
     has_portable_scene_methods,
-    authoring_source_scope, current_source_invocation,
+    authoring_source_scope, cooperative_source_yield_scope, current_source_invocation,
 )
 
 
@@ -23,6 +24,169 @@ def _nested_code_objects(code):
 
 
 class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_portable_source_cooperates_at_statements_loops_and_eager_comprehensions(self):
+        from _manim_source_execution import BARRIER_GLOBAL, execute_authoring_module
+
+        events, callbacks = [], []
+        generators = []
+        def record(*parts):
+            events.append(parts[0] if len(parts) == 1 else tuple(parts))
+            time.sleep(0.002)
+        class TruthValue:
+            def __init__(self, index): self.index = index
+            def __bool__(self):
+                record("truth", self.index)
+                return self.index == 1
+        def allowed(index):
+            events.append(("filter", index))
+            return TruthValue(index)
+        def item(index): record("item", index); return index
+        def set_item(index): record("set", index); return index
+        def key(index): record("key", index); return index
+        def value(index): record("value", index); return index + 10
+        class Base:
+            def play(self, label): events.append(("play", label))
+        async def barrier(method, /, *args, **kwargs):
+            method(*args, **kwargs)
+            events.append("barrier-complete")
+        async def checkpoint():
+            events.append("yield")
+            await asyncio.sleep(0)
+
+        source = textwrap.dedent('''
+            class Example(Base):
+                def construct(self):
+                    record("start")
+                    values = [item(i) for i in range(2) if allowed(i)]
+                    pairs = {key(i): value(i) for i in range(1)}
+                    members = {set_item(i) for i in range(1)}
+                    for i in range(2):
+                        record("loop", i)
+                    def deferred():
+                        events.append("deferred")
+                    deferred_lambda = lambda: events.append("lambda")
+                    deferred_generator = (i for i in range(2))
+                    callbacks.extend((deferred, deferred, deferred_lambda))
+                    generators.append(deferred_generator)
+                    self.play("once")
+                    events.append((values, pairs, members))
+        ''')
+        code, pairs = compile_authoring_source(source)
+        namespace = {"Base": Base, "events": events, "callbacks": callbacks,
+                     "generators": generators,
+                     "record": record, "allowed": allowed, "item": item,
+                     "set_item": set_item, "key": key, "value": value,
+                     BARRIER_GLOBAL: barrier}
+        await execute_authoring_module(code, namespace)
+        scene = namespace["Example"]()
+        portable = bind_portable_construct(scene.construct, pairs)
+        self.assertIsNotNone(portable)
+        self.assertFalse(inspect.iscoroutinefunction(scene.construct))
+        with cooperative_source_yield_scope(checkpoint):
+            await portable()
+
+        expected_source_events = [
+            "start", ("filter", 0), ("truth", 0), ("filter", 1), ("truth", 1), ("item", 1),
+            ("key", 0), ("value", 0), ("set", 0), ("loop", 0), ("loop", 1),
+            ("play", "once"), "barrier-complete", ([1], {0: 10}, {0}),
+        ]
+        self.assertEqual([event for event in events if event != "yield"], expected_source_events)
+        self.assertGreaterEqual(events.count("yield"), 6)
+        self.assertLess(events.index("start"), events.index("yield"))
+        self.assertLess(events.index(("filter", 0)), events.index(("filter", 1)))
+        self.assertLess(events.index(("key", 0)), events.index(("value", 0)))
+        self.assertEqual(len(callbacks), 3)
+        self.assertIs(callbacks[0], callbacks[1])
+        self.assertFalse(inspect.iscoroutinefunction(callbacks[0]))
+        self.assertFalse(inspect.iscoroutinefunction(callbacks[2]))
+        self.assertEqual(next(generators[0]), 0)
+        self.assertEqual(next(generators[0]), 1)
+        self.assertNotIn("deferred", events)
+        callbacks[0]()
+        self.assertEqual(events[-1], "deferred")
+        callbacks[2]()
+        self.assertEqual(events[-1], "lambda")
+
+    async def test_portable_source_checkpoint_is_noop_without_host_callback(self):
+        from _manim_source_execution import execute_authoring_module
+        events = []
+        class Base:
+            def play(self, value): events.append(("play", value))
+        namespace = {"events": events, "Base": Base}
+        code, pairs = compile_authoring_source('''class Example(Base):
+    def construct(self):
+        events.append("before")
+        for item in range(2):
+            events.append(item)
+        events.append("after")
+        self.play(1)
+''')
+        await execute_authoring_module(code, namespace)
+        scene = namespace["Example"]()
+        portable = bind_portable_construct(scene.construct, pairs)
+        async def barrier(method, /, *args, **kwargs): method(*args, **kwargs)
+        namespace[BARRIER_GLOBAL] = barrier
+        with authoring_source_scope():
+            await portable()
+        self.assertEqual(events, ["before", 0, 1, "after", ("play", 1)])
+
+    async def test_host_wait_does_not_consume_source_checkpoint_quantum(self):
+        from _manim_source_execution import await_source_checkpoint
+        clock = [0.0]
+        yields = []
+        async def checkpoint():
+            yields.append(clock[0])
+            clock[0] += 0.01
+        with patch("_manim_source_execution.perf_counter", side_effect=lambda: clock[0]):
+            with cooperative_source_yield_scope(checkpoint):
+                clock[0] = 0.002
+                await await_source_checkpoint()
+                await await_source_checkpoint()
+        self.assertEqual(yields, [0.002])
+
+    async def test_module_barrier_path_cooperates_between_source_statements(self):
+        from _manim_source_execution import MODULE_BARRIER_GLOBAL, execute_authoring_module
+        events = []
+        def record(value):
+            events.append(value)
+            time.sleep(0.002)
+        class Scene:
+            def wait(self, duration): events.append(("wait", duration))
+        async def barrier(method, /, *args, **kwargs): method(*args, **kwargs)
+        async def checkpoint():
+            events.append("yield")
+            await asyncio.sleep(0)
+        source = 'record("module-start")\nscene.wait(1)\nrecord("module-end")\n'
+        code, pairs = compile_authoring_source(source)
+        self.assertFalse(pairs)
+        namespace = {"record": record, "scene": Scene(), MODULE_BARRIER_GLOBAL: barrier}
+        with cooperative_source_yield_scope(checkpoint):
+            with authoring_source_scope():
+                await execute_authoring_module(code, namespace)
+        self.assertEqual([event for event in events if event != "yield"],
+                         ["module-start", ("wait", 1), "module-end"])
+        self.assertGreaterEqual(events.count("yield"), 1)
+
+    async def test_module_checkpoints_preserve_docstring_and_future_imports(self):
+        from _manim_source_execution import MODULE_BARRIER_GLOBAL, execute_authoring_module
+        events = []
+        class Scene:
+            def wait(self, duration): events.append(("wait", duration))
+        async def barrier(method, /, *args, **kwargs): method(*args, **kwargs)
+        source = '''"""Module documentation."""
+from __future__ import annotations
+from __future__ import generator_stop
+scene.wait(1)
+value: MissingName = 2
+'''
+        code, pairs = compile_authoring_source(source)
+        self.assertFalse(pairs)
+        namespace = {"scene": Scene(), MODULE_BARRIER_GLOBAL: barrier}
+        await execute_authoring_module(code, namespace)
+        self.assertEqual(namespace["__doc__"], "Module documentation.")
+        self.assertEqual(namespace["__annotations__"], {"value": "MissingName"})
+        self.assertEqual(events, [("wait", 1)])
+
     async def test_explicit_module_preparation_finishes_before_scene_definition(self):
         from _manim_source_execution import execute_authoring_module
         for portable in (False, True):
@@ -620,6 +784,32 @@ class SourceExecutionTests(unittest.IsolatedAsyncioTestCase):
         # construct must never be inspected as if it were portable.
         await _manim_scene.execute_construct(scene, portable_constructs={object(): object()})
         self.assertEqual(events, ["ordinary"])
+
+    async def test_source_invocation_stops_module_candidate_before_scene_lifecycle(self):
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            import _manim_scene
+
+        events = []
+        class Example(noon.Scene):
+            def __init__(self):
+                events.append(("init", _manim_scene._default_synchronous_continuation_candidate(self)))
+                super().__init__()
+            def setup(self):
+                events.append(("setup", _manim_scene._default_synchronous_continuation_candidate(self)))
+            def construct(self):
+                events.append(("construct", _manim_scene._default_synchronous_continuation_candidate(self)))
+            def tear_down(self):
+                events.append(("tear_down", _manim_scene._default_synchronous_continuation_candidate(self)))
+
+        with authoring_source_scope():
+            self.assertTrue(_manim_scene._default_synchronous_continuation_candidate(
+                Example.__new__(Example)))
+        scene = Example()
+        await _manim_scene.execute_construct(scene)
+        self.assertEqual(events, [
+            ("init", False), ("setup", False), ("construct", True), ("tear_down", False),
+        ])
 
     def test_admission_does_not_invoke_descriptors_or_dynamic_lookup(self):
         effects = []

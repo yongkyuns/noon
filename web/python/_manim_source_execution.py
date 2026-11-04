@@ -27,10 +27,13 @@ import sys
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from time import perf_counter
 from types import CodeType, FunctionType, MethodType
 
 BARRIER_GLOBAL = "_noon_await_source_barrier"
 MODULE_BARRIER_GLOBAL = "_noon_await_module_barrier"
+COOPERATIVE_CHECKPOINT_GLOBAL = "_noon_source_checkpoint"
+_COOPERATIVE_YIELD_QUANTUM_SECONDS = 0.001
 
 # A closed source may use these trusted, scene/data-only entry points. This is
 # deliberately a positive capability list, not a blacklist of known I/O calls.
@@ -4652,6 +4655,17 @@ _SOURCE_INVOCATION: ContextVar[_SourceInvocation | None] = ContextVar(
 )
 
 
+@dataclass
+class _CooperativeSourceYield:
+    callback: object
+    last_yield_at: float
+
+
+_COOPERATIVE_SOURCE_YIELD: ContextVar[_CooperativeSourceYield | None] = ContextVar(
+    "noon_cooperative_source_yield", default=None
+)
+
+
 def current_source_invocation():
     return _SOURCE_INVOCATION.get()
 
@@ -4668,6 +4682,32 @@ def authoring_source_scope():
         cleanup.callback(_SOURCE_INVOCATION.reset, token)
         yield
 
+
+@contextmanager
+def cooperative_source_yield_scope(callback=None):
+    """Carry an optional host fairness callback across one source execution."""
+    state = (_CooperativeSourceYield(callback, perf_counter())
+             if callback is not None else None)
+    token = _COOPERATIVE_SOURCE_YIELD.set(state)
+    try:
+        yield
+    finally:
+        _COOPERATIVE_SOURCE_YIELD.reset(token)
+
+
+async def await_source_checkpoint(value=None, *, condition=False):
+    """Yield at a portable source boundary, preserving an optional expression value."""
+    result = bool(value) if condition else value
+    state = _COOPERATIVE_SOURCE_YIELD.get()
+    if state is not None:
+        now = perf_counter()
+        if now - state.last_yield_at >= _COOPERATIVE_YIELD_QUANTUM_SECONDS:
+            pending = state.callback()
+            if pending:
+                await pending
+            state.last_yield_at = perf_counter()
+    return result
+
 # Known Scene calls, with suspension handled only at the explicit barriers above.
 # Unknown methods (including super().construct()) keep their original host path.
 _SCENE_CALLS = frozenset({
@@ -4678,7 +4718,95 @@ _SCENE_CALLS = frozenset({
 })
 
 
-class _ConstructBody(ast.NodeTransformer):
+class _CooperativeSourceCheckpoints(ast.NodeTransformer):
+    """Insert awaits only into the already-async portable source copy."""
+    _SUITE_FIELDS = frozenset({"body", "orelse", "finalbody"})
+
+    @staticmethod
+    def _checkpoint_statement(location):
+        call = ast.Call(func=ast.Name(id=COOPERATIVE_CHECKPOINT_GLOBAL, ctx=ast.Load()),
+                        args=[], keywords=[])
+        return ast.copy_location(ast.Expr(value=ast.Await(value=call)), location)
+
+    @staticmethod
+    def _checkpoint_value(value):
+        call = ast.Call(func=ast.Name(id=COOPERATIVE_CHECKPOINT_GLOBAL, ctx=ast.Load()),
+                        args=[value], keywords=[])
+        return ast.copy_location(ast.Await(value=call), value)
+
+    def generic_visit(self, node):
+        for field, old_value in ast.iter_fields(node):
+            if isinstance(old_value, ast.AST):
+                setattr(node, field, self.visit(old_value))
+                continue
+            if not isinstance(old_value, list):
+                continue
+            if field in self._SUITE_FIELDS and all(isinstance(item, ast.stmt) for item in old_value):
+                new_values = []
+                prefix_end = 0
+                if isinstance(node, ast.Module):
+                    # Keep the module docstring and contiguous future imports
+                    # before any injected statement, as required by Python.
+                    if (old_value and isinstance(old_value[0], ast.Expr)
+                            and isinstance(old_value[0].value, ast.Constant)
+                            and isinstance(old_value[0].value.value, str)):
+                        prefix_end = 1
+                    while (prefix_end < len(old_value)
+                           and isinstance(old_value[prefix_end], ast.ImportFrom)
+                           and old_value[prefix_end].module == "__future__"):
+                        prefix_end += 1
+                for index, statement in enumerate(old_value):
+                    rewritten = self.visit(statement)
+                    if rewritten is None:
+                        continue
+                    new_values.extend(rewritten if isinstance(rewritten, list) else [rewritten])
+                    if index >= prefix_end:
+                        new_values.append(self._checkpoint_statement(statement))
+            else:
+                new_values = [self.visit(item) if isinstance(item, ast.AST) else item
+                              for item in old_value]
+            setattr(node, field, new_values)
+        return node
+
+    def _visit_comprehension(self, node, values):
+        node = self.generic_visit(node)
+        for generator in node.generators:
+            generator.ifs = [self._checkpoint_condition(condition) for condition in generator.ifs]
+        for field in values:
+            setattr(node, field, self._checkpoint_value(getattr(node, field)))
+        return node
+
+    @staticmethod
+    def _checkpoint_condition(condition):
+        call = ast.Call(func=ast.Name(id=COOPERATIVE_CHECKPOINT_GLOBAL, ctx=ast.Load()),
+                        args=[condition], keywords=[ast.keyword(arg="condition", value=ast.Constant(True))])
+        return ast.copy_location(ast.Await(value=call), condition)
+
+    def visit_ListComp(self, node):
+        return self._visit_comprehension(node, ("elt",))
+
+    def visit_SetComp(self, node):
+        return self._visit_comprehension(node, ("elt",))
+
+    def visit_DictComp(self, node):
+        # A dict key is evaluated before its value; checkpoint after the value
+        # so the transformation preserves that original pair ordering.
+        return self._visit_comprehension(node, ("value",))
+
+    def visit_For(self, node):
+        node = self.generic_visit(node)
+        node.body.insert(0, self._checkpoint_statement(node))
+        return node
+
+    visit_AsyncFor = visit_For
+
+    def visit_While(self, node):
+        node = self.generic_visit(node)
+        node.body.insert(0, self._checkpoint_statement(node))
+        return node
+
+
+class _ConstructBody(_CooperativeSourceCheckpoints):
     def __init__(self, receiver: str):
         self.receiver = receiver
         self.barriers = 0
@@ -4801,7 +4929,7 @@ class _ConstructCompiler(ast.NodeTransformer):
             return node
         body = _ConstructBody(arguments[0].arg)
         candidate = copy.deepcopy(node)
-        candidate.body = [body.visit(statement) for statement in candidate.body]
+        candidate.body = body.generic_visit(ast.Module(body=candidate.body, type_ignores=[])).body
         if body.unsupported or not body.barriers:
             return node
         self.locations.add((node.name, node.lineno))
@@ -4819,7 +4947,7 @@ def _function_codes(code: CodeType):
             yield from _function_codes(value)
 
 
-class _ModuleBarriers(ast.NodeTransformer):
+class _ModuleBarriers(_CooperativeSourceCheckpoints):
     """Yield at direct module statements, never inside deferred function code.
 
     Runtime dispatch invokes noncanonical methods normally and only consumes
@@ -4872,7 +5000,9 @@ def compile_authoring_source(
         source, filename, "exec",
         flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True,
     )
-    if not portable or any(name in source for name in (BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL)):
+    if not portable or any(name in source for name in (
+            BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL,
+            COOPERATIVE_CHECKPOINT_GLOBAL)):
         return original, {}
     originals = list(_function_codes(original))
     has_construct = any(
@@ -4922,6 +5052,7 @@ def compile_authoring_source(
 
 async def execute_authoring_module(code: CodeType, namespace: dict) -> None:
     """Execute the module once in its original namespace, awaiting only module code."""
+    namespace.setdefault(COOPERATIVE_CHECKPOINT_GLOBAL, await_source_checkpoint)
     if code.co_flags & inspect.CO_COROUTINE:
         await eval(code, namespace)
     else:
@@ -4941,6 +5072,7 @@ def bind_portable_construct(
     portable = FunctionType(
         code, original.__globals__, original.__name__, original.__defaults__, original.__closure__
     )
+    original.__globals__.setdefault(COOPERATIVE_CHECKPOINT_GLOBAL, await_source_checkpoint)
     portable.__kwdefaults__ = original.__kwdefaults__
     return MethodType(portable, method.__self__)
 
