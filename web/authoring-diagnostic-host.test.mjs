@@ -12,9 +12,14 @@ import { withAuthoringDiagnostics, diagnosedHostCode } from "./authoring-diagnos
 const worker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 const start = worker.indexOf("async function runAuthoringSource(");
 const end = worker.indexOf("async function runCanonicalCallbackPhase(", start);
+const timingStart = worker.indexOf("function preparationTimingEvent(");
+const timingEnd = worker.indexOf("function sourceExecutionRequirement(", timingStart);
 assert.ok(start >= 0 && end > start, "production source entrypoint must exist");
+assert.ok(timingStart >= 0 && timingEnd > timingStart, "production preparation timing helpers must exist");
 const run = new Function("withAuthoringDiagnostics", "diagnosedHostCode", "prepareAuthoringDependencies", "isRecord", "post",
-  `const activeAuthoringRun = {}; let authoringLibrariesPristine = true;
+  `const activeAuthoringRun = { diagnosticPreparationTiming: false };
+  let authoringLibrariesPristine = true;
+  ${worker.slice(timingStart, timingEnd)}
   ${worker.slice(start, end)}; return runAuthoringSource;`,
 )(withAuthoringDiagnostics, diagnosedHostCode, async () => {},
   value => value !== null && typeof value === "object" && !Array.isArray(value), () => {});
