@@ -33,7 +33,7 @@ function workerIdentity(worker) {
   return { id: workerIds.get(worker), url: worker.url() };
 }
 async function memoryBuildIdentity() {
-  const manifestNames = ["manim_tutorial_manifest.json", "manim_stress_manifest.json"];
+  const manifestNames = ["manim_tutorial_manifest.json", "manim_stress_manifest.json", "noon_showcase_manifest.json"];
   let sourceEntry = null, manifestHash = null;
   for (const name of manifestNames) {
     const bytes = await readFile(path.join(repoRoot, "web/python/examples", name));
@@ -50,6 +50,7 @@ async function memoryBuildIdentity() {
 }
 
 const memory = memoryEnabled ? { enabled: true, build: await memoryBuildIdentity(), marks: [],
+  status: "running", errors: [],
   unaccounted: ["JavaScript live heap", "GPU/out-of-process allocations", "WASM live allocator and capacity"],
   caveat: "Rust retained charges are category-local logical bytes; sampled Chromium process-tree RSS is separate and may double-count shared pages." }
   : null;
@@ -154,6 +155,7 @@ async function memoryMark(page, phase) {
     renderer: Object.fromEntries(["presentedFrames", "needsPresent", "bufferedDeltas", "bytesUploaded",
       "geometryCacheMisses"].map(name => [name, metrics[name] ?? null])), retention };
   });
+  if (state.retention === null) memory.errors.push(`prepared retention metrics missing at ${phase}`);
   memory.marks.push({ phase, ...state, workers: page.workers().map(workerIdentity) });
 }
 
@@ -318,6 +320,7 @@ try {
     browserServer = await chromium.launchServer(launchOptions);
     browser = await chromium.connect(browserServer.wsEndpoint());
     rssSampler = createProcessTreeRssSampler(browserServer.process().pid);
+    memory.rssClockOriginEpochMs = Date.now();
     rssSampler.start();
   } else browser = await chromium.launch(launchOptions);
   if (memoryEnabled) {
@@ -568,6 +571,7 @@ try {
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log("✓ replay rerun stress: source ownership, seek queues, duplicate Runs and canvas reuse remain coherent");
 } catch (error) {
+  if (memoryEnabled) memory.errors.push(`rerun qualification: ${String(error)}`);
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   diagnostics.serverOutput = serverOutput;
@@ -584,22 +588,46 @@ try {
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   throw error;
 } finally {
-  if (memoryEnabled && exampleContext !== null) {
+  if (memoryEnabled) {
     const workers = page?.workers() ?? [];
-    const closedAt = Date.now();
-    try {
+    if (exampleContext === null) memory.errors.push("browser context was unavailable for retirement observation");
+    else try {
+      const closedAt = Date.now();
       await exampleContext.close();
       memory.contextCloseMs = Date.now() - closedAt;
       memory.workersAfterContextClose = await Promise.all(workers.map(async worker => ({ ...workerIdentity(worker),
         retired: await Promise.race([worker.evaluate(() => true).then(() => false, () => true),
           new Promise(resolve => setTimeout(() => resolve(null), 500))]) })));
       await new Promise(resolve => setTimeout(resolve, 750));
-      memory.postContextCloseRss = await rssSampler.stop();
-    } catch (error) { memory.finalObservationError = String(error); }
+    } catch (error) { memory.errors.push(`context retirement observation: ${String(error)}`); }
+    if (rssSampler === null) memory.errors.push("process RSS sampler was not started");
+    else try {
+      const rss = await rssSampler.stop();
+      memory.processTreeRss = { ...rss, clockOriginEpochMs: memory.rssClockOriginEpochMs,
+        samples: rss.samples.map(sample => ({ ...sample, epochMs: memory.rssClockOriginEpochMs + sample.atMs })) };
+      if (rss.sampleCount === 0 || rss.peakSampledRssBytes === null || rss.samplingError !== null || rss.truncated) {
+        memory.errors.push("process RSS samples were missing, errored, or truncated");
+      }
+    } catch (error) { memory.errors.push(`process RSS sampler stop: ${String(error)}`); }
+    if (!Array.isArray(memory.workersAfterContextClose) || memory.workersAfterContextClose.length === 0 ||
+        memory.workersAfterContextClose.some(worker => worker.retired !== true)) {
+      memory.errors.push("one or more browser workers were not confirmed retired");
+    }
+    if (!Number.isFinite(memory.pausedRendererWindow?.before?.presentedFrames) ||
+        !Number.isFinite(memory.pausedRendererWindow?.after?.presentedFrames)) {
+      memory.errors.push("paused renderer counters were unavailable");
+    }
+    memory.status = memory.errors.length === 0 ? "observed" : "failed";
     diagnostics.memory = memory;
-    await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
+    try { await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`); }
+    catch (error) { memory.status = "failed"; memory.errors.push(`memory report write: ${String(error)}`); }
   }
   await browser?.close().catch(() => {});
   await browserServer?.close().catch(() => {});
   server.kill("SIGTERM");
+  if (memoryEnabled && memory.status === "failed" && diagnostics.error === undefined) {
+    diagnostics.error = { name: "MemoryObservationError", message: memory.errors.join("; ") };
+    await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`).catch(() => {});
+    throw new Error(`memory observation failed: ${memory.errors.join("; ")}`);
+  }
 }
