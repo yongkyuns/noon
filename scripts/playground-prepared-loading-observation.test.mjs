@@ -11,6 +11,7 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   readinessRunTimingOriginErrors,
   readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
   readinessPreparedReaderLead, activeFrameGapEvidence, summarizeReaderLead,
+  readinessPostTerminalReceiverSession,
   readinessFirstUsefulRegressionErrors,
   READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
@@ -290,21 +291,47 @@ test("raw cadence coverage handles late renderer startup and rejects generation 
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60 });
   assert.ok(result.coverageErrors.some(error => /generation changed/.test(error)));
   const transition = { ...capture, workers: [{ ordinal: 1, latestMetricsEpochMs: 42, latestOrdinal: 2 }],
-    samples: capture.samples.map((sample, index) => ({ ...sample, generation: 3, presentedAtMs: 32 + index * 10 })),
-    generationChanges: [{ workerOrdinal: 1, from: 0, to: 1, session: 8, observedAtEpochMs: 35 }] };
+    samples: capture.samples.map((sample, index) => ({ ...sample, generation: 2, presentedAtMs: 32 + index * 10 })),
+    generationChanges: [{ workerOrdinal: 1, from: 2, to: 3, previousSession: 7,
+      session: 8, observedAtEpochMs: 35 }] };
   assert.deepEqual(activeFrameGapEvidence(transition, { startEpochMs: 25, endEpochMs: 42,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60,
+    postTerminalReceiverSession: 8 }).coverageErrors, [],
+  "only the trace-proven postterminal receiver transition is allowed after a completed source session");
+  const measuredSessionStart = { ...transition,
+    samples: transition.samples.map(sample => ({ ...sample, generation: 3 })),
+    generationChanges: [{ workerOrdinal: 1, from: 2, to: 3, previousSession: 6,
+      session: 7, observedAtEpochMs: 35 }] };
+  assert.deepEqual(activeFrameGapEvidence(measuredSessionStart, { startEpochMs: 25, endEpochMs: 42,
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors, [],
-  "a single-generation renderer handoff to a new receiver session does not invalidate the completed source session");
+  "one known forward generation change into the measured session is its initial receiver establishment");
   for (const generationChange of [
-    { workerOrdinal: 1, from: 0, to: 1, session: 7, observedAtEpochMs: 35 },
-    { workerOrdinal: 1, from: 0, to: 1, session: null, observedAtEpochMs: 35 },
-    { workerOrdinal: 1, from: 0, to: 2, session: 8, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: 7, session: 7, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: null, session: 7, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 2, previousSession: 6, session: 7, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: 6, session: null, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 1, to: 2, previousSession: 6, session: 8, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 1, to: 2, previousSession: 7, session: 8, observedAtEpochMs: 35 },
   ]) {
-    const invalidTransition = { ...transition, generationChanges: [generationChange] };
+    const invalidTransition = { ...measuredSessionStart, generationChanges: [generationChange] };
     assert.ok(activeFrameGapEvidence(invalidTransition, { startEpochMs: 25, endEpochMs: 42,
-      session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors
+      session: 7, rendererWorkerOrdinal: 1, targetHz: 60,
+      postTerminalReceiverSession: 8 }).coverageErrors
       .some(error => /generation changed/.test(error)), JSON.stringify(generationChange));
   }
+  const unprovenForeignTransition = { ...transition, generationChanges: [
+    { workerOrdinal: 1, from: 2, to: 3, previousSession: 7, session: 9, observedAtEpochMs: 35 },
+  ] };
+  for (const postTerminalReceiverSession of [null, 8]) {
+    assert.ok(activeFrameGapEvidence(unprovenForeignTransition, { startEpochMs: 25, endEpochMs: 42,
+      session: 7, rendererWorkerOrdinal: 1, targetHz: 60, postTerminalReceiverSession }).coverageErrors
+      .some(error => /generation changed/.test(error)), "unproven foreign generation changes fail closed");
+  }
+  const mixedMeasuredSession = { ...measuredSessionStart,
+    samples: measuredSessionStart.samples.map((sample, index) => ({ ...sample, generation: index === 0 ? 2 : 3 })) };
+  assert.ok(activeFrameGapEvidence(mixedMeasuredSession, { startEpochMs: 25, endEpochMs: 42,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors
+    .some(error => /generation changed/.test(error)), "mixed generations in the measured session fail closed");
   const missingHeader = { ...capture, headerObservedAtEpochMs: null };
   assert.ok(activeFrameGapEvidence(missingHeader, { startEpochMs: 25, endEpochMs: 40,
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors
@@ -316,6 +343,30 @@ test("raw cadence coverage handles late renderer startup and rejects generation 
   assert.deepEqual(activeFrameGapEvidence(lateWorker, { startEpochMs: 25, endEpochMs: 61,
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors, [],
   "a renderer created after accepted Run is valid when its first raw header and all interval ordinals are captured");
+});
+
+test("postterminal receiver exemption comes only from ordered matching execution events", () => {
+  const trace = { droppedEvents: 0, events: [
+    { sequence: 0, stage: "source-proof" },
+    { sequence: 1, stage: "disposition", disposition: "observed-complete", session: 7,
+      contextId: "semantic-1", continuationGeneration: 3,
+      publication: { session: 7, sequence: 81 } },
+    { sequence: 2, stage: "receiver-attached", session: 8,
+      contextId: "semantic-1", continuationGeneration: 3,
+      publication: { session: 8, sequence: 0, snapshot: true } },
+  ] };
+  assert.equal(readinessPostTerminalReceiverSession(trace, 7), 8);
+  assert.equal(readinessPostTerminalReceiverSession(trace, 6), null,
+    "postterminal proof must name the measured source session");
+  for (const invalid of [
+    { ...trace, droppedEvents: 1 },
+    { ...trace, events: [...trace.events].reverse() },
+    { ...trace, events: [trace.events[0], trace.events[1], { ...trace.events[2], sequence: 3 }] },
+    { ...trace, events: [trace.events[0], trace.events[1], { ...trace.events[2], contextId: "other" }] },
+    { ...trace, events: [trace.events[0], trace.events[1], { ...trace.events[2], continuationGeneration: 4 }] },
+    { ...trace, events: [trace.events[0], trace.events[1], { ...trace.events[2],
+      publication: { ...trace.events[2].publication, session: 9 } }] },
+  ]) assert.equal(readinessPostTerminalReceiverSession(invalid, 7), null);
 });
 
 test("reader lead summary keeps open, closed and buffering observations distinct", () => {

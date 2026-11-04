@@ -23,7 +23,7 @@ import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   readinessTraceMatchesRun,
   readinessRunTimingOriginErrors, readinessReplayCycleEvidence,
   readinessRendererSamples, readinessWarmSeekTargets, readinessPreparedReaderLead,
-  summarizeReaderLead, activeFrameGapEvidence } from "./playground-prepared-loading-observation.mjs";
+  summarizeReaderLead, activeFrameGapEvidence, readinessPostTerminalReceiverSession } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -397,22 +397,33 @@ async function installReadinessPresentationProbe(context, { profilePublicationSt
               !Number.isFinite(message.metrics.sampledAtMs)) {
             probe.cadenceError ??= "raw presentation interval capture is missing, invalid, or overflowed";
           } else {
-            const worker = probe.cadenceWorkers.get(workerOrdinal) ?? { latestOrdinal: 0, generation: null };
+            const worker = probe.cadenceWorkers.get(workerOrdinal) ?? { latestOrdinal: 0, generation: null, session: null };
             worker.latestMetricsEpochMs = message.metrics.performanceTimeOriginMs + message.metrics.sampledAtMs;
             worker.captureHeaderObservedAtEpochMs ??= worker.latestMetricsEpochMs;
             worker.capacity = raw.capacity;
             if (raw.latestOrdinal < worker.latestOrdinal) {
               probe.cadenceError ??= "raw presentation interval ordinal regressed";
             }
+            const latestReceiptSession = message.metrics.latestPresentationSample?.session;
+            const observedSession = Number.isSafeInteger(latestReceiptSession) ? latestReceiptSession : null;
             if (worker.generation !== null && raw.generation !== worker.generation) {
               if (probe.cadenceGenerationChanges.length < 64) {
-                probe.cadenceGenerationChanges.push({ workerOrdinal, from: worker.generation, to: raw.generation,
-                  session: Number.isSafeInteger(message.metrics.latestPresentationSample?.session)
-                    ? message.metrics.latestPresentationSample.session : null,
-                  observedAtEpochMs: message.metrics.performanceTimeOriginMs + message.metrics.sampledAtMs });
+                const change = { workerOrdinal, from: worker.generation, to: raw.generation,
+                  previousSession: worker.session, session: observedSession,
+                  observedAtEpochMs: message.metrics.performanceTimeOriginMs + message.metrics.sampledAtMs };
+                probe.cadenceGenerationChanges.push(change);
+                worker.pendingGenerationChange = observedSession === null ? change : null;
               } else probe.cadenceError ??= "renderer generation change collector bound exceeded";
             }
             worker.generation = raw.generation;
+            if (worker.pendingGenerationChange?.to === raw.generation && worker.pendingGenerationChange.session === null &&
+                observedSession !== null) {
+              worker.pendingGenerationChange.session = observedSession;
+              worker.pendingGenerationChange.attributedAtEpochMs = message.metrics.performanceTimeOriginMs +
+                message.metrics.sampledAtMs;
+              worker.pendingGenerationChange = null;
+            }
+            if (observedSession !== null) worker.session = observedSession;
             let previousRingOrdinal = null;
             for (const sample of raw.samples) {
               if (!Number.isSafeInteger(sample.ordinal) || !Number.isSafeInteger(sample.session) ||
@@ -780,7 +791,6 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     if (stratum === "reused-healthy-interpreter") {
       if (!Number.isFinite(navigation.run?.sourceRunStartedAtMs)) {
         await page.locator("#replace-scene").click();
-        await waitForApplied(page, source.id);
       }
       const seedDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
       const seedDisposition = initialArm === "A" ? "looped" : "observed-complete";
@@ -1020,6 +1030,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       session: sourceAttached?.session,
       rendererWorkerOrdinal: sourceRow.rendererWorkerOrdinal,
       targetHz: readinessContract.reference.refreshHz,
+      postTerminalReceiverSession: readinessPostTerminalReceiverSession(sourceRow.endTrace, sourceAttached?.session),
     });
     sourceRow.profileValidationErrors.push(...sourceRow.activeFrameGap.coverageErrors);
     sourceRow.readerLeadSummary = summarizeReaderLead(sourceRow.readerLeadObservations);

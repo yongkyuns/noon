@@ -301,8 +301,27 @@ export function summarizeReaderLead(observations) {
     bufferingSamples: values.filter(value => value.buffering).length };
 }
 
+export function readinessPostTerminalReceiverSession(trace, measuredSession) {
+  if (!Number.isSafeInteger(measuredSession)) return null;
+  if (trace?.droppedEvents !== 0 || !Array.isArray(trace.events) || trace.events.some((event, index) =>
+    !Number.isSafeInteger(event.sequence) || event.sequence !== index)) return null;
+  const completed = trace.events.filter(event => event.stage === "disposition" &&
+    event.disposition === "observed-complete");
+  if (completed.length !== 1) return null;
+  const terminal = completed[0];
+  if (!Number.isSafeInteger(terminal.sequence) || terminal.session !== measuredSession ||
+      terminal.publication?.session !== terminal.session || typeof terminal.contextId !== "string" ||
+      !Number.isSafeInteger(terminal.continuationGeneration)) return null;
+  const receivers = trace.events.filter(event => event.stage === "receiver-attached" &&
+    event.sequence > terminal.sequence && event.contextId === terminal.contextId &&
+    event.continuationGeneration === terminal.continuationGeneration &&
+    Number.isSafeInteger(event.session) && event.publication?.session === event.session &&
+    event.publication.snapshot === true);
+  return receivers.length === 1 && receivers[0].session !== terminal.session ? receivers[0].session : null;
+}
+
 export function activeFrameGapEvidence(capture, { startEpochMs, endEpochMs, session,
-  rendererWorkerOrdinal, targetHz }) {
+  rendererWorkerOrdinal, targetHz, postTerminalReceiverSession = null }) {
   const errors = capture?.error ? [capture.error] : [];
   const samples = Array.isArray(capture?.samples) ? capture.samples : [];
   if (!Number.isFinite(startEpochMs) || !Number.isFinite(endEpochMs) || endEpochMs <= startEpochMs ||
@@ -338,16 +357,32 @@ export function activeFrameGapEvidence(capture, { startEpochMs, endEpochMs, sess
   if (selected.length === 0) errors.push("active frame-gap window has no complete renderer intervals");
   const ownerSamples = samples.filter(sample => sample.workerOrdinal === rendererWorkerOrdinal &&
     sample.session === session);
+  const targetGenerations = [...new Set(ownerSamples.map(sample => sample.generation))];
   const generations = [...new Set(ownerSamples.filter(sample => {
     const at = sample.clockOriginMs + sample.presentedAtMs;
     return at >= startEpochMs && at <= endEpochMs;
   }).map(sample => sample.generation))];
-  const unattributedGenerationChange = (capture?.generationChanges ?? []).some(change => {
+  if (targetGenerations.length > 1) errors.push("renderer generation changed within the measured session");
+  const generationChanges = (capture?.generationChanges ?? []).filter(change => {
     if (change.workerOrdinal !== rendererWorkerOrdinal || change.observedAtEpochMs < startEpochMs ||
         change.observedAtEpochMs > endEpochMs) return false;
+    return true;
+  });
+  const targetSessionChanges = generationChanges.filter(change => change.session === session);
+  const validTargetSessionEstablishment = targetSessionChanges.length === 1 && (() => {
+    const change = targetSessionChanges[0];
+    return change.to - change.from === 1 && Number.isSafeInteger(change.previousSession) &&
+      change.previousSession !== session && targetGenerations.length === 1 && targetGenerations[0] === change.to;
+  })();
+  const unattributedGenerationChange = generationChanges.some(change => {
     const delta = change.to - change.from;
-    return change.session === session || !Number.isSafeInteger(change.session) ||
-      !Number.isFinite(delta) || Math.abs(delta) > 1;
+    if (change.session === session) return !validTargetSessionEstablishment;
+    if (Number.isSafeInteger(postTerminalReceiverSession) &&
+        change.session === postTerminalReceiverSession && postTerminalReceiverSession !== session) {
+      return delta !== 1 || change.previousSession !== session || targetGenerations.length !== 1 ||
+        targetGenerations[0] !== change.from;
+    }
+    return true;
   });
   if (generations.length > 1 || unattributedGenerationChange) {
     errors.push("renderer generation changed during the active frame-gap window");
