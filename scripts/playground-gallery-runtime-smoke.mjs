@@ -223,6 +223,42 @@ try {
     await context.addInitScript(({ channel, protocolVersion, profilePublications }) => {
       window.__galleryAuthoringResults = [];
       window.__galleryWorkerMessages = [];
+      window.__pauseDiag = { events: [], engineMessages: [] };
+      window.__pauseDiagPush = (target, value) => {
+        const list = window.__pauseDiag?.[target];
+        if (!Array.isArray(list)) return;
+        list.push(value);
+        if (list.length > 128) list.shift();
+      };
+      const pendingPauseRequests = new Set();
+      const originalPortPostMessage = MessagePort.prototype.postMessage;
+      MessagePort.prototype.postMessage = function (data, transfer) {
+        if (data?.channel === 'noon.engine' && data.type === 'pause') {
+          if (Number.isSafeInteger(data.requestId)) pendingPauseRequests.add(data.requestId);
+          window.__pauseDiagPush('engineMessages', { direction: 'out', atMs: performance.now(),
+            type: data.type, requestId: data.requestId ?? null, session: data.session ?? null });
+        }
+        return transfer === undefined ? originalPortPostMessage.call(this, data)
+          : originalPortPostMessage.call(this, data, transfer);
+      };
+      const originalPortAddEventListener = MessagePort.prototype.addEventListener;
+      MessagePort.prototype.addEventListener = function (type, listener, options) {
+        if (type === 'message' && !this.__pauseDiagnosticObserverAttached) {
+          Object.defineProperty(this, '__pauseDiagnosticObserverAttached', { value: true });
+          originalPortAddEventListener.call(this, 'message', event => {
+            const data = event.data;
+            if (data?.channel === 'noon.engine' && pendingPauseRequests.has(data.requestId)) {
+              window.__pauseDiagPush('engineMessages', { direction: 'in', atMs: performance.now(),
+                type: data.type ?? null, requestId: data.requestId,
+                error: data.message ?? null, session: data.presentationReceipt?.session ?? data.session ?? null,
+                time: data.time ?? null, playing: data.playing ?? null,
+                presentationReceipt: data.presentationReceipt ?? null });
+              pendingPauseRequests.delete(data.requestId);
+            }
+          });
+        }
+        return originalPortAddEventListener.call(this, type, listener, options);
+      };
       const profilingRequestId = Number.MAX_SAFE_INTEGER;
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
@@ -231,6 +267,14 @@ try {
           const worker = Reflect.construct(target, workerArgs, newTarget);
           worker.addEventListener('message', event => {
             const { data } = event;
+            if (data?.channel === 'noon.engine' && data.requestId !== undefined) {
+              const value = data.result ?? data;
+              window.__pauseDiagPush?.('engineMessages', { direction: 'in', atMs: performance.now(),
+                type: data.type ?? null, requestId: data.requestId, error: data.message ?? null,
+                session: value?.presentationReceipt?.session ?? value?.session ?? null,
+                time: value?.time ?? null, playing: value?.playing ?? null,
+                presentationReceipt: value?.presentationReceipt ?? null });
+            }
             if (data?.channel === 'noon.render' && data.requestId === profilingRequestId) {
               // This ID is outside the product client's request range. Consume
               // only our initial diagnostic reply before its normal listener.
@@ -555,6 +599,14 @@ try {
           caseTimer = setTimeout(() => reject(new Error(`${name}: browser case exceeded 150 seconds`)), 150000);
         }),
       ]);
+      result.pauseDiagnostics = await Promise.race([
+        page.evaluate(() => ({
+          buttonCount: window.__pauseDiag?.buttonCount ?? null,
+          events: window.__pauseDiag?.events ?? [],
+          engineMessages: window.__pauseDiag?.engineMessages ?? [],
+        })),
+        new Promise(resolve => setTimeout(() => resolve(null), 1000)),
+      ]).catch(error => ({ error: String(error) }));
       result.outcome = 'pass';
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
@@ -577,6 +629,13 @@ try {
       result.failureDiagnostics.nativeCrashReports = await native.failure();
       result.failureDiagnostics.nativeProcessSnapshots = native.snapshots();
       result.failureDiagnostics.attemptedPage = await captureAttemptedPage(page);
+      result.failureDiagnostics.pauseDiagnostics = await Promise.race([
+        page.evaluate(() => ({
+          events: window.__pauseDiag?.events ?? [],
+          engineMessages: window.__pauseDiag?.engineMessages ?? [],
+        })),
+        new Promise(resolve => setTimeout(() => resolve(null), 1000)),
+      ]).catch(error => ({ error: String(error) }));
     } finally {
       clearTimeout(caseTimer);
       if (expectedProfile && !Object.hasOwn(result, 'executionDiagnostics')) {
