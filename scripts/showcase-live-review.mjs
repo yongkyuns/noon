@@ -99,30 +99,13 @@ export function assertNaturalFirstPassPublication(entry, authoredDuration, publi
 
 async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
   const gallery = window.__noonExampleGallery;
-  const attempts = window.__showcaseLiveReviewCaptureAttempts ??= [];
-  const lifecycle = window.__showcaseLiveReviewLifecycle ??= { events: [] };
-  if (!lifecycle.observerStarted) {
-    lifecycle.observerStarted = true;
-    lifecycle.events.push({ stage: "observer-first-call", epochMs: performance.timeOrigin + performance.now(),
-      elapsedSeconds: Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds),
-      disposition: gallery?.executionDiagnostics?.events?.find(event => event.stage === "disposition")?.disposition ?? null });
-  }
-  const noteAttempt = value => {
-    if (attempts.length < 32) attempts.push(value);
-    else { attempts.splice(8, 1); attempts.push(value); }
-  };
   const patch = document.querySelector("#patch-status");
   if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
   if (gallery?.selectedExampleId !== exampleId) throw new Error("gallery selection changed during the first pass");
   const diagnostics = gallery?.executionDiagnostics;
   const events = diagnostics?.events ?? [];
   const disposition = events.find((event) => event.stage === "disposition")?.disposition ?? null;
-  if (disposition === "looped" || disposition === "finite-complete") {
-    noteAttempt({ stage: "first-wrap-observed", epochMs: performance.timeOrigin + performance.now(),
-      elapsedSeconds: Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds),
-      disposition, loopCount: events.find(event => event.stage === "disposition")?.loopCount });
-    return true;
-  }
+  if (disposition === "looped" || disposition === "finite-complete") return true;
   const heldEvidence = (report, metrics, receipt) => {
     const playback = report?.engineMetrics?.preparedPlayback;
     const observation = playback?.observation;
@@ -140,10 +123,6 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
   const controls = document.querySelector(".playback-controls")?.dataset;
   const elapsed = Number(controls?.elapsedSeconds);
   const alreadyCaptured = window.__showcaseLiveReviewFirstPass;
-  if (elapsed >= holdStart - 0.15 || elapsed <= 0.5) noteAttempt({ stage: "poll",
-    epochMs: performance.timeOrigin + performance.now(), elapsedSeconds: elapsed,
-    playing: controls?.playing, busy: controls?.busy, disposition,
-    loopCount: events.find(event => event.stage === "disposition")?.loopCount });
   if (!alreadyCaptured && diagnostics?.context?.exampleId === exampleId &&
       Number.isSafeInteger(diagnostics.runRequestId) &&
       Number.isSafeInteger(diagnostics.interpreterGeneration) &&
@@ -157,115 +136,53 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       runRequestId: diagnostics.runRequestId,
       context: diagnostics.context,
     };
+    const canvas = document.querySelector("#scene");
+    if (typeof canvas?.toBlob !== "function") return false;
+    // Let the transferred HTML canvas placeholder receive the current worker
+    // bitmap before validating the exact publication that toBlob will snapshot.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     const report = await gallery.executionMetrics();
     const current = gallery.executionDiagnostics;
     const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
     const metrics = report?.metrics;
     const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
     const receipt = metrics?.latestPresentationSample;
+    const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
+    const captureElapsed = Number(captureControls.elapsedSeconds);
     const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
       receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
     const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
-    const attempt = { stage: "candidate", candidateEpochMs: performance.timeOrigin + performance.now(),
-      controls: { ...controls }, disposition: currentDisposition,
-      receipt: receipt ? { ...receipt, presentedAtEpochMs: metrics.performanceTimeOriginMs + receipt.presentedAtMs } : null,
-      metricsTime: metrics?.time, needsPresent: metrics?.needsPresent, bufferedDeltas: metrics?.bufferedDeltas,
-      heldPresentation: heldPresentation ? { ...heldPresentation } : null,
-      rustObservedTime: report?.engineMetrics?.preparedPlayback?.observedTime ?? null,
-      rustFrontier: report?.engineMetrics?.preparedPlayback?.observation?.frontier ?? null,
-      rustLoopCount: report?.engineMetrics?.preparedPlayback?.observation?.loopCount ?? null };
-    noteAttempt(attempt);
-    if (current?.interpreterGeneration === runIdentity.interpreterGeneration &&
-        current?.runRequestId === runIdentity.runRequestId &&
-        JSON.stringify(current.context) === JSON.stringify(runIdentity.context) &&
-        currentDisposition !== "looped" && attached?.publication &&
-        attached.publication.session === receipt?.session && Number.isSafeInteger(receipt?.sequence) &&
-        receipt.sequence >= attached.publication.sequence && Number.isFinite(receipt.time) &&
-        (naturalTerminalReceipt || heldPresentation !== null) &&
-        metrics.time === receipt.time && metrics.needsPresent === false && metrics.bufferedDeltas === 0 &&
-        Number.isSafeInteger(metrics.objectCount)) {
-      const canvas = document.querySelector("#scene");
-      if (typeof canvas?.toBlob === "function") {
-        // A transferred HTML canvas placeholder can lag the worker's present.
-        // Let two main-thread paint updates run, then toBlob synchronously copies
-        // the placeholder bitmap before asynchronous PNG serialization (HTML
-        // canvas toBlob: https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
-        const captureElapsed = Number(captureControls.elapsedSeconds);
-        attempt.afterAnimationFramesEpochMs = performance.timeOrigin + performance.now();
-        attempt.controlsAtCopy = captureControls;
-        if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
-            captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
-            captureElapsed < holdStart ||
-            captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration)) return false;
-        const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-        attempt.bitmapCopyStartedEpochMs = performance.timeOrigin + performance.now();
-        // Validate the exact run and renderer receipt before awaiting PNG encoding.
-        const afterReport = await gallery.executionMetrics();
-        const afterMetrics = afterReport?.metrics;
-        const afterReceipt = afterMetrics?.latestPresentationSample;
-        const afterHeldPresentation = heldPresentation === null ? null :
-          heldEvidence(afterReport, afterMetrics, afterReceipt);
-        const afterDiagnostics = gallery.executionDiagnostics;
-        const afterAttached = [...(afterDiagnostics?.events ?? [])].reverse()
-          .find((event) => event.stage === "attached");
-        const afterDisposition = afterDiagnostics?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
-        const afterPlayback = afterReport?.engineMetrics?.preparedPlayback;
-        attempt.afterMetricsEpochMs = performance.timeOrigin + performance.now();
-        attempt.afterReceipt = afterReceipt ? { ...afterReceipt,
-          presentedAtEpochMs: afterMetrics.performanceTimeOriginMs + afterReceipt.presentedAtMs } : null;
-        attempt.afterMetricsTime = afterMetrics?.time;
-        attempt.afterDisposition = afterDisposition;
-        attempt.afterControls = { ...document.querySelector(".playback-controls")?.dataset };
-        attempt.afterRust = { observedTime: afterPlayback?.observedTime ?? null,
-          frontier: afterPlayback?.observation?.frontier ?? null,
-          loopCount: afterPlayback?.observation?.loopCount ?? null,
-          heldPresentation: afterPlayback?.observation?.heldPresentation ?? null };
-        const acceptedAfterCopy = afterDiagnostics?.interpreterGeneration === runIdentity.interpreterGeneration &&
-            afterDiagnostics?.runRequestId === runIdentity.runRequestId &&
-            JSON.stringify(afterDiagnostics.context) === JSON.stringify(runIdentity.context) &&
-            afterDisposition !== "looped" &&
-            JSON.stringify(afterAttached?.publication) === JSON.stringify(attached.publication) &&
-            afterReceipt?.session === receipt.session && afterReceipt.sequence === receipt.sequence &&
-            afterReceipt.time === receipt.time && afterMetrics.time === receipt.time &&
-            afterMetrics.needsPresent === false && afterMetrics.bufferedDeltas === 0 &&
-            afterMetrics.objectCount === metrics.objectCount &&
-            (heldPresentation === null ? afterHeldPresentation === null :
-              afterHeldPresentation !== null &&
-              afterHeldPresentation.publication.session === heldPresentation.publication.session &&
-              afterHeldPresentation.publication.sequence === heldPresentation.publication.sequence &&
-              afterHeldPresentation.evaluatedTime === heldPresentation.evaluatedTime &&
-              afterHeldPresentation.validUntil === heldPresentation.validUntil);
-        attempt.postCopyValidation = acceptedAfterCopy;
-        if (acceptedAfterCopy) {
-          const pngBlob = await pngBlobPromise;
-          attempt.blobResolvedEpochMs = performance.timeOrigin + performance.now();
-          if (!(pngBlob instanceof Blob)) return false;
-          const pngDataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
-            reader.readAsDataURL(pngBlob);
-          });
-          if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
-          window.__showcaseLiveReviewFirstPass = {
-            pngDataUrl,
-            metrics,
-            rendererReceipt: receipt,
-            heldPresentation,
-            controls: captureControls,
-            authoredDuration: duration,
-            holdStart,
-            ...runIdentity,
-            attached,
-          };
-        } else {
-          attempt.rejection = "post-copy receipt/run/held-state validation failed";
-        }
-      }
+    if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
+        captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
+        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
+        current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
+        current?.runRequestId !== runIdentity.runRequestId ||
+        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
+        currentDisposition === "looped" || !attached?.publication ||
+        attached.publication.session !== receipt?.session || !Number.isSafeInteger(receipt?.sequence) ||
+        receipt.sequence < attached.publication.sequence || !Number.isFinite(receipt.time) ||
+        !(naturalTerminalReceipt || heldPresentation !== null) || metrics.time !== receipt.time ||
+        metrics.needsPresent !== false || metrics.bufferedDeltas !== 0 || !Number.isSafeInteger(metrics.objectCount)) {
+      return false;
     }
+
+    // toBlob copies the bitmap synchronously before serializing it in parallel.
+    // Keep the validated run, receipt, and controls as this snapshot's evidence;
+    // playback may advance while toBlob returns and the PNG is encoded.
+    const capture = { metrics, rendererReceipt: receipt, heldPresentation, controls: captureControls,
+      authoredDuration: duration, holdStart, ...runIdentity, attached };
+    const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const pngBlob = await pngBlobPromise;
+    if (!(pngBlob instanceof Blob)) return false;
+    const pngDataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
+      reader.readAsDataURL(pngBlob);
+    });
+    if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
+    window.__showcaseLiveReviewFirstPass = { pngDataUrl, ...capture };
   }
   return false;
 }
@@ -278,50 +195,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
   try {
     await Promise.race([
       (async () => {
-        const run = await page.evaluate(async ({ holdStart }) => {
-          const epochMs = () => performance.timeOrigin + performance.now();
-          const lifecycle = window.__showcaseLiveReviewLifecycle = { events: [], observerStarted: false };
-          const attempts = window.__showcaseLiveReviewCaptureAttempts = [];
-          const record = (stage, extra = {}) => {
-            const controls = document.querySelector(".playback-controls")?.dataset;
-            const diagnostics = window.__noonExampleGallery?.executionDiagnostics;
-            const event = { stage, epochMs: epochMs(), elapsedSeconds: Number(controls?.elapsedSeconds),
-              playing: controls?.playing ?? null, busy: controls?.busy ?? null,
-              disposition: diagnostics?.events?.find(item => item.stage === "disposition")?.disposition ?? null,
-              loopCount: diagnostics?.events?.find(item => item.stage === "disposition")?.loopCount ?? null,
-              runRequestId: diagnostics?.runRequestId ?? null, ...extra };
-            if (lifecycle.events.length < 8) lifecycle.events.push(event);
-            else { lifecycle.events.splice(8, 1); lifecycle.events.push(event); }
-          };
-          let sampling = true;
-          const sample = () => {
-            if (!sampling) return;
-            const controls = document.querySelector(".playback-controls")?.dataset;
-            const elapsed = Number(controls?.elapsedSeconds);
-            if (Number.isFinite(elapsed) && (elapsed >= holdStart - 0.15 || elapsed <= 0.5)) {
-              const diagnostics = window.__noonExampleGallery?.executionDiagnostics;
-              const event = { stage: "run-window-sample", epochMs: epochMs(), elapsedSeconds: elapsed,
-                playing: controls?.playing ?? null, busy: controls?.busy ?? null,
-                disposition: diagnostics?.events?.find(item => item.stage === "disposition")?.disposition ?? null,
-                loopCount: diagnostics?.events?.find(item => item.stage === "disposition")?.loopCount ?? null,
-                runRequestId: diagnostics?.runRequestId ?? null };
-              if (attempts.length < 8) attempts.push(event);
-              else { attempts.splice(8, 1); attempts.push(event); }
-            }
-            requestAnimationFrame(sample);
-          };
-          record("run-call");
-          requestAnimationFrame(sample);
-          try {
-            const result = await window.__noonExampleGallery.run();
-            record("run-return", { stale: result?.stale ?? null, preparedPlayback: result?.result?.preparedPlayback ?? null,
-              durationSeconds: result?.result?.durationSeconds ?? null });
-            return result;
-          } finally {
-            sampling = false;
-          }
-        }, { holdStart: entry?.still_intervals?.find(([, end]) => Math.abs(end - (entry?.duration ?? 0)) <=
-            8 * Number.EPSILON * Math.max(1, entry?.duration ?? 0))?.[0] ?? 0 });
+        const run = await page.evaluate(() => window.__noonExampleGallery.run());
         const audio = run?.result?.hasAudio === true;
         if (!audio && run?.result?.preparedPlayback !== true) return;
         // Complete finite audio authoring intentionally prepares a silent,
@@ -427,11 +301,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
   } finally {
     clearTimeout(timer);
   }
-  const lifecycle = await page.evaluate(() => ({
-    events: window.__showcaseLiveReviewLifecycle?.events ?? [],
-    captureAttempts: window.__showcaseLiveReviewCaptureAttempts ?? [],
-  }));
-  return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion, lifecycle };
+  return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion };
 }
 
 export async function readLiveState(page) {
@@ -599,7 +469,6 @@ async function main() {
         // Closing the page in finally retires its workers on timeout; no stuck run survives.
         const firstPassRun = await runOrdinaryGallery(page, 360000, entry);
         result.firstPassWallMsIncludingAuthoring = firstPassRun.wallMs;
-        result.firstPassLifecycle = firstPassRun.lifecycle;
         // Check execution before viewport convergence so a runtime panic is not
         // obscured by the renderer's consequently unchanged backing dimensions.
         result.firstPass = await readLiveState(page);
@@ -765,10 +634,6 @@ async function main() {
         result.error = String(error.stack ?? error);
         result.unexpectedReplayDenial = entry.playbackCapability === "deterministic-retained-replay" &&
           result.firstPass?.controls?.controllable === "false";
-        result.firstPassCaptureAttempts = await page.evaluate(() =>
-          window.__showcaseLiveReviewCaptureAttempts ?? []).catch(() => null);
-        result.firstPassLifecycle = await page.evaluate(() => window.__showcaseLiveReviewLifecycle ?? null)
-          .catch(() => null);
         result.failureState = await page.evaluate(() => ({
           patch: document.querySelector("#patch-status")?.value,
           status: document.querySelector("#status-text")?.textContent,
