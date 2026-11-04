@@ -531,6 +531,39 @@ fn browser_input_classifies_unrecorded_replay_without_blocking_first_execution()
 }
 
 #[test]
+fn automatic_viewer_completion_preserves_live_native_input() {
+    let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
+    f.player.begin_replay_retention().unwrap();
+    f.player.live_wait(0.25).unwrap();
+    f.player.live_advance_segment_to(0.25).unwrap();
+    f.player.live_complete_segment().unwrap();
+    f.player.finish_source_playback().unwrap();
+    let completed_frame = f.player.session.frame().clone();
+
+    assert_eq!(
+        f.player.seal_replay_for_viewer(),
+        Err("replay unavailable: UnrecordedInput".to_owned())
+    );
+    assert!(f.player.session.replay_scope_active());
+    assert!(!f.player.session.replay_is_sealed());
+    assert_eq!(f.player.session.frame(), &completed_frame);
+
+    f.player
+        .submit_test_frame_json(&browser_pointer_json(
+            "press",
+            Some(200.0),
+            Some(100.0),
+            Some(0),
+            0,
+        ))
+        .unwrap();
+    assert_eq!(
+        f.player.session.effective_signal_value(f.down),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
+}
+
+#[test]
 fn browser_no_op_source_setup_does_not_poison_replay() {
     let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
     f.player

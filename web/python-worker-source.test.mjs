@@ -1,8 +1,91 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { installPreparedSourceCounterProbe } from "../scripts/prepared-source-counter-probe.mjs";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
+
+test("source counter probe matches the real worker and preserves awaited source cleanup", async () => {
+  let instrumented;
+  const evidence = {};
+  await installPreparedSourceCounterProbe({
+    async route(_match, handler) {
+      await handler({
+        request: () => ({ resourceType: () => "worker" }),
+        fetch: async () => ({ text: async () => source, headers: () => ({}) }),
+        fulfill: async ({ body }) => { instrumented = body; },
+      });
+    },
+  }, "counter-test", evidence);
+  assert.ok(instrumented.includes("return await observeQualificationRun(globals,"));
+  assert.notEqual(evidence.counterProbe.originalWorkerSha256, evidence.counterProbe.executedWorkerSha256);
+});
+
+function preparedSourceYieldHook(run, setTimer) {
+  const start = source.indexOf("  self.noonPreparedSourceYield = () => {");
+  const end = source.indexOf("  self.noonCreateCanonicalAuthoringSceneContext =", start);
+  assert.ok(start >= 0 && end > start, "prepared source yield hook boundaries must exist");
+  const worker = {};
+  return new Function("self", "initialRun", "setTimeout", "awaitOutsidePreparedSourceTurn", `
+    let activeAuthoringRun = initialRun;
+    ${source.slice(start, end)}
+    return { hook: self.noonPreparedSourceYield, replaceRun: next => { activeAuthoringRun = next; } };
+  `)(worker, run, setTimer, (_run, _owner, operation) => operation());
+}
+
+test("cooperative source yield is disabled outside its attached prepared reader turn", () => {
+  for (const mutate of [
+    run => { run.preparedPlayback = false; },
+    run => { run.continuation.preparedPlayer = null; },
+    run => { run.continuation.terminal = true; },
+    run => { run.continuation.observedExecution = true; },
+    run => { run.continuation.callbackRequest = {}; },
+    run => { run.preparedDriver.state = () => "preparing"; },
+  ]) {
+    const run = {
+      sourceSceneOnly: true, preparedPlayback: true,
+      continuation: { preparedPlayer: {}, observedExecution: false, callbackRequest: null, terminal: false },
+      preparedDriver: { state: () => "running" },
+    };
+    mutate(run);
+    const timers = [];
+    const { hook } = preparedSourceYieldHook(run, (callback, delay) => timers.push({ callback, delay }));
+    assert.equal(hook(), false);
+    assert.deepEqual(timers, []);
+  }
+});
+
+test("cooperative source yield resumes once and rejects a retired reader turn", async () => {
+  const create = () => {
+    let state = "running";
+    const continuation = { preparedPlayer: {}, observedExecution: false, callbackRequest: null, terminal: false };
+    const run = { sourceSceneOnly: true, preparedPlayback: true, continuation,
+      preparedDriver: { state: () => state } };
+    const timers = [];
+    const controller = preparedSourceYieldHook(run, (callback, delay) => timers.push({ callback, delay }));
+    return { run, continuation, timers, ...controller, setState(value) { state = value; } };
+  };
+
+  const active = create();
+  const settled = active.hook();
+  assert.equal(active.timers.length, 1);
+  assert.equal(active.timers[0].delay, 0);
+  active.timers[0].callback();
+  await settled;
+
+  for (const retire of [
+    item => item.setState("cancelled"),
+    item => { item.continuation.preparedPlayer = {}; },
+    item => { item.continuation.observedExecution = true; },
+    item => item.replaceRun({}),
+  ]) {
+    const pending = create();
+    const rejected = pending.hook();
+    retire(pending);
+    pending.timers[0].callback();
+    await assert.rejects(rejected, /retired/);
+  }
+});
 
 test("source disposal retires canonical input before releasing its retained context", async () => {
   const begin = source.indexOf("function retireSemanticContext(");
@@ -717,7 +800,7 @@ test("a trapped host never publishes late success or request errors", () => {
   const posted = [];
   const dispatch = new Function("self", `
     const AUTHORING_CHANNEL = "noon.authoring";
-    const AUTHORING_PROTOCOL_VERSION = 7;
+    const AUTHORING_PROTOCOL_VERSION = 8;
     let fatalAuthoringFailure = false;
     ${source.slice(source.indexOf('function post(type,'), source.indexOf('function isRecord(value)'))}
     return { post, fail: () => { fatalAuthoringFailure = true; } };
@@ -752,7 +835,8 @@ test("source compilation never replays module effects or changes fixtures", asyn
 });
 
 test("explicit endpoint reconnect returns the existing runtime lease before reattaching", async () => {
-  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const attachSource = source.slice(source.indexOf("function observeSemanticExecution"), source.indexOf("function registerContinuationContext")) +
+    source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
   const contexts = new Map();
   const entry = { context: {}, endpoints: new Set(), released: false };
   contexts.set("scene", entry);
@@ -781,7 +865,8 @@ test("explicit endpoint reconnect returns the existing runtime lease before reat
 });
 
 test("a first callback added after attachment uses the suspended source handler and retires its session", async () => {
-  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const attachSource = source.slice(source.indexOf("function observeSemanticExecution"), source.indexOf("function registerContinuationContext")) +
+    source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
   const context = {};
   const entry = { context, endpoints: new Set(), released: false };
   const contexts = new Map([["scene", entry]]);

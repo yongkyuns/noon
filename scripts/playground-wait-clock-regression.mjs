@@ -68,18 +68,23 @@ try {
   // The public editor lifecycle must submit the source; there is no parallel test
   // animation driver, fake UI clock or page-side interpolation in this regression.
   await page.goto(`${server.baseUrl}/web/index.html`);
-  await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" &&
-    window.__noonExampleGallery?.runInFlight === false);
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const previousGeneration = await page.evaluate(() =>
+    window.__noonExampleGallery.generationDiagnostics.runGeneration);
   await page.evaluate(source => {
     const editor = document.querySelector("#python-scene-source");
     editor.value = source;
     editor.dispatchEvent(new Event("input", { bubbles: true }));
   }, source);
-  await page.waitForFunction(expected => {
+  await page.locator("#replace-scene").click();
+  await page.waitForFunction(({ expected, previousGeneration }) => {
+    const gallery = window.__noonExampleGallery;
     const controls = document.querySelector(".playback-controls");
     const time = Number(controls?.dataset.elapsedSeconds);
-    return controls?.dataset.controllable === expected && time > 0.1 && time < 1.5;
-  }, firstPassControllable);
+    return gallery?.executionDiagnostics?.context?.runGeneration > previousGeneration &&
+      gallery.executionDiagnostics.events.some(event => event.stage === "attached") &&
+      controls?.dataset.controllable === expected && time > 0.1 && time < 1.5;
+  }, { expected: firstPassControllable, previousGeneration });
   async function sample(label) {
     const samples = await page.evaluate(async () => {
       const samples = [];
@@ -112,15 +117,19 @@ try {
     "must also tick during the wait following an active animation");
   await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" &&
     window.__noonExampleGallery?.runInFlight === false);
-  // Preparation can finish before presentation. Wait for the Rust reader's
-  // actual terminal range and logical endpoint, independently of play intent.
-  await page.waitForFunction(() => {
+  // Preparation may finish early. Require the profile's natural disposition;
+  // a configured loop need not leave its clock parked at the exact endpoint.
+  await page.waitForFunction(disposition => {
     const controls = document.querySelector(".playback-controls")?.dataset;
     const end = Number(document.querySelector(".playback-scrubber")?.max);
+    const events = window.__noonExampleGallery?.executionDiagnostics?.events ?? [];
     return controls?.durationKnown === "true" && controls.buffering === "false" &&
       controls.busy === "false" && Math.abs(end - 6.8) < 1e-9 &&
-      Math.abs(Number(controls.elapsedSeconds) - end) < 1e-7;
-  });
+      events.some(event => event.stage === "terminal-adopted") &&
+      events.some(event => event.stage === "disposition" && event.disposition === disposition &&
+        (disposition !== "looped" || event.loopCount >= 1));
+  }, profile === "default" ? "looped" : "observed-complete");
+  report.sourceTrace = await page.evaluate(() => window.__noonExampleGallery.executionDiagnostics);
   const duration = await page.locator(".playback-scrubber").getAttribute("max");
   assert.ok(Math.abs(Number(duration) - 6.8) < 1e-9, "both waits must contribute to replay duration");
   await page.waitForFunction(() => {
@@ -162,6 +171,7 @@ try {
   console.log(`wait clock tracks wall time in source and replay, preserves pause/resume (${backend})`);
 } catch (error) {
   report.failure = error.stack ?? String(error);
+  report.sourceTrace = await page?.evaluate(() => window.__noonExampleGallery?.executionDiagnostics).catch(() => null);
   report.controls.failure = await controlSnapshot().catch(() => null);
   await page?.screenshot({ path: path.join(out, "failure.png") }).catch(() => {});
   throw error;

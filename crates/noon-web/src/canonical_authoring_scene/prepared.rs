@@ -4,6 +4,14 @@ use super::{AuthoringFailure, CanonicalAuthoringScene};
 use noon::{PrefixBatch, PrefixPublisher, PrefixReader};
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn observed_source_execution_requirement(
+        &mut self,
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        Ok(self
+            .active_live_player()?
+            .observed_source_execution_requirement())
+    }
+
     pub(crate) fn prefix_source_requirement(
         &mut self,
         publisher: &PrefixPublisher,
@@ -28,17 +36,26 @@ impl CanonicalAuthoringScene {
     pub fn begin_observed_prepared_source(
         &mut self,
         effects: noon::ContinuationEffects,
-    ) -> Result<bool, AuthoringFailure> {
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
         self.active_live_player()?
             .begin_observed_prepared_source(effects)
     }
 
-    pub(crate) fn prepare_prefix_segment(
+    pub(crate) fn advance_prepared_prefix_segment(
         &mut self,
         publisher: &PrefixPublisher,
+    ) -> Result<crate::semantic_execution_player::PreparedPrefixAdvance, AuthoringFailure> {
+        self.active_live_player()?
+            .live_advance_prepared_prefix_segment(Some(publisher))
+    }
+
+    pub(crate) fn complete_prepared_prefix_segment(
+        &mut self,
+        segment: noon::ExecutionSegment,
+        publication: noon_core::PublicationContext,
     ) -> Result<f64, AuthoringFailure> {
         self.active_live_player()?
-            .live_prepare_prefix_segment(Some(publisher))
+            .live_complete_prepared_prefix_segment(segment, publication)
     }
 
     pub(crate) fn validate_prepared_publisher(

@@ -12,11 +12,17 @@ import { withAuthoringDiagnostics, diagnosedHostCode } from "./authoring-diagnos
 const worker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 const start = worker.indexOf("async function runAuthoringSource(");
 const end = worker.indexOf("async function runCanonicalCallbackPhase(", start);
+const timingStart = worker.indexOf("function preparationTimingEvent(");
+const timingEnd = worker.indexOf("function sourceExecutionRequirement(", timingStart);
 assert.ok(start >= 0 && end > start, "production source entrypoint must exist");
-const run = new Function("withAuthoringDiagnostics", "diagnosedHostCode", "prepareAuthoringDependencies",
-  `const activeAuthoringRun = {}; let authoringLibrariesPristine = true;
+assert.ok(timingStart >= 0 && timingEnd > timingStart, "production preparation timing helpers must exist");
+const run = new Function("withAuthoringDiagnostics", "diagnosedHostCode", "prepareAuthoringDependencies", "isRecord", "post",
+  `const activeAuthoringRun = { diagnosticPreparationTiming: false };
+  let authoringLibrariesPristine = true;
+  ${worker.slice(timingStart, timingEnd)}
   ${worker.slice(start, end)}; return runAuthoringSource;`,
-)(withAuthoringDiagnostics, diagnosedHostCode, async () => {});
+)(withAuthoringDiagnostics, diagnosedHostCode, async () => {},
+  value => value !== null && typeof value === "object" && !Array.isArray(value), () => {});
 
 const scripts = {};
 const globals = new Map();
@@ -26,7 +32,9 @@ constructor.destroy = () => {};
 await run({
   globals: { get: () => constructor },
   runPython(code) {
-    if (code.includes("source_is_scene_only(__noon_source)")) return false;
+    if (code.includes("source_execution_proof(__noon_source)")) {
+      return JSON.stringify({ admitted: false, reason: { code: "unknown_name", span: null } });
+    }
     scripts.compile = code;
   },
   runPythonAsync(code) { scripts.execute = code; return "fixture"; },

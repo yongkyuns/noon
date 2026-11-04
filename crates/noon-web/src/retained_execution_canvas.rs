@@ -652,7 +652,7 @@ mod wasm {
                         self.camera_height = camera.height;
                         self.update_camera()?;
                     }
-                    self.pending_changes = changes;
+                    self.pending_changes.accumulate(changes);
                     self.pending_frame = true;
                     let defer_path_maintenance = self.resident_path_maintenance_retry_deferred;
                     self.resident_path_maintenance_retry_deferred = false;

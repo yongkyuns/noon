@@ -108,8 +108,7 @@ try {
       throw new Error('Python scene editor is unavailable');
     }
     editor.value = pythonSource;
-    // This fixture explicitly invokes Run. Dispatching input also queues an
-    // automatic rerun, whose overlapping completion is not this test's subject.
+    // Execute this replacement draft through one explicit Run.
     window.__pythonFamilyTransformDone = false;
     window.__pythonFamilyTransformError = null;
     Promise.resolve(window.__noonExampleGallery.run())

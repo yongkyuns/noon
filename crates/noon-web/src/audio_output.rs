@@ -68,6 +68,43 @@ fn device_time(origin: f64, offset: f64) -> Result<f64, &'static str> {
     Ok(value)
 }
 
+fn schedulable_device_interval(
+    origin: f64,
+    start_delay: f64,
+    duration: f64,
+) -> Result<Option<(f64, f64)>, &'static str> {
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err("audio interval duration is invalid");
+    }
+    let start = device_time(origin, start_delay)?;
+    let end = device_time(start, duration)?;
+    Ok((end > start).then_some((start, end)))
+}
+
+fn bounded_voice_duration(
+    start_delay: f64,
+    duration: f64,
+    scene_time: f64,
+    authorized_until: f64,
+) -> Result<Option<f64>, &'static str> {
+    if !start_delay.is_finite()
+        || start_delay < 0.0
+        || !duration.is_finite()
+        || duration <= 0.0
+        || !scene_time.is_finite()
+        || scene_time < 0.0
+        || !authorized_until.is_finite()
+        || authorized_until < scene_time
+    {
+        return Err("audio authorization interval is invalid");
+    }
+    let authorized_duration = authorized_until - scene_time - start_delay;
+    if authorized_duration <= 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(duration.min(authorized_duration)))
+}
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use std::{
@@ -85,7 +122,7 @@ mod wasm {
     };
 
     use super::{
-        device_gain, device_time,
+        bounded_voice_duration, device_gain, device_time, schedulable_device_interval,
         transition::{GainRamp, ATTACK_SECONDS, RELEASE_SECONDS, VIEWER_RAMP_SECONDS},
         ViewerAudioControls,
     };
@@ -93,6 +130,8 @@ mod wasm {
     struct DeviceVoice {
         source: AudioBufferSourceNode,
         gain: GainNode,
+        clip: noon_core::SemanticNodeId,
+        scheduled_end: f64,
     }
 
     impl Drop for DeviceVoice {
@@ -115,10 +154,37 @@ mod wasm {
     }
 
     impl DeviceGraph {
+        fn clear_retirement_observer(&mut self) {
+            if self.ended.take().is_some() {
+                if let Some(voice) = self.voices.get(self.last_voice) {
+                    AudioScheduledSourceNode::set_onended(voice.source.as_ref(), None);
+                }
+            }
+        }
+
+        fn retain_active_voices(&mut self, now: f64) {
+            self.clear_retirement_observer();
+            self.voices.retain(|voice| voice.scheduled_end > now);
+            if let Some((last_voice, natural_end)) = self
+                .voices
+                .iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| left.scheduled_end.total_cmp(&right.scheduled_end))
+                .map(|(index, voice)| (index, voice.scheduled_end))
+            {
+                self.last_voice = last_voice;
+                self.natural_end = natural_end;
+            } else {
+                self.last_voice = 0;
+                self.natural_end = now;
+            }
+        }
+
         /// The latest-ending native source retires this one disposable graph.
         /// A weak slot reference and the browser node's own identity avoid a
         /// reference cycle, an extra generation, or a cleanup timer.
         fn observe_retirement(&mut self, retiring: &Rc<RefCell<Option<Self>>>) {
+            self.clear_retirement_observer();
             let slot = Rc::downgrade(retiring);
             let ended = Closure::new(move |event: web_sys::Event| {
                 let Some(slot) = slot.upgrade() else {
@@ -151,10 +217,9 @@ mod wasm {
     impl Drop for DeviceGraph {
         fn drop(&mut self) {
             if self.ended.is_some() {
-                AudioScheduledSourceNode::set_onended(
-                    self.voices[self.last_voice].source.as_ref(),
-                    None,
-                );
+                if let Some(voice) = self.voices.get(self.last_voice) {
+                    AudioScheduledSourceNode::set_onended(voice.source.as_ref(), None);
+                }
             }
             self.bus.gain().set_value(0.0);
             let _ = self.bus.disconnect();
@@ -163,11 +228,14 @@ mod wasm {
 
     struct PreparedVoice {
         buffer: AudioBuffer,
+        clip: noon_core::SemanticNodeId,
         start_delay: f64,
         duration: f64,
+        scheduled_duration: f64,
         source_offset: f64,
         loop_region: Option<(f64, f64)>,
         gain_points: Vec<(f64, f32)>,
+        has_authored_end: bool,
     }
 
     pub(crate) struct WebAudioOutput {
@@ -375,15 +443,32 @@ mod wasm {
             &mut self,
             clips: impl IntoIterator<Item = noon_runtime::AudioPlaybackClip<'a>>,
         ) -> Result<(), JsValue> {
-            self.prepare(clips).map(|_| ())
+            self.prepare(clips, None).map(|_| ())
         }
 
         fn prepare<'a>(
             &mut self,
             clips: impl IntoIterator<Item = noon_runtime::AudioPlaybackClip<'a>>,
+            authorization: Option<(f64, f64)>,
         ) -> Result<Vec<PreparedVoice>, JsValue> {
             let mut prepared = Vec::new();
             for clip in clips {
+                let scheduled_duration = match authorization {
+                    Some((scene_time, authorized_until)) => {
+                        let Some(duration) = bounded_voice_duration(
+                            clip.start_delay,
+                            clip.duration,
+                            scene_time,
+                            authorized_until,
+                        )
+                        .map_err(js_error)?
+                        else {
+                            continue;
+                        };
+                        duration
+                    }
+                    None => clip.duration,
+                };
                 let length = u32::try_from(clip.pcm.frames()).map_err(|_| {
                     JsValue::from_str("audio PCM frame count exceeds the Web Audio buffer limit")
                 })?;
@@ -425,11 +510,14 @@ mod wasm {
                 }
                 prepared.push(PreparedVoice {
                     buffer: self.buffers[&clip.resource].clone(),
+                    clip: clip.clip,
                     start_delay: clip.start_delay,
                     duration: clip.duration,
+                    scheduled_duration,
                     source_offset: clip.source_offset,
                     loop_region: clip.loop_region.map(|region| (region.start, region.end)),
                     gain_points,
+                    has_authored_end: authorization.is_some(),
                 });
             }
             Ok(prepared)
@@ -450,7 +538,131 @@ mod wasm {
                     "enable audio from a user gesture before resuming audio playback",
                 ));
             }
-            let prepared = self.prepare(clips)?;
+            let prepared = self.prepare(clips, None)?;
+            self.start_prepared(prepared)
+        }
+
+        /// Start only clips whose scheduled intervals are admitted by this
+        /// Rust prefix. Their pending stop can be replaced if a later prefix
+        /// authorizes more of the same immutable clip.
+        pub(crate) fn start_clips_until<'a>(
+            &mut self,
+            clips: impl IntoIterator<Item = noon_runtime::AudioPlaybackClip<'a>>,
+            scene_time: f64,
+            authorized_until: f64,
+        ) -> Result<(), JsValue> {
+            if !self.is_ready() {
+                return Err(JsValue::from_str(
+                    "enable audio from a user gesture before resuming audio playback",
+                ));
+            }
+            let prepared = self.prepare(clips, Some((scene_time, authorized_until)))?;
+            self.start_prepared(prepared)
+        }
+
+        /// Extend pending stops within the same immutable schedule. Sources
+        /// that already reached an older frontier are restarted from the fresh
+        /// Rust-projected clip offset; pending sources keep their original node.
+        pub(crate) fn extend_clips_until<'a>(
+            &mut self,
+            clips: impl IntoIterator<Item = noon_runtime::AudioPlaybackClip<'a>>,
+            scene_time: f64,
+            authorized_until: f64,
+        ) -> Result<(), JsValue> {
+            if !self.is_ready() {
+                self.stop();
+                return Err(JsValue::from_str("audio device was interrupted"));
+            }
+            let prepared = self.prepare(clips, Some((scene_time, authorized_until)))?;
+            if self.graph.is_none() {
+                return self.start_prepared(prepared);
+            }
+            let now = self.context.current_time();
+            let graph = self.graph.as_mut().unwrap();
+            graph.retain_active_voices(now);
+            if graph.voices.is_empty() {
+                self.graph = None;
+                return self.start_prepared(prepared);
+            }
+            if prepared.is_empty() {
+                return Ok(());
+            }
+            for voice in prepared {
+                let Some((start, end)) =
+                    schedulable_device_interval(now, voice.start_delay, voice.scheduled_duration)
+                        .map_err(js_error)?
+                else {
+                    continue;
+                };
+                if let Some(device) = graph
+                    .voices
+                    .iter_mut()
+                    .find(|device| device.clip == voice.clip && device.scheduled_end > now)
+                {
+                    AudioScheduledSourceNode::stop_with_when(device.source.as_ref(), end)?;
+                    device.scheduled_end = end;
+                    continue;
+                }
+
+                let source = self.context.create_buffer_source()?;
+                let gain = self.context.create_gain()?;
+                source.set_buffer(Some(&voice.buffer));
+                if let Some((loop_start, loop_end)) = voice.loop_region {
+                    source.set_loop(true);
+                    source.set_loop_start(loop_start);
+                    source.set_loop_end(loop_end);
+                }
+                source.connect_with_audio_node(&gain)?;
+                gain.connect_with_audio_node(&graph.bus)?;
+                for (index, &(offset, value)) in voice.gain_points.iter().enumerate() {
+                    if index == 0 {
+                        gain.gain().set_value_at_time(value, start + offset)?;
+                    } else {
+                        gain.gain()
+                            .linear_ramp_to_value_at_time(value, start + offset)?;
+                    }
+                }
+                source.start_with_when_and_grain_offset(start, voice.source_offset)?;
+                AudioScheduledSourceNode::stop_with_when(source.as_ref(), end)?;
+                graph.voices.push(DeviceVoice {
+                    source,
+                    gain,
+                    clip: voice.clip,
+                    scheduled_end: end,
+                });
+            }
+            if let Some((last_voice, natural_end)) = graph
+                .voices
+                .iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| left.scheduled_end.total_cmp(&right.scheduled_end))
+                .map(|(index, voice)| (index, voice.scheduled_end))
+            {
+                graph.last_voice = last_voice;
+                graph.natural_end = natural_end;
+                graph.observe_retirement(&self.retiring);
+            }
+            Ok(())
+        }
+
+        fn start_prepared(&mut self, prepared: Vec<PreparedVoice>) -> Result<(), JsValue> {
+            if prepared.is_empty() {
+                return Ok(());
+            }
+            let origin = self.context.current_time();
+            let mut schedulable = Vec::with_capacity(prepared.len());
+            for voice in prepared {
+                if let Some((start, end)) =
+                    schedulable_device_interval(origin, voice.start_delay, voice.scheduled_duration)
+                        .map_err(js_error)?
+                {
+                    schedulable.push((voice, start, end));
+                }
+            }
+            let prepared = schedulable;
+            if prepared.is_empty() {
+                return Ok(());
+            }
             let bus = self.context.create_gain()?;
             bus.gain().set_value(0.0);
             bus.connect_with_audio_node(&self.master)?;
@@ -462,10 +674,15 @@ mod wasm {
                 natural_end: 0.0,
                 ended: None,
             };
-            for voice in &prepared {
+            for (voice, _, _) in &prepared {
                 let source = self.context.create_buffer_source()?;
                 let gain = self.context.create_gain()?;
-                graph.voices.push(DeviceVoice { source, gain });
+                graph.voices.push(DeviceVoice {
+                    source,
+                    gain,
+                    clip: voice.clip,
+                    scheduled_end: 0.0,
+                });
                 let device = graph.voices.last().unwrap();
                 device.source.set_buffer(Some(&voice.buffer));
                 if let Some((start, end)) = voice.loop_region {
@@ -476,28 +693,19 @@ mod wasm {
                 device.source.connect_with_audio_node(&device.gain)?;
                 device.gain.connect_with_audio_node(&graph.bus)?;
             }
-            let origin = self.context.current_time();
             // Check the complete device-time conversion before starting even a
             // muted source. Extremely large finite authored times can overflow
             // or collapse when added to a device clock.
-            for (index, voice) in prepared.iter().enumerate() {
-                let start = device_time(origin, voice.start_delay).map_err(js_error)?;
-                let end = device_time(start, voice.duration).map_err(js_error)?;
-                if end <= start {
-                    return Err(JsValue::from_str(
-                        "audio interval is too short for the current Web Audio clock",
-                    ));
-                }
+            for (index, (voice, start, end)) in prepared.iter().enumerate() {
                 for &(offset, _) in &voice.gain_points {
-                    device_time(start, offset).map_err(js_error)?;
+                    device_time(*start, offset).map_err(js_error)?;
                 }
-                if end > graph.natural_end {
-                    graph.natural_end = end;
+                if *end > graph.natural_end {
+                    graph.natural_end = *end;
                     graph.last_voice = index;
                 }
             }
-            for (voice, device) in prepared.iter().zip(&graph.voices) {
-                let start = origin + voice.start_delay;
+            for ((voice, start, _), device) in prepared.iter().zip(&graph.voices) {
                 for (index, &(offset, gain)) in voice.gain_points.iter().enumerate() {
                     if index == 0 {
                         device.gain.gain().set_value_at_time(gain, start + offset)?;
@@ -509,14 +717,22 @@ mod wasm {
                     }
                 }
             }
-            for (voice, device) in prepared.iter().zip(&graph.voices) {
-                device
-                    .source
-                    .start_with_when_and_grain_offset_and_grain_duration(
-                        origin + voice.start_delay,
-                        voice.source_offset,
-                        voice.duration,
-                    )?;
+            for ((voice, start, end), device) in prepared.iter().zip(&mut graph.voices) {
+                if voice.has_authored_end {
+                    device
+                        .source
+                        .start_with_when_and_grain_offset(*start, voice.source_offset)?;
+                    AudioScheduledSourceNode::stop_with_when(device.source.as_ref(), *end)?;
+                } else {
+                    device
+                        .source
+                        .start_with_when_and_grain_offset_and_grain_duration(
+                            *start,
+                            voice.source_offset,
+                            voice.duration,
+                        )?;
+                }
+                device.scheduled_end = *end;
             }
             let now = self.context.current_time();
             self.release_at(now)?;
@@ -608,5 +824,27 @@ mod tests {
         assert!(device_time(f64::MAX, f64::MAX).is_err());
         assert!(device_time(1.0, -0.5).is_err());
         assert!(device_time(f64::INFINITY, 0.0).is_err());
+    }
+
+    #[test]
+    fn collapsed_open_prefix_interval_waits_for_more_device_time() {
+        let frontier: f64 = 0.5;
+        let scene_time = f64::from_bits(frontier.to_bits() - 1);
+        let duration = frontier - scene_time;
+        assert!(duration > 0.0);
+        assert_eq!(schedulable_device_interval(15.0, 0.0, duration), Ok(None));
+        assert_eq!(
+            schedulable_device_interval(15.0, 0.0, 0.01),
+            Ok(Some((15.0, 15.01)))
+        );
+    }
+
+    #[test]
+    fn open_prefix_bounds_clip_starts_and_scheduled_stops() {
+        assert_eq!(bounded_voice_duration(0.0, 8.0, 2.0, 3.0), Ok(Some(1.0)));
+        assert_eq!(bounded_voice_duration(0.5, 1.0, 2.0, 3.0), Ok(Some(0.5)));
+        assert_eq!(bounded_voice_duration(1.0, 1.0, 2.0, 3.0), Ok(None));
+        assert!(bounded_voice_duration(0.0, 1.0, 2.0, 1.0).is_err());
+        assert!(bounded_voice_duration(0.0, 1.0, f64::NAN, 2.0).is_err());
     }
 }

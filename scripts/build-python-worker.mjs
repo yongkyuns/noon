@@ -70,7 +70,7 @@ const readyBlock = [
   "pyodidePromise",
   "  .then(() => {",
   "    authoringMilestones.authoringWorkerReadyAtMs = performance.now();",
-  '    post("ready");',
+  '    post("ready", { libraryTrust: "pristine" });',
   "  })",
   "  .catch(failAuthoringWorker);",
 ].join("\n");
@@ -78,7 +78,7 @@ const generatedReadyBlock = [
   "Promise.all([pyodidePromise, runtimeBuildPromise])",
   "  .then(([, buildIdentity]) => {",
   "    authoringMilestones.authoringWorkerReadyAtMs = performance.now();",
-  '    post("ready", { buildIdentity });',
+  '    post("ready", { buildIdentity, libraryTrust: "pristine" });',
   "  })",
   "  .catch(failAuthoringWorker);",
 ].join("\n");

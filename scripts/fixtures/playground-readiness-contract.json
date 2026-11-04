@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "status": "ready",
+  "reference": {
+    "host": "Apple M6, 24 GB RAM, 12 GPU cores",
+    "os": "macOS 27.0.1",
+    "browser": "Chromium 151.0.7922.34",
+    "refreshHz": 60,
+    "viewport": { "width": 1280, "height": 900 },
+    "deviceScaleFactor": 1,
+    "backend": "WebGPU",
+    "gpuMode": "hardware",
+    "actualAdapterIdentity": {
+      "backend": "BrowserWebGpu",
+      "browserDeviceInfo": {
+        "architecture": "metal-3",
+        "description": "",
+        "device": "",
+        "isFallbackAdapter": false,
+        "vendor": "apple"
+      },
+      "device": 0,
+      "deviceType": "Other",
+      "driver": "",
+      "driverInfo": "",
+      "name": "",
+      "vendor": 0
+    },
+    "gpuClassification": "hardware-like-unverified",
+    "display": "LG HDR 4K, awake main display, 60 Hz; macOS built-in Apple M6 GPU inventory"
+  },
+  "sources": [
+    {
+      "id": "showcase-first-scene",
+      "path": "python/examples/showcase_first_scene.py",
+      "sha256": "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8",
+      "durationSeconds": 8,
+      "window": "full-authored-first-pass"
+    },
+    {
+      "id": "showcase-dynamic-scene",
+      "path": "python/examples/showcase_dynamic_scene.py",
+      "sha256": "bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca",
+      "durationSeconds": 19,
+      "window": "full-authored-first-pass"
+    }
+  ],
+  "arms": {
+    "A": "default-incremental-first-pass",
+    "B": "default-completed-history-replay",
+    "C": "explicit-observed-first-pass",
+    "D": "observed-completed-history-replay"
+  },
+  "baselineArms": ["C", "D"],
+  "allowedRegression": {
+    "firstUsefulP95": { "maxRatio": 1.2, "slackMs": 250 }
+  },
+  "strata": {
+    "fresh-process-warm-resource-cache": "new browser process and workers; browser resource cache may already be primed",
+    "reload-new-workers-warm-resource-cache": "same browser process, reloaded page and new workers; resource cache remains warm",
+    "cold-network": "fresh Chromium process/context; context-wide no-cache routing bypasses browser and job-local Pyodide cache interception; CDN edge may already have the object",
+    "reused-healthy-interpreter": "same page and Python worker; a second Run uses the same pristine interpreter generation after a completed eligible source execution"
+  },
+  "pendingCohorts": [],
+  "measurementDefinitions": {
+    "runAcceptedAt": "Page epoch timestamp when the current Run is accepted, before clientForRun/interpreter preparation; time queued before page acceptance, including click/dispatch delay, is excluded. sourceRunStartedAt remains the later source-invocation origin used to join causal publications.",
+    "firstUsefulMs": "Elapsed from accepted Run to completion of the first canvas screenshot containing at least 128 scene-ink pixels.",
+    "firstPresentedMs": "Elapsed from accepted Run or replay restart to a matching Noon renderer presentation receipt; the timestamp is an observer upper bound, not GPU completion or physical scanout.",
+    "firstSubmittedMs": "Elapsed from accepted Run to the first renderer.render() call completion. This is an upper bound on earlier backend frame submission and the Noon presentation receipt; it is not exact queue-submit start, GPU completion, or physical scanout.",
+    "firstControlsReady": "Elapsed from accepted Run to an enabled playback toggle observed with a matching current-run presentation.",
+    "commandAcceptance": "Elapsed time from the actual DOM request event to endpoint acceptedEpochMs sampled after the Rust mutation.",
+    "commandPresentation": "Elapsed time from the actual DOM request event to a command-correlated Noon presentation receipt; it does not measure physical scanout.",
+    "readerLead": "At each readiness observation, prepared reader lead is Rust frontier minus Rust observed reader time from one preparedPlayback state snapshot; it is not inferred from renderer time.",
+    "buffering": "Per-row prepared-reader waiting is reconstructed from Rust playing/buffering transitions at execution mutation boundaries; pauses are excluded. Episode duration is an observer-bound interval, and count, total and maximum are limited independently per row.",
+    "activeFrameGaps": "Successful continuous renderer presentation intervals fully inside the accepted-Run-to-first-traversal or restart-to-first-replay-wrap observation window, deduplicated by renderer interval ordinal. Renderer call timing is not physical scanout.",
+    "missedRefreshFraction": "Estimated missed nominal cadence opportunities divided by captured intervals plus estimated missed opportunities, using the declared refreshHz as a host cadence target; it is not a physical display refresh measurement."
+  },
+  "sampling": {
+    "warmupsPerArmPerStratum": 1,
+    "measuredStartsPerArmPerStratum": 20,
+    "minimumCommandObservationsPerSourceArm": 100,
+    "startupPercentiles": ["median", "p90", "p95"],
+    "commandPercentiles": ["median", "p95", "p99"],
+    "activeFrameGapPercentiles": ["median", "p95", "p99"],
+    "tailMethod": "nearest-rank",
+    "startupPopulationP99": false
+  },
+  "bounds": {
+    "firstUsefulMs": {
+      "showcase-first-scene": {
+        "fresh-process-warm-resource-cache": { "sourceRun": 2900, "historyReplay": 850 },
+        "reload-new-workers-warm-resource-cache": { "sourceRun": 2900, "historyReplay": 850 },
+        "cold-network": { "sourceRun": 3100, "historyReplay": 850 },
+        "reused-healthy-interpreter": { "sourceRun": 1000, "historyReplay": 850 }
+      },
+      "showcase-dynamic-scene": {
+        "fresh-process-warm-resource-cache": { "sourceRun": 3700, "historyReplay": 850 },
+        "reload-new-workers-warm-resource-cache": { "sourceRun": 3200, "historyReplay": 850 },
+        "cold-network": { "sourceRun": 3300, "historyReplay": 850 },
+        "reused-healthy-interpreter": { "sourceRun": 1000, "historyReplay": 850 }
+      }
+    },
+    "commandFeedbackMs": 50,
+    "commandAcceptanceP95Ms": 100,
+    "commandPresentationP95Ms": 100,
+    "commandPresentationP99Ms": 200,
+    "bufferingEpisodeCount": 2,
+    "bufferingTotalMs": 500,
+    "bufferingEpisodeMs": 250,
+    "activeFrameGapP99Ms": 33.4,
+    "missedRefreshFraction": 0.02,
+    "maxActiveFrameGapMs": 250,
+    "peakProcessRssBytes": 2415919104,
+    "liveOwnerRetirementMs": 1000
+  },
+  "failurePolicy": "retain every attempt; missing identities, traces, samples or required arm results fail strict qualification",
+  "productGateAnchor": {
+    "sourceRevision": "58135c4069a6f8d700dcaaee677d7c8c7a48d6c5",
+    "manifestSha256": "1e56fbc77b7d845bcb183f2dee47cacbfb81e429dc8f6ea578046e5616393849",
+    "dependencyLockSha256": "d2945ca9867fff1ef9656739912db19e2a84eebfdeb8131d1d56251b8f1535c5",
+    "workloads": [
+      "parity-square-and-circle",
+      "showcase-camera-follows-path",
+      "showcase-first-scene",
+      "showcase-raster-images",
+      "showcase-bezier-paths"
+    ],
+    "runnerSha256": "20e394a847da9241283a90b323fa476b80819a692baa464add04248fa3405c62",
+    "workloadSha256": "5137eef8aa71b8d70df845ad769278d934fd8eca53f585ca09c4f8d5e3ddbe96",
+    "comparisonSha256": "94cf8fd9ecec1d4c7d4f7fe4af123595e7d0b7f788ed422187e650bda64125a0",
+    "thresholds": {
+      "maxLatencyRatio": 1.25,
+      "latencySlackMs": 350,
+      "minFpsRatio": 0.8,
+      "maxVisualDiffRatio": 0.015
+    },
+    "preserveOriginalWorkloadAndThresholds": true
+  },
+  "baselineEvidence": {
+    "path": "benchmarks/playground-readiness-reference.json",
+    "sha256": "e1dab4c82b7c4905595d5e21e71b38861a392b3690477473cefdbd772504c33a",
+    "review": "Coordinator-reviewed C/D reference distributions and engineering targets; ready freezes the contract, not candidate qualification."
+  },
+  "boundRationale": {
+    "startup": "Per-source/phase/stratum sample-p95 absolute ceilings plus A/C and B/D p95 <= reference*1.20+250 ms. Limits allow modest loading delay; screenshot-completion timing includes the capture cadence. Cold-network excludes CDN-edge coldness.",
+    "commands": "Feedback p95 <=50 ms; runtime acceptance and matching presentation p95 <=100 ms; matching presentation p99 <=200 ms. Apply with preparation active and independently to completed-history seeks.",
+    "cadence": "At 60 Hz, p99 <= two nominal intervals, <=2% estimated missed opportunities, and no renderer interval >250 ms. The reference 371 ms outlier exceeds the chosen stall target and remains recorded.",
+    "buffering": "Both ordinary and dense prefix playback permit at most two brief waits, each <=250 ms and <=500 ms total per run. These are UX targets, not derived from candidate diagnostics or the inapplicable C/D prefix path.",
+    "memory": "Paired-run sampled process-tree RSS p95 <=2.25 GiB; every worker retires within a 1000 ms observer upper bound including a fixed 750 ms tail. Existing logical category caps and separate owner/capacity diagnostics remain required; RSS is not total GPU or live retained bytes."
+  }
+}

@@ -312,10 +312,23 @@ test("stdout and warning explanations survive a fatal abort without evicting lif
   assert.ok(snapshot.consoleMessages.every(m => m.phase === "python-startup" && m.lineNumber === 17));
   snapshot.consoleMessages[0].text = "mutated snapshot";
   assert.equal(trace.snapshot().consoleMessages[0].text, "Fatal Python error: example");
+  trace.setPhase("gpu-rendering");
+  for (let i = 0; i < 50; i++) emit("warning", `GPU warning ${i}`);
+  const error = trace.snapshot().consoleErrors[0];
+  assert.equal(error.text, "Aborted()");
+  assert.equal(error.phase, "python-startup");
+  assert.equal(error.lineNumber, 17);
+  error.text = "mutated snapshot";
+  assert.equal(trace.snapshot().consoleErrors[0].text, "Aborted()");
+  for (let i = 0; i < 3; i++) emit("error", `later error ${i}`);
+  assert.equal(trace.snapshot().consoleErrorCount, 4);
+  assert.equal(trace.snapshot().consoleErrorsOmitted, 1);
+  assert.deepEqual(trace.snapshot().consoleErrors.map(m => m.text),
+    ["later error 0", "later error 1", "later error 2"]);
   detach(); detach();
   assert.deepEqual(page.listeners("console"), [unrelated]);
   emit("log", "after detach");
-  assert.equal(trace.snapshot().consoleMessageCount, 53);
+  assert.equal(trace.snapshot().consoleMessageCount, 106);
 });
 
 test("console evidence bounds text and locations without retaining remote arguments", () => {

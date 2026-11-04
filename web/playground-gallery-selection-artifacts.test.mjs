@@ -8,7 +8,7 @@ import { waitForBrowserObservation } from "../scripts/playground-browser-support
 import { assertNonreplayableShowcase, readLiveState } from "../scripts/showcase-live-review.mjs";
 import { normalizeShowcaseManifest } from "./showcase-gallery.js";
 import test from "node:test";
-import { createBrowserFailureTrace } from "../scripts/playground-browser-failure-evidence.mjs";
+import { captureAttemptedPage, createBrowserFailureTrace } from "../scripts/playground-browser-failure-evidence.mjs";
 
 const sourceUrl = new URL("../scripts/playground-gallery-selection-smoke.mjs", import.meta.url).href;
 const showcaseManifest = JSON.parse(await readFile(new URL("./python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
@@ -197,6 +197,12 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     await vm.runInNewContext(`(async () => {${source}\n})()`, {
       assert, path, fileURLToPath, sourceUrl, URL,
       assertNonreplayableShowcase, readLiveState, normalizeShowcaseManifest,
+      seekPausedGallery: async (_page, duration) => {
+        assert.equal(duration, 2.6);
+        endpointRequested = true;
+        events.push("seek:paused-endpoint");
+        return duration;
+      },
       process: { env },
       setTimeout: (callback) => { callback(); return 0; },
       clearTimeout: () => {},
@@ -229,6 +235,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       playgroundLaunchOptions: (name) => ({ browser: name, headless: true }),
       createPyodideResourceCache: () => ({ install: async () => {}, stats: () => ({ upstreamFailures: Number(bootstrapFailure) }) }),
       createBrowserFailureTrace,
+      captureAttemptedPage,
       layoutReplayViewport: async (_canvas, size) => { layoutSizes.push(size); },
       replayViewport: async (_canvas, size, { deviceScaleFactor }) => ({
         bitmap: { width: size.width * deviceScaleFactor, height: size.height * deviceScaleFactor },
@@ -276,6 +283,7 @@ test("an acknowledged seek cannot baseline an earlier renderer publication", asy
   const result = await runSmoke({ replayable: true, staleEndpointReads: 2 });
   assert.equal(result.error, undefined);
   assert.equal(result.events.filter(event => event === "render:stale").length, 2);
+  assert.ok(result.events.indexOf("seek:paused-endpoint") < result.events.indexOf("render:endpoint"));
   assert.ok(result.events.indexOf("render:endpoint") < result.events.indexOf("capture:authoredBaseline"));
   const report = assertRetained(result, ["authoredBaseline", "indicated", "restored"]);
   assert.equal(report.authoredPlayback.publishedTime, 2.6);

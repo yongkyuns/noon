@@ -7,7 +7,10 @@ import { diagnosedHostCode, withAuthoringDiagnostics } from "./authoring-diagnos
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 const start = source.indexOf("async function prepareAuthoringDependencies(");
 const end = source.indexOf("\nasync function runCanonicalCallbackPhase(", start);
+const timingStart = source.indexOf("function preparationTimingEvent(");
+const timingEnd = source.indexOf("function sourceExecutionRequirement(", timingStart);
 assert.ok(start >= 0 && end > start, "production source-startup boundary must exist");
+assert.ok(timingStart >= 0 && timingEnd > timingStart, "production preparation timing helpers must exist");
 // Exercise the production dependency preparation + source runner without
 // initializing WASM, a worker or Pyodide. Only the interpreter interface is mocked.
 const { prepareAuthoringDependencies, runAuthoringSource } = vm.runInNewContext(
@@ -16,10 +19,12 @@ const { prepareAuthoringDependencies, runAuthoringSource } = vm.runInNewContext(
 // own tests and does not change the package loader ordering asserted here.
 const activeAuthoringRun = {};
 let authoringLibrariesPristine = false;
+${source.slice(timingStart, timingEnd)}
 ${source.slice(start, end)}
 return { prepareAuthoringDependencies, runAuthoringSource };
 })()`,
-  { diagnosedHostCode, withAuthoringDiagnostics },
+  { diagnosedHostCode, withAuthoringDiagnostics, post() {},
+    isRecord: value => value !== null && typeof value === "object" && !Array.isArray(value) },
 );
 
 function interpreter({ compile, load, execute, requiredPackages = [], missingPackages } = {}) {

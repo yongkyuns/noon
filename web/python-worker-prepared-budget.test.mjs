@@ -16,6 +16,7 @@ function section(start, end) {
 }
 const production = [
   section("function failAuthoringWorker(error)", "// A WASM trap"),
+  section("function executionDiagnostic(entry, event)", "function registerContinuationContext(context)"),
   section("function invokePreparedEngine(callback)", "function continuationEvent("),
   section("function failContinuation(continuation, error)", "function isContinuationControl("),
   section("async function handleRequest(request)", "async function attachSemanticExecutionRequest("),
@@ -23,7 +24,8 @@ const production = [
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture({ failureAt = null, failure = "budget rejected", catchBarrier = false, quiet = false } = {}) {
-  const tasks = new Map(), calls = [], messages = [], errors = [], runs = [];
+  const tasks = new Map(), calls = [], messages = [], diagnostics = [], errors = [], runs = [];
+  const effectCalls = [];
   const semanticContexts = new Map();
   let nextTask = 0, nextRun = 0, armed = true, closed = 0;
   const attempt = (stage, run) => {
@@ -31,12 +33,18 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
     if (armed && failureAt === stage) throw failure;
   };
   const context = vm.createContext({
-    semanticContexts, activeAuthoringRun: null, fatalAuthoringFailure: false,
+    semanticContexts, activeAuthoringRun: null, fatalAuthoringFailure: false, authoringLibrariesPristine: true,
     pyodidePromise: Promise.resolve({}), performance, WebAssembly, Error,
     validateRequest() {},
-    post: (type, payload) => messages.push({ type, ...payload }),
+    post: (type, payload) => (type === "execution_diagnostic" ? diagnostics : messages).push({ type, ...payload }),
+    isRecord: value => value !== null && typeof value === "object" && !Array.isArray(value),
     postError: (requestId, error) => errors.push({ requestId, error }),
     self: { close() { closed++; } },
+    awaitSemanticContinuation: async (_context, start = null) => {
+      effectCalls.push("observed-await");
+      if (start !== null) await start();
+      return "observed-event";
+    },
     retireSemanticContext() { assert.fail("an attached historical reader must not be retired"); },
     createPreparedInterpreterDriver: options => createPreparedInterpreterDriver({
       ...options,
@@ -54,10 +62,12 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       };
       runs.push(record);
       const player = {
-        prepareSourceSegment(scene) {
+        setPreparedLoopDuration() {},
+        prepareSourceSegmentStep(scene) {
           assert.equal(scene, continuation.context);
           attempt("prepare", id);
           record.pending = quiet ? null : { terminal: false };
+          return true;
         },
         reserveSourcePrefixCapacity() {
           if (record.pending === null) return false;
@@ -91,7 +101,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       };
       const continuation = {
         contextId: `context-${id}`, generation: id,
-        context: { beginObservedPreparedSource: () => false, prepareInitialSourceSegment: () => true }, terminal: false,
+        context: { beginObservedPreparedSource: () => "null", prepareInitialSourceSegment: () => true }, terminal: false,
         preparedPlayback: true, preparedPlayer: player, preparedDriver: owner.preparedDriver,
         initialSourceReady: { resolve() {}, reject(error) { record.initialRejection = error; } },
         preparedReady: { promise: Promise.resolve(), reject(error) { record.readyRejection = error; } },
@@ -101,7 +111,7 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       record.continuation = continuation;
       record.player = player;
       record.endpoint = endpoint;
-      record.entry = { released: false, context: continuation.context };
+      record.entry = { released: false, context: continuation.context, runRequestId: owner.requestId };
       semanticContexts.set(continuation.contextId, record.entry);
       owner.continuation = continuation;
       try {
@@ -115,15 +125,15 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
           record.caught = error;
         }
         record.statements++;
-        return JSON.stringify({ semantic_execution: {
+        return JSON.stringify({ duration: 2, semantic_execution: {
           context_id: continuation.contextId, continuation_generation: continuation.generation,
         } });
       } finally { record.cleanup++; }
     },
   });
-  vm.runInContext(`${production}\nglobalThis.testHandleRequest = handleRequest;`, context);
+  vm.runInContext(`${production}\nglobalThis.testHandleRequest = handleRequest;\nglobalThis.testPrepareSemanticEffectRequest = prepareSemanticEffectRequest;`, context);
   return {
-    tasks, calls, messages, errors, runs, context,
+    tasks, calls, effectCalls, messages, diagnostics, errors, runs, context,
     get closed() { return closed; },
     disarm() { armed = false; },
     async run(requestId = 1) {
@@ -145,6 +155,45 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
   };
 }
 
+test("prepared shader resources resume the same source barrier without observed handoff", async () => {
+  const f = fixture();
+  const context = {};
+  const continuation = {
+    preparedPlayback: true,
+    observedExecution: false,
+    preparedPlayer: {},
+    generation: 17,
+    endpoint: { async prepareSourceEffects(generation, staged) {
+      f.effectCalls.push(["prepare", generation, staged.startsSegment]);
+    } },
+    preparedDriver: { async awaitSegment(value) {
+      assert.equal(value, context);
+      f.effectCalls.push("prepared-await");
+      return "prepared-source-event";
+    } },
+  };
+  const segmentEvent = await f.context.testPrepareSemanticEffectRequest(
+    continuation, context, { startsSegment: true },
+  );
+  assert.equal(segmentEvent, "prepared-source-event");
+  assert.deepEqual(f.effectCalls, [["prepare", 17, true], "prepared-await"]);
+
+  f.effectCalls.length = 0;
+  const ordinaryEffect = await f.context.testPrepareSemanticEffectRequest(
+    continuation, context, { startsSegment: false },
+  );
+  assert.equal(ordinaryEffect, undefined);
+  assert.deepEqual(f.effectCalls, [["prepare", 17, false]]);
+
+  f.effectCalls.length = 0;
+  continuation.observedExecution = true;
+  const observedEvent = await f.context.testPrepareSemanticEffectRequest(
+    continuation, context, { startsSegment: true },
+  );
+  assert.equal(observedEvent, "observed-event");
+  assert.deepEqual(f.effectCalls, ["observed-await", ["prepare", 17, true]]);
+});
+
 async function assertOrdinaryFailure(f, done, record, expected) {
   await f.drain();
   await done;
@@ -158,6 +207,8 @@ async function assertOrdinaryFailure(f, done, record, expected) {
     assert.equal(rejection.cause, expected, "keep the original thrown value");
   }
   assert.deepEqual(f.messages, [], "failure must not publish a success descriptor");
+  assert.equal(f.diagnostics.at(-1).event.stage, "failed");
+  assert.equal(f.diagnostics.at(-1).requestId, 1);
   assert.equal(f.closed, 0, "a budget rejection is not an interpreter-fatal trap");
   assert.equal(f.context.fatalAuthoringFailure, false);
   assert.equal(f.context.activeAuthoringRun, null, "failed source invocation must be released");

@@ -7,8 +7,8 @@ use crate::ExecutionSession;
 use noon_core::{ObjectId, PublicationContext, SemanticClickIndicate};
 use noon_runtime::{
     apply_execution_slot_membership_changes, preflight_execution_slot_membership_changes,
-    FrameState, PrefixBatch, PrefixBatchStats, PrefixError, PrefixReceiver,
-    PreparedTransientAnimation, RendererPublication, ReplayStats, RuntimeIdentity,
+    AudioPlaybackClip, AudioPlaybackError, FrameState, PrefixBatch, PrefixBatchStats, PrefixError,
+    PrefixReceiver, PreparedTransientAnimation, RendererPublication, ReplayStats, RuntimeIdentity,
 };
 
 mod input;
@@ -55,6 +55,12 @@ impl PrefixReader {
         self.receiver.contains_time(time)
     }
 
+    /// Shared selectable timeline bounds. Unlike a displayed frontier, the
+    /// open upper value is a concrete timestamp this exact reader can admit.
+    pub fn selectable_time_bounds(&self) -> Result<Option<(f64, f64)>, PrefixError> {
+        self.receiver.selectable_time_bounds(&self.session.runtime)
+    }
+
     pub fn runtime_identity(&self) -> RuntimeIdentity {
         self.session.runtime_identity()
     }
@@ -70,6 +76,21 @@ impl PrefixReader {
     pub fn frame(&self) -> &FrameState {
         self.session.frame()
     }
+    /// Immutable authored audio retained with this reader's original runtime.
+    pub fn has_audio(&self) -> bool {
+        self.session.has_audio()
+    }
+    pub fn audio_end_time(&self) -> Option<f64> {
+        self.session.audio_end_time()
+    }
+    /// Borrow the original PCM and clip schedule at an accepted reader time.
+    /// This query does not advance or publish history.
+    pub fn audio_playback_at(
+        &self,
+        time: f64,
+    ) -> Result<impl Iterator<Item = AudioPlaybackClip<'_>>, AudioPlaybackError> {
+        self.session.audio_playback_at(time)
+    }
     pub fn replay_stats(&self) -> ReplayStats {
         self.session.replay_stats()
     }
@@ -77,6 +98,12 @@ impl PrefixReader {
     /// This excludes revision/storage capacity, allocator overhead and GPU state.
     pub fn retained_resource_bytes(&self) -> usize {
         self.receiver.retained_resource_bytes()
+    }
+    pub fn retained_history_payload_bytes(&self) -> usize {
+        self.receiver.retained_history_payload_bytes()
+    }
+    pub fn history_payload_budget_bytes(&self) -> usize {
+        self.receiver.history_payload_budget_bytes()
     }
     pub fn resource_budget_bytes(&self) -> usize {
         self.receiver.resource_budget_bytes()
@@ -130,9 +157,11 @@ impl PrefixReader {
     /// Observe delivery admission without consuming the batch or publishing its
     /// future targets. Slot work is proportional only to newly delivered rows.
     pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
-        let stats = self
-            .receiver
-            .preflight_append(&self.session.runtime, batch)?;
+        let stats = self.receiver.preflight_append_with_scalar_timeline(
+            &self.session.runtime,
+            batch,
+            &self.session.signal_timeline,
+        )?;
         if batch.required_object_capacity() > self.session.slots.reserved_object_capacity() {
             return Err(PrefixError::CapacityRequired {
                 object_slots: batch.required_object_capacity(),
@@ -150,7 +179,11 @@ impl PrefixReader {
     pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
         self.preflight_append(&batch)?;
         let new_objects: Vec<_> = batch.new_object_ids().collect();
-        let stats = self.receiver.append(&mut self.session.runtime, batch)?;
+        let stats = self.receiver.append_with_scalar_timeline(
+            &mut self.session.runtime,
+            batch,
+            &mut self.session.signal_timeline,
+        )?;
         apply_execution_slot_membership_changes(&mut self.session.slots, &[], &new_objects)
             .expect("same-owner prefix identity batch was preflighted before adoption");
         Ok(stats)

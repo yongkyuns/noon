@@ -28,6 +28,115 @@ fn deliver(reader: &mut PrefixReader, batch: PrefixBatch) {
     reader.append(batch).unwrap();
 }
 
+fn prepared_source_delivery() -> (CanonicalAuthoringScene, crate::PreparedExecutionPlayer) {
+    let mut context = CanonicalAuthoringScene::default();
+    let target = context.scene.circle(0.5).unwrap();
+    context.bind_mobject(ObjectId::new(0), &target).unwrap();
+    context.begin_ordinary_wait(1.0).unwrap();
+    context.prepare_live_segment().unwrap();
+    let player = crate::PreparedExecutionPlayer::from_completed_source(&mut context, 711).unwrap();
+    context.begin_ordinary_wait(1.0).unwrap();
+    (context, player)
+}
+
+#[test]
+fn prepared_source_segment_yields_before_completion_and_reader_adoption() {
+    let (mut context, mut player) = prepared_source_delivery();
+    let frontier = player.prepared_frontier();
+    assert_eq!(
+        player
+            .prepare_interpreter_segment_step(&mut context)
+            .unwrap(),
+        None
+    );
+    assert_eq!(player.prepared_frontier(), frontier);
+    assert_eq!(player.prepared_end_time(), None);
+
+    assert_eq!(
+        player
+            .prepare_interpreter_segment_step(&mut context)
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(player.prepared_frontier(), frontier);
+    assert!(player.reserve_source_prefix_capacity().unwrap());
+    assert!(player.deliver_source_prefix().unwrap());
+    assert_eq!(player.prepared_frontier(), 2.0);
+}
+
+#[test]
+fn prepared_source_segment_rejects_a_changed_phase_and_cancellation_keeps_reader() {
+    let (mut context, mut player) = prepared_source_delivery();
+    let frontier = player.prepared_frontier();
+    assert_eq!(
+        player
+            .prepare_interpreter_segment_step(&mut context)
+            .unwrap(),
+        None
+    );
+    context
+        .active_live_player()
+        .unwrap()
+        .live_complete_segment()
+        .unwrap();
+    assert!(player
+        .prepare_interpreter_segment_step(&mut context)
+        .is_err());
+    assert!(
+        player
+            .prepare_interpreter_segment_step(&mut context)
+            .is_err(),
+        "failed completion is not retried from the mutated source"
+    );
+    assert_eq!(player.prepared_frontier(), frontier);
+    assert!(!player.reserve_source_prefix_capacity().unwrap());
+
+    let (mut context, mut player) = prepared_source_delivery();
+    let frontier = player.prepared_frontier();
+    assert_eq!(
+        player
+            .prepare_interpreter_segment_step(&mut context)
+            .unwrap(),
+        None
+    );
+    player.stop_source_preparation();
+    assert_eq!(player.prepared_frontier(), frontier);
+    assert_eq!(player.prepared_time(), 0.0);
+}
+
+#[test]
+fn foreign_source_step_rejection_preserves_the_rightful_owner() {
+    let (mut context, mut player) = prepared_source_delivery();
+    let mut foreign = CanonicalAuthoringScene::default();
+    foreign.begin_ordinary_wait(1.0).unwrap();
+
+    assert!(player
+        .prepare_interpreter_segment_step(&mut foreign)
+        .is_err());
+    assert_eq!(
+        player
+            .prepare_interpreter_segment_step(&mut context)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        player
+            .prepare_interpreter_segment_step(&mut context)
+            .unwrap(),
+        Some(true)
+    );
+}
+
+#[test]
+fn synchronous_source_segment_api_still_completes_without_exposing_a_stage() {
+    let (mut context, mut player) = prepared_source_delivery();
+    assert!(player.prepare_interpreter_segment(&mut context).unwrap());
+    assert_eq!(player.prepared_frontier(), 1.0);
+    assert!(player.reserve_source_prefix_capacity().unwrap());
+    assert!(player.deliver_source_prefix().unwrap());
+    assert_eq!(player.prepared_frontier(), 2.0);
+}
+
 #[test]
 fn interpreter_host_effect_admission_retains_a_quiet_original_source_at_its_actual_time() {
     let (mut context, _) = fixture();
@@ -35,14 +144,50 @@ fn interpreter_host_effect_admission_retains_a_quiet_original_source_at_its_actu
     let player = context.active_live_player().unwrap();
     let before = player.debug_frame_json();
     let identity = player.ownership_identity();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
     let player = context.take_execution_player(1.0, 0).unwrap();
     assert_eq!(player.ownership_identity(), identity);
     assert_eq!(player.debug_frame_json(), before);
     assert_eq!(player.time(), 0.0);
     assert!(player.has_pending_live_segment());
+}
+
+#[test]
+fn opaque_source_reason_refines_only_after_a_callback_is_registered() {
+    let (mut context, target) = fixture();
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
+    assert_eq!(
+        context.observed_source_execution_requirement().unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
+
+    let player = context.active_live_player().unwrap();
+    player.live_advance_segment_to(1.0).unwrap();
+    player.live_complete_segment().unwrap();
+    context
+        .add_updater(&target, HostCallbackId::new(92), 1.0, None)
+        .unwrap();
+    assert_eq!(
+        context.observed_source_execution_requirement().unwrap(),
+        Some(noon::SourceExecutionRequirement::HostCallbacks)
+    );
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert_eq!(context.active_live_player().unwrap().time(), 1.0);
+    assert!(context
+        .active_live_player()
+        .unwrap()
+        .has_pending_live_segment());
 }
 
 #[test]
@@ -55,9 +200,12 @@ fn completed_observed_source_keeps_original_history_for_replay() {
     context.begin_ordinary_wait(0.5).unwrap();
     let initial = context.active_live_player().unwrap().debug_frame_json();
     let identity = context.active_live_player().unwrap().ownership_identity();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
     let mut player = context.take_execution_player(1.0, 0).unwrap();
     player.live_advance_segment_to(0.5).unwrap();
     player.live_complete_segment().unwrap();
@@ -100,9 +248,12 @@ fn completed_observed_source_keeps_original_history_for_replay() {
 fn completed_observed_zero_wait_keeps_exact_zero_during_replay() {
     let (mut context, _) = fixture();
     context.begin_ordinary_wait(0.0).unwrap();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
     let mut player = context.take_execution_player(4.0, 0).unwrap();
     player.live_advance_segment_to(0.0).unwrap();
     player.live_complete_segment().unwrap();
@@ -266,9 +417,12 @@ fn interpreter_prefix_callback_rejection_does_not_advance_or_complete_source() {
     assert!(context.create_prepared_prefix().is_err());
 
     let identity = context.active_live_player().unwrap().ownership_identity();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostCallbacks)
+    );
     assert_eq!(
         context.active_live_player().unwrap().debug_frame_json(),
         before

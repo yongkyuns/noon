@@ -1,20 +1,26 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
-import { createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
+import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
+import { seekPausedGallery, waitForPublishedGalleryFrame } from './showcase-playback.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
-import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
+import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryPoolForProfileGate, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
+import { assertGalleryRuntimeBuildIdentityUnchanged, evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, showcaseAudioGestureReady, SHOWCASE_PROFILE_EXPECTATIONS, validateGalleryRuntimeBuildIdentity, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
 const profile = process.env.NOON_PLAYGROUND_PROFILE ?? 'mobile-dpr2';
+const profileGateMode = process.env.NOON_SHOWCASE_PROFILE_GATE ?? 'disabled';
+assert.ok(['disabled', 'baseline', 'strict'].includes(profileGateMode), 'NOON_SHOWCASE_PROFILE_GATE must be disabled, baseline, or strict');
 const port = Number(process.env.NOON_GALLERY_PORT ?? 4197);
 const external = process.env.NOON_GALLERY_BASE;
 const base = external ?? `http://127.0.0.1:${port}/web/`;
@@ -25,6 +31,76 @@ const liveMathAnimations = {
   'showcase-latex-create': [['Create', 0, 1], ['Write', 1, 2]],
   'showcase-text-math': [['Write', 0, 1.2]],
 };
+async function qualifyTriangleHistory(page, duration, initialDiagnostics) {
+  await page.evaluate(async () => {
+    window.__triangleControlReceipts = [];
+    const { ExecutionWorkerClient } = await import('./execution-worker-client.js');
+    for (const name of ['pause', 'seek']) {
+      const original = ExecutionWorkerClient.prototype[name];
+      ExecutionWorkerClient.prototype[name] = async function (...args) {
+        const result = await original.apply(this, args);
+        window.__triangleControlReceipts.push({ operation: name, requested: args[0] ?? null,
+          time: result?.time, playing: result?.playing, receipt: result?.presentationReceipt ?? null });
+        return result;
+      };
+    }
+  });
+  const captures = [];
+  for (const target of [3, 12, 21]) {
+    const time = await seekPausedGallery(page, duration, target);
+    const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+    assert.equal(Number(metrics.metrics.time), time,
+      'renderer did not settle at the selected authored time');
+    const pixels = await page.locator('#scene').screenshot();
+    captures.push({ time, pixelSha256: createHash('sha256').update(pixels).digest('hex'),
+      metrics: { time: metrics.metrics.time, session: metrics.metrics.presentedSession,
+        presentedFrames: metrics.metrics.presentedFrames, objectCount: metrics.metrics.objectCount,
+        bufferedDeltas: metrics.metrics.bufferedDeltas },
+      preparedRetention: metrics.engineMetrics?.preparedRetention ?? null });
+  }
+  assert.equal(new Set(captures.map(capture => capture.pixelSha256)).size, 3,
+    'Triangle authored checkpoints must render distinct pictures');
+  const rewindTime = await seekPausedGallery(page, duration, 12);
+  const rewindMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+  const rewindPixels = await page.locator('#scene').screenshot();
+  const rewindSha256 = createHash('sha256').update(rewindPixels).digest('hex');
+  assert.equal(rewindSha256, captures[1].pixelSha256,
+    'rewinding to 12 seconds must reproduce the retained canvas picture exactly');
+  const receipts = await page.evaluate(() => window.__triangleControlReceipts);
+  const pause = receipts.find(receipt => receipt.operation === 'pause');
+  assert.equal(pause?.playing, false, 'playback controls did not pause the looping source');
+  assert.ok(Number.isSafeInteger(pause?.receipt?.sequence), 'pause lacked its renderer receipt');
+  const seeks = receipts.filter(receipt => receipt.operation === 'seek');
+  assert.equal(seeks.length, 4);
+  for (const [index, receipt] of seeks.entries()) {
+    const expected = [3, 12, 21, 12][index];
+    assert.equal(receipt.time, expected);
+    assert.equal(receipt.receipt?.time, expected);
+    assert.equal(receipt.receipt?.session, pause.receipt.session);
+    assert.ok(Number.isSafeInteger(receipt.receipt?.sequence));
+    if (index > 0) assert.ok(receipt.receipt.sequence > seeks[index - 1].receipt.sequence,
+      'renderer receipts must preserve seek order');
+  }
+  const diagnostics = await page.evaluate(() => window.__noonExampleGallery.executionDiagnostics);
+  assert.equal(diagnostics.runRequestId, initialDiagnostics.runRequestId);
+  assert.deepEqual(diagnostics.context, initialDiagnostics.context);
+  for (const stage of ['source-proof', 'attached', 'source-complete']) {
+    assert.equal(diagnostics.events.filter(event => event.stage === stage).length, 1,
+      `history control changed ${stage} count`);
+  }
+  const retention = rewindMetrics.engineMetrics?.preparedRetention;
+  assert.ok(retention && retention.reader && retention.pending, 'prepared retention metrics are unavailable');
+  assert.ok(retention.reader.historyPayloadBytes <= retention.reader.historyPayloadBudgetBytes,
+    'prepared history exceeded its reported payload budget');
+  assert.ok(retention.reader.resourceBytes <= retention.reader.resourceBudgetBytes,
+    'prepared resources exceeded their reported resource budget');
+  assert.equal(retention.pending.batches, 0, 'terminal history seek retained a pending producer batch');
+  return { receipts, captures, rewind: { time: rewindTime, pixelSha256: rewindSha256,
+    exactCanvasMatch: true, metrics: { time: rewindMetrics.metrics.time,
+      session: rewindMetrics.metrics.presentedSession,
+      presentedFrames: rewindMetrics.metrics.presentedFrames,
+      objectCount: rewindMetrics.metrics.objectCount } } };
+}
 await mkdir(artifacts, { recursive: true });
 let server, httpServerState, browser, runtimeCache;
 let completed = false;
@@ -57,6 +133,14 @@ async function json(relative) {
   assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
   return response.json();
 }
+async function showcaseSourceBytes(relative) {
+  if (!external) return readFileSync(path.join(root, 'web', relative));
+  const response = await fetch(new URL(relative, base), {
+    signal: AbortSignal.timeout(20000), headers: { 'Cache-Control': 'no-cache' },
+  });
+  assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+}
 try {
   if (!external) {
     httpServerState = { kind: 'owned-repository-server', port, ready: false, error: null };
@@ -78,15 +162,24 @@ try {
   const workerResponse = await fetch(new URL('python-worker.js', base), { signal: AbortSignal.timeout(20000) });
   assert.ok(workerResponse.ok, 'gallery worker source is unavailable');
   runtimeCache = createPyodideResourceCache(await workerResponse.text());
+  const servedRuntimeBuildIdentity = await json(`runtime-build-identity.json?t=${Date.now()}`);
+  await writeFile(path.join(artifacts, 'runtime-build-identity.json'), stringify(servedRuntimeBuildIdentity));
+  const runtimeBuildIdentity = validateGalleryRuntimeBuildIdentity(servedRuntimeBuildIdentity, {
+    requireSourceRevision: profileGateMode !== 'disabled',
+  });
   const revision = external ? await json(`build-info.json?t=${Date.now()}`) : null;
   if (process.env.NOON_GALLERY_REVISION) assert.equal(revision?.commit, process.env.NOON_GALLERY_REVISION);
   const manifests = await Promise.all(galleryManifestPaths.map(relative => json(relative)));
+  const showcaseManifest = manifests[3];
   const entries = galleryEntriesFromManifests(manifests);
-  const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
-  if (selectedIds) for (const id of selectedIds) {
-    assert.ok(entries.some(entry => entry.id === id), "unknown gallery case: " + id);
+  if (profileGateMode !== 'disabled') {
+    const sources = new Map();
+    for (const entry of showcaseManifest.entries) sources.set(entry.path, await showcaseSourceBytes(entry.path));
+    validateShowcaseInventory(showcaseManifest.entries, relative => sources.get(relative));
   }
-  const selectedPool = selectedIds ? entries.filter(entry => selectedIds.includes(entry.id)) : entries;
+  const selectedIds = process.env.NOON_GALLERY_CASES?.split(',').map(id => id.trim()).filter(Boolean);
+  const selectedPool = galleryPoolForProfileGate(entries, showcaseManifest.entries,
+    profileGateMode, selectedIds ?? null);
   const shard = galleryShardFromEnvironment(process.env);
   const selectedEntries = shard ? shardGalleryEntries(selectedPool, shard.index, shard.count) : selectedPool;
   assert.ok(selectedEntries.length > 0, "gallery selection is empty");
@@ -96,8 +189,18 @@ try {
     browser: browserName,
     profile,
     shard,
+    profileGateMode,
+    runtimeBuildId: runtimeBuildIdentity.buildId,
+    runtimeSourceRevision: runtimeBuildIdentity.sourceRevision,
     sourceCaseCount: entries.length,
+    profileGateScope: profileGateMode === 'disabled' ? 'disabled'
+      : selectedIds ? 'focused' : 'full-catalog',
+    showcaseCatalog: profileGateMode === 'disabled' ? [] : SHOWCASE_PROFILE_EXPECTATIONS.map(({ id, path: sourcePath, sha256 }) =>
+      ({ id, path: sourcePath, sha256 })),
     selectedCaseIds: selectedEntries.map(entry => entry.id),
+    profileGateShowcaseCaseIds: profileGateMode !== 'disabled'
+      ? selectedEntries.filter(entry => SHOWCASE_PROFILE_EXPECTATIONS.some(row => row.id === entry.id)).map(entry => entry.id)
+      : [],
     expectedCases: queue.map(({ entry, noJspi }) => ({ id: entry.id, noJspi })),
   }));
   console.log("Gallery case inventory:", selectedEntries.length, "cases", queue.length, "executions");
@@ -167,7 +270,14 @@ try {
     page.setDefaultTimeout(10000);
     const trace = createBrowserFailureTrace();
     const detachTrace = trace.attach(caseBrowser, context, page);
-    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(), errors: [], failedRequests: [], samples: [], presentations: [] };
+    const expectedProfile = profileGateMode === 'disabled' ? null
+      : SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === entry.id) ?? null;
+    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(),
+      runtimeBuildIdentity: { beforeBuildId: runtimeBuildIdentity.buildId, afterBuildId: null, unchanged: false },
+      ...(expectedProfile ? { source: { path: expectedProfile.path, sha256: expectedProfile.sha256 } } : {}),
+      errors: [], failedRequests: [], samples: [], presentations: [] };
+    let audioGestureIssued = false;
+    let audioAttachmentObserved = false;
     const observedPublications = new Set();
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     const native = createNativeWebKitEvidence({
@@ -226,17 +336,68 @@ try {
                 crossOriginIsolated: window.crossOriginIsolated,
                 patch: { ...document.querySelector('#patch-status')?.dataset },
                 playback: { ...document.querySelector('.playback-controls')?.dataset },
+                playButtonDisabled: document.querySelector('.playback-controls .playback-toggle')?.disabled ?? null,
                 text: document.querySelector('#patch-status')?.value,
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
                 rendererBackend: document.querySelector('#status')?.dataset.rendererBackend,
                 renderHost: document.querySelector('#status')?.dataset.renderHost,
-                metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError };
+                metrics: window.__galleryMetrics ?? null, metricsError: window.__galleryMetricsError,
+                executionDiagnostics: document.querySelector('#patch-status')?.dataset.state === 'applied'
+                  ? gallery.executionDiagnostics ?? null : null };
             }, Object.hasOwn(liveMathAnimations, entry.id));
             lastWorkerMessages = workerMessages;
             result.state = state;
             assert.equal(state.selected, entry.id);
             assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
             assert.equal(state.metricsError, undefined);
+            if (expectedProfile?.audioPolicy === 'authored-audio') {
+              const attachedEvent = state.executionDiagnostics?.events?.find(event => event.stage === 'attached');
+              if (!audioAttachmentObserved && attachedEvent) {
+                audioAttachmentObserved = true;
+                result.audioAttachment = {
+                  runRequestId: state.executionDiagnostics.runRequestId,
+                  interpreterGeneration: state.executionDiagnostics.interpreterGeneration,
+                  context: state.executionDiagnostics.context,
+                  attachedEvent,
+                  initiallyPaused: state.playback?.playing === 'false',
+                  playButtonDisabled: state.playButtonDisabled,
+                };
+              }
+              const gestureReady = showcaseAudioGestureReady({ expected: expectedProfile,
+                patchApplied: state.patch.state === 'applied', runInFlight: state.inFlight,
+                diagnostics: state.executionDiagnostics, playback: state.playback,
+                playButtonDisabled: state.playButtonDisabled });
+              const attached = Boolean(attachedEvent);
+              if (!audioGestureIssued && gestureReady) {
+                result.audioGesture = {
+                  action: 'playback-controls Play button click',
+                  issued: true,
+                  initiallyPaused: state.playback?.playing === 'false',
+                  sample: {
+                    runRequestId: state.executionDiagnostics.runRequestId,
+                    interpreterGeneration: state.executionDiagnostics.interpreterGeneration,
+                    context: state.executionDiagnostics.context,
+                    attachedEvent,
+                  },
+                  playingConfirmed: false,
+                };
+                audioGestureIssued = true;
+                await page.locator('.playback-controls .playback-toggle').click();
+              } else if (!audioGestureIssued && attached &&
+                  galleryCaseLifecycleReady({ patchApplied: state.patch.state === 'applied',
+                    runInFlight: state.inFlight, requiresDisposition: true,
+                    diagnostics: state.executionDiagnostics, exampleId: entry.id })) {
+                assert.fail(`${entry.id}: attached authored audio lacked an enabled paused Play gesture path`);
+              }
+              if (audioGestureIssued && state.playback?.playing === 'true') {
+                result.audioGesture.playingConfirmed = true;
+                result.audioGesture.confirmedSample = {
+                  runRequestId: state.executionDiagnostics?.runRequestId,
+                  interpreterGeneration: state.executionDiagnostics?.interpreterGeneration,
+                  context: state.executionDiagnostics?.context,
+                };
+              }
+            }
             const metric = state.metrics?.metrics;
             for (const presentation of metric?.publicationStageSamples ?? []) {
               const key = `${presentation.session}:${presentation.sequence}`;
@@ -254,8 +415,16 @@ try {
             });
             if (state.patch.state === 'applied' && !state.inFlight) {
               const authored = parseAuthoringResult(await page.evaluate(() => window.__galleryAuthoringResults.at(-1)));
-              if (authored.semanticExecution?.preparedPlayback !== true ||
-                  Math.abs(Number(state.playback.elapsedSeconds) - authored.duration) < 1e-7) {
+              const requiresDisposition = authored.semanticExecution?.preparedPlayback === true ||
+                (profileGateMode !== 'disabled' && expectedProfile !== null);
+              if ((expectedProfile?.audioPolicy !== 'authored-audio' ||
+                    result.audioGesture?.playingConfirmed === true) && galleryCaseLifecycleReady({
+                patchApplied: state.patch.state === 'applied',
+                runInFlight: state.inFlight,
+                requiresDisposition,
+                diagnostics: state.executionDiagnostics,
+                exampleId: entry.id,
+              })) {
                 completed = true; break;
               }
             }
@@ -351,7 +520,34 @@ try {
           assert.ok(Number.isFinite(result.authoredDuration), 'missing authored duration');
           if (entry.expected_duration != null) assert.ok(Math.abs(result.authoredDuration - entry.expected_duration) < 1e-6,
             `authored duration ${result.authoredDuration} differs from ${entry.expected_duration}`);
-          if (entry.expected_object_count != null) assert.equal(metrics.metrics.objectCount, entry.expected_object_count);
+          if (entry.expected_object_count != null) {
+            // The lifecycle sample can be the opening picture of the next loop.
+            // Inspect the closed endpoint separately through normal controls.
+            let endpointMetrics = metrics;
+            if (result.state.playback?.controllable === 'true' && result.authoredDuration > 0) {
+              const time = await seekPausedGallery(page, result.authoredDuration);
+              endpointMetrics = await waitForPublishedGalleryFrame(page, time, result.authoredDuration);
+              result.terminalInspection = { time, metrics: endpointMetrics };
+            }
+            assert.equal(endpointMetrics.metrics.objectCount, entry.expected_object_count);
+          }
+          if (expectedProfile) {
+            result.executionDiagnostics = result.state?.executionDiagnostics ?? await page.evaluate(() =>
+              window.__noonExampleGallery?.executionDiagnostics ?? null);
+            result.profileGate = {
+              mode: profileGateMode,
+              ...evaluateShowcaseDiagnostics(expectedProfile, result.executionDiagnostics),
+            };
+            if (profileGateMode === 'strict') {
+              validateShowcaseDiagnostics(expectedProfile, result.executionDiagnostics);
+              result.profileGate.status = 'matched';
+              delete result.profileGate.reason;
+            }
+          }
+          if (profileGateMode !== 'disabled' && entry.id === 'showcase-triangle-light') {
+            result.playbackHistory = await qualifyTriangleHistory(page, result.authoredDuration,
+              result.executionDiagnostics);
+          }
           assert.deepEqual(result.errors, []);
           if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
         })(),
@@ -380,8 +576,39 @@ try {
         native.snapshots().at(-1)?.processes ?? []);
       result.failureDiagnostics.nativeCrashReports = await native.failure();
       result.failureDiagnostics.nativeProcessSnapshots = native.snapshots();
+      result.failureDiagnostics.attemptedPage = await captureAttemptedPage(page);
     } finally {
       clearTimeout(caseTimer);
+      if (expectedProfile && !Object.hasOwn(result, 'executionDiagnostics')) {
+        const snapshot = await Promise.race([
+          page.evaluate(() => window.__noonExampleGallery?.executionDiagnostics ?? null),
+          new Promise(resolve => setTimeout(() => resolve(null), 1000)),
+        ]).catch(() => null);
+        result.executionDiagnostics = snapshot;
+        result.profileGate ??= {
+          mode: profileGateMode,
+          ...evaluateShowcaseDiagnostics(expectedProfile, snapshot),
+        };
+      }
+      if (result.runtimeBuildIdentity.afterBuildId === null) {
+        let after = null;
+        try {
+          after = validateGalleryRuntimeBuildIdentity(
+            await json(`runtime-build-identity.json?t=${Date.now()}`), {
+              requireSourceRevision: profileGateMode !== 'disabled',
+            });
+          result.runtimeBuildIdentity.afterBuildId = after.buildId;
+          assertGalleryRuntimeBuildIdentityUnchanged(runtimeBuildIdentity, after);
+          result.runtimeBuildIdentity.unchanged = true;
+        } catch (error) {
+          if (after !== null) result.runtimeBuildIdentity.after = after;
+          result.runtimeBuildIdentity.afterError = String(error);
+          result.outcome = 'fail';
+          result.failure = result.failure
+            ? `${result.failure}; runtime identity check: ${String(error)}`
+            : `runtime identity check: ${String(error)}`;
+        }
+      }
       await page.screenshot({ path: path.join(artifacts, `${name}.png`), timeout: 5000 }).catch(() => {});
       result.browserTrace = trace.snapshot();
       detachTrace();
@@ -405,9 +632,9 @@ try {
       await caseBrowser?.close();
     }
   }
-  // Keep WebKit's cold WASM compilation and GPU contexts sequential on CI.
-  // Cold startup itself is covered by the public playground workflow.
-  const concurrency = browserName === 'webkit' ? 1 : 2;
+  // Headed Firefox cases share one display; each DOM interaction needs its own
+  // foreground window. WebKit also keeps cold WASM/GPU contexts sequential.
+  const concurrency = browserName === 'chromium' ? 2 : 1;
   const liveMathCases = [];
   await Promise.all(Array.from({ length: concurrency }, async () => {
     while (next < queue.length) {

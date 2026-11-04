@@ -7,12 +7,21 @@ use crate::{
     ExecutionSegment, PrefixBatch, PrefixError, PrefixPublisher, PrefixReader, Scene,
     SourceExecutionRequirement,
 };
+use noon_core::PublicationContext;
 use noon_runtime::{ReplayError, ReplayLimits};
 
 /// Producer lifecycle, not authored playback time or a rendering directive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreparedSourceStatus {
     Ready,
+    /// The retained source is waiting for trusted renderer resources. It has not
+    /// transferred to observed execution or advanced the source segment.
+    PreparingResources,
+    /// Resources were compiled, but the source segment still needs one ordinary
+    /// prepared step before its suffix can be retained.
+    ResourceSegmentPending,
+    /// A committed resource introduction awaits retention by its trusted host.
+    ResourcePublicationPending(PublicationContext),
     /// Preparation has not advanced the newly required source interval.
     ExecutionRequired(SourceExecutionRequirement),
     /// Canonical source ownership was taken once, without invoking it again.
@@ -30,6 +39,10 @@ pub enum PreparedSourceError<E> {
     Replay(ReplayError),
     Prefix(PrefixError),
     Program(LiveProgramError<E>),
+    InvalidResourceState {
+        operation: &'static str,
+        state: PreparedSourceStatus,
+    },
     /// Invalid demand is rejected before invoking source code or changing state.
     InvalidPreparationTarget(f64),
 }
@@ -40,6 +53,9 @@ impl<E: std::fmt::Display> std::fmt::Display for PreparedSourceError<E> {
             Self::Replay(e) => e.fmt(f),
             Self::Prefix(e) => e.fmt(f),
             Self::Program(e) => e.fmt(f),
+            Self::InvalidResourceState { operation, state } => {
+                write!(f, "cannot {operation} while prepared source is {state:?}")
+            }
             Self::InvalidPreparationTarget(time) => write!(f, "invalid preparation target {time}"),
         }
     }
@@ -135,6 +151,104 @@ impl<C: LiveContinuation> PreparedSource<C> {
             Some(Pending::Batch(_)) => PreparedSourceStatus::BatchReady,
             None => self.phase,
         }
+    }
+
+    /// Trusted renderer resources required by the still-owned source operation.
+    pub fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        if self.phase != PreparedSourceStatus::PreparingResources {
+            return None;
+        }
+        self.program.as_ref()?.pending_effect_programs()
+    }
+
+    /// Commit the staged resource operation after the host has compiled every
+    /// pending program. This does not acknowledge a displayed reader frame.
+    pub fn publish_prepared_effects(&mut self) -> Result<(), PreparedSourceError<C::Error>> {
+        if self.phase != PreparedSourceStatus::PreparingResources {
+            return Err(PreparedSourceError::InvalidResourceState {
+                operation: "publish prepared effects",
+                state: self.status(),
+            });
+        }
+        let status = match self
+            .program
+            .as_mut()
+            .expect("resource preparation retains source")
+            .publish_prepared_effects()
+        {
+            Ok(status) => status,
+            Err(error) => {
+                self.phase = PreparedSourceStatus::Failed;
+                return Err(PreparedSourceError::Program(error));
+            }
+        };
+        self.phase = match status {
+            LiveProgramStatus::PublicationPending(context) => {
+                PreparedSourceStatus::ResourcePublicationPending(context)
+            }
+            LiveProgramStatus::Awaiting(_) => PreparedSourceStatus::ResourceSegmentPending,
+            LiveProgramStatus::ReadyToResume => PreparedSourceStatus::Ready,
+            state => {
+                self.phase = PreparedSourceStatus::Failed;
+                return Err(PreparedSourceError::Program(
+                    self.program
+                        .as_ref()
+                        .expect("resource preparation retains source")
+                        .invalid_state(match state {
+                            LiveProgramStatus::Finished => "finish during resource preparation",
+                            _ => "publish prepared effects",
+                        }),
+                ));
+            }
+        };
+        Ok(())
+    }
+
+    /// Drain the producer's resource publication for host preparation. The
+    /// returned context belongs to the source, never the independently displayed
+    /// reader; admission below is retention, not a presentation receipt.
+    pub fn take_effect_resource_publication(
+        &mut self,
+    ) -> Option<noon_runtime::RendererPublication<'_>> {
+        matches!(
+            self.phase,
+            PreparedSourceStatus::ResourcePublicationPending(_)
+        )
+        .then(|| {
+            self.program
+                .as_mut()
+                .expect("resource publication retains source")
+                .take_renderer_publication()
+        })
+    }
+
+    /// Admit only the exact producer publication after successful resource
+    /// preparation. The source becomes resumable at its original continuation.
+    pub fn admit_effect_resource_publication(
+        &mut self,
+        publication: PublicationContext,
+    ) -> Result<(), PreparedSourceError<C::Error>> {
+        let PreparedSourceStatus::ResourcePublicationPending(expected) = self.phase else {
+            return Err(PreparedSourceError::InvalidResourceState {
+                operation: "admit prepared effect resources",
+                state: self.status(),
+            });
+        };
+        if publication != expected {
+            return Err(PreparedSourceError::Program(
+                LiveProgramError::PublicationMismatch {
+                    expected,
+                    actual: publication,
+                },
+            ));
+        }
+        self.program
+            .as_mut()
+            .expect("resource publication retains source")
+            .admit_publication(publication)
+            .map_err(PreparedSourceError::Program)?;
+        self.phase = PreparedSourceStatus::Ready;
+        Ok(())
     }
 
     /// Transfer the initial independent reader exactly once. Future source work
@@ -244,7 +358,12 @@ impl<C: LiveContinuation> PreparedSource<C> {
     /// Abort/trap configurations require host-context teardown; this is not panic
     /// recovery on those targets or rollback of arbitrary external side effects.
     pub fn prepare_next(&mut self) -> Result<PreparedSourceStatus, PreparedSourceError<C::Error>> {
-        if self.pending.is_some() || self.phase != PreparedSourceStatus::Ready {
+        if self.pending.is_some()
+            || !matches!(
+                self.phase,
+                PreparedSourceStatus::Ready | PreparedSourceStatus::ResourceSegmentPending
+            )
+        {
             return Ok(self.status());
         }
         // Leave a failed, empty owner behind before invoking arbitrary source or
@@ -259,7 +378,7 @@ impl<C: LiveContinuation> PreparedSource<C> {
             boundary: self.boundary,
             published_until: self.published_until,
             pending: None,
-            phase: PreparedSourceStatus::Ready,
+            phase: self.phase,
         };
         self.phase = PreparedSourceStatus::Failed;
         attempt.prepare_one()?;
@@ -272,23 +391,30 @@ impl<C: LiveContinuation> PreparedSource<C> {
             .program
             .as_mut()
             .expect("ready source owns its live program");
-        if let Some(requirement) = program
-            .session()
-            .preflight_prepared_source(self.publisher.as_ref())
-            .map_err(PreparedSourceError::Prefix)?
-        {
-            self.phase = PreparedSourceStatus::ExecutionRequired(requirement);
-            return Ok(());
-        }
-        let status = program.resume().map_err(PreparedSourceError::Program)?;
-        let requirement = if status == LiveProgramStatus::PreparingResources {
-            Some(SourceExecutionRequirement::ExternalResources)
+        let status = if self.phase == PreparedSourceStatus::ResourceSegmentPending {
+            program.status()
         } else {
-            program
+            if let Some(requirement) = program
                 .session()
                 .preflight_prepared_source(self.publisher.as_ref())
                 .map_err(PreparedSourceError::Prefix)?
+            {
+                self.phase = PreparedSourceStatus::ExecutionRequired(requirement);
+                return Ok(());
+            }
+            program.resume().map_err(PreparedSourceError::Program)?
         };
+        if self.phase == PreparedSourceStatus::ResourceSegmentPending {
+            self.phase = PreparedSourceStatus::Ready;
+        }
+        if status == LiveProgramStatus::PreparingResources {
+            self.phase = PreparedSourceStatus::PreparingResources;
+            return Ok(());
+        }
+        let requirement = program
+            .session()
+            .preflight_prepared_source(self.publisher.as_ref())
+            .map_err(PreparedSourceError::Prefix)?;
         if let Some(requirement) = requirement {
             self.phase = PreparedSourceStatus::ExecutionRequired(requirement);
             return Ok(());

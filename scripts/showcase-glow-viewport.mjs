@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
+import { seekPausedGallery } from "./showcase-playback.mjs";
 
 export async function qualifyGlowViewport(browser, base, output, backend, cache) {
   const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
@@ -23,9 +24,12 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
     if (cache) await cache.install(context);
     if (fixture.noJspi) await disableAuthoringJspi(context);
     const page = await context.newPage();
-    const result = { fixture, outcome: "fail", pageErrors: [] };
+    const result = { fixture, outcome: "fail", pageErrors: [], consoleErrors: [] };
     report.results.push(result);
     page.on("pageerror", error => result.pageErrors.push(String(error)));
+    page.on("console", message => {
+      if (message.type() === "error") result.consoleErrors.push(message.text());
+    });
     try {
       await page.goto(`${base}/index.html?catalog=showcase&example=showcase-gpu-glow`);
       if (fixture.resize) {
@@ -47,8 +51,14 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
           !window.__noonExampleGallery.runInFlight &&
           controls?.dataset.busy === "false" && controls.dataset.durationKnown === "true" &&
           controls.dataset.buffering === "false" &&
-          Math.abs(Number(controls.dataset.elapsedSeconds) - 12) < 1e-7);
+          window.__noonExampleGallery.executionDiagnostics?.events.some(event =>
+            event.stage === "disposition" && event.disposition === "looped" && event.loopCount >= 1));
       }, null, { timeout: 120000 });
+      // Layout qualification selects its endpoint through the normal controls;
+      // independent unseeked first-pass pixels are checked by the live review.
+      if (await page.locator("#patch-status").getAttribute("data-state") !== "error") {
+        await seekPausedGallery(page, 12);
+      }
       result.state = await page.evaluate(() => {
         const canvas = document.querySelector("#scene");
         const rect = canvas.getBoundingClientRect();
@@ -75,6 +85,7 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
       assert.equal(metrics.metrics.objectCount, 11);
       assert.ok(metrics.metrics.presentedFrames > 0);
       assert.deepEqual(result.pageErrors, []);
+      assert.deepEqual(result.consoleErrors, []);
       result.outcome = "pass";
       console.log(`PASS glow viewport ${backend} ${fixture.name}: ${JSON.stringify(result.state)}`);
     } catch (error) {

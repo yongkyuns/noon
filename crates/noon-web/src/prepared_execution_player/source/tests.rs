@@ -11,6 +11,187 @@ fn pending_capacity(player: &PreparedExecutionPlayer) -> Option<usize> {
         .map(PrefixBatch::required_object_capacity)
 }
 
+fn navigation(rows: &[(&str, f64)]) -> noon::SceneSectionNavigation {
+    let mut scene = Scene::new();
+    for (name, time) in rows {
+        scene
+            .next_section_at(*name, noon::SectionType::Normal, *time)
+            .unwrap();
+    }
+    scene.section_navigation()
+}
+
+#[test]
+fn source_execution_requirement_json_maps_every_engine_reason() {
+    use noon::SourceExecutionRequirement as Requirement;
+    use noon_runtime::ReplayError;
+
+    let cases = [
+        (
+            Requirement::HostEffects,
+            serde_json::json!({"code":"host_effects"}),
+        ),
+        (
+            Requirement::HostCallbacks,
+            serde_json::json!({"code":"host_callbacks"}),
+        ),
+        (
+            Requirement::EffectiveDisplay,
+            serde_json::json!({"code":"effective_display"}),
+        ),
+        (
+            Requirement::NativeInput,
+            serde_json::json!({"code":"native_input"}),
+        ),
+        (Requirement::Signals, serde_json::json!({"code":"signals"})),
+        (
+            Requirement::ReplayUnavailable(ReplayError::UnsupportedDomain),
+            serde_json::json!({
+                "code":"replay_unavailable",
+                "detail": ReplayError::UnsupportedDomain.to_string()
+            }),
+        ),
+        (
+            Requirement::ExternalResources,
+            serde_json::json!({"code":"external_resources"}),
+        ),
+    ];
+    assert_eq!(source_execution_requirement_json(None), "null");
+    for (requirement, expected) in cases {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&source_execution_requirement_json(Some(
+                requirement
+            )))
+            .unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn prepared_player_exposes_its_retained_source_requirement() {
+    let mut player = staged_player(93, false);
+    assert_eq!(player.source_execution_requirement_json(), "null");
+    player.source.as_mut().unwrap().required =
+        Some(noon::SourceExecutionRequirement::HostCallbacks);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&player.source_execution_requirement_json())
+            .unwrap(),
+        serde_json::json!({"code":"host_callbacks"})
+    );
+}
+
+#[test]
+fn retention_metrics_distinguish_pending_extraction_from_adopted_charges() {
+    let mut player = staged_player(934, false);
+    let read = |player: &PreparedExecutionPlayer| {
+        serde_json::from_str::<serde_json::Value>(&player.prepared_retention_metrics_json())
+            .unwrap()
+    };
+    let before = read(&player);
+    assert_eq!(before["pending"]["batches"], 1);
+    assert!(before["pending"]["resourceBytes"].as_u64().unwrap() > 0);
+    assert_eq!(
+        before,
+        read(&player),
+        "observation cannot adopt or drain history"
+    );
+    player.reserve_source_prefix_capacity().unwrap();
+    player.deliver_source_prefix().unwrap();
+    let after = read(&player);
+    assert_eq!(after["pending"]["batches"], 0);
+    assert_eq!(after["pending"]["resourceBytes"], 0);
+    assert_eq!(after["extracted"], before["extracted"]);
+    assert_eq!(
+        after["reader"]["resourceBytes"],
+        before["extracted"]["resourceBytes"]
+    );
+    assert_eq!(
+        after["reader"]["historyPayloadBytes"],
+        before["extracted"]["historyPayloadBytes"]
+    );
+}
+
+#[test]
+fn staged_cues_follow_only_their_adopted_prefix_and_failed_adoption_keeps_old_cues() {
+    let mut player = staged_player(931, false);
+    player.set_section_navigation(navigation(&[("Start", 0.0)]));
+    player.source.as_mut().unwrap().staged_navigation = Some(navigation(&[
+        ("Start", 0.0),
+        ("Interior", 1.5),
+        ("Open", 2.0),
+    ]));
+    let mut foreign = staged_player(932, false);
+    player.source.as_mut().unwrap().pending = foreign.source.as_mut().unwrap().pending.take();
+
+    assert!(player.deliver_source_prefix().is_err());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&player.sections_json()).unwrap(),
+        serde_json::json!([{"index":0,"name":"Start","time":0.0}]),
+        "a rejected batch cannot publish its staged cue snapshot",
+    );
+
+    let mut player = staged_player(933, false);
+    player.set_section_navigation(navigation(&[("Start", 0.0)]));
+    player.source.as_mut().unwrap().staged_navigation = Some(navigation(&[
+        ("Start", 0.0),
+        ("Interior", 1.5),
+        ("Open", 2.0),
+    ]));
+    player.reserve_source_prefix_capacity().unwrap();
+    assert!(player.deliver_source_prefix().unwrap());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&player.sections_json()).unwrap(),
+        serde_json::json!([
+            {"index":0,"name":"Start","time":0.0},
+            {"index":1,"name":"Interior","time":1.5}
+        ]),
+        "matching append adopts interior cues but keeps the exclusive frontier hidden",
+    );
+}
+
+#[test]
+fn zero_duration_source_metadata_waits_for_a_matching_batch() {
+    let mut player = staged_player(934, false);
+    player.set_section_navigation(navigation(&[("Start", 0.0)]));
+    player.source.as_mut().unwrap().pending = None;
+    player.source.as_mut().unwrap().staged_navigation =
+        Some(navigation(&[("Start", 0.0), ("Deferred", 1.0)]));
+
+    assert!(!player.deliver_source_prefix().unwrap());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&player.sections_json()).unwrap(),
+        serde_json::json!([{"index":0,"name":"Start","time":0.0}]),
+        "zero-duration metadata is not selectable before history adopts its time",
+    );
+}
+
+#[test]
+fn terminal_source_delivery_adopts_its_endpoint_cue_only_after_append() {
+    let mut player = staged_player(935, true);
+    player.set_section_navigation(navigation(&[("Start", 0.0)]));
+    player.source.as_mut().unwrap().staged_navigation =
+        Some(navigation(&[("Start", 0.0), ("Terminal", 2.0)]));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&player.sections_json()).unwrap(),
+        serde_json::json!([{"index":0,"name":"Start","time":0.0}]),
+    );
+
+    player.reserve_source_prefix_capacity().unwrap();
+    assert!(player.deliver_source_prefix().unwrap());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&player.sections_json()).unwrap(),
+        serde_json::json!([
+            {"index":0,"name":"Start","time":0.0},
+            {"index":1,"name":"Terminal","time":2.0}
+        ]),
+    );
+    assert!(
+        player.source.is_none(),
+        "terminal adoption closes the source delivery cursor"
+    );
+}
+
 // Stage a real compiler-produced creation suffix, then release the source scene.
 // Reservation/retry can only use this retained batch; no source can be rerun.
 fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
@@ -51,7 +232,9 @@ fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
     player.source = Some(SourceDelivery {
         publisher,
         pending: Some(batch),
+        staged_navigation: None,
         required: None,
+        in_progress: None,
         finished: false,
     });
     player

@@ -25,6 +25,8 @@ on:
       - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/playground-profile-expectations.mjs"
+      - "scripts/playground-profile-expectations.test.mjs"
       - "scripts/ci-install-playwright-browser.sh"
       - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
@@ -74,6 +76,8 @@ on:
       - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/playground-profile-expectations.mjs"
+      - "scripts/playground-profile-expectations.test.mjs"
       - "scripts/ci-install-playwright-browser.sh"
       - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
@@ -431,6 +435,18 @@ jobs:
       - name: Install Playwright browser and system dependencies
         timeout-minutes: 15
         run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
+      - name: Start headless Firefox audio sink
+        if: matrix.browser == 'firefox'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pulseaudio pulseaudio-utils
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=noon_ci rate=48000
+          pactl set-default-sink noon_ci
+          pactl info
+          pactl list short sinks
       - name: Qualify the full gallery shard, including portable no-JSPI controls
         timeout-minutes: 20
         env:
@@ -438,6 +454,7 @@ jobs:
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_GALLERY_SHARD_INDEX: "${{ matrix.shard }}"
           NOON_GALLERY_SHARD_COUNT: "3"
+          NOON_SHOWCASE_PROFILE_GATE: strict
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery/${{ matrix.browser }}/shard-${{ matrix.shard }}
         run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
       # Keep exact shard evidence on failures, not on every passing run.
