@@ -75,6 +75,7 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
   assert.deepEqual(READINESS_STRATA, ["fresh-process-warm-resource-cache",
     "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"]);
   assert.ok(validateReadinessContract(contract, { strict: true }).some(error => /not been reviewed and frozen/.test(error)));
+  assert.match(contract.measurementDefinitions.runAcceptedAt, /queued before page acceptance/);
   const manifest = JSON.parse(await readFile(new URL("../web/python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
   assert.deepEqual(contract.sources.map(source => source.id), ["showcase-first-scene", "showcase-dynamic-scene"]);
   for (const source of contract.sources) {
