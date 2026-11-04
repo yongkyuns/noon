@@ -235,17 +235,27 @@ for (const mode of ["transferable", "shared"]) {
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(f.replies.some(reply => reply.type === "pause"), false,
         "prepared pause waits for the cached initial picture's matching receipt");
+      const resuming = f.request("resume");
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(f.replies.some(reply => reply.type === "resume"), false,
+        "later controls wait in the existing queue while presentation is pending");
       await f.present();
       const paused = await pausing;
       assert.equal(paused.playing, false);
       assert.ok(paused.commandTiming.presentationSettledEpochMs >= paused.commandTiming.acceptedEpochMs);
+      assert.ok(paused.commandTiming.enqueuedEpochMs <= paused.commandTiming.dequeuedEpochMs);
+      assert.ok(paused.commandTiming.dequeuedEpochMs <= paused.commandTiming.acceptedEpochMs);
       assert.deepEqual(paused.presentationReceipt, {
         session: 7, sequence: f.deltas[0].sequence, time: 0, unchanged: true,
       });
       assert.equal(f.count("pause-at"), 0, "cold pause cannot observe wall time");
-      const resumed = await f.request("resume");
+      const resumed = await resuming;
       assert.equal(resumed.playing, true);
       assert.ok(resumed.commandTiming.presentationSettledEpochMs >= resumed.commandTiming.acceptedEpochMs);
+      assert.ok(resumed.commandTiming.enqueuedEpochMs <= resumed.commandTiming.dequeuedEpochMs);
+      assert.ok(resumed.commandTiming.dequeuedEpochMs <= resumed.commandTiming.acceptedEpochMs);
+      assert.ok(resumed.commandTiming.dequeuedEpochMs > resumed.commandTiming.enqueuedEpochMs,
+        "the queue wait records the deliberately pending presentation interval");
       assert.deepEqual(resumed.presentationReceipt, paused.presentationReceipt,
         "resume reuses the already-presented cached frame without forcing a render");
       assert.ok(f.count("wake") >= 1, "the matching presentation admits subsequent source wakes");

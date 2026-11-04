@@ -142,6 +142,7 @@ export async function attachSemanticEngine(
   let externalInteractionTickTime = null;
   let pendingExternalContinuation = null;
   const controls = [];
+  const controlEnqueueEpochMs = new WeakMap();
   let diagnosticReady = false, diagnosticTerminal = false, diagnosticDisposition = false;
   let diagnosticCapabilities = null;
   const post = (payload, transfer = []) => {
@@ -1132,6 +1133,12 @@ export async function attachSemanticEngine(
       }
       while (controls.length && writable()) {
       const message = controls.shift();
+      const enqueuedEpochMs = controlEnqueueEpochMs.get(message);
+      controlEnqueueEpochMs.delete(message);
+      const queueTiming = Number.isFinite(enqueuedEpochMs) ? {
+        enqueuedEpochMs,
+        dequeuedEpochMs: performance.timeOrigin + performance.now(),
+      } : null;
       let rendererObservation = null;
       let debugFrame;
       let sourceCompleted;
@@ -1445,7 +1452,10 @@ export async function attachSemanticEngine(
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
           ...(sampleTiming === null ? {} : { sampleTiming }),
-          ...(commandTiming === null ? {} : { commandTiming }),
+          ...(commandTiming === null ? {} : { commandTiming: {
+            ...commandTiming,
+            ...(queueTiming === null ? {} : queueTiming),
+          } }),
           ...(audioAnchor === undefined ? {} : { audioAnchor }),
           ...(commandPublication === null ? {} : { commandPublication }),
           ...(presentationReceipt === null ? {} : { presentationReceipt }),
@@ -1747,6 +1757,7 @@ export async function attachSemanticEngine(
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
           throw new Error("semantic control queue is full; wait for pending commands before retrying");
         }
+        controlEnqueueEpochMs.set(message, performance.timeOrigin + performance.now());
         controls.push(message);
         if (message.type === "sample_to_authored_time") lastExternalSampleTime = message.time;
         void drain();

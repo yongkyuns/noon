@@ -180,6 +180,8 @@ export function readinessWarmSeekTargets(entry, actualEnd = entry?.duration) {
 export function readinessCommandReceipt(result, requestEpochMs, rendererSample = null) {
   const timing = result?.commandTiming;
   const acceptedEpochMs = Number.isFinite(timing?.acceptedEpochMs) ? timing.acceptedEpochMs : null;
+  const enqueuedEpochMs = Number.isFinite(timing?.enqueuedEpochMs) ? timing.enqueuedEpochMs : null;
+  const dequeuedEpochMs = Number.isFinite(timing?.dequeuedEpochMs) ? timing.dequeuedEpochMs : null;
   const publication = result?.commandPublication;
   const commandPublication = Number.isSafeInteger(publication?.session) && publication.session >= 0 &&
     Number.isSafeInteger(publication?.sequence) && publication.sequence >= 0
@@ -211,8 +213,20 @@ export function readinessCommandReceipt(result, requestEpochMs, rendererSample =
     presentationSettledEpochMs = result.receivedEpochMs;
     presentationSettlementSource = "endpoint receipt arrival upper bound";
   }
+  // These are endpoint wall intervals: request-to-enqueue includes port/event-loop delivery;
+  // dequeue-to-acceptance includes execution and awaits, not CPU time.
   return {
     commandPublication,
+    commandQueueTiming: {
+      enqueuedEpochMs,
+      dequeuedEpochMs,
+      requestToEnqueueMs: Number.isFinite(requestEpochMs) && Number.isFinite(enqueuedEpochMs)
+        ? enqueuedEpochMs - requestEpochMs : null,
+      queueWaitMs: Number.isFinite(enqueuedEpochMs) && Number.isFinite(dequeuedEpochMs)
+        ? dequeuedEpochMs - enqueuedEpochMs : null,
+      dequeueToAcceptanceMs: Number.isFinite(dequeuedEpochMs) && Number.isFinite(acceptedEpochMs)
+        ? acceptedEpochMs - dequeuedEpochMs : null,
+    },
     runtimeAcceptanceEpochMs: acceptedEpochMs,
     runtimeAcceptanceMs: Number.isFinite(acceptedEpochMs) && Number.isFinite(requestEpochMs)
       ? acceptedEpochMs - requestEpochMs : null,
@@ -221,6 +235,20 @@ export function readinessCommandReceipt(result, requestEpochMs, rendererSample =
     commandPresentationMs: Number.isFinite(presentationSettledEpochMs) && Number.isFinite(requestEpochMs)
       ? presentationSettledEpochMs - requestEpochMs : null,
     matchingPresentation,
+  };
+}
+
+export function readinessPreparedReaderLead(preparedPlayback) {
+  const observation = preparedPlayback?.observation;
+  const observedTime = preparedPlayback?.observedTime;
+  const frontier = observation?.frontier;
+  if (!Number.isFinite(observedTime) || !Number.isFinite(frontier)) return null;
+  return {
+    observedTime,
+    frontier,
+    leadSeconds: frontier - observedTime,
+    endClosed: Number.isFinite(observation.end),
+    buffering: observation.buffering === true,
   };
 }
 
@@ -436,12 +464,17 @@ export function summarizeReadiness(cases, contract) {
       const commands = {};
       const commandPhases = {};
       for (const row of observed) for (const command of row.commands ?? []) {
-        const values = commands[command.name] ??= { feedback: [], accepted: [], presented: [] };
+        const values = commands[command.name] ??= {
+          feedback: [], accepted: [], presented: [], requestToEnqueue: [], queueWait: [], dequeueToAcceptance: [],
+        };
         if (command.commandPhase !== undefined) commandPhases[command.name] = command.commandPhase;
         const samples = {
           feedback: command.uiFeedbackMs ?? command.feedbackMs,
           accepted: command.runtimeAcceptanceMs ?? command.acceptedMs,
           presented: command.commandPresentationMs ?? command.presentedMs,
+          requestToEnqueue: command.commandQueueTiming?.requestToEnqueueMs,
+          queueWait: command.commandQueueTiming?.queueWaitMs,
+          dequeueToAcceptance: command.commandQueueTiming?.dequeueToAcceptanceMs,
         };
         for (const [stage, value] of Object.entries(samples)) if (Number.isFinite(value)) values[stage].push(value);
       }
@@ -536,6 +569,19 @@ export function validateReadinessResults(cases, contract) {
             errors.push(`${source.id}/${arm}: missing ordered presentation-settled receipt`);
           }
           if (!Number.isFinite(command.commandPresentationMs)) errors.push(`${source.id}/${arm}: missing command presentation timing`);
+          const queueTiming = command.commandQueueTiming;
+          if (![queueTiming?.enqueuedEpochMs, queueTiming?.dequeuedEpochMs,
+            queueTiming?.requestToEnqueueMs, queueTiming?.queueWaitMs,
+            queueTiming?.dequeueToAcceptanceMs].every(Number.isFinite)) {
+            errors.push(`${source.id}/${arm}: missing command queue timing`);
+          } else if (!Number.isFinite(command.requestEpochMs) || !Number.isFinite(command.runtimeAcceptanceEpochMs) ||
+              queueTiming.enqueuedEpochMs < command.requestEpochMs ||
+              queueTiming.dequeuedEpochMs < queueTiming.enqueuedEpochMs ||
+              command.runtimeAcceptanceEpochMs < queueTiming.dequeuedEpochMs ||
+              queueTiming.requestToEnqueueMs < 0 || queueTiming.queueWaitMs < 0 ||
+              queueTiming.dequeueToAcceptanceMs < 0) {
+            errors.push(`${source.id}/${arm}: command queue timing is out of order`);
+          }
           if (!command.matchingPresentation) {
             errors.push(`${source.id}/${arm}: command has no command-correlated renderer receipt`);
           } else {

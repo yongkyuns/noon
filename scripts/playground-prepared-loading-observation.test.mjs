@@ -9,6 +9,7 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
   readinessRunTimingOriginErrors,
   readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
+  readinessPreparedReaderLead,
   READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
@@ -170,7 +171,10 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
     activeCadenceWindows: [{ p95Ms: 16, p99Ms: 17 }], bufferingEpisodes: [{ durationMs: 40 }],
     memory: { peakSampledRssBytes: 100 }, ...overrides });
   const summary = summarizeReadiness([
-    row("A"), row("A", { warmup: true, startup: { firstUsefulMs: 1 } }),
+    row("A", { commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12,
+      commandQueueTiming: { requestToEnqueueMs: 1, queueWaitMs: 2, dequeueToAcceptanceMs: 3 } },
+    { name: "seek", commandPhase: "completed-history-warm", feedbackMs: 6, acceptedMs: 9, presentedMs: 13 }] }),
+    row("A", { warmup: true, startup: { firstUsefulMs: 1 } }),
     row("A", { status: "failed", startup: { firstUsefulMs: 2 } }),
   ], contract).find(value => value.sourceId === sourceId && value.arm === "A" && value.stratum === stratum);
   assert.equal(summary.expectedStarts, 20);
@@ -184,6 +188,8 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   assert.equal("p99" in summary.startup.firstUsefulMs, false,
     "twenty-start strata do not publish an unsupported startup population p99");
   assert.equal(summary.commands.pause.feedback.n, 1);
+  assert.equal(summary.commands.pause.queueWait.n, 1);
+  assert.equal(summary.commands.pause.queueWait.p95, 2);
   assert.equal(summary.commands.pause.accepted.n, 1,
     "command acceptance remains a separately measured command milestone");
   assert.equal(summary.commands.seek.phase, "completed-history-warm");
@@ -284,6 +290,7 @@ test("strict readiness requires the first-submission bound and actual command re
     "actual commands still require endpoint acceptance timing");
   assert.ok(errors.some(error => /no command-correlated renderer receipt/.test(error)));
   assert.ok(errors.some(error => /missing ordered presentation-settled receipt/.test(error)));
+  assert.ok(errors.some(error => /missing command queue timing/.test(error)));
   assert.ok(errors.some(error => /incomplete starts/.test(error)));
   assert.ok(errors.some(error => /showcase-first-scene\/A: too few command observations/.test(error)),
     "other arms cannot make up a missing command sample population");
@@ -299,6 +306,15 @@ test("strict readiness requires the first-submission bound and actual command re
   };
   assert.ok(validateReadinessResults(wrongSequence, contract)
     .some(error => /does not match the command publication/.test(error)));
+  const orderedQueue = structuredClone(cases);
+  orderedQueue[0].commands[0].requestEpochMs = 1000;
+  orderedQueue[0].commands[0].runtimeAcceptanceEpochMs = 1012;
+  orderedQueue[0].commands[0].commandQueueTiming = { enqueuedEpochMs: 1002, dequeuedEpochMs: 1008,
+    requestToEnqueueMs: 2, queueWaitMs: 6, dequeueToAcceptanceMs: 4 };
+  assert.ok(!validateReadinessResults(orderedQueue, contract).some(error => /command queue timing/.test(error)));
+  orderedQueue[0].commands[0].commandQueueTiming.dequeuedEpochMs = 1001;
+  assert.ok(validateReadinessResults(orderedQueue, contract)
+    .some(error => /command queue timing is out of order/.test(error)));
 });
 
 test("strict replay arms require a full per-stratum completed-history seek sample set", async () => {
@@ -486,9 +502,12 @@ test("minimal timing preserves current renderer samples for first-submission bou
 
 test("readiness command receipts use endpoint timing and matching publication metadata", async () => {
   const measured = readinessCommandReceipt({
-    commandTiming: { acceptedEpochMs: 1012, presentationSettledEpochMs: 1018 },
+    commandTiming: { enqueuedEpochMs: 1011, dequeuedEpochMs: 1011.5,
+      acceptedEpochMs: 1012, presentationSettledEpochMs: 1018 },
     presentationReceipt: { session: 7, sequence: 9, time: 1.5, unchanged: false } }, 1010);
   assert.deepEqual(measured, { commandPublication: null, runtimeAcceptanceEpochMs: 1012, runtimeAcceptanceMs: 2,
+    commandQueueTiming: { enqueuedEpochMs: 1011, dequeuedEpochMs: 1011.5,
+      requestToEnqueueMs: 1, queueWaitMs: 0.5, dequeueToAcceptanceMs: 0.5 },
     presentationSettledEpochMs: 1018, presentationSettlementSource: "endpoint presentation-settled timestamp",
     commandPresentationMs: 8,
     matchingPresentation: { session: 7, sequence: 9, time: 1.5, unchanged: false } });
@@ -530,4 +549,17 @@ test("readiness command receipts use endpoint timing and matching publication me
   assert.match(source, /validateReusedHealthyInterpreter\(navigation, measured/);
   assert.match(source, /await page\.locator\("#replace-scene"\)\.click\(\)/);
   assert.match(source, /sameWorker: measuredWorker === seedWorker/);
+});
+
+test("prepared reader lead uses one Rust observation and reports closure and buffering", () => {
+  assert.deepEqual(readinessPreparedReaderLead({ observedTime: 2.25, observation: {
+    frontier: 5, end: null, buffering: true,
+  } }), { observedTime: 2.25, frontier: 5, leadSeconds: 2.75, endClosed: false, buffering: true });
+  assert.deepEqual(readinessPreparedReaderLead({ observedTime: 4, observation: {
+    frontier: 4, end: 4, buffering: false,
+  } }), { observedTime: 4, frontier: 4, leadSeconds: 0, endClosed: true, buffering: false });
+  assert.equal(readinessPreparedReaderLead({ observedTime: 5, observation: {
+    frontier: 4, end: 4, buffering: false,
+  } }).leadSeconds, -1, "unexpected negative lead remains visible instead of being clamped");
+  assert.equal(readinessPreparedReaderLead({ observedTime: 4 }), null);
 });
