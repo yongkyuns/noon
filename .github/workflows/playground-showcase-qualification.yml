@@ -4,7 +4,7 @@ run-name: Trace bloom hold receipt timing on exact 411a CI runtime
 on:
   push:
     branches: [codex/2421-showcase-diagnostic]
-    paths: [.github/workflows/playground-showcase-qualification.yml]
+    paths: [.github/workflows/playground-showcase-qualification.yml, scripts/showcase-live-review-diagnostic.patch]
 
 permissions:
   contents: read
