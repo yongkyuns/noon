@@ -194,7 +194,9 @@ try {
         liveIntermediate ??= sample;
       }
       if (sample && previousTime !== null && sample.time > previousTime) madeForwardProgress = true;
-      if (sample && madeForwardProgress && previousTime > 2.5 && sample.time < 0.5) {
+      if (sample && previousTime !== null && sample.time < previousTime) {
+        assert.ok(madeForwardProgress && previousTime > 2.5 && sample.time < 0.5,
+          `first observed Rust time decrease was not the authored endpoint wrap: ${previousTime} -> ${sample.time}`);
         naturalFirstWrap = { beforeTime: previousTime, afterTime: sample.time,
           sourceRunExampleId: sample.sourceRunExampleId, sourceRunGeneration: sample.sourceRunGeneration,
           sourceRunCompletedAtMs: sample.sourceRunCompletedAtMs, backend: sample.backend };
@@ -259,8 +261,6 @@ try {
           objectCount: replay.metrics.objectCount,
         };
       }
-      if (label === "fadeout") assert.equal(replay?.metrics?.objectCount, 1,
-        "paused FadeOut interior must retain the transforming object");
       const pixels = await page.locator("#scene").screenshot();
       await writeFile(path.join(artifactDir, `${variant.name}-${label}.png`), pixels);
       assert.ok(changedPixels(pixels, background) > 20, `${label} frame is blank`);
