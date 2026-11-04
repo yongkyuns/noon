@@ -157,7 +157,6 @@ pub fn program() -> Result<LiveProgram<GlassLens>, String> {
 mod tests {
     use super::*;
     use crate::{LiveProgramStatus, RustHostCallbackTable};
-    use noon_runtime::ReplayLimits;
 
     fn drive(
         program: &mut LiveProgram<GlassLens>,
@@ -223,8 +222,11 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "prepared-prefix")]
     #[test]
     fn prepared_prefix_adopts_glass_pixels_backdrop_and_dissolve_history() {
+        use noon_runtime::ReplayLimits;
+
         let (scene, mut continuation) = setup().unwrap();
         let mut source = scene.execution_session().unwrap();
         source
