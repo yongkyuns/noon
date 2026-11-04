@@ -13126,6 +13126,42 @@ mod tests {
     }
 
     #[test]
+    fn replacing_authoring_store_keeps_old_context_and_handles_alive() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let previous_store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
+        let mut previous_context = CanonicalAuthoringScene::with_store(Rc::clone(&previous_store));
+        let mut previous_handle = previous_context.scene.circle(1.0).unwrap();
+        let previous_nodes = previous_store.borrow().len();
+
+        let fresh_store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
+        let mut fresh_context = CanonicalAuthoringScene::with_store(Rc::clone(&fresh_store));
+        let _fresh_handle = fresh_context.scene.square(1.0).unwrap();
+        assert_eq!(previous_store.borrow().len(), previous_nodes);
+        assert_eq!(fresh_store.borrow().len(), 2);
+        assert!(!Rc::ptr_eq(
+            previous_context.scene.integration_store(),
+            fresh_context.scene.integration_store()
+        ));
+        let fresh_revision = fresh_context.scene.revision();
+        assert!(fresh_context
+            .bind_mobject(ObjectId::new(7), &previous_handle)
+            .is_err());
+        assert_eq!(fresh_context.scene.revision(), fresh_revision);
+
+        // This Rc is the authoring-store wrapper's owner. Scene contexts and
+        // typed handles retain their own shared store references after it drops.
+        drop(previous_store);
+        previous_handle.shift(2.0, -1.0).unwrap();
+        previous_context.scene.square(0.5).unwrap();
+        assert_eq!(
+            previous_context.scene.integration_store().borrow().len(),
+            previous_nodes + 1
+        );
+        assert_eq!(fresh_store.borrow().len(), 2);
+    }
+
+    #[test]
     fn camera_factory_binds_one_scene_local_role_before_execution() {
         use std::{cell::RefCell, rc::Rc};
 

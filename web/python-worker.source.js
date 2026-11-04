@@ -65,6 +65,7 @@ const semanticContexts = new Map();
 let nextSemanticContext = 0;
 let nextContinuationGeneration = 1;
 let activeAuthoringRun = null;
+let authoringStore = null;
 // Opaque source may modify imported modules/builtins. Never infer purity against
 // that environment on a later Run or retry/reconstruct the source to recover it.
 let authoringLibrariesPristine = true;
@@ -125,7 +126,7 @@ async function initializePyodide() {
   ]);
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const resourcesReadyAt = performance.now();
-  const authoringStore = new WasmAuthoringStore();
+  authoringStore = new WasmAuthoringStore();
   const authoringStoreCreatedAt = performance.now();
   self.noonCreateCanonicalAuthoringSceneContext = () => {
     const context = authoringStore.createSceneContext();
@@ -1943,6 +1944,13 @@ json.dumps(source_execution_proof(__noon_source))
     const sceneOnly = proof.admitted;
     authoringLibrariesPristine &&= sceneOnly;
     run.sourceSceneOnly = sceneOnly;
+    if (sceneOnly) {
+      // Admitted sources cannot carry factory handles between Runs. Their old
+      // Rust contexts and handles retain the prior arena through their own Rc.
+      const previousAuthoringStore = authoringStore;
+      authoringStore = new WasmAuthoringStore();
+      previousAuthoringStore.free();
+    }
     post("execution_diagnostic", { requestId,
       libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted",
       event: { stage: proof.reason?.code === "interpreter_tainted" ? "interpreter-trust" : "source-proof", ...proof },
