@@ -8,6 +8,7 @@ use noon_compile::{CompiledScalarSignalTimelineEntry, CompiledScalarSignalTrack}
 use noon_core::{evaluate_scalar_track, ReactiveValue, SemanticNodeId, SignalId};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg(feature = "prepared-prefix")]
 pub(crate) struct SignalTimelineCursor(HashMap<SemanticNodeId, usize>);
 
 #[derive(Clone, Debug)]
@@ -193,6 +194,7 @@ impl SignalTimelineSchedule {
         self.groups.is_empty()
     }
 
+    #[cfg(feature = "prepared-prefix")]
     pub(crate) fn cursor(&self) -> SignalTimelineCursor {
         SignalTimelineCursor(
             self.groups
@@ -205,6 +207,7 @@ impl SignalTimelineSchedule {
     /// Return only entries appended after a source-bound per-signal cursor.
     /// Independent signal groups need no global ordering; each group's append
     /// order is the authored order validated by `prepare_append_batch`.
+    #[cfg(feature = "prepared-prefix")]
     pub(crate) fn appended_since(
         &self,
         cursor: &SignalTimelineCursor,

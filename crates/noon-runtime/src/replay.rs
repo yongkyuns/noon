@@ -55,6 +55,7 @@ pub struct ReplayStats {
 struct Revision {
     time: f64,
     inverse: Option<CompiledReplayRevision>,
+    #[cfg(feature = "prepared-prefix")]
     scalar_timeline_entries: usize,
 }
 #[derive(Clone, Debug)]
@@ -226,6 +227,7 @@ impl SceneInstance {
         history.revisions.push(Revision {
             time: self.frame.time,
             inverse: None,
+            #[cfg(feature = "prepared-prefix")]
             scalar_timeline_entries: cost,
         });
         history.applied = history.revisions.len();
@@ -374,6 +376,7 @@ impl SceneInstance {
         history.revisions.push(Revision {
             time: self.frame.time,
             inverse,
+            #[cfg(feature = "prepared-prefix")]
             scalar_timeline_entries: 0,
         });
         history.applied = history.revisions.len();
