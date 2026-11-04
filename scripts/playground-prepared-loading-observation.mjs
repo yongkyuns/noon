@@ -431,9 +431,14 @@ export function validateReadinessResults(cases, contract) {
         }
         for (const command of row.commands ?? []) {
           if (command.name === "seek" && command.commandPhase === "completed-history-warm") {
+            const roundoff = 8 * Number.EPSILON * Math.max(1, row.durationSeconds);
+            if (!Number.isFinite(row.actualClosedEnd) || !Number.isFinite(row.durationSeconds) ||
+                Math.abs(row.actualClosedEnd - row.durationSeconds) > roundoff) {
+              errors.push(`${source.id}/${arm}: actual closed endpoint differs from the storyboard duration`);
+            }
             if (!Number.isFinite(command.targetTime) || command.targetTime < 0 ||
-                !Number.isFinite(row.durationSeconds) || command.targetTime > row.durationSeconds) {
-              errors.push(`${source.id}/${arm}: completed-history seek target is outside the authored range`);
+                !Number.isFinite(row.actualClosedEnd) || command.targetTime > row.actualClosedEnd) {
+              errors.push(`${source.id}/${arm}: completed-history seek target is outside the actual closed range`);
             }
             if (command.matchingPresentation?.time !== command.targetTime || command.receiptTime !== command.targetTime) {
               errors.push(`${source.id}/${arm}: completed-history seek receipt does not match its exact target`);

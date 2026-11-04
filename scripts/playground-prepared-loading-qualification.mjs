@@ -962,6 +962,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assertNaturalFirstPassPublication(showcaseEntry, actualEnd, actualEnd);
     const seekTargets = readinessWarmSeekTargets(showcaseEntry, actualEnd);
     assert.equal(seekTargets.length, 5, "manifest does not supply five distinct warm-seek targets");
+    replayRow.actualClosedEnd = actualEnd;
     replayRow.warmSeekTargets = seekTargets;
     if (replayCurrent.controls?.playing === "true") replayCurrent = await readinessCommand(page, replayRow, false);
     for (const targetTime of seekTargets) replayCurrent = await readinessWarmSeek(page, replayRow, targetTime);

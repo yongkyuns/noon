@@ -284,10 +284,26 @@ test("strict replay arms require a full per-stratum completed-history seek sampl
   assert.ok(!errors.some(error => error === `${sourceId}/B/${READINESS_STRATA[0]}: too few completed-history seek observations`),
     "play/pause counts cannot replace the named seek sample floor");
   row.durationSeconds = contract.sources[0].durationSeconds;
-  row.commands[0].targetTime = row.durationSeconds;
+  row.actualClosedEnd = row.durationSeconds + 2e-15;
+  row.commands[0].targetTime = row.actualClosedEnd;
+  row.commands[0].receiptTime = row.actualClosedEnd;
+  row.commands[0].matchingPresentation.time = row.actualClosedEnd;
   errors = validateReadinessResults([row], contract);
-  assert.ok(errors.some(error => /completed-history seek receipt does not match its exact target/.test(error)),
-    "a matching publication identity cannot stand in for the requested authored time");
+  assert.ok(!errors.some(error => /actual closed endpoint differs|outside the actual closed range/.test(error)),
+    "one-ULP Rust endpoint roundoff remains valid when the exact receipt matches");
+  row.commands[0].targetTime = row.actualClosedEnd + 1e-6;
+  row.commands[0].receiptTime = row.commands[0].targetTime;
+  row.commands[0].matchingPresentation.time = row.commands[0].targetTime;
+  errors = validateReadinessResults([row], contract);
+  assert.ok(errors.some(error => /outside the actual closed range/.test(error)),
+    "a seek beyond the actual closed endpoint is rejected");
+  row.commands[0].targetTime = row.actualClosedEnd;
+  row.commands[0].receiptTime = row.actualClosedEnd;
+  row.commands[0].matchingPresentation.time = row.actualClosedEnd;
+  row.actualClosedEnd = row.durationSeconds + 1e-6;
+  errors = validateReadinessResults([row], contract);
+  assert.ok(errors.some(error => /actual closed endpoint differs from the storyboard duration/.test(error)),
+    "an actual endpoint outside the existing storyboard roundoff allowance is rejected");
 });
 
 test("cold-network evidence records actual external responses and job-cache bypass", () => {
