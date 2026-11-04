@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -30,6 +31,78 @@ const liveMathAnimations = {
   'showcase-latex-create': [['Create', 0, 1], ['Write', 1, 2]],
   'showcase-text-math': [['Write', 0, 1.2]],
 };
+async function qualifyTriangleHistory(page, duration, initialDiagnostics) {
+  await page.evaluate(async () => {
+    window.__triangleControlReceipts = [];
+    const { ExecutionWorkerClient } = await import('./execution-worker-client.js');
+    for (const name of ['pause', 'seek']) {
+      const original = ExecutionWorkerClient.prototype[name];
+      ExecutionWorkerClient.prototype[name] = async function (...args) {
+        const result = await original.apply(this, args);
+        window.__triangleControlReceipts.push({ operation: name, requested: args[0] ?? null,
+          time: result?.time, playing: result?.playing, receipt: result?.presentationReceipt ?? null });
+        return result;
+      };
+    }
+  });
+  const captures = [];
+  for (const target of [3, 12, 21]) {
+    const time = await seekPausedGallery(page, duration, target);
+    const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+    const diagnostics = await page.evaluate(() => window.__noonExampleGallery.executionDiagnostics);
+    assert.equal(diagnostics.runRequestId, initialDiagnostics.runRequestId,
+      'history control changed the source request identity');
+    assert.deepEqual(diagnostics.context, initialDiagnostics.context,
+      'history control changed the source execution context');
+    assert.equal(diagnostics.events.filter(event => event.stage === 'source-proof').length, 1,
+      'history control reran source proof');
+    assert.equal(diagnostics.events.filter(event => event.stage === 'attached').length, 1,
+      'history control reattached a source');
+    assert.ok(Math.abs(Number(metrics.metrics.time) - time) < 1e-7,
+      'renderer did not settle at the selected authored time');
+    const pixels = await page.locator('#scene').screenshot();
+    captures.push({ time, pixelSha256: createHash('sha256').update(pixels).digest('hex'),
+      metrics: { time: metrics.metrics.time, session: metrics.metrics.presentedSession,
+        presentedFrames: metrics.metrics.presentedFrames, objectCount: metrics.metrics.objectCount,
+        bufferedDeltas: metrics.metrics.bufferedDeltas },
+      preparedRetention: metrics.engineMetrics?.preparedRetention ?? null });
+  }
+  assert.equal(new Set(captures.map(capture => capture.pixelSha256)).size, 3,
+    'Triangle authored checkpoints must render distinct pictures');
+  const rewindTime = await seekPausedGallery(page, duration, 12);
+  const rewindMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+  const rewindPixels = await page.locator('#scene').screenshot();
+  const rewindSha256 = createHash('sha256').update(rewindPixels).digest('hex');
+  assert.equal(rewindSha256, captures[1].pixelSha256,
+    'rewinding to 12 seconds must reproduce the retained canvas picture exactly');
+  const receipts = await page.evaluate(() => window.__triangleControlReceipts);
+  const pause = receipts.find(receipt => receipt.operation === 'pause');
+  assert.equal(pause?.playing, false, 'playback controls did not pause the looping source');
+  assert.ok(Number.isSafeInteger(pause?.receipt?.sequence), 'pause lacked its renderer receipt');
+  const seeks = receipts.filter(receipt => receipt.operation === 'seek');
+  assert.equal(seeks.length, 4);
+  for (const [index, receipt] of seeks.entries()) {
+    const expected = [3, 12, 21, 12][index];
+    assert.equal(receipt.time, expected);
+    assert.equal(receipt.receipt?.time, expected);
+    assert.equal(receipt.receipt?.session, pause.receipt.session);
+    assert.ok(Number.isSafeInteger(receipt.receipt?.sequence));
+    if (index > 0) assert.ok(receipt.receipt.sequence > seeks[index - 1].receipt.sequence,
+      'renderer receipts must preserve seek order');
+  }
+  const diagnostics = await page.evaluate(() => window.__noonExampleGallery.executionDiagnostics);
+  assert.equal(diagnostics.runRequestId, initialDiagnostics.runRequestId);
+  assert.deepEqual(diagnostics.context, initialDiagnostics.context);
+  for (const stage of ['source-proof', 'attached', 'source-complete']) {
+    assert.equal(diagnostics.events.filter(event => event.stage === stage).length, 1,
+      `history control changed ${stage} count`);
+  }
+  return { receipts, captures, rewind: { time: rewindTime, pixelSha256: rewindSha256,
+    exactCanvasMatch: true, metrics: { time: rewindMetrics.metrics.time,
+      session: rewindMetrics.metrics.presentedSession,
+      presentedFrames: rewindMetrics.metrics.presentedFrames,
+      objectCount: rewindMetrics.metrics.objectCount } } };
+}
 await mkdir(artifacts, { recursive: true });
 let server, httpServerState, browser, runtimeCache;
 let completed = false;
@@ -472,6 +545,10 @@ try {
               result.profileGate.status = 'matched';
               delete result.profileGate.reason;
             }
+          }
+          if (profileGateMode !== 'disabled' && entry.id === 'showcase-triangle-light') {
+            result.playbackHistory = await qualifyTriangleHistory(page, result.authoredDuration,
+              result.executionDiagnostics);
           }
           assert.deepEqual(result.errors, []);
           if (external) assert.equal((await json(`build-info.json?t=${Date.now()}`)).commit, revision.commit, 'public revision changed during gallery validation');
