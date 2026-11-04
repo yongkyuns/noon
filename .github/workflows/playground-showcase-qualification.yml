@@ -1,5 +1,5 @@
 name: Showcase capture timing diagnostic
-run-name: Verify bloom endpoint capture fix
+run-name: Trace bloom hold receipt timing on exact 411a CI runtime
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
       - name: Preserve diagnostic patch and check out exact CI source
         shell: bash
         env:
-          SOURCE_REVISION: d28af55345aa07b3cf9ce03bd7ce9a5993f74014
+          SOURCE_REVISION: becce6a1b03e2b60e79f0bc17ac8e9c391c7a3f7
           TEMP_EVENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -36,20 +36,20 @@ jobs:
       - name: Download exact CI runtime
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: 13353893838
-          run-id: 41890852960
+          artifact-ids: 13361439483
+          run-id: 41910671745
           github-token: ${{ github.token }}
           path: web
       - name: Download original capture report and oracle
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: 13356829442
-          run-id: 41890852960
+          artifact-ids: 13364289458
+          run-id: 41910671745
           github-token: ${{ github.token }}
           path: browser-smoke-artifacts/showcase/webgl
       - name: Verify exact pinned-source runtime and original capture report
         env:
-          EXPECTED_SOURCE: d28af55345aa07b3cf9ce03bd7ce9a5993f74014
+          EXPECTED_SOURCE: becce6a1b03e2b60e79f0bc17ac8e9c391c7a3f7
         run: |
           set -euo pipefail
           test "$(cat browser-smoke-artifacts/showcase-diagnostic/webgl/source.txt)" = "$EXPECTED_SOURCE"
