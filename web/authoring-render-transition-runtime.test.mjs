@@ -1048,9 +1048,9 @@ test("optional raw cadence capture keeps ordinal gaps across ordinary cadence re
   assert.equal(raw.enabled, true);
   assert.equal(raw.latestOrdinal, 3);
   assert.deepEqual(JSON.parse(JSON.stringify(raw.samples)), [
-    { ordinal: 1, session: 12, intervalMs: 16 },
-    { ordinal: 2, session: 12, intervalMs: 16 },
-    { ordinal: 3, session: 12, intervalMs: 17 },
+    { ordinal: 1, session: 12, presentedAtMs: 116, intervalMs: 16 },
+    { ordinal: 2, session: 12, presentedAtMs: 132, intervalMs: 16 },
+    { ordinal: 3, session: 12, presentedAtMs: 3017, intervalMs: 17 },
   ], "the optional ring preserves all gaps in chronological order across reset windows");
   vm.runInContext("disposeRenderer()", harness.context);
   const replaced = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);

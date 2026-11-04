@@ -836,7 +836,7 @@ export function createAuthoringRenderController(host) {
           rawPresentationIntervalOrdinal += 1;
           if (rawPresentationIntervalCaptureEnabled) {
             const sample = { ordinal: rawPresentationIntervalOrdinal,
-              session: presentedSession, intervalMs };
+              session: presentedSession, presentedAtMs, intervalMs };
             if (rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity) {
               rawPresentationIntervalSamples.push(sample);
             } else {
@@ -1168,6 +1168,7 @@ export function createAuthoringRenderController(host) {
       ...(includePresentationIntervals === true ? {
         rawPresentationIntervals: {
           enabled: rawPresentationIntervalCaptureEnabled,
+          capacity: rawPresentationIntervalCapacity,
           generation: rawPresentationIntervalGeneration,
           latestOrdinal: rawPresentationIntervalOrdinal,
           ordinalOverflow: rawPresentationIntervalOrdinalOverflow,
