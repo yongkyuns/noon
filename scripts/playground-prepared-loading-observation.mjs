@@ -59,6 +59,30 @@ export function readinessPresentationMatchesRun(attachedPublication, latestPrese
     Number.isFinite(runStartEpochMs) && originMs + latestPresentation.presentedAtMs >= runStartEpochMs;
 }
 
+export function readinessRunTimingOriginErrors(startup) {
+  const errors = [];
+  const accepted = startup?.runAcceptedAtEpochMs;
+  const started = startup?.sourceRunStartedAtEpochMs;
+  const completed = startup?.sourceRunCompletedAtEpochMs;
+  if (!Number.isFinite(accepted)) errors.push("missing accepted Run timestamp");
+  if (!Number.isFinite(started)) errors.push("missing source start timestamp");
+  if (!Number.isFinite(completed)) errors.push("missing source completion timestamp");
+  if (Number.isFinite(accepted) && Number.isFinite(started) && started < accepted) {
+    errors.push("source start predates accepted Run");
+  }
+  if (Number.isFinite(started) && Number.isFinite(completed) && completed < started) {
+    errors.push("source completion predates source start");
+  }
+  if (Number.isFinite(accepted) && Number.isFinite(completed) && completed < accepted) {
+    errors.push("source completion predates accepted Run");
+  }
+  if (Number.isFinite(accepted) && Number.isFinite(completed) &&
+      startup?.sourceCompleteMs !== completed - accepted) {
+    errors.push("source completion duration is not measured from accepted Run");
+  }
+  return errors;
+}
+
 export function readinessReplayCycleEvidence(observations, { restartPublication, requestEpochMs,
   durationSeconds, terminalHoldStartSeconds, clockToleranceSeconds, acceptsTerminalPublication }) {
   if (!Array.isArray(observations) || !Number.isSafeInteger(restartPublication?.session) ||
@@ -387,7 +411,8 @@ export function summarizeReadiness(cases, contract) {
         attemptedStarts: rows.length,
         observedStarts: observed.length,
         failedStarts: rows.filter(row => row.status !== "observed").length,
-        startup: Object.fromEntries(["shellReadyObservedUpperMs", "interpreterReadyObservedUpperMs",
+        startup: Object.fromEntries(["navigationShellReadyObservedUpperMs", "shellReadyObservedUpperMs",
+          "interpreterReadyObservedUpperMs", "firstControlsReadyObservedUpperMs", "sourceCompleteMs",
           "firstReaderAttachedObservedUpperMs", "firstSubmittedMs", "firstUsefulMs"].map(key =>
           [key, startupDistribution(observed.map(row => row.startup?.[key]))])),
         commands: commandSummary,
@@ -417,7 +442,14 @@ export function validateReadinessResults(cases, contract) {
         if ((row.profileValidationErrors ?? []).length) errors.push(`${source.id}/${arm}: profile trace invalid`);
         const startupFields = ["firstUsefulMs", "firstSubmittedMs"];
         if (row.arm === "A" || row.arm === "C") startupFields.push(
-          "shellReadyObservedUpperMs", "interpreterReadyObservedUpperMs");
+          "navigationShellReadyObservedUpperMs", "shellReadyObservedUpperMs",
+          "interpreterReadyObservedUpperMs", "firstControlsReadyObservedUpperMs",
+          "runAcceptedAtEpochMs", "sourceRunStartedAtEpochMs", "sourceRunCompletedAtEpochMs",
+          "sourceCompleteMs");
+        if (row.arm === "A" || row.arm === "C") {
+          errors.push(...readinessRunTimingOriginErrors(row.startup)
+            .map(error => `${source.id}/${arm}: ${error}`));
+        }
         if (row.arm === "A") startupFields.push("firstReaderAttachedObservedUpperMs");
         for (const key of startupFields) {
           if (!Number.isFinite(row.startup?.[key])) errors.push(`${source.id}/${arm}: missing ${key}`);

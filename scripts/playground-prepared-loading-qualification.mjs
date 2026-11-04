@@ -20,7 +20,8 @@ import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   activeCadenceWindows, summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
-  readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets } from "./playground-prepared-loading-observation.mjs";
+  readinessRunTimingOriginErrors, readinessReplayCycleEvidence,
+  readinessRendererSamples, readinessWarmSeekTargets } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -241,6 +242,7 @@ async function observation(page) {
       presentationProbe: renderProbe ? { count: renderProbe.samples.length, error: renderProbe.error,
         uiEventCount: renderProbe.uiEvents.length, droppedUiEvents: renderProbe.droppedUiEvents } : null,
       controls: controls ? { ...controls.dataset,
+        toggleEnabled: controls.querySelector(".playback-toggle")?.disabled === false,
         seekEnd: scrubber && !scrubber.disabled ? Number(scrubber.max) : null } : null,
       inFlight: gallery?.runInFlight, selected: gallery?.selectedExampleId,
       status: document.querySelector("#patch-status")?.dataset.state,
@@ -641,11 +643,13 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     }
     replayRow.startup.shellReadyLimitation = "retained replay reuses the loaded page and interpreter";
     replayRow.startup.firstReaderLimitation = "retained replay reuses the original source reader";
-    let startupStarted = sourceStarted;
     let navigation = await observation(page);
+    sourceRow.startup.navigationShellReadyObservedUpperMs = performance.now() - sourceStarted;
+    sourceRow.startup.navigationShellReadyBasis = "navigation start to initialized gallery shell";
+    sourceRow.startup.shellReadyObservedUpperMs = 0;
+    sourceRow.startup.shellReadyBasis = "the initialized gallery shell accepts Run immediately";
     if (stratum === "reused-healthy-interpreter") {
       if (!Number.isFinite(navigation.run?.sourceRunStartedAtMs)) {
-        startupStarted = performance.now();
         await page.locator("#replace-scene").click();
         await waitForApplied(page, source.id);
       }
@@ -684,13 +688,13 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         probe.samples = []; probe.keys.clear(); probe.uiEvents = []; probe.commandResults = [];
         probe.droppedUiEvents = 0; probe.error = null;
       });
-      startupStarted = performance.now();
       await page.locator("#replace-scene").click();
       await page.waitForFunction(seed => {
         const gallery = globalThis.__noonExampleGallery;
         const run = gallery?.runPhaseMetrics;
         const diagnostics = gallery?.executionDiagnostics;
         return run?.runGeneration !== seed.runGeneration &&
+          Number.isFinite(run?.runAcceptedAtMs) &&
           Number.isFinite(run?.sourceRunStartedAtMs) &&
           Number.isSafeInteger(diagnostics?.runRequestId) && diagnostics.runRequestId !== seed.runRequestId &&
           Number.isSafeInteger(diagnostics?.interpreterGeneration) &&
@@ -717,15 +721,16 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       assert.deepEqual(reuseErrors, [], "second source Run did not reuse the verified healthy interpreter");
       navigation = measured;
       sourceRow.startup.shellReadyObservedUpperMs = 0;
-      sourceRow.startup.shellReadyBasis = "gallery shell was already present before the measured Run";
-      sourceRow.startup.interpreterReadyObservedUpperMs = 0;
-      sourceRow.startup.interpreterReadyBasis = "same live pristine Python worker was verified before the measured Run";
+      sourceRow.startup.shellReadyBasis = "the initialized gallery shell accepts Run immediately";
     }
-    if (sourceRow.startup.shellReadyObservedUpperMs === undefined) {
-      sourceRow.startup.shellReadyObservedUpperMs = performance.now() - startupStarted;
+    let sourceRunAcceptedEpochMs = Number.isFinite(navigation.run?.runAcceptedAtMs)
+      ? navigation.originMs + navigation.run.runAcceptedAtMs : null;
+    if (sourceRunAcceptedEpochMs !== null) {
+      sourceRow.startup.runAcceptedAtEpochMs = sourceRunAcceptedEpochMs;
     }
     let sourceRunStart = Number.isFinite(navigation.run?.sourceRunStartedAtMs)
       ? navigation.originMs + navigation.run.sourceRunStartedAtMs : null;
+    if (sourceRunStart !== null) sourceRow.startup.sourceRunStartedAtEpochMs = sourceRunStart;
     let lastCaptureKey = null;
     const lastUsefulCaptureAt = new Map();
     const read = async (targetRow = sourceRow) => {
@@ -742,6 +747,16 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       }
       if (sourceRunStart === null && Number.isFinite(sample.run?.sourceRunStartedAtMs)) {
         sourceRunStart = sample.originMs + sample.run.sourceRunStartedAtMs;
+        targetRow.startup.sourceRunStartedAtEpochMs = sourceRunStart;
+      }
+      if (targetRow === sourceRow && sourceRunAcceptedEpochMs === null &&
+          Number.isFinite(sample.run?.runAcceptedAtMs)) {
+        sourceRunAcceptedEpochMs = sample.originMs + sample.run.runAcceptedAtMs;
+        targetRow.startup.runAcceptedAtEpochMs = sourceRunAcceptedEpochMs;
+      }
+      if (targetRow === sourceRow && sourceRunAcceptedEpochMs !== null && sourceRunStart !== null) {
+        targetRow.startup.interpreterReadyObservedUpperMs = sourceRunStart - sourceRunAcceptedEpochMs;
+        targetRow.startup.interpreterReadyBasis = "clientForRun resolves before the source start timestamp";
       }
       const events = diagnostic?.events ?? [];
       const attachedPublication = events.find(event => event.stage === "attached")?.publication;
@@ -751,25 +766,26 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       const firstSessionPresentationEpochMs = Number.isFinite(sample.metrics?.performanceTimeOriginMs) &&
         Number.isFinite(sample.metrics?.firstPresentedSessionAtMs)
         ? sample.metrics.performanceTimeOriginMs + sample.metrics.firstPresentedSessionAtMs : null;
-      if (targetRow === sourceRow && targetRow.startup.interpreterReadyObservedUpperMs === undefined &&
-          Number.isSafeInteger(diagnostic?.interpreterGeneration) &&
-          sourceRunStart !== null) {
-        targetRow.startup.interpreterReadyObservedUpperMs = sample.epochMs - sourceRunStart;
-      }
       if (targetRow === sourceRow && initialArm === "A" &&
           targetRow.startup.firstReaderAttachedObservedUpperMs === undefined &&
           events.some(event => event.stage === "attached") &&
-          sourceRunStart !== null) {
-        targetRow.startup.firstReaderAttachedObservedUpperMs = sample.epochMs - sourceRunStart;
+          sourceRunAcceptedEpochMs !== null) {
+        targetRow.startup.firstReaderAttachedObservedUpperMs = sample.epochMs - sourceRunAcceptedEpochMs;
       }
       const hasCurrentRunPresentation = readinessPresentationMatchesRun(presentationAnchor,
         latestPresentation, sample.metrics?.performanceTimeOriginMs, targetRunStart);
+      if (targetRow === sourceRow && sourceRunAcceptedEpochMs !== null && hasCurrentRunPresentation &&
+          sample.controls?.toggleEnabled === true &&
+          targetRow.startup.firstControlsReadyObservedUpperMs === undefined) {
+        targetRow.startup.firstControlsReadyObservedUpperMs = sample.epochMs - sourceRunAcceptedEpochMs;
+      }
       if (targetRow === sourceRow && hasCurrentRunPresentation &&
           sourceRunStart !== null &&
+          sourceRunAcceptedEpochMs !== null &&
           firstSessionPresentationEpochMs !== null && firstSessionPresentationEpochMs >= sourceRunStart &&
           Number.isSafeInteger(attachedPublication?.session) &&
           targetRow.startup.firstRenderSubmissionCompleteUpperMs === undefined) {
-        targetRow.startup.firstRenderSubmissionCompleteUpperMs = firstSessionPresentationEpochMs - sourceRunStart;
+        targetRow.startup.firstRenderSubmissionCompleteUpperMs = firstSessionPresentationEpochMs - sourceRunAcceptedEpochMs;
       }
       const metric = sample.metrics;
       targetRow.rendererGpuIdentity = metric?.rendererGpuIdentity ?? targetRow.rendererGpuIdentity ?? null;
@@ -790,9 +806,10 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
           const bytes = await page.locator("#scene").screenshot();
           const ink = sceneInkPixels(PNG.sync.read(bytes));
           const captureEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
-          if (ink >= 128 && sourceRunStart !== null) {
-            targetRow.startup.firstUsefulMs = captureEpochMs - (targetRow === sourceRow
-              ? sourceRunStart : targetRow.replayStartedAtEpochMs);
+          const measurementOriginEpochMs = targetRow === sourceRow
+            ? sourceRunAcceptedEpochMs : targetRow.replayStartedAtEpochMs;
+          if (ink >= 128 && Number.isFinite(measurementOriginEpochMs)) {
+            targetRow.startup.firstUsefulMs = captureEpochMs - measurementOriginEpochMs;
             targetRow.startup.usefulObservationUpperMs = targetRow.startup.firstUsefulMs;
             targetRow.firstUsefulCaptureEpochMs = captureEpochMs;
             await writeFile(path.join(output, `${source.id}-${trial}-${targetRow.arm}-${stratum}-first.png`), bytes);
@@ -829,8 +846,13 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     }
     assert.ok(Number.isFinite(current.run?.sourceRunCompletedAtMs) && current.inFlight === false &&
       lifecycleComplete(current), "source cleanup, terminal adoption, or disposition was not observed before timeout");
-    assert.ok(sourceRunStart !== null, "source invocation start time is unavailable");
-    sourceRow.startup.sourceCompleteMs = navigation.originMs + current.run.sourceRunCompletedAtMs - sourceRunStart;
+    sourceRow.startup.sourceRunCompletedAtEpochMs = current.originMs + current.run.sourceRunCompletedAtMs;
+    if (Number.isFinite(sourceRunAcceptedEpochMs)) {
+      sourceRow.startup.sourceCompleteMs =
+        sourceRow.startup.sourceRunCompletedAtEpochMs - sourceRunAcceptedEpochMs;
+    }
+    const timingOriginErrors = readinessRunTimingOriginErrors(sourceRow.startup);
+    assert.deepEqual(timingOriginErrors, [], "source run acceptance/start/completion timestamps are missing or reversed");
     sourceRow.startup.sourceRunTiming = current.run.pythonWorkerRunTiming ?? null;
     sourceRow.startup.renderPreparation = current.run.renderPreparation ?? null;
     sourceRow.endTrace = current.executionDiagnostics;

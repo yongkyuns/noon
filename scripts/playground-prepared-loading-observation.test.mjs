@@ -7,6 +7,7 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   activeCadenceWindows, summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
+  readinessRunTimingOriginErrors,
   readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
   READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
@@ -359,6 +360,22 @@ test("first render and useful picture must belong to the measured run", () => {
     "the original source attachment cannot identify a replacement replay receiver");
   assert.equal(readinessPresentationMatchesRun(restart, replayFrame, 1000, 1110), true,
     "the restart receipt identifies the replay receiver's first-useful picture");
+});
+
+test("Run startup origins are required and ordered independently from source start", () => {
+  assert.deepEqual(readinessRunTimingOriginErrors({ runAcceptedAtEpochMs: 100,
+    sourceRunStartedAtEpochMs: 140, sourceRunCompletedAtEpochMs: 300, sourceCompleteMs: 200 }), []);
+  assert.ok(readinessRunTimingOriginErrors({ sourceRunStartedAtEpochMs: 140,
+    sourceRunCompletedAtEpochMs: 300, sourceCompleteMs: 160 }).includes("missing accepted Run timestamp"));
+  assert.ok(readinessRunTimingOriginErrors({ runAcceptedAtEpochMs: 150,
+    sourceRunStartedAtEpochMs: 140, sourceRunCompletedAtEpochMs: 300, sourceCompleteMs: 150 })
+    .includes("source start predates accepted Run"));
+  assert.ok(readinessRunTimingOriginErrors({ runAcceptedAtEpochMs: 100,
+    sourceRunStartedAtEpochMs: 140, sourceRunCompletedAtEpochMs: 130, sourceCompleteMs: 30 })
+    .includes("source completion predates source start"));
+  assert.ok(readinessRunTimingOriginErrors({ runAcceptedAtEpochMs: 100,
+    sourceRunStartedAtEpochMs: 140, sourceRunCompletedAtEpochMs: 300, sourceCompleteMs: 160 })
+    .includes("source completion duration is not measured from accepted Run"));
 });
 
 test("replay requires its own terminal hold, near-end clock and newer postwrap frame", () => {
