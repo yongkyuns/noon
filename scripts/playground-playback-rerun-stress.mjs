@@ -54,9 +54,16 @@ async function memoryBuildIdentity() {
 
 const memory = memoryEnabled ? { enabled: true, build: await memoryBuildIdentity(), marks: [],
   status: "running", errors: [],
-  ...(wasmAccountingEnabled ? { wasmCapacityDiagnostic: { enabled: true, workerEntrypoints: {} } } : {}),
-  unaccounted: ["JavaScript live heap", "GPU/out-of-process allocations", "WASM live allocator"] ,
-  caveat: "Rust retained charges are category-local logical bytes; sampled Chromium process-tree RSS is separate and may double-count shared pages. WASM linear-memory byteLength is capacity, not live allocation." }
+  ...(wasmAccountingEnabled ? { wasmCapacityDiagnostic: {
+    enabled: true, label: "invasive Noon wasm-bindgen linear-memory capacity diagnostic",
+    workerEntrypoints: {},
+    comparisonCaveat: "Do not compare timing or RSS with an uninstrumented cohort.",
+    metricCaveat: "linear-memory byteLength is capacity, not live allocation or total memory.",
+  } } : {}),
+  unaccounted: ["JavaScript live heap", "GPU/out-of-process allocations", "WASM live allocator",
+    "Pyodide WASM linear-memory capacity and heap",
+    ...(!wasmAccountingEnabled ? ["Noon wasm-bindgen linear-memory capacity"] : [])],
+  caveat: "Rust retained charges are category-local logical bytes; sampled Chromium process-tree RSS is separate and may double-count shared pages. The opt-in observer covers Noon wasm-bindgen memory only, not Pyodide memory." }
   : null;
 
 let serverOutput = "";
