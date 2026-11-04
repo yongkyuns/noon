@@ -204,7 +204,9 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       return { metrics: { time: sample.time, objectCount: current.objectCount ?? 55,
         needsPresent: current.needsPresent ?? false, bufferedDeltas: current.bufferedDeltas ?? 0,
         latestPresentationSample: sample },
-      ...(current.preparedPlayback ? { engineMetrics: { preparedPlayback: current.preparedPlayback } } : {}) };
+      ...(current.omitPreparedPlayback ? {} : { engineMetrics: { preparedPlayback: current.preparedPlayback ?? {
+        observation: { loopCount: current.rustLoopCount ?? 0 },
+      } } }) };
     },
     get executionDiagnostics() {
       const base = current.diagnostics ?? {
@@ -464,6 +466,8 @@ test("fresh pre-copy metrics reject a wrapped or out-of-window frame", async () 
   for (const invalid of [
     { wrapOnFreshMetrics: true },
     { postPresentationSample: { session: 7, sequence: 6, time: 8.01, presentedAtMs: 110 } },
+    { rustLoopCount: 1 },
+    { omitPreparedPlayback: true },
   ]) {
     const { page } = preparedAudioPage({
       run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
