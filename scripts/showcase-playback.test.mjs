@@ -16,11 +16,11 @@ test("published-frame polling awaits asynchronous observations before accepting 
 });
 
 function gallery({ playing = true, duration = 2.5999999999999996, controllable = true,
-  error = null, pauseFailure = false, seekFailure = false, staleSeek = false } = {}) {
+  error = null, pauseFailure = false, seekFailure = false, staleSeek = false, stalePlaying = false } = {}) {
   const calls = [];
   const patch = { dataset: { state: error ? "error" : "applied" }, value: error };
   const controls = {
-    dataset: { busy: "false", controllable: String(controllable), elapsedSeconds: "0" },
+    dataset: { busy: "false", controllable: String(controllable), playing: String(playing), elapsedSeconds: "0" },
     title: controllable ? "" : "Replay unavailable: History not retained",
     querySelector: () => ({ getAttribute: () => playing ? "Pause animation" : "Play animation" }),
   };
@@ -48,6 +48,7 @@ function gallery({ playing = true, duration = 2.5999999999999996, controllable =
           calls.push("pause");
           if (pauseFailure) throw new Error("pause rejected");
           playing = false;
+          if (!stalePlaying) controls.dataset.playing = "false";
         },
       };
     },
@@ -88,6 +89,12 @@ test("a materially different duration is not silently substituted", async () => 
 test("pause failure prevents seeking", async () => {
   const { page, calls } = gallery({ pauseFailure: true });
   await assert.rejects(seekPausedGallery(page, 2.6), /pause rejected/);
+  assert.ok(!calls.includes("seek"));
+});
+
+test("a paused label cannot conceal a still-playing transport state", async () => {
+  const { page, calls } = gallery({ stalePlaying: true });
+  await assert.rejects(seekPausedGallery(page, 2.6), /stable frame/);
   assert.ok(!calls.includes("seek"));
 });
 

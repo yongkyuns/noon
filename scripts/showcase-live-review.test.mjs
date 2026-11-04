@@ -268,6 +268,10 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       FileReader: TestFileReader,
       requestAnimationFrame(callback) {
         current.captureEvents?.push("requestAnimationFrame");
+        if (current.wrapDuringAnimationFrame) {
+          current.looped = true;
+          current.elapsed = current.publishedTime = 0.1;
+        }
         callback(0);
         return 1;
       },
@@ -391,7 +395,7 @@ test("looping first pass accepts an earlier receipt only with matching Rust hold
   }
 });
 
-test("terminal snapshot remains valid when toBlob blocks across the loop wrap", async () => {
+test("terminal snapshot survives delayed page RAF and encoding across the loop wrap", async () => {
   const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
   const copiedDataUrl = "data:image/png;base64,cHJlLXdyYXA=";
   const captureEvents = [];
@@ -400,7 +404,7 @@ test("terminal snapshot remains valid when toBlob blocks across the loop wrap", 
       time: 0, playing: true, durationSeconds: 8 } },
     observations: [
       { elapsed: 7.5, publishedTime: 7.5, canvasDataUrl: copiedDataUrl, captureEvents,
-        controls: { playing: "true" }, wrapSynchronouslyDuringToBlob: true },
+        controls: { playing: "true" }, wrapDuringAnimationFrame: true, wrapSynchronouslyDuringToBlob: true },
       { elapsed: 0.1, publishedTime: 0.1, looped: true },
     ],
   });
@@ -414,7 +418,7 @@ test("terminal snapshot remains valid when toBlob blocks across the loop wrap", 
     session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
   });
   assert.deepEqual(captureEvents, [
-    "requestAnimationFrame", "requestAnimationFrame", "metrics-1", "toBlob-copy",
+    "metrics-1", "toBlob-copy",
     "wrap-during-toBlob", "toBlob-serialize",
   ]);
 });

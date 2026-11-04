@@ -31,9 +31,10 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
       }
       const toggle = controls.querySelector(".playback-toggle");
       return controls.dataset.busy === "false" &&
-        (!paused || toggle?.getAttribute("aria-label") === "Play animation") &&
+        (!paused || (controls.dataset.playing === "false" &&
+          toggle?.getAttribute("aria-label") === "Play animation")) &&
         (expectedTime === null || Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7);
-    }, { expectedTime, paused });
+    }, { expectedTime, paused }, { polling: 50 });
   };
 
   await waitReady();

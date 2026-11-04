@@ -138,10 +138,8 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
     };
     const canvas = document.querySelector("#scene");
     if (typeof canvas?.toBlob !== "function") return false;
-    // Let the transferred HTML canvas placeholder receive the current worker
-    // bitmap before validating the exact publication that toBlob will snapshot.
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    // Avoid waiting for display animation frames: a starved RAF can outlast the
+    // terminal hold. The independent pixel oracle checks the copied bitmap.
     const report = await gallery.executionMetrics();
     const current = gallery.executionDiagnostics;
     const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
