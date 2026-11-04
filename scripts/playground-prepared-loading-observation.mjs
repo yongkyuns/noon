@@ -66,13 +66,14 @@ export function readinessReplayCycleEvidence(observations, { restartPublication,
       !Number.isFinite(durationSeconds) || !Number.isFinite(terminalHoldStartSeconds) ||
       !Number.isFinite(clockToleranceSeconds) || typeof acceptsTerminalPublication !== "function") return null;
   let reset = null, terminalHold = null, nearEnd = null, wrapped = null;
+  let advancedAfterReset = false;
   for (const observation of observations) {
     const controls = observation.controls;
     const clock = Number(controls?.elapsedSeconds);
     const frame = observation.metrics?.latestPresentationSample;
     const origin = observation.metrics?.performanceTimeOriginMs;
     if (!Number.isFinite(observation.epochMs) || observation.epochMs < requestEpochMs ||
-        !Number.isFinite(clock) || controls?.busy !== "false" || controls?.playing !== "true" ||
+        !Number.isFinite(clock) || controls?.busy !== "false" ||
         frame?.session !== restartPublication.session || !Number.isSafeInteger(frame?.sequence) ||
         frame.sequence < restartPublication.sequence || !Number.isFinite(frame.time) ||
         !Number.isFinite(origin) || !Number.isFinite(frame.presentedAtMs) ||
@@ -81,9 +82,14 @@ export function readinessReplayCycleEvidence(observations, { restartPublication,
       publication: { session: frame.session, sequence: frame.sequence, time: frame.time,
         presentedAtEpochMs: origin + frame.presentedAtMs } };
     if (reset === null) {
-      if (clock <= clockToleranceSeconds && frame.time <= clockToleranceSeconds) reset = sample;
+      if (controls.playing === "false" && frame.sequence === restartPublication.sequence &&
+          clock <= clockToleranceSeconds && frame.time <= clockToleranceSeconds) reset = sample;
       continue;
     }
+    if (controls.playing !== "true") continue;
+    if (clock > clockToleranceSeconds) advancedAfterReset = true;
+    if (advancedAfterReset && nearEnd === null && clock <= clockToleranceSeconds &&
+        frame.time <= clockToleranceSeconds) return null;
     if (terminalHold === null && clock >= terminalHoldStartSeconds - clockToleranceSeconds &&
         frame.sequence > restartPublication.sequence && acceptsTerminalPublication(frame.time)) {
       terminalHold = sample;

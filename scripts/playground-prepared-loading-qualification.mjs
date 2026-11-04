@@ -873,6 +873,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assert.ok(restartCompleted, "restart command completion transition was not observed");
     const restartEngineResult = await readinessCommandResult(page, restartIssued.commandResultIndex, "restart_playback");
     const restartPresented = await observation(page);
+    replayRow.cadenceObservations.push({ epochMs: restartPresented.epochMs,
+      metrics: restartPresented.metrics, controls: restartPresented.controls });
     const latestReplay = restartPresented.metrics?.latestPresentationSample;
     const minimalReplaySample = latestReplay ? { ...latestReplay,
       clockOriginMs: restartPresented.metrics.performanceTimeOriginMs } : null;

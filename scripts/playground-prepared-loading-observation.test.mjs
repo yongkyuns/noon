@@ -332,11 +332,12 @@ test("first render and useful picture must belong to the measured run", () => {
 });
 
 test("replay requires its own terminal hold, near-end clock and newer postwrap frame", () => {
-  const sample = (epochMs, elapsedSeconds, time, sequence) => ({ epochMs,
-    controls: { elapsedSeconds: String(elapsedSeconds), busy: "false", playing: "true" },
+  const sample = (epochMs, elapsedSeconds, time, sequence, playing = true) => ({ epochMs,
+    controls: { elapsedSeconds: String(elapsedSeconds), busy: "false", playing: String(playing) },
     metrics: { performanceTimeOriginMs: 1000,
       latestPresentationSample: { session: 4, sequence, time, presentedAtMs: epochMs - 1000 } } });
-  const observations = [sample(1005, 0.005, 0.005, 10), sample(7800, 6.85, 6.8, 20),
+  const observations = [sample(1005, 0, 0, 10, false), sample(1100, 0.1, 0.1, 11),
+    sample(7800, 6.85, 6.8, 20),
     sample(8990, 7.9, 6.8, 20), sample(9100, 0.1, 0.1, 21)];
   const options = { restartPublication: { session: 4, sequence: 10 }, requestEpochMs: 1000,
     durationSeconds: 8, terminalHoldStartSeconds: 6.8, clockToleranceSeconds: 0.15,
@@ -350,6 +351,12 @@ test("replay requires its own terminal hold, near-end clock and newer postwrap f
   assert.equal(readinessReplayCycleEvidence(observations.map(value => ({ ...value,
     metrics: { ...value.metrics, latestPresentationSample: { ...value.metrics.latestPresentationSample, sequence: 10 } } })), options), null,
   "the original restart frame cannot stand in for a replayed terminal or wrap frame");
+  const missedFirstCycle = [observations[0], sample(1200, 0.2, 0.2, 11), sample(1800, 0.1, 0.1, 12),
+    ...observations.slice(2)];
+  assert.equal(readinessReplayCycleEvidence(missedFirstCycle, options), null,
+    "an observed first wrap before terminal proof cannot be replaced by a later cycle");
+  assert.equal(readinessReplayCycleEvidence(observations.slice(1), options), null,
+    "a playing near-zero frame cannot substitute for the settled restart publication");
 });
 
 test("minimal timing preserves current renderer samples for first-submission bounds", () => {
