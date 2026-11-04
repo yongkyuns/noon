@@ -1413,6 +1413,13 @@ class Example(Scene):
         examples = Path(__file__).parent / 'examples'
         timing = (examples / 'showcase_timing.py').read_text()
         self.assertTrue(source_is_scene_only(timing))
+        self.assertFalse(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    target = Circle()
+                    self.play(UpdateFromFunc(target, lambda item: item.shift(RIGHT)))
+        ''')))
 
         alias = dedent('''
             from noon import *

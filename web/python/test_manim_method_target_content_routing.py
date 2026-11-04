@@ -27,7 +27,7 @@ class MethodTargetContentRoutingTests(unittest.TestCase):
         tree = ast.parse(path.read_text())
         candidate = next(node for node in tree.body
                          if isinstance(node, ast.FunctionDef)
-                         and node.name == "_build_canonical_composition_candidate")
+                         and node.name == "_build_canonical_composition_candidate_steps")
         branch = next(node for node in ast.walk(candidate)
                       if isinstance(node, ast.If)
                       and ast.unparse(node.test) == "affine is not None")

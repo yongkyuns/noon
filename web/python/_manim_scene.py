@@ -27,7 +27,10 @@ import _manim_lifecycle as _lifecycle
 import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
-from _manim_source_execution import current_source_invocation
+from _manim_source_execution import (
+    cooperative_source_yield_active,
+    current_source_invocation,
+)
 from _noon_errors import engine_await, engine_call, is_effect_preparation_required, raise_engine_error
 import _noon_ir as _ir
 import noon as _base
@@ -2294,7 +2297,7 @@ def _validate_apply_matrix_target(scene: _base.Scene, source: object) -> None:
         raise ValueError("ApplyMatrix target belongs to another Scene")
 
 
-def _build_canonical_composition_candidate(
+def _build_canonical_composition_candidate_steps(
     self: _base.Scene,
     kind: str,
     animations: tuple[object, ...],
@@ -2346,11 +2349,11 @@ def _build_canonical_composition_candidate(
             next_object_id += 1
         return reservation
 
-    def append_leaf(builder: object, animation: object, child_kwargs: dict[str, object]) -> None:
+    def append_leaf(builder: object, animation: object, child_kwargs: dict[str, object]):
         nonlocal next_object_id
         if isinstance(animation, _composition.AnimationGroup):
             nested_kind = "sequence" if isinstance(animation, _composition.Succession) else "parallel"
-            nested = build(nested_kind, tuple(animation.animations), animation, {})
+            nested = yield from build(nested_kind, tuple(animation.animations), animation, {})
             builder.appendComposition(nested)
             return
         if isinstance(animation, _composition.UpdateFromFunc):
@@ -2417,7 +2420,7 @@ def _build_canonical_composition_candidate(
             return
         cyclic_replace = _canonical_cyclic_replace_transform(self, animation, child_kwargs)
         if cyclic_replace is not None:
-            append_leaf(builder, cyclic_replace, child_kwargs)
+            yield from append_leaf(builder, cyclic_replace, child_kwargs)
             return
         if type(animation) is _animate.ApplyMatrix:
             # Validate generic animation options before target preparation. Nonzero
@@ -2428,7 +2431,7 @@ def _build_canonical_composition_candidate(
             target = source._copy_for_animate_target()
             _apply_matrix_target(target, animation)
             transform = _base.Transform(source, target, **animation.anim_args)
-            append_leaf(builder, transform, child_kwargs)
+            yield from append_leaf(builder, transform, child_kwargs)
             return
         if type(animation) is _animate.ScaleInPlace:
             # Resolve options before creating a target. Copy/scale and effective
@@ -2445,7 +2448,7 @@ def _build_canonical_composition_candidate(
             target = source._copy_for_animate_target()
             target.scale(animation.scale_factor)
             transform = _base.Transform(source, target, **animation.anim_args)
-            append_leaf(builder, transform, child_kwargs)
+            yield from append_leaf(builder, transform, child_kwargs)
             return
         if _canonical_tracker_builder(animation):
             tracker = animation.tracker
@@ -3019,11 +3022,13 @@ def _build_canonical_composition_candidate(
         if play_rate is not None:
             nested.setPlayRateFunction(play_rate)
         for child_animation in root_animations:
-            append_leaf(nested, child_animation, {} if root_group is not None else root_kwargs)
+            yield from append_leaf(nested, child_animation, {} if root_group is not None else root_kwargs)
+            yield None
         return nested
 
     for animation in animations:
-        append_leaf(candidate, animation, {} if group is not None else kwargs)
+        yield from append_leaf(candidate, animation, {} if group is not None else kwargs)
+        yield None
     try:
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
@@ -3036,6 +3041,51 @@ def _build_canonical_composition_candidate(
         tracker_associations,
         tuple(completed_families),
     ) if supported else False
+
+
+def _build_canonical_composition_candidate(
+    self: _base.Scene,
+    kind: str,
+    animations: tuple[object, ...],
+    group: object | None,
+    kwargs: dict[str, object],
+):
+    steps = _build_canonical_composition_candidate_steps(self, kind, animations, group, kwargs)
+    try:
+        while True:
+            next(steps)
+    except StopIteration as result:
+        return result.value
+    except RuntimeError as error:
+        # PEP 479 wraps a StopIteration raised by a synchronous leaf inside the
+        # generator. Preserve the public synchronous builder's original error.
+        if (error.args == ("generator raised StopIteration",)
+                and isinstance(error.__cause__, StopIteration)):
+            raise error.__cause__
+        raise
+    finally:
+        steps.close()
+
+
+async def _build_canonical_composition_candidate_cooperatively(
+    self: _base.Scene,
+    kind: str,
+    animations: tuple[object, ...],
+    group: object | None,
+    kwargs: dict[str, object],
+):
+    from _manim_source_execution import await_source_checkpoint
+
+    steps = _build_canonical_composition_candidate_steps(self, kind, animations, group, kwargs)
+    try:
+        while True:
+            try:
+                next(steps)
+            except StopIteration as result:
+                return result.value
+            await await_source_checkpoint()
+    finally:
+        steps.close()
 
 
 def _play_canonical_composition(
@@ -3115,6 +3165,24 @@ def _play(self, *args, **kwargs):
     group = args[0] if len(args) == 1 and isinstance(args[0], _composition.AnimationGroup) else None
     kind = "sequence" if isinstance(group, _composition.Succession) else "parallel"
     animations = tuple(group.animations) if group is not None else args
+    if (
+        getattr(self, _PORTABLE_BARRIER_CALL, False)
+        and _async_continuation_active(self)
+        and cooperative_source_yield_active()
+    ):
+        async def build_and_play():
+            candidate = await _build_canonical_composition_candidate_cooperatively(
+                self, kind, animations, group, kwargs,
+            )
+            if candidate is False:
+                raise NotImplementedError(
+                    "Scene.play request is unsupported by the shared Rust engine"
+                )
+            pending = _play_canonical_composition(self, *candidate)
+            if isinstance(pending, _SemanticContinuationAwaitable):
+                await pending
+
+        return _SemanticContinuationAwaitable(self, operation=build_and_play)
     candidate = _build_canonical_composition_candidate(self, kind, animations, group, kwargs)
     if candidate is False:
         raise NotImplementedError("Scene.play request is unsupported by the shared Rust engine")

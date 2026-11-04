@@ -4695,6 +4695,11 @@ def cooperative_source_yield_scope(callback=None):
         _COOPERATIVE_SOURCE_YIELD.reset(token)
 
 
+def cooperative_source_yield_active():
+    state = _COOPERATIVE_SOURCE_YIELD.get()
+    return state is not None and state.callback is not None
+
+
 async def await_source_checkpoint(value=None, *, condition=False):
     """Yield at a portable source boundary, preserving an optional expression value."""
     result = bool(value) if condition else value
