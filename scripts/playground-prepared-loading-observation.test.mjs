@@ -208,6 +208,22 @@ test("readiness requires actual attachment and ordered cleanup/disposition, not 
   }
 });
 
+test("observed first-pass completion does not require an incremental loop counter", () => {
+  const expected = { sourceId: "showcase-first-scene", requestedProfile: "observed",
+    attachedProfile: "observed", disposition: "observed-complete" };
+  const trace = { schemaVersion: 1, interpreterGeneration: 2, runRequestId: 7,
+    context: { exampleId: expected.sourceId, selectionGeneration: 3, runGeneration: 4 }, droppedEvents: 0,
+    requestedProfile: "observed", events: [
+      { sequence: 0, stage: "attached", profile: "observed" },
+      { sequence: 1, stage: "terminal-adopted" },
+      { sequence: 2, stage: "source-complete" },
+      { sequence: 3, stage: "disposition", disposition: "observed-complete" },
+    ] };
+  assert.deepEqual(validateReadinessTrace(trace, expected), []);
+  assert.ok(validateReadinessTrace(trace, { ...expected, disposition: "looped" })
+    .includes("trace has no expected disposition"));
+});
+
 test("strict readiness requires the first-submission bound and actual command receipts", async () => {
   const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
   const sourceId = contract.sources[0].id;

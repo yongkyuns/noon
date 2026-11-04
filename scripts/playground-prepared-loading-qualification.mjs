@@ -633,22 +633,23 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         await waitForApplied(page, source.id);
       }
       const seedDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
+      const seedDisposition = initialArm === "A" ? "looped" : "observed-complete";
       const seedComplete = sample => {
         const events = sample.executionDiagnostics?.events ?? [];
         const disposition = events.findLast(event => event.stage === "disposition");
         return sample.run?.exampleId === source.id && Number.isFinite(sample.run?.sourceRunCompletedAtMs) &&
           sample.inFlight === false && events.some(event => event.stage === "source-complete") &&
-          events.some(event => event.stage === "terminal-adopted") && disposition?.disposition === "looped" &&
-          Number.isSafeInteger(disposition.loopCount) && disposition.loopCount >= 1;
+          events.some(event => event.stage === "terminal-adopted") && disposition?.disposition === seedDisposition &&
+          (seedDisposition !== "looped" || (Number.isSafeInteger(disposition.loopCount) && disposition.loopCount >= 1));
       };
       while (!seedComplete(navigation) && performance.now() < seedDeadline) {
         navigation = await observation(page);
         await page.waitForTimeout(observationPollIntervalMs);
       }
-      assert.ok(seedComplete(navigation), "healthy-interpreter seed source did not complete and loop");
+      assert.ok(seedComplete(navigation), "healthy-interpreter seed source did not complete its expected disposition");
       const seedErrors = validateReadinessTrace(navigation.executionDiagnostics, {
         sourceId: source.id, requestedProfile: initialArm === "A" ? "incremental" : "observed",
-        attachedProfile: initialArm === "A" ? "incremental" : "observed", disposition: "looped",
+        attachedProfile: initialArm === "A" ? "incremental" : "observed", disposition: seedDisposition,
       });
       assert.deepEqual(seedErrors, [], "healthy-interpreter seed did not use the expected eligible profile");
       const seedWorker = workers.filter(worker => /\/python-worker\.js(?:\?|$)/.test(worker.url())).at(-1);
@@ -797,10 +798,11 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     await readinessCommand(page, sourceRow, initiallyPlaying);
 
     const runDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
+    const sourceDisposition = initialArm === "A" ? "looped" : "observed-complete";
     const lifecycleComplete = sample => {
       const events = sample.executionDiagnostics?.events ?? [];
       return ["source-complete", "terminal-adopted"].every(stage => events.some(event => event.stage === stage)) &&
-        events.some(event => event.stage === "disposition" && event.disposition === "looped");
+        events.some(event => event.stage === "disposition" && event.disposition === sourceDisposition);
     };
     while (!(Number.isFinite(current.run?.sourceRunCompletedAtMs) && current.inFlight === false &&
              lifecycleComplete(current)) && performance.now() < runDeadline) {
@@ -827,7 +829,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     const expectedProfile = initialArm === "A" ? "incremental" : "observed";
     const trace = current.executionDiagnostics;
     sourceRow.profileValidationErrors.push(...validateReadinessTrace(trace, {
-      sourceId: source.id, requestedProfile: expectedProfile, attachedProfile: expectedProfile, disposition: "looped",
+      sourceId: source.id, requestedProfile: expectedProfile, attachedProfile: expectedProfile,
+      disposition: sourceDisposition,
     }));
     if (trace && Array.isArray(trace.events)) {
       sourceRow.requestedProfile = trace.requestedProfile;
@@ -943,9 +946,10 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     const replayTrace = replayCurrent.executionDiagnostics;
     replayRow.endTrace = replayTrace;
     const replayExpectedProfile = replayArm === "B" ? "incremental" : "observed";
+    const replayDisposition = replayArm === "B" ? "looped" : "observed-complete";
     replayRow.profileValidationErrors.push(...validateReadinessTrace(replayTrace, {
       sourceId: source.id, requestedProfile: replayExpectedProfile,
-      attachedProfile: replayExpectedProfile, disposition: "looped",
+      attachedProfile: replayExpectedProfile, disposition: replayDisposition,
     }));
     if (replayTrace?.runRequestId !== null && replayTrace?.runRequestId !== undefined &&
         !replayRow.sourceInvocationIds.includes(replayTrace.runRequestId)) {
