@@ -1204,13 +1204,15 @@ try {
   report.status = "failed"; report.error = String(error.stack ?? error); process.exitCode = 1;
 } finally {
   report.resourceCache = cache.stats();
-  await writeReport();
-  try { await browser?.close(); }
+  try { await writeReport(); }
   finally {
-    try { await browserServer?.close(); }
+    try { await browser?.close(); }
     finally {
-      for (const server of Object.values(servers)) await server.close();
-      if (overlay) await rm(overlay, { recursive: true, force: true });
+      try { await browserServer?.close(); }
+      finally {
+        for (const server of Object.values(servers)) await server.close();
+        if (overlay) await rm(overlay, { recursive: true, force: true });
+      }
     }
   }
 }

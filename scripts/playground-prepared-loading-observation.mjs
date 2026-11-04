@@ -128,7 +128,7 @@ export function readinessRendererSamples(stagedSamples, observations) {
 
 export function readinessWarmSeekTargets(entry, actualEnd = entry?.duration) {
   const duration = entry?.duration;
-  if (!Number.isFinite(duration) || !Number.isFinite(actualEnd) || actualEnd <= 0 || actualEnd > duration) return [];
+  if (!Number.isFinite(duration) || !Number.isFinite(actualEnd) || actualEnd <= 0) return [];
   const terminalHold = entry?.still_intervals?.findLast(([, end]) => end === duration);
   const candidates = [...(entry?.beats ?? []).map(beat => beat.time), terminalHold?.[0], actualEnd]
     .filter(Number.isFinite).filter(time => time > 0 && time <= actualEnd).sort((a, b) => a - b);

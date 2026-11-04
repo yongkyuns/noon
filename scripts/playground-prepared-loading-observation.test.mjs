@@ -168,8 +168,13 @@ test("warm seek targets are five distinct manifest beats or closed terminal endp
     assert.equal(targets.at(-1), actualEnd, "the exact closed Rust endpoint remains selectable");
     assert.ok(targets.every(time => entry.beats.some(beat => beat.time === time) ||
       entry.still_intervals.some(([start, end]) => start === time && end === entry.duration) || time === actualEnd));
-    assert.equal(readinessWarmSeekTargets(entry, entry.duration + 1e-6).length, 0,
-      "an endpoint outside the storyboard's validated duration is rejected");
+    if (entry.duration === 8) {
+      const roundedUpEnd = 8.000000000000002;
+      assert.equal(readinessWarmSeekTargets(entry, roundedUpEnd).at(-1), roundedUpEnd,
+        "one-ULP endpoint roundoff is retained for the caller's storyboard validator");
+    }
+    assert.deepEqual(readinessWarmSeekTargets(entry, NaN), []);
+    assert.deepEqual(readinessWarmSeekTargets(entry, 0), []);
   }
 });
 
