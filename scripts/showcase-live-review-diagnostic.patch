@@ -1,8 +1,13 @@
 diff --git a/scripts/showcase-live-review.mjs b/scripts/showcase-live-review.mjs
-index 1fb3f5e2d..5b60d4398 100644
+index 1fb3f5e2d..51c76cdf5 100644
 --- a/scripts/showcase-live-review.mjs
 +++ b/scripts/showcase-live-review.mjs
-@@ -102,15 +102,50 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
+@@ -98,19 +98,54 @@ export function assertNaturalFirstPassPublication(entry, authoredDuration, publi
+   }
+ }
+ 
+-async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration, rendererReadbackEnabled }) {
++export async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration, rendererReadbackEnabled }) {
    const gallery = window.__noonExampleGallery;
    const runState = window.__showcaseLiveReviewRun;
    if (!runState || runState.stop) return true;
@@ -139,20 +144,21 @@ index 1fb3f5e2d..5b60d4398 100644
      if (runState.stop) return false;
      const current = gallery.executionDiagnostics;
      const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
-@@ -171,8 +241,10 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
+@@ -171,8 +241,11 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
      const roundoff = 8 * Number.EPSILON * Math.max(1, duration);
      const knownEndMatches = state?.durationSeconds == null || (Number.isFinite(state.durationSeconds) &&
        Math.abs(state.durationSeconds - duration) <= roundoff);
 -    const rustTimeInHold = Number.isFinite(observedTime) && observedTime >= holdStart && observedTime < duration &&
 -      Number.isFinite(state?.preparedFrontier) && state.preparedFrontier >= observedTime && knownEndMatches;
-+    const rustTimeInHold = (Number.isFinite(observedTime) && observedTime >= holdStart && observedTime < duration &&
-+      Number.isFinite(state?.preparedFrontier) && state.preparedFrontier >= observedTime && knownEndMatches) ||
-+      (observedTime === state?.durationSeconds && Number.isFinite(state?.durationSeconds) && knownEndMatches &&
-+        state.loopCount === 0 && Number.isFinite(receipt?.time) && receipt.time >= holdStart && receipt.time < duration);
++    const rustTimeInHold = Number.isFinite(observedTime) &&
++      Number.isFinite(state?.preparedFrontier) && state.preparedFrontier >= observedTime && knownEndMatches &&
++      ((observedTime >= holdStart && observedTime < duration) ||
++        (observedTime === state?.durationSeconds && Number.isFinite(state.durationSeconds) &&
++          state.loopCount === 0 && Number.isFinite(receipt?.time) && receipt.time >= holdStart && receipt.time < duration));
      const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
        receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
      const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(state, receipt);
-@@ -209,7 +281,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
+@@ -209,7 +282,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
      pngBlobPromise.catch(() => {});
      // Bracket the copy with Rust observations. A delayed main-thread callback
      // cannot turn an old first-loop observation into a post-wrap capture.
@@ -161,7 +167,7 @@ index 1fb3f5e2d..5b60d4398 100644
      if (afterCopy?.preparedPlayback !== true || afterCopy.loopCount !== 0 ||
          afterCopy.playing !== true || afterCopy.buffering !== false ||
          !Number.isFinite(afterCopy.time) || afterCopy.time < holdStart || afterCopy.time >= duration ||
-@@ -565,7 +637,9 @@ async function main() {
+@@ -565,7 +638,9 @@ async function main() {
    const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
    assert.ok(["webgl", "webgpu"].includes(backend));
    const expectedBackend = backend === "webgl" ? "WebGL2" : "WebGPU";
@@ -172,7 +178,7 @@ index 1fb3f5e2d..5b60d4398 100644
    const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
    const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2);
    const report = {
-@@ -828,6 +902,24 @@ async function main() {
+@@ -828,6 +903,24 @@ async function main() {
          result.error = String(error.stack ?? error);
          result.unexpectedReplayDenial = entry.playbackCapability === "deterministic-retained-replay" &&
            result.firstPass?.controls?.controllable === "false";
@@ -198,25 +204,19 @@ index 1fb3f5e2d..5b60d4398 100644
            patch: document.querySelector("#patch-status")?.value,
            status: document.querySelector("#status-text")?.textContent,
 diff --git a/scripts/showcase-live-review.test.mjs b/scripts/showcase-live-review.test.mjs
-index 02c25c810..7c1f2a620 100644
+index 02c25c810..7b134dc6b 100644
 --- a/scripts/showcase-live-review.test.mjs
 +++ b/scripts/showcase-live-review.test.mjs
-@@ -243,12 +243,13 @@ function preparedAudioPage({ run, runDelayMs = 0, priorRunInFlight = false,
-       const report = observationReport("state");
-       const playback = report.engineMetrics?.preparedPlayback;
-       const observation = playback?.observation;
--      return { preparedPlayback: playback !== undefined, time: playback?.observedTime,
-+      const state = { preparedPlayback: playback !== undefined, time: playback?.observedTime,
-         preparedFrontier: observation?.frontier, durationSeconds: observation?.end,
-         heldPresentation: observation?.heldPresentation, loopCount: current.looped ? 1 : observation?.loopCount,
-         playing: true, buffering: false,
-         presentationReceipt: report.metrics.needsPresent || report.metrics.bufferedDeltas
-           ? null : { ...report.metrics.latestPresentationSample, objectCount: report.metrics.objectCount } };
-+      return current.afterCopyState && metricsCalls > 1 ? { ...state, ...current.afterCopyState } : state;
-     },
-     get executionDiagnostics() {
-       const base = current.diagnostics ?? {
-@@ -498,6 +499,35 @@ test("open-prefix terminal proof uses current Rust time/frontier and rejects a k
+@@ -1,7 +1,7 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+ import { runInNewContext } from "node:vm";
+-import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, assertNaturalFirstPassPublication, summarizeLiveReview, runOrdinaryGallery, readLiveState } from "./showcase-live-review.mjs";
++import { assertFirstPass, assertReplayAvailable, assertNonreplayableShowcase, assertLiveOutcome, assertLiveEndpoint, assertLivePixels, assertNaturalFirstPassPublication, summarizeLiveReview, runOrdinaryGallery, readLiveState, observeNaturalFirstPassWrap } from "./showcase-live-review.mjs";
+ import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
+ 
+ const entry = { id: "showcase-example", duration: 8 };
+@@ -498,6 +498,35 @@ test("open-prefix terminal proof uses current Rust time/frontier and rejects a k
    }
  });
  
@@ -225,27 +225,27 @@ index 02c25c810..7c1f2a620 100644
 +  const preparedRun = { stale: false, result: { hasAudio: false, preparedPlayback: true,
 +    time: 0, playing: true, durationSeconds: 8 } };
 +  const endpoint = { elapsed: 8, observedTime: 8, frontier: 8, end: 8, publishedTime: 7.25,
-+    afterCopyState: { time: 7.5 },
 +    controls: { playing: "true" } };
-+  const valid = preparedAudioPage({ run: preparedRun, observations: [endpoint,
-+    { elapsed: 0.1, publishedTime: 0.1, looped: true }] });
-+  const captured = await runOrdinaryGallery(valid.page, 100, lesson);
-+  assert.equal(captured.firstPassCapture.executionState.time, 8);
-+  assert.equal(captured.firstPassCapture.rendererReceipt.time, 7.25);
-+  assert.equal(captured.firstPassCapture.afterCopyState.time, 7.5);
++  const args = { duration: 8, holdStart: 7, exampleId: lesson.id,
++    runGeneration: 9, rendererReadbackEnabled: true };
++  const valid = preparedAudioPage({ run: preparedRun, observations: [endpoint] });
++  await valid.page.evaluate(() => window.__noonExampleGallery.run());
++  valid.window.__showcaseLiveReviewRun = { requestedAtEpochMs: 0, stop: false };
++  assert.equal(await valid.page.evaluate(observeNaturalFirstPassWrap, args), false);
++  assert.equal(valid.window.__showcaseLiveReviewFirstPass.captureKind, "renderer-owned");
++  assert.equal(valid.window.__showcaseLiveReviewFirstPass.executionState.time, 8);
++  assert.equal(valid.window.__showcaseLiveReviewFirstPass.rendererReceipt.time, 7.25);
++  assert.equal(valid.window.__showcaseLiveReviewFirstPass.proofReceipt.time, 7.25);
 +
 +  for (const invalid of [
-+    { end: null },
-+    { end: 9 },
-+    { rustLoopCount: 1 },
-+    { sequence: 3 },
++    { end: null }, { end: 9 }, { rustLoopCount: 1 }, { frontier: 7.9 }, { sequence: 3 },
 +  ]) {
-+    const failed = preparedAudioPage({ run: preparedRun, observations: [
-+      { ...endpoint, ...invalid },
-+      { elapsed: 0.1, publishedTime: 0.1, looped: true },
-+    ] });
-+    await assert.rejects(runOrdinaryGallery(failed.page, 100, lesson),
-+      /wrapped before its terminal hold picture/);
++    const failed = preparedAudioPage({ run: preparedRun, observations: [{ ...endpoint, ...invalid }] });
++    await failed.page.evaluate(() => window.__noonExampleGallery.run());
++    failed.window.__showcaseLiveReviewRun = { requestedAtEpochMs: 0, stop: false };
++    failed.window.__showcaseLiveReviewFirstPass = null;
++    assert.equal(await failed.page.evaluate(observeNaturalFirstPassWrap, args), false);
++    assert.equal(failed.window.__showcaseLiveReviewFirstPass, null);
 +  }
 +});
 +
