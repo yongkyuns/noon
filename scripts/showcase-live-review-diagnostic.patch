@@ -1,5 +1,14 @@
 --- a/scripts/showcase-live-review.mjs
 +++ b/scripts/showcase-live-review.mjs
+@@ -10,7 +10,7 @@
+ import { layoutReplayViewport, replayViewport, qualifyReplayViewport } from "./showcase-viewport.mjs";
+ import { NONREPLAYABLE_SHOWCASE_CAPABILITIES } from "../web/showcase-gallery.js";
+ import { qualifyGlowViewport } from "./showcase-glow-viewport.mjs";
+-import { waitForBrowserObservation } from "./playground-browser-support.mjs";
++import { holdPlaygroundPreload, waitForBrowserObservation } from "./playground-browser-support.mjs";
+ import { assertCaptureTime, validateCaptureIntervals } from "./showcase-capture-checks.mjs";
+ 
+ const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 @@ -97,25 +97,55 @@
    }
  }
@@ -114,7 +123,7 @@
        controls.playing === "true" && Number.isFinite(elapsed) &&
        elapsed >= holdStart && elapsed <= duration + 8 * Number.EPSILON * Math.max(1, duration)) {
      const runIdentity = {
-@@ -137,73 +208,255 @@
+@@ -137,73 +208,252 @@
        context: diagnostics.context,
      };
      const canvas = document.querySelector("#scene");
@@ -300,6 +309,7 @@
    return false;
  }
  
+-export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null) {
 +function stopObserver(page, { requestedAtEpochMs, runGeneration }) {
 +  page.evaluate(({ requestedAtEpochMs: requested, runGeneration }) => {
 +    const state = window.__showcaseLiveReviewRun;
@@ -308,7 +318,7 @@
 +  }, { requestedAtEpochMs, runGeneration }).catch(() => {});
 +}
 +
- export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null) {
++export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null, { expectColdStart = false } = {}) {
    const started = performance.now();
    let timer;
    let firstPassCapture = null;
@@ -321,17 +331,24 @@
      await Promise.race([
        (async () => {
 -        const run = await page.evaluate(() => window.__noonExampleGallery.run());
-+        const kickoff = await page.evaluate(() => {
++        const kickoff = await page.evaluate(({ expectColdStart }) => {
 +          window.__showcaseLiveReviewCaptureDiagnostic = { firstHoldObservation: null,
 +            attempts: [], droppedAttempts: 0 };
 +          const gallery = window.__noonExampleGallery;
-+          const state = { requestedAtEpochMs: performance.timeOrigin + performance.now(),
-+            runGenerationBefore: gallery.generationDiagnostics.runGeneration, stop: false };
++          const requestedAtEpochMs = performance.timeOrigin + performance.now();
++          const runGenerationBefore = gallery.generationDiagnostics.runGeneration;
++          const runInFlightBefore = gallery.runInFlight;
++          const phaseBefore = gallery.runPhaseMetrics;
++          const state = { requestedAtEpochMs, runGenerationBefore,
++            acceptedRunGeneration: null, stop: false };
 +          window.__showcaseLiveReviewFirstPass = null;
 +          window.__showcaseLiveReviewRun = state;
 +          let promise;
++          if (runInFlightBefore || (expectColdStart && phaseBefore !== null)) {
++            return { requestedAtEpochMs, runGenerationBefore, runInFlightBefore, phaseBefore };
++          }
 +          try { promise = gallery.run(); }
-+          catch (error) { promise = Promise.reject(error); }
++          catch (error) { state.error = String(error?.message ?? error); promise = Promise.reject(error); }
 +          state.promise = Promise.resolve(promise).then((result) => {
 +            state.resolvedAtEpochMs = performance.timeOrigin + performance.now();
 +            return result;
@@ -342,24 +359,34 @@
 +          });
 +          state.promise.catch(() => {});
 +          const phase = gallery.runPhaseMetrics;
-+          if (gallery.generationDiagnostics.runGeneration > state.runGenerationBefore &&
++          if (Number.isSafeInteger(gallery.generationDiagnostics.runGeneration) &&
++              gallery.generationDiagnostics.runGeneration > runGenerationBefore &&
 +              phase?.runGeneration === gallery.generationDiagnostics.runGeneration &&
 +              phase?.exampleId === gallery.selectedExampleId) {
 +            state.acceptedRunGeneration = gallery.generationDiagnostics.runGeneration;
 +          }
-+          return { requestedAtEpochMs: state.requestedAtEpochMs,
-+            runGenerationBefore: state.runGenerationBefore,
-+            acceptedRunGeneration: state.acceptedRunGeneration };
-+        });
++          return { requestedAtEpochMs, runGenerationBefore, runInFlightBefore, phaseBefore,
++            acceptedRunGeneration: state.acceptedRunGeneration,
++            generation: gallery.generationDiagnostics.runGeneration, phaseGeneration: phase?.runGeneration,
++            phaseExampleId: phase?.exampleId, selectedExampleId: gallery.selectedExampleId,
++            error: state.error };
++        }, { expectColdStart });
 +        runStateInstalled = true;
 +        runRequestedAtEpochMs = kickoff.requestedAtEpochMs;
 +        acceptedRunGeneration = kickoff.acceptedRunGeneration;
++        assert.equal(kickoff.runInFlightBefore, false, "review Run started while another Run was active");
++        if (expectColdStart) assert.equal(kickoff.phaseBefore, null, "first-pass review page already accepted a Run");
++        if (kickoff.error) throw new Error(kickoff.error);
++        assert.ok(Number.isSafeInteger(acceptedRunGeneration) && acceptedRunGeneration > kickoff.runGenerationBefore &&
++          kickoff.generation === acceptedRunGeneration && kickoff.phaseGeneration === acceptedRunGeneration &&
++          kickoff.phaseExampleId === kickoff.selectedExampleId,
++        `Run did not synchronously accept a fresh generation: ${JSON.stringify(kickoff)}`);
 +        const roundoff = 8 * Number.EPSILON * Math.max(1, entry?.duration ?? 1);
 +        const terminalHold = entry?.still_intervals?.find(([, end]) => Math.abs(end - entry.duration) <= roundoff);
 +        if (entry && terminalHold !== undefined) {
 +          observerPromise = waitForBrowserObservation(page, observeNaturalFirstPassWrap, {
 +            duration: entry.duration, holdStart: terminalHold[0], exampleId: entry.id,
-+            runGenerationBefore: kickoff.runGenerationBefore,
++            runGeneration: acceptedRunGeneration,
 +          }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
 +          observerPromise.catch(() => {});
 +        }
@@ -373,26 +400,6 @@
 +        const run = settled.result;
 +        const runResolvedAtEpochMs = settled.resolvedAtEpochMs;
 +        assert.equal(run?.stale, false, "gallery Run was superseded");
-+        const accepted = await page.evaluate(() => {
-+          const gallery = window.__noonExampleGallery;
-+          const state = window.__showcaseLiveReviewRun;
-+          const generation = gallery?.generationDiagnostics?.runGeneration;
-+          const phase = gallery?.runPhaseMetrics;
-+          if (!Number.isSafeInteger(state?.acceptedRunGeneration) &&
-+              Number.isSafeInteger(generation) && generation > state?.runGenerationBefore &&
-+              phase?.runGeneration === generation && phase?.exampleId === gallery?.selectedExampleId) {
-+            state.acceptedRunGeneration = generation;
-+          }
-+          return { before: state?.runGenerationBefore, generation,
-+            accepted: state?.acceptedRunGeneration, runInFlight: gallery?.runInFlight,
-+            phaseGeneration: phase?.runGeneration, phaseExampleId: phase?.exampleId,
-+            selectedExampleId: gallery?.selectedExampleId, error: state?.error };
-+        });
-+        acceptedRunGeneration = accepted.accepted;
-+        assert.ok(Number.isSafeInteger(acceptedRunGeneration) && acceptedRunGeneration > accepted.before &&
-+          accepted.generation === acceptedRunGeneration && accepted.phaseGeneration === acceptedRunGeneration &&
-+          accepted.phaseExampleId === accepted.selectedExampleId,
-+        `Run did not bind a fresh generation: ${JSON.stringify(accepted)}`);
          const audio = run?.result?.hasAudio === true;
 -        if (!audio && run?.result?.preparedPlayback !== true) return;
 +        if (audio || run?.result?.preparedPlayback !== true) {
@@ -411,7 +418,7 @@
          if (audio) {
            assert.equal(run.result.time, 0, "finite audio Run did not prepare at time zero");
            assert.equal(run.result.playing, false, "finite audio Run must prepare paused");
-@@ -211,35 +464,73 @@
+@@ -211,35 +461,73 @@
          const duration = run.result.durationSeconds;
          assert.ok(Number.isFinite(duration) && (audio ? duration > 0 : duration >= 0),
            `${audio ? "finite audio" : "prepared playback"} Run has no authored duration`);
@@ -498,7 +505,7 @@
              assert.deepEqual(capture.context, observed.diagnostics.context,
                "terminal capture belongs to a different gallery run context");
              assert.ok(observed.diagnostics.events.some((event) =>
-@@ -253,6 +544,10 @@
+@@ -253,6 +541,10 @@
              assertNaturalFirstPassPublication(entry, duration,
                capture.heldPresentation?.observedTime ?? capture.metrics.time);
              firstPassCapture = capture;
@@ -509,7 +516,7 @@
              firstPassCompletion = {
                disposition: "looped",
                loopCount: observed.diagnostics.events.find((event) =>
-@@ -302,6 +597,9 @@
+@@ -302,6 +594,9 @@
      ]);
    } finally {
      clearTimeout(timer);
@@ -519,7 +526,33 @@
    }
    return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion };
  }
-@@ -634,6 +932,61 @@
+@@ -449,13 +744,15 @@
+       report.results.push(result);
+       const page = await context.newPage();
+       page.setDefaultTimeout(120000);
++      let releasePreload = null;
+       page.on("pageerror", (error) => result.pageErrors.push(String(error.stack ?? error)));
+       page.on("console", (message) => {
+         if (message.type() === "error") result.consoleErrors.push(message.text());
+       });
+       const video = page.video();
+       try {
+-        await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`);
++        releasePreload = await holdPlaygroundPreload(page);
++        await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`, { waitUntil: "domcontentloaded" });
+         await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+         const source = await readFile(path.join(root, "web", entry.path), "utf8");
+         const editorSource = await page.locator("#python-scene-source").inputValue();
+@@ -469,7 +766,7 @@
+         result.stage = "ordinary first pass";
+         result.firstPassOutcome = "fail";
+         // Closing the page in finally retires its workers on timeout; no stuck run survives.
+-        const firstPassRun = await runOrdinaryGallery(page, 360000, entry);
++        const firstPassRun = await runOrdinaryGallery(page, 360000, entry, { expectColdStart: true });
+         result.firstPassWallMsIncludingAuthoring = firstPassRun.wallMs;
+         // Check execution before viewport convergence so a runtime panic is not
+         // obscured by the renderer's consequently unchanged backing dimensions.
+@@ -634,6 +931,61 @@
          console.log(`PASS live ${entry.id}: normal source run, replay endpoint, and ${result.intermediateSamples.length} intermediate comparisons`);
        } catch (error) {
          result.error = String(error.stack ?? error);
@@ -581,3 +614,24 @@
          result.unexpectedReplayDenial = entry.playbackCapability === "deterministic-retained-replay" &&
            result.firstPass?.controls?.controllable === "false";
          result.failureState = await page.evaluate(() => ({
+@@ -644,7 +996,8 @@
+         await page.screenshot({ path: path.join(output, `${entry.id}-failure.png`) }).catch(() => {});
+         console.error(`FAIL live ${entry.id}: ${result.error}`);
+       } finally {
+-        await page.close();
++        try { await page.close(); }
++        finally { releasePreload?.(); }
+         try {
+           assert.ok(video, "review video was not created");
+           result.video = `${entry.id}.webm`;
+--- a/scripts/playground-browser-support.mjs
++++ b/scripts/playground-browser-support.mjs
+@@ -8,7 +8,7 @@
+   const gate = new Promise((resolve) => { release = resolve; });
+   await page.route("**/live-authoring-bootstrap.js", async (route) => {
+     await gate;
+-    await route.continue();
++    if (!page.isClosed()) await route.continue();
+   });
+   return release;
+ }
