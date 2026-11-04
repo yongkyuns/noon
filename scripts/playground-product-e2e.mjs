@@ -36,7 +36,10 @@ if (showcaseEntry !== null) {
   assert.equal(showcaseEntry.duration, measurement.sourceEndSeconds, "product endpoint differs from its declared lesson");
 }
 
-function authoredPassLifecycleReady({ runInFlight, run, diagnostics }) {
+function authoredPassLifecycleReady({ runInFlight, run, diagnostics, controls }) {
+  if (diagnostics == null) return runInFlight === false && run?.exampleId === exampleId &&
+    Number.isFinite(run.sourceRunCompletedAtMs) && controls?.busy === "false" &&
+    Number(controls.elapsedSeconds) >= measurement.sourceEndSeconds - 1e-7;
   const context = diagnostics?.context;
   if (runInFlight !== false || run?.exampleId !== exampleId ||
       context?.exampleId !== exampleId || context.runGeneration !== run.runGeneration ||
@@ -63,24 +66,24 @@ function authoredPassLifecycleReady({ runInFlight, run, diagnostics }) {
     Math.abs(final.time - measurement.sourceEndSeconds) <= tolerance;
 }
 
-function firstPassEndpointSample(samples, disposition) {
-  const publication = disposition?.publication;
-  if (!Array.isArray(samples) || !Number.isSafeInteger(publication?.session) ||
-      !Number.isSafeInteger(publication?.sequence)) return null;
+function firstPassEndpointSample(samples, fps, runGeneration) {
+  if (!Array.isArray(samples)) return null;
+  let previousTime = -Infinity;
   for (const sample of samples) {
-    if (sample.session !== publication.session || sample.session < 0 ||
-        !Number.isSafeInteger(sample.sequence) || sample.sequence < 0 ||
-        sample.sequence >= publication.sequence || !Number.isFinite(sample.time) ||
-        sample.time < 0 || sample.time > measurement.sourceEndSeconds ||
-        !Number.isFinite(sample.presentedAtMs) || sample.presentedAtMs < 0) continue;
+    if (sample.session !== fps.session || sample.exampleId !== exampleId ||
+        sample.runGeneration !== runGeneration || !Number.isFinite(sample.time)) continue;
+    if (sample.time + 0.001 < previousTime) break;
+    previousTime = sample.time;
+    if (sample.ready !== true || sample.needsPresent !== false || sample.bufferedDeltas !== 0 ||
+        !Number.isSafeInteger(sample.frames) || sample.frames < 1 || sample.time < 0 ||
+        sample.time > measurement.sourceEndSeconds || !Number.isFinite(sample.rendererAt)) continue;
     if (showcaseEntry !== null) {
       try {
         assertNaturalFirstPassPublication(showcaseEntry, measurement.sourceEndSeconds, sample.time);
       } catch {
         continue;
       }
-    } else if (Math.abs(sample.time - measurement.sourceEndSeconds) >
-        8 * Number.EPSILON * Math.max(1, measurement.sourceEndSeconds)) continue;
+    } else if (sample.time < measurement.windowEndSeconds - 1e-7) continue;
     return sample;
   }
   return null;
@@ -188,6 +191,8 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
           ...probe.latest,
           now: performance.now(),
           runInFlight: gallery?.runInFlight ?? false,
+          exampleId: gallery?.runPhaseMetrics?.exampleId ?? null,
+          runGeneration: gallery?.runPhaseMetrics?.runGeneration ?? null,
           playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
         };
       });
@@ -204,50 +209,60 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     // completion signal. Wait for the same run's source cleanup and final
     // profile disposition, including one actual loop before accepting a
     // replayable pass.
-    await page.waitForFunction(exampleId => {
+    await page.waitForFunction(({ exampleId, expectedProfile, expectedDisposition, durationSeconds }) => {
       const gallery = window.__noonExampleGallery;
-      const events = gallery?.executionDiagnostics?.events ?? [];
-      return gallery?.runInFlight === false && gallery.runPhaseMetrics?.exampleId === exampleId &&
-        Number.isFinite(gallery.runPhaseMetrics.sourceRunCompletedAtMs) &&
-        events.some(event => event.stage === "source-complete") &&
-        events.some(event => event.stage === "terminal-adopted") &&
-        events.some(event => event.stage === "disposition");
-    }, exampleId, { timeout: 30_000 });
+      const run = gallery?.runPhaseMetrics;
+      const diagnostics = gallery?.executionDiagnostics;
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      if (gallery?.runInFlight !== false || run?.exampleId !== exampleId ||
+          !Number.isFinite(run.sourceRunCompletedAtMs)) return false;
+      if (diagnostics == null) return controls?.busy === "false" &&
+        Number(controls.elapsedSeconds) >= durationSeconds - 1e-7;
+      const events = diagnostics.events ?? [];
+      const attached = events.find(event => event.stage === "attached");
+      const sourceComplete = events.find(event => event.stage === "source-complete");
+      const terminal = events.find(event => event.stage === "terminal-adopted");
+      const final = events.findLast(event => event.stage === "disposition");
+      const ordered = Number.isSafeInteger(sourceComplete?.sequence) &&
+        Number.isSafeInteger(terminal?.sequence) && Number.isSafeInteger(final?.sequence) &&
+        final.sequence > Math.max(sourceComplete.sequence, terminal.sequence);
+      const dispositionReady = expectedDisposition === "looped"
+        ? final?.disposition === "looped" && Number.isSafeInteger(final.loopCount) && final.loopCount >= 1
+        : final?.disposition === expectedDisposition && Number.isFinite(final.time) &&
+          Math.abs(final.time - durationSeconds) <= 8 * Number.EPSILON * Math.max(1, durationSeconds);
+      return diagnostics.droppedEvents === 0 && attached?.profile === expectedProfile && ordered &&
+        !events.some(event => event.stage === "profile-change") && dispositionReady;
+    }, { exampleId, expectedProfile: completionExpectation.attachedProfile,
+      expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds },
+    { timeout: 30_000 });
     const lifecycle = await page.evaluate(() => {
       const gallery = window.__noonExampleGallery;
       return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
-        diagnostics: gallery.executionDiagnostics };
+        diagnostics: gallery.executionDiagnostics,
+        controls: document.querySelector(".playback-controls")?.dataset ?? null };
     });
     assert.ok(authoredPassLifecycleReady(lifecycle),
-    `authored source did not complete its expected lifecycle: ${JSON.stringify({
+      `authored source did not complete its expected lifecycle: ${JSON.stringify({
       disposition: lifecycle.diagnostics?.events?.findLast(event => event.stage === "disposition"),
-      context: lifecycle.diagnostics?.context, run: lifecycle.run,
+      context: lifecycle.diagnostics?.context, run: lifecycle.run, controls: lifecycle.controls,
     })}`);
-    const disposition = lifecycle.diagnostics.events.findLast(event => event.stage === "disposition");
+    const disposition = lifecycle.diagnostics?.events.findLast(event => event.stage === "disposition") ?? null;
     evidence.completion = { runGeneration: lifecycle.run.runGeneration,
-      runRequestId: lifecycle.diagnostics.runRequestId, attachedProfile: completionExpectation.attachedProfile,
-      disposition: disposition.disposition, loopCount: disposition.loopCount ?? null,
+      runRequestId: lifecycle.diagnostics?.runRequestId ?? null, attachedProfile: disposition?.profile ?? null,
+      disposition: disposition?.disposition ?? "legacy-natural-endpoint",
+      loopCount: disposition?.loopCount ?? null,
       sourceRunCompletedAtMs: lifecycle.run.sourceRunCompletedAtMs };
     const milliseconds = performance.now() - started;
     if (captureFrames) {
-      // This current observation is separate from the retained first-pass
-      // endpoint publication captured in the bounded stage samples below.
+      // This current observation is separate from the natural terminal sample
+      // retained in this run's 50 ms renderer observations.
       const endpoint = { phase: "endpoint", ...await sampleRendererObservation(page) };
       frameSamples.push(endpoint);
     }
     const presentationSamples = await page.evaluate(() => window.__noonProductRenderProbe.presentationSamples);
-    if (captureFrames) {
-      const terminal = lifecycle.diagnostics.events.findLast(event => event.stage === "disposition");
-      const firstPassEndpoint = firstPassEndpointSample(presentationSamples, terminal);
-      assert.ok(firstPassEndpoint !== null,
-        `no pre-wrap terminal publication was rendered in this authored pass: ${JSON.stringify({
-          terminal: terminal?.publication, samples: presentationSamples.slice(-8),
-        })}`);
-      evidence.firstPassEndpoint = firstPassEndpoint;
-    }
     evidence.presentationSamples = presentationSamples;
     return { milliseconds, state, frameSamples, presentationSamples,
-      completion: evidence.completion, firstPassEndpoint: evidence.firstPassEndpoint ?? null };
+      completion: evidence.completion, runGeneration: lifecycle.run.runGeneration };
   } finally {
     sampling = false;
     try {
@@ -267,7 +282,9 @@ async function sampleRendererObservation(page) {
   });
   await page.waitForFunction(previous => window.__noonProductRenderProbe.metricsReplies > previous,
     previousReplies, { timeout: 10_000 });
-  return page.evaluate(() => ({ ...window.__noonProductRenderProbe.latest, now: performance.now() }));
+  return page.evaluate(() => ({ ...window.__noonProductRenderProbe.latest, now: performance.now(),
+    exampleId: window.__noonExampleGallery?.runPhaseMetrics?.exampleId ?? null,
+    runGeneration: window.__noonExampleGallery?.runPhaseMetrics?.runGeneration ?? null }));
 }
 
 function changedPixelStats(buffer) {
@@ -522,6 +539,12 @@ try {
     warmupSeconds: measurement.windowStartSeconds,
     maxEndDelaySeconds: measurement.maxEndDelaySeconds,
   });
+  const firstPassEndpoint = firstPassEndpointSample(warm.frameSamples, fps, warm.runGeneration);
+  assert.ok(firstPassEndpoint !== null,
+    `no natural first-pass terminal hold was sampled in the scored renderer epoch: ${JSON.stringify({
+      runGeneration: warm.runGeneration, session: fps.session, samples: warm.frameSamples.slice(-8),
+    })}`);
+  warm.firstPassEndpoint = firstPassEndpoint;
   const presentationGaps = measurement.gapClock === null ? null
     : samplePresentationGaps(warm.presentationSamples, fps);
 
