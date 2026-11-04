@@ -11,9 +11,9 @@ permissions:
 
 jobs:
   webkit-gallery-diagnostic:
-    name: WebKit shrink-to-center phase diagnosis
+    name: WebKit gallery shard 1 phase diagnosis
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       DEBUG: pw:browser
     steps:
@@ -47,13 +47,14 @@ jobs:
           bash scripts/ci-install-playwright-browser.sh webkit
           node scripts/check-web-package.mjs
           git diff --exit-code -- web
-      - name: Rerun the exact failing gallery case with phase diagnostics
-        timeout-minutes: 10
+      - name: Rerun the full strict WebKit gallery shard with phase diagnostics
+        timeout-minutes: 20
         env:
           NOON_PLAYGROUND_BROWSER: webkit
           NOON_PLAYGROUND_PROFILE: mobile-dpr2
           NOON_SHOWCASE_PROFILE_GATE: strict
-          NOON_GALLERY_CASES: manim-shrink-to-center-text
+          NOON_GALLERY_SHARD_INDEX: "1"
+          NOON_GALLERY_SHARD_COUNT: "3"
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery-webkit-diagnostic
         run: node scripts/playground-gallery-runtime-smoke.mjs
       - name: Preserve diagnostic evidence
