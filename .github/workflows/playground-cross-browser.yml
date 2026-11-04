@@ -14,6 +14,8 @@ jobs:
     name: Firefox audio and worker retirement diagnosis
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DEBUG: pw:browser
     steps:
       - uses: actions/checkout@v7
       - name: Apply only diagnostic harness changes to the tested source
@@ -42,7 +44,24 @@ jobs:
           npx playwright install --with-deps firefox
           node scripts/check-web-package.mjs
           git diff --exit-code -- web
+      - name: Record available native audio services
+        shell: bash
+        run: |
+          mkdir -p browser-smoke-artifacts/firefox-diagnostic/native
+          {
+            for noon_audio_tool in pulseaudio pactl aplay; do
+              command -v "$noon_audio_tool" || echo "$noon_audio_tool unavailable"
+            done
+            ps -eo comm= | sort -u | rg -i 'pulse|pipewire|alsa|jack' || true
+            if command -v pactl >/dev/null; then pactl info || true; fi
+            if command -v aplay >/dev/null; then aplay -l || true; fi
+          } > browser-smoke-artifacts/firefox-diagnostic/native/services.txt 2>&1
+      - name: Test native AudioContext without Noon code
+        env:
+          NOON_FIREFOX_AUDIO_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/native
+        run: xvfb-run -a node scripts/firefox-native-audio-resume-diagnostic.mjs
       - name: Diagnose immutable audio through the unchanged gallery gate
+        if: ${{ !cancelled() }}
         id: gallery
         env:
           NOON_PLAYGROUND_BROWSER: firefox
@@ -51,15 +70,6 @@ jobs:
           NOON_GALLERY_CASES: showcase-background-music
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/gallery
         run: xvfb-run -a node scripts/playground-gallery-runtime-smoke.mjs
-      - name: Diagnose public edit and replacement through the unchanged workflow
-        if: ${{ !cancelled() }}
-        id: matrix
-        env:
-          NOON_PLAYGROUND_BROWSER: firefox
-          NOON_PLAYGROUND_PROFILE: desktop-dpr2
-          NOON_PLAYGROUND_REQUIRE_RUNTIME: '0'
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/matrix
-        run: xvfb-run -a node scripts/playground-browser-matrix-smoke.mjs
       - name: Preserve complete diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v7
