@@ -49,16 +49,7 @@ async function qualifyTriangleHistory(page, duration, initialDiagnostics) {
   for (const target of [3, 12, 21]) {
     const time = await seekPausedGallery(page, duration, target);
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-    const diagnostics = await page.evaluate(() => window.__noonExampleGallery.executionDiagnostics);
-    assert.equal(diagnostics.runRequestId, initialDiagnostics.runRequestId,
-      'history control changed the source request identity');
-    assert.deepEqual(diagnostics.context, initialDiagnostics.context,
-      'history control changed the source execution context');
-    assert.equal(diagnostics.events.filter(event => event.stage === 'source-proof').length, 1,
-      'history control reran source proof');
-    assert.equal(diagnostics.events.filter(event => event.stage === 'attached').length, 1,
-      'history control reattached a source');
-    assert.ok(Math.abs(Number(metrics.metrics.time) - time) < 1e-7,
+    assert.equal(Number(metrics.metrics.time), time,
       'renderer did not settle at the selected authored time');
     const pixels = await page.locator('#scene').screenshot();
     captures.push({ time, pixelSha256: createHash('sha256').update(pixels).digest('hex'),
@@ -97,6 +88,13 @@ async function qualifyTriangleHistory(page, duration, initialDiagnostics) {
     assert.equal(diagnostics.events.filter(event => event.stage === stage).length, 1,
       `history control changed ${stage} count`);
   }
+  const retention = rewindMetrics.engineMetrics?.preparedRetention;
+  assert.ok(retention && retention.reader && retention.pending, 'prepared retention metrics are unavailable');
+  assert.ok(retention.reader.historyPayloadBytes <= retention.reader.historyPayloadBudgetBytes,
+    'prepared history exceeded its reported payload budget');
+  assert.ok(retention.reader.resourceBytes <= retention.reader.resourceBudgetBytes,
+    'prepared resources exceeded their reported resource budget');
+  assert.equal(retention.pending.batches, 0, 'terminal history seek retained a pending producer batch');
   return { receipts, captures, rewind: { time: rewindTime, pixelSha256: rewindSha256,
     exactCanvasMatch: true, metrics: { time: rewindMetrics.metrics.time,
       session: rewindMetrics.metrics.presentedSession,
