@@ -474,9 +474,7 @@ class _RetainedTextMobject(_base.Mobject):
         return self
 
     def move_to(self, point: object, *args: Any, **kwargs: Any) -> _RetainedTextMobject:
-        if args or kwargs:
-            raise NotImplementedError("text move_to currently supports point targets only")
-        _base.Mobject.move_to(self, point)
+        _base.Mobject.move_to(self, point, *args, **kwargs)
         return self
 
     def center(self) -> _RetainedTextMobject:
