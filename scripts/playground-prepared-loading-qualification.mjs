@@ -266,15 +266,6 @@ async function observationDeadline(pending) {
   } finally { clearTimeout(timer); }
 }
 
-async function waitForApplied(page, exampleId) {
-  await page.waitForFunction(expected => {
-    const gallery = globalThis.__noonExampleGallery;
-    const run = gallery?.runPhaseMetrics;
-    return gallery?.runInFlight === false && run?.exampleId === expected &&
-      Number.isFinite(run.sourceRunCompletedAtMs);
-  }, exampleId, { timeout: 180_000 });
-}
-
 async function installReadinessPresentationProbe(context, { profilePublicationStages }) {
   await context.addInitScript(({ maxSamples, maxCadenceSamples, profilePublicationStages }) => {
     const NativeWorker = window.Worker;
