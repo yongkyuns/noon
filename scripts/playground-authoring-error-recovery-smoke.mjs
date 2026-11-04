@@ -695,14 +695,14 @@ try {
   diagnostics.snapshots.pixels = await selectGalleryExample(page, "showcase-raster-images", "Pixels in the scene");
   assert.equal(diagnostics.snapshots.pixels.exampleId, "showcase-raster-images");
   const pixelProof = diagnostics.snapshots.pixels.runEvidence.proof;
-  assert.equal(pixelProof.libraryTrust, "tainted",
-    "Pixels in the scene must execute through an opaque source proof on this baseline");
-  assert.equal(pixelProof.event.admitted, false);
+  assert.equal(pixelProof.libraryTrust, "pristine",
+    "qualified deterministic pixel generation must preserve interpreter trust");
+  assert.equal(pixelProof.event.admitted, true);
   const pixelGeneration = diagnostics.snapshots.pixels.interpreterGeneration;
   diagnostics.snapshots.firstSceneAfterPixels = await selectGalleryExample(page, "showcase-first-scene", "Your first scene");
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.exampleId, "showcase-first-scene");
-  assert.ok(diagnostics.snapshots.firstSceneAfterPixels.interpreterGeneration > pixelGeneration,
-    "same-page Pixels → Your first scene must not reuse opaque interpreter state");
+  assert.equal(diagnostics.snapshots.firstSceneAfterPixels.interpreterGeneration, pixelGeneration,
+    "same-page qualified Pixels → Your first scene reuses the healthy interpreter");
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.ready.libraryTrust, "pristine");
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.proof.libraryTrust, "pristine");
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.proof.event.admitted, true);

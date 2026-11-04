@@ -184,6 +184,10 @@ try {
         const editStarted = monotonicNow();
         const editStartedEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
         await submitMeasuredSourceEdit(page, "# C6 first edit without preload");
+        assert.equal(await page.evaluate(() =>
+          window.__noonExampleGallery.generationDiagnostics.runGeneration), previousGeneration,
+        "draft editing must preserve the current execution generation");
+        await page.locator("#replace-scene").click();
         await waitForCompletedRun(page, previousGeneration);
         const firstRunPhases = await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics);
         assert.ok(firstRunPhases?.runGeneration > previousGeneration,
@@ -381,8 +385,8 @@ try {
         draws: Number(document.querySelector("#metric-draws")?.value),
         uploadBytes: Number(document.querySelector("#metric-upload")?.value),
       }));
-      // The source edit travels through the normal debounce/authoring/reconcile
-      // path. Completion is an explicit endpoint, not a claim about first pixels.
+      // Commit the draft, then use the normal explicit Run/reconcile path.
+      // Source completion and first presented pixels remain separate milestones.
       await waitForCompletedRun(page);
       const noonWasmInstantiation = wasmAccountingEnabled
         ? await collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEnabled })
@@ -400,6 +404,10 @@ try {
       const editStarted = monotonicNow();
       const editStartedEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
       await submitMeasuredSourceEdit(page, "# C6 warm source rerun");
+      assert.equal(await page.evaluate(() =>
+        window.__noonExampleGallery.generationDiagnostics.runGeneration), beforeGeneration,
+      "draft editing must preserve the active execution");
+      await page.locator("#replace-scene").click();
       await waitForCompletedRun(page, beforeGeneration);
       const editCompleted = monotonicNow();
       const warmPresentation = await waitForSessionFirstPresented(page, previousPresentationSession);
@@ -880,8 +888,7 @@ async function runPreloadEditRace(page) {
       };
     };
     const first = submit(superseded);
-    // Dispatch the newer full-source edit in the same page task: the ordinary
-    // 500 ms source debounce cannot start the obsolete source between edits.
+    // Both drafts precede the one explicit Run that accepts the newest source.
     const latest = submit(newest);
     return {
       first,
@@ -894,13 +901,14 @@ async function runPreloadEditRace(page) {
     "first source edit must land during automatic preload");
   assert.equal(editReceipts.latest.liveAuthoring, "preloading",
     "newest source edit must also land before the automatic preload reports ready");
-  assert.ok(editReceipts.first.generation > startingGeneration &&
-    editReceipts.latest.generation >= editReceipts.first.generation,
-  "source edits must invalidate the active run and retain the newest editor value");
+  assert.equal(editReceipts.first.generation, startingGeneration);
+  assert.equal(editReceipts.latest.generation, startingGeneration,
+    "draft edits must preserve the active preload run");
   assert.equal(editReceipts.source, NEWEST_SOURCE);
   assert.equal(editReceipts.runInFlightAfterBoth, true);
   const newestEditStartedEpochMs = editReceipts.latest.submittedAtEpochMs;
   const newestInputGeneration = editReceipts.latest.generation;
+  await page.locator("#replace-scene").click();
 
   const sampledSessions = new Map();
   const obsoleteSourceSamples = [];
@@ -979,9 +987,9 @@ async function runPreloadEditRace(page) {
     firstEdit: {
       sha256: sha256(SUPERSEDED_SOURCE),
       submittedAtEpochMs: editReceipts.first.submittedAtEpochMs,
-      invalidationGeneration: editReceipts.first.generation,
+      observedRunGeneration: editReceipts.first.generation,
       oneObjectScene: true,
-      supersededBeforeDebouncedRun: true,
+      supersededBeforeExplicitRun: true,
     },
     newestEdit: {
       sha256: sha256(NEWEST_SOURCE),
