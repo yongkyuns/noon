@@ -18,10 +18,11 @@ import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
 import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
-  activeCadenceWindows, summarizeColdNetworkObservations,
+  summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
   readinessRunTimingOriginErrors, readinessReplayCycleEvidence,
-  readinessRendererSamples, readinessWarmSeekTargets } from "./playground-prepared-loading-observation.mjs";
+  readinessRendererSamples, readinessWarmSeekTargets, readinessPreparedReaderLead,
+  summarizeReaderLead, activeFrameGapEvidence } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -233,6 +234,7 @@ async function observation(page) {
     globalThis.__noonReadinessPresentationProbe?.requestMetrics();
     let response = null;
     try { response = await gallery?.executionMetrics?.(); } catch {}
+    const metrics = response?.metrics ?? null;
     const controls = document.querySelector(".playback-controls");
     const scrubber = controls?.querySelector(".playback-scrubber");
     const renderProbe = globalThis.__noonReadinessPresentationProbe;
@@ -241,6 +243,7 @@ async function observation(page) {
       run: gallery?.runPhaseMetrics,
       executionDiagnostics: gallery?.executionDiagnostics ?? null,
       presentationProbe: renderProbe ? { count: renderProbe.samples.length, error: renderProbe.error,
+        rendererWorkerOrdinal: renderProbe.rendererWorkerOrdinalForOrigin(metrics?.performanceTimeOriginMs),
         uiEventCount: renderProbe.uiEvents.length, droppedUiEvents: renderProbe.droppedUiEvents } : null,
       controls: controls ? { ...controls.dataset,
         toggleEnabled: controls.querySelector(".playback-toggle")?.disabled === false,
@@ -271,10 +274,13 @@ async function waitForApplied(page, exampleId) {
 }
 
 async function installReadinessPresentationProbe(context, { profilePublicationStages }) {
-  await context.addInitScript(({ maxSamples, profilePublicationStages }) => {
+  await context.addInitScript(({ maxSamples, maxCadenceSamples, profilePublicationStages }) => {
     const NativeWorker = window.Worker;
     const requestId = Number.MAX_SAFE_INTEGER;
-    const probe = { worker: null, pending: false, profilePublicationStages, samples: [], keys: new Set(), error: null,
+    const cadencePollIntervalMs = 250;
+    const probe = { profilePublicationStages, samples: [], keys: new Set(), error: null,
+      rendererWorkerOrdinal: 0, rendererWorkers: new Map(), cadenceSamples: [], cadenceWorkers: new Map(),
+      cadenceGenerationChanges: [], cadenceError: null,
       uiEvents: [], commandResults: [], droppedUiEvents: 0,
       recordUiEvent(event) {
         if (probe.uiEvents.length >= maxSamples) { probe.droppedUiEvents++; return; }
@@ -287,12 +293,23 @@ async function installReadinessPresentationProbe(context, { profilePublicationSt
           commandTiming: message.commandTiming ?? null, commandPublication: message.commandPublication ?? null,
           presentationReceipt: message.presentationReceipt ?? null });
       },
-      requestMetrics() {
-        if (!probe.profilePublicationStages || probe.worker === null || probe.pending) return;
-        probe.pending = true;
-        probe.worker.postMessage({ channel: "noon.render", protocolVersion: 1,
-          type: "metrics", requestId, profilePublicationStages: probe.profilePublicationStages });
+      requestMetrics(force = false, ordinal = probe.workerRecord?.ordinal) {
+        const record = probe.rendererWorkers.get(ordinal);
+        if (!record || record.pending) return;
+        const requestAtMs = performance.now();
+        if (!force && !probe.profilePublicationStages && requestAtMs - record.lastRequestAtMs < cadencePollIntervalMs) return;
+        record.lastRequestAtMs = requestAtMs;
+        record.pending = true;
+        record.instance.postMessage({ channel: "noon.render", protocolVersion: 1,
+          type: "metrics", requestId, includePresentationIntervals: true,
+          profilePublicationStages: probe.profilePublicationStages });
       } };
+    probe.rendererWorkerOrdinalForOrigin = originMs => {
+      if (!Number.isFinite(originMs)) return null;
+      const matching = [...probe.rendererWorkers].filter(([, worker]) => worker.clockOriginMs === originMs)
+        .map(([ordinal]) => ordinal);
+      return matching.length === 1 ? matching[0] : null;
+    };
     window.__noonReadinessPresentationProbe = probe;
     if (globalThis.MessagePort?.prototype) {
       const addMessageListener = MessagePort.prototype.addEventListener;
@@ -346,17 +363,84 @@ async function installReadinessPresentationProbe(context, { profilePublicationSt
       constructor(url, options) {
         super(url, options);
         if (!String(url).includes("execution-render-worker.js")) return;
-        probe.worker = this;
-        probe.pending = false;
+        const workerOrdinal = ++probe.rendererWorkerOrdinal;
+        const workerRecord = { ordinal: workerOrdinal, instance: this, pending: false, responses: 0,
+          lastRequestAtMs: -Infinity };
+        probe.rendererWorkers.set(workerOrdinal, workerRecord);
+        probe.workerRecord = workerRecord;
         this.addEventListener("message", event => {
           const message = event.data;
           if (message?.channel !== "noon.render" || message.requestId !== requestId) return;
           event.stopImmediatePropagation();
-          if (probe.worker !== this) return;
-          probe.pending = false;
+          workerRecord.pending = false;
+          workerRecord.responses++;
+          if (Number.isFinite(message.metrics?.performanceTimeOriginMs)) {
+            const origin = message.metrics.performanceTimeOriginMs;
+            if (workerRecord.clockOriginMs !== undefined && workerRecord.clockOriginMs !== origin) {
+              probe.cadenceError ??= "renderer worker clock origin changed";
+            }
+            workerRecord.clockOriginMs = origin;
+          }
           if (message.type !== "metrics" || !Number.isFinite(message.metrics?.presentedFrames)) {
             probe.error = `invalid renderer metrics response: ${message.message ?? message.type}`;
+            probe.cadenceError ??= probe.error;
             return;
+          }
+          const raw = message.metrics.rawPresentationIntervals;
+          if (raw?.enabled !== true || !Number.isSafeInteger(raw.generation) ||
+              !Number.isSafeInteger(raw.latestOrdinal) || raw.latestOrdinal < 0 ||
+              !Number.isSafeInteger(raw.capacity) || raw.capacity <= 0 ||
+              raw.ordinalOverflow !== false || !Array.isArray(raw.samples) || raw.samples.length > raw.capacity ||
+              !Number.isFinite(message.metrics.performanceTimeOriginMs) ||
+              !Number.isFinite(message.metrics.sampledAtMs)) {
+            probe.cadenceError ??= "raw presentation interval capture is missing, invalid, or overflowed";
+          } else {
+            const worker = probe.cadenceWorkers.get(workerOrdinal) ?? { latestOrdinal: 0, generation: null };
+            worker.latestMetricsEpochMs = message.metrics.performanceTimeOriginMs + message.metrics.sampledAtMs;
+            worker.captureHeaderObservedAtEpochMs ??= worker.latestMetricsEpochMs;
+            worker.capacity = raw.capacity;
+            if (raw.latestOrdinal < worker.latestOrdinal) {
+              probe.cadenceError ??= "raw presentation interval ordinal regressed";
+            }
+            if (worker.generation !== null && raw.generation !== worker.generation) {
+              if (probe.cadenceGenerationChanges.length < 64) {
+                probe.cadenceGenerationChanges.push({ workerOrdinal, from: worker.generation, to: raw.generation,
+                  observedAtEpochMs: message.metrics.performanceTimeOriginMs + message.metrics.sampledAtMs });
+              } else probe.cadenceError ??= "renderer generation change collector bound exceeded";
+            }
+            worker.generation = raw.generation;
+            let previousRingOrdinal = null;
+            for (const sample of raw.samples) {
+              if (!Number.isSafeInteger(sample.ordinal) || !Number.isSafeInteger(sample.session) ||
+                  !Number.isFinite(sample.presentedAtMs) || !Number.isFinite(sample.intervalMs) ||
+                  sample.intervalMs < 0 || sample.ordinal > raw.latestOrdinal) {
+                probe.cadenceError ??= "raw presentation interval sample is invalid";
+                continue;
+              }
+              if (previousRingOrdinal !== null && sample.ordinal !== previousRingOrdinal + 1) {
+                probe.cadenceError ??= "raw presentation interval ring is not contiguous";
+              }
+              previousRingOrdinal = sample.ordinal;
+              if (sample.ordinal <= worker.latestOrdinal) continue;
+              if (sample.ordinal !== worker.latestOrdinal + 1) {
+                probe.cadenceError ??= "raw presentation interval ordinal gap or ring overrun";
+                worker.latestOrdinal = sample.ordinal - 1;
+              }
+              if (probe.cadenceSamples.length >= maxCadenceSamples) {
+                probe.cadenceError ??= "raw presentation interval collector bound exceeded";
+                break;
+              }
+              probe.cadenceSamples.push({ ...sample, workerOrdinal,
+                generation: raw.generation, clockOriginMs: message.metrics.performanceTimeOriginMs });
+              worker.latestOrdinal = sample.ordinal;
+            }
+            if (raw.latestOrdinal > worker.latestOrdinal) {
+              probe.cadenceError ??= "raw presentation interval tail is missing";
+            }
+            if (raw.samples.length > 0 && previousRingOrdinal !== raw.latestOrdinal) {
+              probe.cadenceError ??= "raw presentation interval ring tail does not match its ordinal";
+            }
+            probe.cadenceWorkers.set(workerOrdinal, worker);
           }
           for (const sample of message.metrics.publicationStageSamples ?? []) {
             const key = `${message.metrics.performanceTimeOriginMs}:${sample.session}:${sample.sequence}`;
@@ -366,10 +450,11 @@ async function installReadinessPresentationProbe(context, { profilePublicationSt
             probe.samples.push({ ...sample, clockOriginMs: message.metrics.performanceTimeOriginMs });
           }
         });
+        probe.requestMetrics(false, workerOrdinal);
       }
     }
     Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: ObservedWorker });
-  }, { maxSamples: 4096, profilePublicationStages });
+  }, { maxSamples: 4096, maxCadenceSamples: 16384, profilePublicationStages });
 }
 
 function readinessTraceState(row, sample) {
@@ -432,6 +517,44 @@ function bufferingEpisodes(uiEvents) {
   if (startedAtEpochMs !== null) episodes.push({ startedAtEpochMs, endedAtEpochMs: null,
     durationMs: null, open: true, observer: "playback-controls mutation" });
   return episodes;
+}
+
+async function rawCadenceCapture(page, rendererWorkerOrdinal) {
+  if (!Number.isSafeInteger(rendererWorkerOrdinal)) {
+    return { error: "measured renderer worker identity is unavailable", samples: [], workers: [], generationChanges: [] };
+  }
+  await page.waitForFunction(ordinal => {
+    const probe = globalThis.__noonReadinessPresentationProbe;
+    const record = probe?.rendererWorkers?.get(ordinal);
+    return record && !record.pending;
+  }, rendererWorkerOrdinal, { timeout: 10_000 });
+  const previousResponseCount = await page.evaluate(ordinal => {
+    const probe = globalThis.__noonReadinessPresentationProbe;
+    const record = probe?.rendererWorkers?.get(ordinal);
+    if (!record) return null;
+    const count = record.responses;
+    probe.requestMetrics(true, ordinal);
+    return count;
+  }, rendererWorkerOrdinal);
+  if (!Number.isSafeInteger(previousResponseCount)) {
+    return { error: "owning renderer worker is unavailable for final cadence capture", samples: [], workers: [], generationChanges: [] };
+  }
+  await page.waitForFunction(({ ordinal, previous }) => {
+    const probe = globalThis.__noonReadinessPresentationProbe;
+    const record = probe?.rendererWorkers?.get(ordinal);
+    return record && record.responses > previous && !record.pending;
+  }, { ordinal: rendererWorkerOrdinal, previous: previousResponseCount }, { timeout: 10_000 });
+  return page.evaluate(ordinal => {
+    const probe = globalThis.__noonReadinessPresentationProbe;
+    const workers = [...(probe?.cadenceWorkers ?? new Map())].map(([ordinal, state]) => ({ ordinal, ...state }));
+    const owner = probe?.cadenceWorkers?.get(ordinal);
+    return { error: probe ? probe.cadenceError : "raw cadence probe is unavailable",
+      samples: probe?.cadenceSamples ?? [],
+      generationChanges: probe?.cadenceGenerationChanges ?? [],
+      workers, latestMetricsEpochMs: owner?.latestMetricsEpochMs ?? null,
+      headerObservedAtEpochMs: owner?.captureHeaderObservedAtEpochMs ?? null,
+      capacity: owner?.capacity ?? null };
+  }, rendererWorkerOrdinal);
 }
 
 async function retiredWorkerObservation(worker, timeoutMs = 500) {
@@ -613,11 +736,12 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     stratum, trial, warmup, status: "running", startup: {}, commands: [],
     browserProcessId: browserServer.process().pid, clientContextId: contextIdentity.id,
     clientContextCreatedAtEpochMs: contextIdentity.createdAtEpochMs,
-    rendererSamples: [], cadenceObservations: [], pageErrors: [], consoleErrors: [],
+    rendererSamples: [], cadenceObservations: [], readerLeadObservations: [], pageErrors: [], consoleErrors: [],
     sourceInvocationIds: [], profileValidationErrors: [], limitation: [] };
   const replayRow = { ...sourceRow, arm: replayArm, pairedInitialArm: initialArm, startup: {},
-    commands: [], rendererSamples: [], cadenceObservations: [], pageErrors: [],
+    commands: [], rendererSamples: [], cadenceObservations: [], readerLeadObservations: [], pageErrors: [],
     consoleErrors: [], sourceInvocationIds: [], profileValidationErrors: [], limitation: [] };
+  replayRow.rendererWorkerOrdinal = undefined;
   report.cases.push(sourceRow, replayRow);
   let activeRow = sourceRow;
   const onPageError = error => activeRow.pageErrors.push(String(error));
@@ -739,6 +863,12 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       targetRow.lastObservation = sample;
       targetRow.cadenceObservations.push({ epochMs: sample.epochMs,
         metrics: sample.metrics, controls: sample.controls, preparedPlayback: sample.preparedPlayback });
+      const readerLead = readinessPreparedReaderLead(sample.preparedPlayback);
+      if (readerLead !== null) {
+        if (targetRow.readerLeadObservations.length < 4096) {
+          targetRow.readerLeadObservations.push({ observedAtEpochMs: sample.epochMs, ...readerLead });
+        } else targetRow.profileValidationErrors.push("reader lead observation bound exceeded");
+      }
       targetRow.preparedRetention = sample.preparedRetention ?? targetRow.preparedRetention ?? null;
       readinessTraceState(targetRow, sample);
       const diagnostic = sample.executionDiagnostics;
@@ -760,6 +890,14 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         targetRow.startup.interpreterReadyBasis = "clientForRun resolves before the source start timestamp";
       }
       const events = diagnostic?.events ?? [];
+      const disposition = events.findLast(event => event.stage === "disposition");
+      const firstTraversalObserved = initialArm === "A"
+        ? Number.isSafeInteger(disposition?.loopCount) && disposition.loopCount >= 1
+        : disposition?.disposition === "observed-complete";
+      if (targetRow === sourceRow && sourceRow.firstTraversalEndObservedAtEpochMs === undefined &&
+          firstTraversalObserved) {
+        sourceRow.firstTraversalEndObservedAtEpochMs = sample.epochMs;
+      }
       const attachedPublication = events.find(event => event.stage === "attached")?.publication;
       const presentationAnchor = targetRow === sourceRow ? attachedPublication : targetRow.restartPublication;
       const latestPresentation = sample.metrics?.latestPresentationSample;
@@ -775,6 +913,13 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       }
       const hasCurrentRunPresentation = readinessPresentationMatchesRun(presentationAnchor,
         latestPresentation, sample.metrics?.performanceTimeOriginMs, targetRunStart);
+      if (hasCurrentRunPresentation) {
+        const owner = sample.presentationProbe?.rendererWorkerOrdinal;
+        if (Number.isSafeInteger(owner) && targetRow.rendererWorkerOrdinal === undefined) targetRow.rendererWorkerOrdinal = owner;
+        else if (Number.isSafeInteger(owner) && targetRow.rendererWorkerOrdinal !== owner) {
+          targetRow.profileValidationErrors.push("renderer worker changed during the measured row");
+        }
+      }
       if (targetRow === sourceRow && sourceRunAcceptedEpochMs !== null && hasCurrentRunPresentation &&
           sample.controls?.toggleEnabled === true &&
           targetRow.startup.firstControlsReadyObservedUpperMs === undefined) {
@@ -858,10 +1003,29 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     sourceRow.startup.renderPreparation = current.run.renderPreparation ?? null;
     sourceRow.endTrace = current.executionDiagnostics;
     sourceRow.traceCompleteness = sourceRow.traceCompleteness ?? null;
+    const sourceAttached = sourceRow.endTrace?.events?.find(event => event.stage === "attached")?.publication;
+    const sourceCadenceCapture = await rawCadenceCapture(page, sourceRow.rendererWorkerOrdinal);
+    sourceRow.rawCadenceCoverage = { error: sourceCadenceCapture.error,
+      headerObservedAtEpochMs: sourceCadenceCapture.headerObservedAtEpochMs,
+      capacity: sourceCadenceCapture.capacity, latestMetricsEpochMs: sourceCadenceCapture.latestMetricsEpochMs,
+      samplesReceived: sourceCadenceCapture.samples.length, workers: sourceCadenceCapture.workers,
+      generationChanges: sourceCadenceCapture.generationChanges };
+    sourceRow.activeFrameGap = activeFrameGapEvidence(sourceCadenceCapture, {
+      startEpochMs: sourceRunAcceptedEpochMs,
+      endEpochMs: sourceRow.firstTraversalEndObservedAtEpochMs,
+      session: sourceAttached?.session,
+      rendererWorkerOrdinal: sourceRow.rendererWorkerOrdinal,
+      targetHz: readinessContract.reference.refreshHz,
+    });
+    sourceRow.profileValidationErrors.push(...sourceRow.activeFrameGap.coverageErrors);
+    sourceRow.readerLeadSummary = summarizeReaderLead(sourceRow.readerLeadObservations);
+    if ((initialArm === "A" && sourceRow.readerLeadSummary.count === 0) ||
+        sourceRow.readerLeadObservations.length >= 4096) {
+      sourceRow.profileValidationErrors.push("prepared source reader lead is missing or exceeded its bound");
+    }
     sourceRow.rendererSamples = await page.evaluate(() =>
       globalThis.__noonReadinessPresentationProbe?.samples ?? []);
     sourceRow.presentationSampleEnd = sourceRow.rendererSamples.length;
-    sourceRow.activeCadenceWindows = activeCadenceWindows(sourceRow.cadenceObservations);
     delete sourceRow.cadenceObservations;
     sourceRow.uiEvents = await page.evaluate(() => globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []);
     sourceRow.bufferingEpisodes = bufferingEpisodes(sourceRow.uiEvents);
@@ -977,7 +1141,25 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assert.ok(Number.isFinite(replayRow.startup.firstUsefulMs), "retained replay produced no useful picture in its first cycle");
     assert.ok(replayCurrent.metrics?.presentedFrames > beforeFrames,
       "retained replay produced no new presentation");
-    replayRow.activeCadenceWindows = activeCadenceWindows(replayRow.cadenceObservations);
+    const replayCadenceCapture = await rawCadenceCapture(page, replayRow.rendererWorkerOrdinal);
+    replayRow.rawCadenceCoverage = { error: replayCadenceCapture.error,
+      headerObservedAtEpochMs: replayCadenceCapture.headerObservedAtEpochMs,
+      capacity: replayCadenceCapture.capacity, latestMetricsEpochMs: replayCadenceCapture.latestMetricsEpochMs,
+      samplesReceived: replayCadenceCapture.samples.length, workers: replayCadenceCapture.workers,
+      generationChanges: replayCadenceCapture.generationChanges };
+    replayRow.activeFrameGap = activeFrameGapEvidence(replayCadenceCapture, {
+      startEpochMs: replayStartedAtEpochMs,
+      endEpochMs: replayCycleComplete.wrapped.observationEpochMs,
+      session: restartPublication.session,
+      rendererWorkerOrdinal: replayRow.rendererWorkerOrdinal,
+      targetHz: readinessContract.reference.refreshHz,
+    });
+    replayRow.profileValidationErrors.push(...replayRow.activeFrameGap.coverageErrors);
+    replayRow.readerLeadSummary = summarizeReaderLead(replayRow.readerLeadObservations);
+    if ((replayArm === "B" && replayRow.readerLeadSummary.count === 0) ||
+        replayRow.readerLeadObservations.length >= 4096) {
+      replayRow.profileValidationErrors.push("prepared replay reader lead is missing or exceeded its bound");
+    }
     replayRow.startup.replayRequestToRestartCompletionMs =
       replayRow.startup.restartCompletedUiEpochMs - replayStartedAtEpochMs;
     replayRow.startup.replayToWrapMs = replayCycleComplete.wrapped.observationEpochMs - replayStartedAtEpochMs;

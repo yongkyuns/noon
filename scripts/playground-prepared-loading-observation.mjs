@@ -1,10 +1,13 @@
+import { summarizeCadence } from "../web/frame-metrics.js";
+
 export const READINESS_ARMS = ["A", "B", "C", "D"];
 export const READINESS_BASELINE_ARMS = ["C", "D"];
 const READINESS_STARTUP_PHASES = ["sourceRun", "historyReplay"];
 export const READINESS_STRATA = ["fresh-process-warm-resource-cache",
   "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"];
 export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceP95Ms",
-  "commandPresentationP99Ms", "bufferingEpisodeMs", "activeCadenceWindowP99Ms", "peakProcessRssBytes", "liveOwnerRetirementMs"];
+  "commandPresentationP99Ms", "bufferingEpisodeMs", "activeFrameGapP99Ms", "missedRefreshFraction",
+  "maxActiveFrameGapMs", "peakProcessRssBytes", "liveOwnerRetirementMs"];
 export const PRODUCT_GATE_THRESHOLD_ENVS = {
   maxLatencyRatio: "NOON_PRODUCT_MAX_LATENCY_RATIO",
   latencySlackMs: "NOON_PRODUCT_LATENCY_SLACK_MS",
@@ -282,31 +285,70 @@ export function distribution(values) {
     percentileMethod: "midpoint median; nearest-rank tails" };
 }
 
-export function activeCadenceWindows(observations) {
-  const windows = [];
-  let current = null, previousCount = 0, previousSession = null;
-  const close = () => { if (current) windows.push(current); current = null; };
-  for (const sample of observations) {
-    const metrics = sample.metrics ?? {};
-    const count = metrics.presentationIntervalSamples;
-    const summary = metrics.presentationIntervalMs;
-    if (!Number.isSafeInteger(count) || count <= 0 || !Number.isFinite(summary?.p95) ||
-        !Number.isFinite(summary?.p99)) {
-      close(); previousCount = 0; previousSession = null; continue;
-    }
-    const session = metrics.presentedSession ?? null;
-    if (current && (count < previousCount || session !== previousSession)) close();
-    if (!current) current = { startedAtEpochMs: sample.epochMs, sampleCount: 0 };
-    current.endedAtEpochMs = sample.epochMs;
-    current.sampleCount = Math.max(current.sampleCount, count);
-    current.p95Ms = summary.p95;
-    current.p99Ms = Number.isFinite(summary.p99) ? summary.p99 : null;
-    current.maxMs = Number.isFinite(summary.max) ? summary.max : null;
-    previousCount = count;
-    previousSession = session;
+export function summarizeReaderLead(observations) {
+  const values = Array.isArray(observations) ? observations : [];
+  return { count: values.length,
+    leadSeconds: distribution(values.map(value => value.leadSeconds)),
+    openSamples: values.filter(value => !value.endClosed).length,
+    closedSamples: values.filter(value => value.endClosed).length,
+    bufferingSamples: values.filter(value => value.buffering).length };
+}
+
+export function activeFrameGapEvidence(capture, { startEpochMs, endEpochMs, session,
+  rendererWorkerOrdinal, targetHz }) {
+  const errors = capture?.error ? [capture.error] : [];
+  const samples = Array.isArray(capture?.samples) ? capture.samples : [];
+  if (!Number.isFinite(startEpochMs) || !Number.isFinite(endEpochMs) || endEpochMs <= startEpochMs ||
+      !Number.isSafeInteger(session) || !Number.isSafeInteger(rendererWorkerOrdinal)) {
+    errors.push("active frame-gap window identity or bounds are missing");
   }
-  close();
-  return windows;
+  if (!Number.isFinite(capture?.headerObservedAtEpochMs) ||
+      !Number.isSafeInteger(capture?.capacity) || capture.capacity <= 0) {
+    errors.push("raw cadence capture header is missing or malformed");
+  }
+  const ownerMetricsEpochMs = capture?.workers?.find(worker => worker.ordinal === rendererWorkerOrdinal)?.latestMetricsEpochMs;
+  const ownerState = capture?.workers?.find(worker => worker.ordinal === rendererWorkerOrdinal);
+  if (!Number.isFinite(ownerMetricsEpochMs) || ownerMetricsEpochMs < endEpochMs) {
+    errors.push("active frame-gap capture did not sample through the window end");
+  }
+  const ownerOrdinals = samples.filter(sample => sample.workerOrdinal === rendererWorkerOrdinal)
+    .map(sample => sample.ordinal);
+  if (!Number.isSafeInteger(ownerState?.latestOrdinal) || ownerOrdinals.length !== ownerState.latestOrdinal ||
+      ownerOrdinals.some((ordinal, index) => ordinal !== index + 1)) {
+    errors.push("raw cadence interval ordinals contain a gap or missing tail");
+  }
+  const inWindow = samples.filter(sample => {
+    const end = sample.clockOriginMs + sample.presentedAtMs;
+    const start = end - sample.intervalMs;
+    return sample.workerOrdinal === rendererWorkerOrdinal && sample.session === session &&
+      start < endEpochMs && end > startEpochMs;
+  });
+  const selected = inWindow.filter(sample => {
+    const end = sample.clockOriginMs + sample.presentedAtMs;
+    const start = end - sample.intervalMs;
+    return start >= startEpochMs && end <= endEpochMs;
+  });
+  if (selected.length === 0) errors.push("active frame-gap window has no complete renderer intervals");
+  const ownerSamples = samples.filter(sample => sample.workerOrdinal === rendererWorkerOrdinal &&
+    sample.session === session);
+  const generations = [...new Set(ownerSamples.filter(sample => {
+    const at = sample.clockOriginMs + sample.presentedAtMs;
+    return at >= startEpochMs && at <= endEpochMs;
+  }).map(sample => sample.generation))];
+  if (generations.length > 1 || (capture?.generationChanges ?? []).some(change =>
+      change.workerOrdinal === rendererWorkerOrdinal && change.observedAtEpochMs >= startEpochMs &&
+      change.observedAtEpochMs <= endEpochMs)) {
+    errors.push("renderer generation changed during the active frame-gap window");
+  }
+  const intervalMs = distribution(selected.map(sample => sample.intervalMs));
+  const cadence = summarizeCadence(selected.map(sample => sample.intervalMs), targetHz);
+  return { window: { startEpochMs, endEpochMs, session, rendererWorkerOrdinal },
+    latestMetricsEpochMs: ownerMetricsEpochMs, count: selected.length,
+    intervalMs, targetHz, missedVsyncs: cadence?.missedVsyncs ?? null,
+    missedRefreshFraction: cadence === null ? null : cadence.missedVsyncs /
+      (selected.length + cadence.missedVsyncs), longFrameRate: cadence?.longFrameRate ?? null,
+    workerOrdinals: [...new Set(inWindow.map(sample => sample.workerOrdinal))], generations,
+    coverageErrors: errors, samples: selected };
 }
 
 export function validateReadinessContract(contract, { strict = false } = {}) {
@@ -377,7 +419,7 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
   }
   if (JSON.stringify(sampling?.startupPercentiles) !== JSON.stringify(["median", "p90", "p95"]) ||
       JSON.stringify(sampling?.commandPercentiles) !== JSON.stringify(["median", "p95", "p99"]) ||
-      JSON.stringify(sampling?.activeCadenceWindowPercentiles) !== JSON.stringify(["median", "p95", "p99"]) ||
+      JSON.stringify(sampling?.activeFrameGapPercentiles) !== JSON.stringify(["median", "p95", "p99"]) ||
       sampling?.startupPopulationP99 !== false || sampling?.tailMethod !== "nearest-rank") {
     errors.push("readiness percentile plan is inconsistent with the sample size");
   }
@@ -481,7 +523,15 @@ export function summarizeReadiness(cases, contract) {
       const commandSummary = Object.fromEntries(Object.entries(commands).map(([name, values]) => [name,
         { ...Object.fromEntries(Object.entries(values).map(([stage, samples]) => [stage, distribution(samples)])),
           ...(commandPhases[name] ? { phase: commandPhases[name] } : {}) }]));
-      const cadence = observed.flatMap(row => row.activeCadenceWindows ?? []);
+      const frameGaps = observed.flatMap(row => row.activeFrameGap?.samples ?? []);
+      const frameGapDistribution = distribution(frameGaps.map(sample => sample.intervalMs));
+      const frameGapCount = frameGaps.length;
+      const missedVsyncs = observed.reduce((sum, row) => sum + (row.activeFrameGap?.missedVsyncs ?? 0), 0);
+      const longFrames = observed.reduce((sum, row) => sum +
+        (row.activeFrameGap?.longFrameRate ?? 0) * (row.activeFrameGap?.count ?? 0), 0);
+      const readerLead = observed.flatMap(row => row.readerLeadObservations ?? []);
+      const perRunMaxFrameGaps = observed.map(row => row.activeFrameGap?.intervalMs?.max)
+        .filter(Number.isFinite);
       const buffering = observed.flatMap(row => row.bufferingEpisodes ?? []);
       const firstUsefulPhase = arm === "B" || arm === "D" ? "historyReplay" : "sourceRun";
       return {
@@ -497,8 +547,18 @@ export function summarizeReadiness(cases, contract) {
         startupBound: { firstUsefulMs: contract.bounds.firstUsefulMs?.[source.id]?.[stratum]?.[firstUsefulPhase] ?? null,
           phase: firstUsefulPhase },
         commands: commandSummary,
-        activeCadenceWindowP99Ms: distribution(cadence.map(window => window.p99Ms)),
-        activeCadenceWindowCount: cadence.length,
+        activeFrameGapDistribution: frameGapDistribution,
+        activeFrameGapP99Ms: frameGapDistribution.p99,
+        activeFrameGapSampleCount: frameGapCount,
+        missedRefreshFraction: frameGapCount + missedVsyncs > 0 ? missedVsyncs / (frameGapCount + missedVsyncs) : null,
+        longFrameRate: frameGapCount > 0 ? longFrames / frameGapCount : null,
+        maxActiveFrameGapMs: frameGaps.reduce((maximum, sample) => Math.max(maximum, sample.intervalMs), 0) || null,
+        perRunMaxActiveFrameGapMs: distribution(perRunMaxFrameGaps),
+        readerLead: { sampleCount: readerLead.length,
+          seconds: distribution(readerLead.map(sample => sample.leadSeconds)),
+          openSamples: readerLead.filter(sample => !sample.endClosed).length,
+          closedSamples: readerLead.filter(sample => sample.endClosed).length,
+          bufferingSamples: readerLead.filter(sample => sample.buffering).length },
         buffering: { episodes: buffering.length,
           durationMs: distribution(buffering.map(episode => episode.durationMs)) },
         ownerRetirementMs: distribution(observed.map(row => row.retirementMs)),
@@ -537,10 +597,33 @@ export function validateReadinessResults(cases, contract) {
         }
         if (!Number.isFinite(row.retirementMs)) errors.push(`${source.id}/${arm}: missing owner retirement observation`);
         if (!Number.isFinite(row.memory?.peakSampledRssBytes)) errors.push(`${source.id}/${arm}: missing process RSS samples`);
-        if (!Array.isArray(row.activeCadenceWindows) || row.activeCadenceWindows.length === 0) {
-          errors.push(`${source.id}/${arm}: missing active renderer cadence samples`);
-        } else if (row.activeCadenceWindows.some(window => !Number.isFinite(window.p99Ms))) {
-          errors.push(`${source.id}/${arm}: malformed active renderer cadence summary`);
+        const frameGap = row.activeFrameGap;
+        if (!frameGap || !Array.isArray(frameGap.samples) || frameGap.samples.length === 0 ||
+            frameGap.count !== frameGap.samples.length || frameGap.intervalMs?.n !== frameGap.count ||
+            ![frameGap.intervalMs?.median, frameGap.intervalMs?.p95, frameGap.intervalMs?.p99,
+              frameGap.intervalMs?.max, frameGap.missedRefreshFraction, frameGap.longFrameRate].every(Number.isFinite)) {
+          errors.push(`${source.id}/${arm}: missing or malformed full active frame-gap samples`);
+        }
+        if ((frameGap?.coverageErrors ?? []).length > 0) {
+          errors.push(`${source.id}/${arm}: incomplete active frame-gap coverage`);
+        }
+        const rawCoverage = row.rawCadenceCoverage;
+        if (!Number.isSafeInteger(row.rendererWorkerOrdinal) ||
+            frameGap?.window?.rendererWorkerOrdinal !== row.rendererWorkerOrdinal ||
+            !Number.isSafeInteger(rawCoverage?.capacity) || rawCoverage.capacity <= 0 ||
+            !Number.isFinite(rawCoverage?.headerObservedAtEpochMs) ||
+            !Number.isFinite(rawCoverage?.latestMetricsEpochMs) ||
+            rawCoverage.latestMetricsEpochMs < frameGap?.window?.endEpochMs) {
+          errors.push(`${source.id}/${arm}: missing owner-bound raw cadence header or fresh final sample`);
+        }
+        if (row.arm === "A" || row.arm === "B") {
+          const leads = row.readerLeadObservations;
+          if (!Array.isArray(leads) || leads.length === 0 || leads.length > 4096 ||
+              leads.some(sample => !Number.isFinite(sample.leadSeconds) || !Number.isFinite(sample.observedTime) ||
+                !Number.isFinite(sample.frontier) || typeof sample.endClosed !== "boolean" ||
+                typeof sample.buffering !== "boolean")) {
+            errors.push(`${source.id}/${arm}: missing or malformed prepared reader-lead samples`);
+          }
         }
         for (const command of row.commands ?? []) {
           if (command.name === "seek" && command.commandPhase === "completed-history-warm") {
@@ -615,9 +698,23 @@ export function validateReadinessResults(cases, contract) {
       if (Number.isFinite(usefulBound) && useful.p95 > usefulBound) {
         errors.push(`${source.id}/${arm}/${stratum}: first useful p95 ${useful.p95}ms exceeds ${firstUsefulPhase} bound ${usefulBound}ms`);
       }
-      const cadence = distribution(rows.flatMap(row => row.activeCadenceWindows ?? []).map(window => window.p99Ms));
-      if (Number.isFinite(contract.bounds.activeCadenceWindowP99Ms) && cadence.p99 > contract.bounds.activeCadenceWindowP99Ms) {
-        errors.push(`${source.id}/${arm}/${stratum}: active cadence p99 exceeds its bound`);
+      const gapSamples = rows.flatMap(row => row.activeFrameGap?.samples ?? []);
+      const gapSummary = distribution(gapSamples.map(sample => sample.intervalMs));
+      if (Number.isFinite(contract.bounds.activeFrameGapP99Ms) &&
+          gapSummary.p99 > contract.bounds.activeFrameGapP99Ms) {
+        errors.push(`${source.id}/${arm}/${stratum}: active frame-gap p99 exceeds its bound`);
+      }
+      const gapCount = gapSamples.length;
+      const missedVsyncs = rows.reduce((sum, row) => sum + (row.activeFrameGap?.missedVsyncs ?? 0), 0);
+      const missedRefreshFraction = gapCount + missedVsyncs > 0 ? missedVsyncs / (gapCount + missedVsyncs) : null;
+      if (Number.isFinite(contract.bounds.missedRefreshFraction) &&
+          (!Number.isFinite(missedRefreshFraction) || missedRefreshFraction > contract.bounds.missedRefreshFraction)) {
+        errors.push(`${source.id}/${arm}/${stratum}: missed refresh fraction exceeds its bound`);
+      }
+      const maxActiveFrameGapMs = gapSamples.reduce((maximum, sample) => Math.max(maximum, sample.intervalMs), 0);
+      if (Number.isFinite(contract.bounds.maxActiveFrameGapMs) &&
+          (!Number.isFinite(maxActiveFrameGapMs) || maxActiveFrameGapMs > contract.bounds.maxActiveFrameGapMs)) {
+        errors.push(`${source.id}/${arm}/${stratum}: maximum active frame gap exceeds its bound`);
       }
       const memory = distribution(rows.map(row => row.memory?.peakSampledRssBytes));
       if (Number.isFinite(contract.bounds.peakProcessRssBytes) && memory.p95 > contract.bounds.peakProcessRssBytes) {

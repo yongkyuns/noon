@@ -5,11 +5,11 @@ import { createHash } from "node:crypto";
 import { sceneInkPixels, distribution, summarizeReadiness,
   validateReadinessContract, validateReadinessTrace, validateReadinessResults,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
-  activeCadenceWindows, summarizeColdNetworkObservations,
+  summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
   readinessRunTimingOriginErrors,
   readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
-  readinessPreparedReaderLead,
+  readinessPreparedReaderLead, activeFrameGapEvidence, summarizeReaderLead,
   READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
@@ -54,20 +54,6 @@ test("minimal readiness timing disables publication-stage probing and bounds cap
     observationPollIntervalMs: 25, usefulCaptureIntervalMs: 0, profilePublicationStages: true,
   });
   assert.equal(readinessInstrumentationPlan("unknown"), null);
-});
-
-test("active cadence summaries exclude static holds and split reset sessions", () => {
-  const window = (epochMs, count, session, p99) => ({ epochMs, metrics: {
-    presentationIntervalSamples: count, presentedSession: session,
-    presentationIntervalMs: count ? { p95: p99 - 1, p99, max: p99 } : null,
-  } });
-  assert.deepEqual(activeCadenceWindows([
-    window(0, 0, 1, 0), window(10, 1, 1, 17), window(20, 2, 1, 18),
-    window(1000, 0, 1, 0), window(2000, 1, 2, 19),
-  ]), [
-    { startedAtEpochMs: 10, sampleCount: 2, endedAtEpochMs: 20, p95Ms: 17, p99Ms: 18, maxMs: 18 },
-    { startedAtEpochMs: 2000, sampleCount: 1, endedAtEpochMs: 2000, p95Ms: 18, p99Ms: 19, maxMs: 19 },
-  ]);
 });
 
 test("readiness draft binds showcase sources and the cumulative Product Gate anchor", async () => {
@@ -168,7 +154,11 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   const row = (arm, overrides = {}) => ({ sourceId, arm, stratum, warmup: false, status: "observed",
     startup: { firstUsefulMs: 20 }, commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12 },
       { name: "seek", commandPhase: "completed-history-warm", feedbackMs: 6, acceptedMs: 9, presentedMs: 13 }],
-    activeCadenceWindows: [{ p95Ms: 16, p99Ms: 17 }], bufferingEpisodes: [{ durationMs: 40 }],
+    activeFrameGap: { count: 2, samples: [{ intervalMs: 16 }, { intervalMs: 18 }],
+      intervalMs: distribution([16, 18]), missedVsyncs: 1, missedRefreshFraction: 1 / 3,
+      longFrameRate: 0.5, coverageErrors: [] },
+    readerLeadObservations: [{ leadSeconds: 0.2, observedTime: 1, frontier: 1.2, endClosed: false, buffering: false }],
+    bufferingEpisodes: [{ durationMs: 40 }],
     memory: { peakSampledRssBytes: 100 }, ...overrides });
   const summary = summarizeReadiness([
     row("A", { commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12,
@@ -194,9 +184,84 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
     "command acceptance remains a separately measured command milestone");
   assert.equal(summary.commands.seek.phase, "completed-history-warm");
   assert.equal(summary.commands.seek.presented.n, 1, "named seek timings remain separate from play/pause");
-  assert.equal(summary.activeCadenceWindowP99Ms.n, 1);
+  assert.equal(summary.activeFrameGapDistribution.n, 2);
+  assert.equal(summary.activeFrameGapP99Ms, 18);
+  assert.equal(summary.missedRefreshFraction, 1 / 3);
+  assert.equal(summary.maxActiveFrameGapMs, 18);
+  assert.equal(summary.readerLead.sampleCount, 1);
+  assert.equal(summary.readerLead.openSamples, 1);
   assert.equal(summary.buffering.episodes, 1);
   assert.equal(summary.peakProcessRssBytes.n, 1);
+});
+
+test("active frame gaps use complete owned intervals across the whole measured window", () => {
+  const capture = { error: null, headerObservedAtEpochMs: 1010, capacity: 120,
+    workers: [{ ordinal: 2, latestMetricsEpochMs: 1060, latestOrdinal: 4 }], generationChanges: [], samples: [
+      { ordinal: 1, session: 5, workerOrdinal: 2, generation: 1, clockOriginMs: 1000, presentedAtMs: 16, intervalMs: 100 },
+      { ordinal: 2, session: 5, workerOrdinal: 2, generation: 1, clockOriginMs: 1000, presentedAtMs: 36, intervalMs: 16 },
+      { ordinal: 3, session: 5, workerOrdinal: 2, generation: 1, clockOriginMs: 1000, presentedAtMs: 60, intervalMs: 32 },
+      { ordinal: 4, session: 5, workerOrdinal: 2, generation: 1, clockOriginMs: 1000, presentedAtMs: 76, intervalMs: 16 },
+    ] };
+  const result = activeFrameGapEvidence(capture, { startEpochMs: 1020, endEpochMs: 1060,
+    session: 5, rendererWorkerOrdinal: 2, targetHz: 60 });
+  assert.deepEqual(result.samples.map(sample => sample.ordinal), [2, 3]);
+  assert.equal(result.intervalMs.n, 2);
+  assert.equal(result.intervalMs.p99, 32);
+  assert.equal(result.missedVsyncs, 1);
+  assert.equal(result.missedRefreshFraction, 1 / 3);
+  assert.equal(result.longFrameRate, 0.5);
+  assert.deepEqual(result.coverageErrors, []);
+
+  const overrun = structuredClone(capture);
+  overrun.error = "raw interval ordinal gap";
+  overrun.workers[0].latestMetricsEpochMs = 1059;
+  const invalid = activeFrameGapEvidence(overrun, { startEpochMs: 1020, endEpochMs: 1060,
+    session: 5, rendererWorkerOrdinal: 2, targetHz: 60 });
+  assert.ok(invalid.coverageErrors.some(error => /ordinal gap/.test(error)));
+  assert.ok(invalid.coverageErrors.some(error => /sample through the window end/.test(error)));
+
+  const missingOrdinal = structuredClone(capture);
+  missingOrdinal.samples = missingOrdinal.samples.filter(sample => sample.ordinal !== 2);
+  assert.ok(activeFrameGapEvidence(missingOrdinal, { startEpochMs: 1020, endEpochMs: 1060,
+    session: 5, rendererWorkerOrdinal: 2, targetHz: 60 }).coverageErrors
+    .some(error => /ordinals contain a gap/.test(error)));
+
+  const foreignOldRenderer = structuredClone(capture);
+  foreignOldRenderer.samples.push({ ordinal: 1, session: 5, workerOrdinal: 3, generation: 1,
+    clockOriginMs: 1000, presentedAtMs: 1040, intervalMs: 16 });
+  assert.deepEqual(activeFrameGapEvidence(foreignOldRenderer, { startEpochMs: 1020, endEpochMs: 1060,
+    session: 5, rendererWorkerOrdinal: 2, targetHz: 60 }).coverageErrors, [],
+  "an old worker showing the prior picture before the admitted owner presents is not mixed into this row");
+});
+
+test("raw cadence coverage handles late renderer startup and rejects generation changes", () => {
+  const capture = { error: null, headerObservedAtEpochMs: 20, capacity: 120,
+    workers: [{ ordinal: 1, latestMetricsEpochMs: 40, latestOrdinal: 2 }], generationChanges: [], samples: [
+      { ordinal: 1, session: 7, workerOrdinal: 1, generation: 3, clockOriginMs: 0, presentedAtMs: 30, intervalMs: 16 },
+      { ordinal: 2, session: 7, workerOrdinal: 1, generation: 4, clockOriginMs: 0, presentedAtMs: 40, intervalMs: 16 },
+    ] };
+  const result = activeFrameGapEvidence(capture, { startEpochMs: 25, endEpochMs: 40,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60 });
+  assert.ok(result.coverageErrors.some(error => /generation changed/.test(error)));
+  const missingHeader = { ...capture, headerObservedAtEpochMs: null };
+  assert.ok(activeFrameGapEvidence(missingHeader, { startEpochMs: 25, endEpochMs: 40,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors
+    .some(error => /header is missing or malformed/.test(error)));
+  const lateWorker = { ...capture, headerObservedAtEpochMs: 26,
+    workers: [{ ordinal: 1, latestMetricsEpochMs: 61, latestOrdinal: 2 }],
+    samples: capture.samples.map((sample, index) => ({ ...sample, ordinal: index + 1, generation: 3,
+      presentedAtMs: 45 + index * 16 })) };
+  assert.deepEqual(activeFrameGapEvidence(lateWorker, { startEpochMs: 25, endEpochMs: 61,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors, [],
+  "a renderer created after accepted Run is valid when its first raw header and all interval ordinals are captured");
+});
+
+test("reader lead summary keeps open, closed and buffering observations distinct", () => {
+  assert.deepEqual(summarizeReaderLead([
+    { leadSeconds: 0.25, endClosed: false, buffering: true },
+    { leadSeconds: 0, endClosed: true, buffering: false },
+  ]), { count: 2, leadSeconds: distribution([0.25, 0]), openSamples: 1,
+    closedSamples: 1, bufferingSamples: 1 });
 });
 
 test("warm seek targets are five distinct manifest beats or closed terminal endpoints", async () => {
@@ -282,7 +347,8 @@ test("strict readiness requires the first-submission bound and actual command re
     startup: { firstUsefulMs: 10, firstSubmittedMs: 12, firstRenderSubmissionCompleteUpperMs: 12 },
     commands: [{ uiFeedbackMs: 2, commandCompletionUpperMs: 4, runtimeAcceptanceEpochMs: null,
       matchingPresentation: null }],
-    bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 }, activeCadenceWindows: [] }];
+    bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 },
+    activeFrameGap: { count: 0, samples: [], coverageErrors: [] } }];
   const errors = validateReadinessResults(cases, contract);
   assert.ok(!errors.some(error => /missing runtimeAcceptanceMs/.test(error)),
     "startup has no command acceptance milestone");
