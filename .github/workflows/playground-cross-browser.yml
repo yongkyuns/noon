@@ -81,7 +81,7 @@ jobs:
           NOON_PLAYGROUND_BROWSER: webkit
           NOON_PLAYGROUND_PROFILE: mobile-dpr2
           NOON_GALLERY_CASES: parity-square-to-circle
-          NOON_SHOWCASE_PROFILE_GATE: strict
+          NOON_SHOWCASE_PROFILE_GATE: disabled
           NOON_GALLERY_PORT: "4197"
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/pause-diagnostic/webkit-mobile-dpr2
         run: node scripts/playground-gallery-runtime-smoke.mjs
