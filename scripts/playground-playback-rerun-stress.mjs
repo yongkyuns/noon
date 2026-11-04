@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 
 const { chromium } = playwright;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,6 +15,8 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const profile = process.env.NOON_PLAYGROUND_RERUN_STRESS_PROFILE ?? "default";
 assert.ok(["default", "live"].includes(profile));
 const liveComparison = profile === "live";
+const memoryEnabled = process.env.NOON_PLAYGROUND_RERUN_STRESS_MEMORY === "1";
+const exampleId = process.env.NOON_PLAYGROUND_RERUN_STRESS_EXAMPLE_ID ?? "parity-create-circle";
 const artifactDir = path.resolve(
   repoRoot,
   process.env.NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS ??
@@ -20,6 +24,35 @@ const artifactDir = path.resolve(
 );
 
 await mkdir(artifactDir, { recursive: true });
+
+const sha256 = value => createHash("sha256").update(value).digest("hex");
+const workerIds = new WeakMap();
+let nextWorkerId = 0;
+function workerIdentity(worker) {
+  if (!workerIds.has(worker)) workerIds.set(worker, ++nextWorkerId);
+  return { id: workerIds.get(worker), url: worker.url() };
+}
+async function memoryBuildIdentity() {
+  const manifestNames = ["manim_tutorial_manifest.json", "manim_stress_manifest.json"];
+  let sourceEntry = null, manifestHash = null;
+  for (const name of manifestNames) {
+    const bytes = await readFile(path.join(repoRoot, "web/python/examples", name));
+    const entry = JSON.parse(bytes).entries.find(item => item.id === exampleId);
+    if (entry) { sourceEntry = entry; manifestHash = sha256(bytes); break; }
+  }
+  assert.ok(sourceEntry, `no tracked Manim fixture found for ${exampleId}`);
+  const sourceBytes = await readFile(path.join(repoRoot, "web", sourceEntry.path));
+  const identityBytes = await readFile(path.join(repoRoot, "web/runtime-build-identity.json"));
+  const identity = JSON.parse(identityBytes);
+  return { exampleId, sourceFixture: sourceEntry.path, sourceFixtureSha256: sha256(sourceBytes),
+    sourceManifestSha256: manifestHash, buildIdentitySha256: sha256(identityBytes),
+    sourceRevision: identity.sourceRevision, buildId: identity.buildId, packageAssets: identity.files };
+}
+
+const memory = memoryEnabled ? { enabled: true, build: await memoryBuildIdentity(), marks: [],
+  unaccounted: ["JavaScript live heap", "GPU/out-of-process allocations", "WASM live allocator and capacity"],
+  caveat: "Rust retained charges are category-local logical bytes; sampled Chromium process-tree RSS is separate and may double-count shared pages." }
+  : null;
 
 let serverOutput = "";
 const server = spawn(
@@ -107,6 +140,40 @@ async function snapshot(page) {
   });
 }
 
+async function memoryMark(page, phase) {
+  if (!memoryEnabled) return;
+  const state = await page.evaluate(async () => {
+    const report = await window.__noonExampleGallery?.executionMetrics();
+    const metrics = report?.metrics ?? {};
+    const retention = report?.engineMetrics?.preparedRetention ?? null;
+    const diagnostics = window.__noonExampleGallery?.executionDiagnostics;
+    return { epochMs: performance.timeOrigin + performance.now(), executionIdentity: {
+      runRequestId: diagnostics?.runRequestId ?? null,
+      interpreterGeneration: diagnostics?.interpreterGeneration ?? null,
+      runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null },
+    renderer: Object.fromEntries(["presentedFrames", "needsPresent", "bufferedDeltas", "bytesUploaded",
+      "geometryCacheMisses"].map(name => [name, metrics[name] ?? null])), retention };
+  });
+  memory.marks.push({ phase, ...state, workers: page.workers().map(workerIdentity) });
+}
+
+async function pausedRendererWindow(page) {
+  const read = () => page.evaluate(async () => {
+    const report = await window.__noonExampleGallery?.executionMetrics();
+    const metrics = report?.metrics ?? {};
+    return Object.fromEntries(["presentedFrames", "needsPresent", "bufferedDeltas", "bytesUploaded",
+      "geometryCacheMisses"].map(name => [name, metrics[name] ?? null]));
+  });
+  const before = await read();
+  await page.waitForTimeout(1_000);
+  const after = await read();
+  const deltas = Object.fromEntries(["presentedFrames", "bufferedDeltas", "bytesUploaded", "geometryCacheMisses"]
+    .map(name => [name, Number.isFinite(before[name]) && Number.isFinite(after[name])
+      ? after[name] - before[name] : null]));
+  memory.pausedRendererWindow = { durationMs: 1_000, before, after, deltas,
+    claim: "renderer counters only; no CPU-idle claim" };
+}
+
 async function waitForInitialReplay(page, exampleId) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   // Default startup performs one intentional authoring preload while keeping
@@ -179,6 +246,9 @@ async function waitForSourceOwnedPass(page, previousTransitions) {
 }
 
 let browser = null;
+let browserServer = null;
+let rssSampler = null;
+let exampleContext = null;
 
 async function pauseReplay(page) {
   const toggle = page.locator(".playback-toggle");
@@ -231,7 +301,7 @@ const diagnostics = { profile, phases: [] };
 
 try {
   await waitForServer();
-  browser = await chromium.launch({
+  const launchOptions = {
     channel: "chromium",
     headless: true,
     args: [
@@ -243,8 +313,17 @@ try {
       "--disable-gpu-sandbox",
       "--disable-dev-shm-usage",
     ],
-  });
-  page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  };
+  if (memoryEnabled) {
+    browserServer = await chromium.launchServer(launchOptions);
+    browser = await chromium.connect(browserServer.wsEndpoint());
+    rssSampler = createProcessTreeRssSampler(browserServer.process().pid);
+    rssSampler.start();
+  } else browser = await chromium.launch(launchOptions);
+  if (memoryEnabled) {
+    exampleContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    page = await exampleContext.newPage();
+  } else page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -319,7 +398,6 @@ try {
     observeSourceOwnership();
   }, { liveComparison });
 
-  const exampleId = "parity-create-circle";
   await page.goto(`${baseUrl}/web/index.html?example=${exampleId}`, { waitUntil: "load" });
   diagnostics.deferred = await waitForInitialReplay(page, exampleId);
   await waitForCompletedReplay(page, exampleId);
@@ -336,6 +414,10 @@ try {
   diagnostics.phases.push({ phase: "initial", ...initial });
   assert.equal(initial.authoringCount, 1, "automatic preload must author the initial scene exactly once");
   assert.equal(initial.playing, "false", "explicit Pause must settle before the paused case");
+  if (memoryEnabled) {
+    await memoryMark(page, "initial-paused");
+    await pausedRendererWindow(page);
+  }
   assert.equal(initial.playbackAvailability, "available");
   const initialEvents = initialTrace?.events ?? [];
   assert.ok(initialEvents.some(event => event.stage === "source-proof" && event.admitted === true));
@@ -357,6 +439,7 @@ try {
   // replacing the canvas or wedging controls.
   const pausedBaselineCount = (await snapshot(page)).authoringCount;
   const pausedBaselineTransitions = (await snapshot(page)).sourceOwnedTransitions;
+  await memoryMark(page, "before-paused-rerun");
   await holdNextRun(page, exampleId);
   const finalScrubTarget = await page.locator(".playback-scrubber").evaluate((input) => {
     const max = Number(input.max);
@@ -392,6 +475,7 @@ try {
   assert.equal(pausedSettled.canvasIdentity, "original");
   assert.equal(pausedSettled.canvasCount, 1);
   assert.equal(pausedSettled.runtimeState, "running");
+  await memoryMark(page, "after-paused-rerun");
   assert.equal(pausedSettled.patchExample, exampleId);
   assert.ok(
     pausedSettled.scrubberValue >= 0 && pausedSettled.scrubberValue <= pausedSettled.scrubberMax,
@@ -403,6 +487,7 @@ try {
   await startMovingReplay(page);
   const runningBaselineCount = (await snapshot(page)).authoringCount;
   const runningBaselineTransitions = (await snapshot(page)).sourceOwnedTransitions;
+  await memoryMark(page, "before-running-rerun");
   await holdNextRun(page, exampleId);
   await page.evaluate(() => {
     window.__noonRerunStress.beforeRun(true);
@@ -429,6 +514,7 @@ try {
   assert.equal(runningSettled.canvasIdentity, "original");
   assert.equal(runningSettled.canvasCount, 1);
   assert.equal(runningSettled.runtimeState, "running");
+  await memoryMark(page, "after-running-rerun");
 
   // Repeat state transitions without hooks to catch command-queue ordering bugs.
   for (let iteration = 0; iteration < 8; iteration += 1) {
@@ -451,6 +537,7 @@ try {
     const before = await snapshot(page);
     const beforeCount = before.authoringCount;
     const beforeTransitions = before.sourceOwnedTransitions;
+    await memoryMark(page, `before-iteration-${iteration}`);
     await page.evaluate(async (shouldPause) => {
       window.__noonRerunStress.beforeRun(!shouldPause);
       await Promise.all([window.__noonExampleGallery.run(), window.__noonExampleGallery.run()]);
@@ -468,6 +555,7 @@ try {
     assert.equal(settled.patchState, "applied");
     assert.equal(settled.patchExample, exampleId);
     assert.equal(settled.runtimeState, "running");
+    await memoryMark(page, `after-iteration-${iteration}`);
   }
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
@@ -496,6 +584,22 @@ try {
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   throw error;
 } finally {
+  if (memoryEnabled && exampleContext !== null) {
+    const workers = page?.workers() ?? [];
+    const closedAt = Date.now();
+    try {
+      await exampleContext.close();
+      memory.contextCloseMs = Date.now() - closedAt;
+      memory.workersAfterContextClose = await Promise.all(workers.map(async worker => ({ ...workerIdentity(worker),
+        retired: await Promise.race([worker.evaluate(() => true).then(() => false, () => true),
+          new Promise(resolve => setTimeout(() => resolve(null), 500))]) })));
+      await new Promise(resolve => setTimeout(resolve, 750));
+      memory.postContextCloseRss = await rssSampler.stop();
+    } catch (error) { memory.finalObservationError = String(error); }
+    diagnostics.memory = memory;
+    await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
+  }
   await browser?.close().catch(() => {});
+  await browserServer?.close().catch(() => {});
   server.kill("SIGTERM");
 }
