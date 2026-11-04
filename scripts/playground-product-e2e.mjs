@@ -27,9 +27,6 @@ const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
 assert.ok(["baseline", "candidate"].includes(label), "product measurement role must be baseline or candidate");
 const allowLegacyBaseline = label === "baseline";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
-const startupDiagnosticsEnabled = process.env.NOON_PRODUCT_STARTUP_DIAGNOSTICS === "1";
-assert.ok(!startupDiagnosticsEnabled || exampleId === "showcase-camera-follows-path",
-  "authoring startup diagnostics are scoped to the camera three-run investigation");
 const measurement = productMeasurement(exampleId);
 const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
 const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
@@ -246,8 +243,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       const gallery = window.__noonExampleGallery;
       return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
         diagnostics: gallery.executionDiagnostics,
-        controls: document.querySelector(".playback-controls")?.dataset ?? null,
-        pagePerformanceTimeOriginMs: performance.timeOrigin };
+        controls: document.querySelector(".playback-controls")?.dataset ?? null };
     });
     assert.ok(authoredPassLifecycleReady(lifecycle),
       `authored source did not complete its expected lifecycle: ${JSON.stringify({
@@ -261,41 +257,6 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       loopCount: disposition?.loopCount ?? null,
       sourceRunCompletedAtMs: lifecycle.run.sourceRunCompletedAtMs };
     const milliseconds = performance.now() - started;
-    if (startupDiagnosticsEnabled) {
-      const authoringWorkers = page.workers().filter(worker =>
-        /\/python-worker\.js(?:\?|$)/.test(worker.url()));
-      assert.equal(authoringWorkers.length, 1,
-        "startup diagnosis requires exactly one live Python worker after each camera run");
-      const worker = await authoringWorkers[0].evaluate(() => {
-        const startup = globalThis.__noonAuthoringStartupMetrics;
-        return startup === undefined ? null : {
-          performanceTimeOriginMs: performance.timeOrigin,
-          startup: { ...startup },
-        };
-      });
-      assert.ok(worker && Number.isFinite(worker.startup?.authoringWorkerReadyAtMs),
-        "active Python worker did not expose its existing startup milestones");
-      evidence.startupDiagnostics = {
-        runGeneration: lifecycle.run.runGeneration,
-        runRequestId: lifecycle.diagnostics?.runRequestId ?? null,
-        interpreterGeneration: lifecycle.diagnostics?.interpreterGeneration ?? null,
-        libraryTrust: lifecycle.diagnostics?.libraryTrust ?? null,
-        requestedProfile: lifecycle.diagnostics?.requestedProfile ?? null,
-        pagePerformanceTimeOriginMs: lifecycle.pagePerformanceTimeOriginMs,
-        runAcceptedAtMs: lifecycle.run.runAcceptedAtMs ?? null,
-        runAcceptedEpochMs: Number.isFinite(lifecycle.run.runAcceptedAtMs)
-          ? lifecycle.pagePerformanceTimeOriginMs + lifecycle.run.runAcceptedAtMs : null,
-        sourceRunStartedAtMs: lifecycle.run.sourceRunStartedAtMs ?? null,
-        sourceRunStartedEpochMs: Number.isFinite(lifecycle.run.sourceRunStartedAtMs)
-          ? lifecycle.pagePerformanceTimeOriginMs + lifecycle.run.sourceRunStartedAtMs : null,
-        sourceRunCompletedAtMs: lifecycle.run.sourceRunCompletedAtMs ?? null,
-        sourceRunCompletedEpochMs: Number.isFinite(lifecycle.run.sourceRunCompletedAtMs)
-          ? lifecycle.pagePerformanceTimeOriginMs + lifecycle.run.sourceRunCompletedAtMs : null,
-        workerPerformanceTimeOriginMs: worker.performanceTimeOriginMs,
-        workerReadyEpochMs: worker.performanceTimeOriginMs + worker.startup.authoringWorkerReadyAtMs,
-        workerStartup: worker.startup,
-      };
-    }
     if (captureFrames) {
       // This current observation is separate from the natural terminal sample
       // retained in this run's 50 ms renderer observations.
@@ -681,9 +642,6 @@ try {
     warmFirstPassEndpoint: warm.firstPassEndpoint,
     editRunMs: edited.milliseconds,
     editPassLifecycle: edited.completion,
-    ...(startupDiagnosticsEnabled
-      ? { authoringStartupDiagnostics: runEvidence.map(run => run.startupDiagnostics ?? null) }
-      : {}),
     fps,
     // Preserve the actual observations so a short-window regression can be
     // diagnosed without reconstructing telemetry from an aggregate FPS value.
