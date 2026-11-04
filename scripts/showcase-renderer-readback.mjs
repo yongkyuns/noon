@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
 const INITIAL_MARKER = "  let latestPresentationSample = null;";
-const PRESENT_MARKER = "      if (stageSample !== null) stageSample.time = displayedTime;";
+const ACK_MARKER = "    acknowledgePresented(displayed);";
 const METRICS_MARKER = '            respond(message.requestId, { type: "metrics", metrics });';
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -11,17 +11,20 @@ export function decorateAuthoringRenderController(source, { holdStart, duration 
   assert.equal(typeof source, "string");
   assert.ok(Number.isFinite(holdStart) && holdStart >= 0);
   assert.ok(Number.isFinite(duration) && duration > holdStart);
-  for (const marker of [INITIAL_MARKER, PRESENT_MARKER, METRICS_MARKER]) {
+  for (const marker of [INITIAL_MARKER, ACK_MARKER, METRICS_MARKER]) {
     assert.equal(source.split(marker).length - 1, 1, `renderer readback marker must occur exactly once: ${marker}`);
   }
   const initial = `${INITIAL_MARKER}\n  let __showcaseRendererReadback = null;`;
-  const present = `${PRESENT_MARKER}
-      if (__showcaseRendererReadback === null && displayedPublication !== null &&
-          Number.isFinite(displayedTime) && displayedTime >= ${JSON.stringify(holdStart)} &&
-          displayedTime < ${JSON.stringify(duration)}) {
+  const present = `${ACK_MARKER}
+      const readbackSample = latestPresentationSample;
+      if (__showcaseRendererReadback === null && !rendererStartupPending && renderPort !== null &&
+          displayed !== null && readbackSample !== null &&
+          readbackSample.session === displayed.session && readbackSample.sequence === displayed.sequence &&
+          Number.isFinite(readbackSample.time) && readbackSample.time >= ${JSON.stringify(holdStart)} &&
+          readbackSample.time < ${JSON.stringify(duration)}) {
         const readback = __showcaseRendererReadback = {
-          status: "pending", session: displayedPublication.session, sequence: displayedPublication.sequence,
-          time: displayedTime, presentedAtMs,
+          status: "pending", session: readbackSample.session, sequence: readbackSample.sequence,
+          time: readbackSample.time, presentedAtMs: readbackSample.presentedAtMs,
           performanceTimeOriginMs: performance.timeOrigin,
           copyCalledAtEpochMs: performance.timeOrigin + performance.now(), objectCount: null, pngDataUrl: null, error: null,
         };
@@ -33,7 +36,9 @@ export function decorateAuthoringRenderController(source, { holdStart, duration 
         try {
           if (typeof canvas?.convertToBlob !== "function") throw new Error("renderer canvas PNG readback is unavailable");
           readback.objectCount = renderer.objectCount();
-          canvas.convertToBlob({ type: "image/png" }).then(async (blob) => {
+          const encoding = canvas.convertToBlob({ type: "image/png" });
+          readback.copyReturnedAtEpochMs = performance.timeOrigin + performance.now();
+          encoding.then(async (blob) => {
             const bytes = new Uint8Array(await blob.arrayBuffer());
             let binary = "";
             for (let offset = 0; offset < bytes.length; offset += 0x8000) {
@@ -51,7 +56,7 @@ export function decorateAuthoringRenderController(source, { holdStart, duration 
               metrics.showcaseRendererReadback = __showcaseRendererReadback;
             }` + "\n" + METRICS_MARKER;
   const instrumented = source.replace(INITIAL_MARKER, initial)
-    .replace(PRESENT_MARKER, present)
+    .replace(ACK_MARKER, present)
     .replace(METRICS_MARKER, metrics);
   return { instrumented, sourceSha256: sha256(source), instrumentedSha256: sha256(instrumented) };
 }
@@ -112,7 +117,8 @@ export function assertRendererReadback(readback, { attachedPublication, proofRec
   assert.ok(Number.isFinite(readback.presentedAtMs) && Number.isFinite(readback.performanceTimeOriginMs) &&
     Number.isFinite(readback.copyCalledAtEpochMs) &&
     readback.copyCalledAtEpochMs >= readback.performanceTimeOriginMs + readback.presentedAtMs &&
-    readback.resolvedAtEpochMs >= readback.copyCalledAtEpochMs,
+    Number.isFinite(readback.copyReturnedAtEpochMs) && readback.copyReturnedAtEpochMs >= readback.copyCalledAtEpochMs &&
+    readback.resolvedAtEpochMs >= readback.copyReturnedAtEpochMs,
   "renderer readback timing is incomplete");
   assert.ok(Number.isSafeInteger(readback.objectCount) && readback.objectCount >= minimumObjectCount,
     "renderer readback has an incomplete composition");
