@@ -37,10 +37,12 @@ class GlowPulseRoutingTests(unittest.TestCase):
                 def appendGlowPulseMobject(self, *args):
                     self.children.append(("pulse", args)); clock[0] += 0.002
             class Context:
-                def __init__(self): self.builders = []
+                def __init__(self): self.builders = []; self.validated = False
                 def beginOrdinaryCompositionBuilder(self, *args):
                     builder = Builder(); self.builders.append(builder); return builder
-                def ordinaryCanPlayComposition(self, builder): return True
+                def ordinaryCanPlayComposition(self, builder):
+                    self.validated = True; clock[0] += 0.002
+                    return True
             def target(scene, slot):
                 value = object.__new__(Mobject)
                 value._scene = scene
@@ -74,7 +76,8 @@ class GlowPulseRoutingTests(unittest.TestCase):
                 operations._play_canonical_composition = lambda scene, *args: activated.append(args) or scene
                 yields = []
                 async def checkpoint():
-                    yields.append(len(yields))
+                    assert not activated
+                    yields.append(context.validated)
                     await asyncio.sleep(0)
                 operations._begin_async_continuation_construct(scene)
                 scene._noon_portable_construct_mode = True
@@ -87,6 +90,7 @@ class GlowPulseRoutingTests(unittest.TestCase):
                     scene._noon_portable_construct_mode = False
                     operations._finish_async_continuation_construct(scene)
                 assert len(yields) >= 3, yields
+                assert yields[-1] is True
                 assert len(activated) == 1
                 assert tree(expected[0]) == tree(activated[0][0])
 

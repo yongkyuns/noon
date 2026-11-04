@@ -3033,6 +3033,8 @@ def _build_canonical_composition_candidate_steps(
         supported = bool(context.ordinaryCanPlayComposition(candidate))
     except Exception as error:
         raise_engine_error(error, operation="Scene.play")
+    if supported:
+        yield None
     return (
         candidate,
         reservations,
