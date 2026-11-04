@@ -616,11 +616,17 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       await page.locator("#replace-scene").click();
       await page.waitForFunction(seed => {
         const gallery = globalThis.__noonExampleGallery;
-        return gallery?.runPhaseMetrics?.runGeneration !== seed.runGeneration &&
-          gallery?.executionDiagnostics?.runRequestId !== seed.runRequestId;
+        const run = gallery?.runPhaseMetrics;
+        const diagnostics = gallery?.executionDiagnostics;
+        return run?.runGeneration !== seed.runGeneration &&
+          Number.isFinite(run?.sourceRunStartedAtMs) &&
+          Number.isSafeInteger(diagnostics?.runRequestId) && diagnostics.runRequestId !== seed.runRequestId &&
+          Number.isSafeInteger(diagnostics?.interpreterGeneration) &&
+          diagnostics.interpreterGeneration === seed.interpreterGeneration &&
+          diagnostics.libraryTrust === "pristine";
       }, { runGeneration: navigation.run.runGeneration,
-        runRequestId: navigation.executionDiagnostics.runRequestId }, { timeout: 30_000 });
-      await waitForApplied(page, source.id);
+        runRequestId: navigation.executionDiagnostics.runRequestId,
+        interpreterGeneration: navigation.executionDiagnostics.interpreterGeneration }, { timeout: 30_000 });
       const measured = await observation(page);
       const measuredWorker = workers.filter(worker => /\/python-worker\.js(?:\?|$)/.test(worker.url())).at(-1);
       const measuredSource = await page.locator("#python-scene-source").inputValue();
@@ -893,9 +899,9 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       replayRow.profileValidationErrors.push("previous page workers were not confirmed retired");
     }
     replayRow.status = replayRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
-            const stagedReplaySamples = await page.evaluate(start =>
-              (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
-            replayRow.rendererSamples = readinessRendererSamples(stagedReplaySamples, replayRow.cadenceObservations);
+    const stagedReplaySamples = await page.evaluate(start =>
+      (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
+    replayRow.rendererSamples = readinessRendererSamples(stagedReplaySamples, replayRow.cadenceObservations);
     replayRow.activeCadenceWindows = activeCadenceWindows(replayRow.cadenceObservations);
     delete replayRow.cadenceObservations;
     const firstReplayRender = replayRow.rendererSamples.map(sample => ({ sample,
