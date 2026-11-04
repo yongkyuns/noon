@@ -4,7 +4,7 @@ import { installStressObservation } from "./playground-stress-observation.mjs";
 
 function fixture() {
   const patch = { dataset: { state: "applied", runGeneration: "3" }, value: "Finished" };
-  const draft = { dataset: {}, value: "Test · current Run applied" };
+  const draft = { dataset: { state: "applied" }, value: "Test · current Run applied" };
   const status = { dataset: { state: "ready", presentedFrames: "110" } };
   const gallery = { runInFlight: false, generationDiagnostics: { runGeneration: 3 } };
   const source = { id: "python-scene-source", value: "rows = 20" };
@@ -27,10 +27,12 @@ test("captures an edit as draft state without changing the active Run", () => {
   f.observation.expectSourceEdit("rows = 7");
   f.source.value = "rows = 7";
   f.draft.value = "Dynamic Load Stress draft not applied · Run to apply";
+  f.draft.dataset.state = "unapplied";
   f.input();
   const edited = f.observation.editedSnapshot();
   assert.equal(edited.patchText, "Finished");
   assert.equal(edited.draftText, "Dynamic Load Stress draft not applied · Run to apply");
+  assert.equal(edited.draftState, "unapplied");
   assert.equal(edited.objectCount, "626");
   assert.equal(edited.runInFlight, false);
   assert.equal(edited.runGeneration, 3);

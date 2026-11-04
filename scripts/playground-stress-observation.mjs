@@ -18,6 +18,7 @@ export function installStressObservation(target = globalThis) {
       patchState: patch?.dataset.state ?? "",
       patchText: patch?.value ?? patch?.textContent ?? "",
       draftText: document.querySelector("#draft-status")?.value ?? "",
+      draftState: document.querySelector("#draft-status")?.dataset.state ?? "",
       patchOperation: patch?.dataset.operation ?? "",
       patchSequence: patch?.dataset.sequence ?? "",
       patchRunGeneration: patch?.dataset.runGeneration ?? "",
