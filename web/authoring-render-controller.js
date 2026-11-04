@@ -69,6 +69,7 @@ export function createAuthoringRenderController(host) {
   // present exposes. It is an acknowledgement only, never scene or time state.
   let pendingPresentationPublication = null;
   let lastPresentedPublication = null;
+  let latestPresentationSample = null;
   let lastPointerReceipt = null;
   let pendingRendererObservationRequest = null;
   let pendingRendererObservationPublication = null;
@@ -449,6 +450,7 @@ export function createAuthoringRenderController(host) {
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    latestPresentationSample = null;
     lastPointerReceipt = null;
     pendingRendererObservationRequest = null;
     pendingRendererObservationPublication = null;
@@ -684,6 +686,7 @@ export function createAuthoringRenderController(host) {
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    latestPresentationSample = null;
     lastPointerReceipt = null;
     pendingRendererObservationPublication = null;
     mode = nextMode;
@@ -826,9 +829,20 @@ export function createAuthoringRenderController(host) {
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
+    const displayedPublication = publication ?? lastPresentedPublication;
+    if (displayedPublication !== null) {
+      const displayedTime = renderer.time();
+      latestPresentationSample = {
+        session: displayedPublication.session,
+        sequence: displayedPublication.sequence,
+        time: displayedTime,
+        presentedAtMs,
+      };
+      if (stageSample !== null) stageSample.time = displayedTime;
+    }
     if (stageSample !== null) {
       // Preserve the displayed authored time even when metrics polling is late.
-      stageSample.time = renderer.time();
+      stageSample.time ??= renderer.time();
       stageSample.presentation = presentedFrames;
       stageSample.presentedAtMs = presentedAtMs;
       stageSample.applyMs = lastDeltaApplyMs;
@@ -1135,6 +1149,7 @@ export function createAuthoringRenderController(host) {
       firstPresentedAtMs,
       presentedSession,
       firstPresentedSessionAtMs,
+      latestPresentationSample,
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),

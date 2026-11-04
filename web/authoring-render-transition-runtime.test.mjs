@@ -651,6 +651,9 @@ test("publication profiling retains displayed time across delayed metrics polls"
   assert.equal(metrics.publicationStageSamples[0].time, 0.25);
   assert.equal(metrics.publicationStageSamples[0].presentation, 2);
   assert.equal(metrics.publicationStageSamples[0].presentedAtMs, 50);
+  assert.deepEqual(JSON.parse(JSON.stringify(metrics.latestPresentationSample)), {
+    session: 53, sequence: 7, time: 0.25, presentedAtMs: 50,
+  });
 });
 
 test("render substage timing is opt-in and drains bounded renderer samples", async () => {
@@ -728,6 +731,10 @@ test("ordinary metrics polls preserve diagnostics for the requested profile", as
 
 test("renderer transition discards an old timing sample even when publication identity repeats", async () => {
   const harness = await createManagedWakeHarness();
+  vm.runInContext(`latestPresentationSample = {session:53, sequence:43, time:0.5, presentedAtMs:24};
+    resetTransportState();`, harness.context);
+  assert.equal(vm.runInContext("currentMetrics().latestPresentationSample", harness.context), null,
+    "transport teardown must clear renderer presentation identity");
   await vm.runInContext(`handleMainMessage({
     channel:"noon.render", protocolVersion:1, type:"metrics", requestId:73,
     profilePublicationStages:true,
@@ -736,6 +743,7 @@ test("renderer transition discards an old timing sample even when publication id
   // replay the same logical publication identity, so identity matching alone
   // cannot distinguish the old attempt from the new render attempt.
   vm.runInContext(`renderer = null;
+    latestPresentationSample = {session:53, sequence:44, time:0.5, presentedAtMs:25};
     needsPresent = true;
     pendingPresentationPublication = {session:53, sequence:44};
     pendingPublicationStageSample = {session:53, sequence:44, receivedAtMs:0};
@@ -746,6 +754,10 @@ test("renderer transition discards an old timing sample even when publication id
   await flushTasks();
   const samples = vm.runInContext("currentMetrics().publicationStageSamples", harness.context);
   assert.deepEqual(JSON.parse(JSON.stringify(samples)), []);
+  const latest = vm.runInContext("currentMetrics().latestPresentationSample", harness.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(latest)), {
+    session: 53, sequence: 44, time: 0, presentedAtMs: 0,
+  }, "only the replacement renderer's successful present may restore the sample");
 });
 
 test("Rust wake directives admit one animation drive and one deadline without idle polling", async () => {
