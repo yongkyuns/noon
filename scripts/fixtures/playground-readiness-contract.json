@@ -40,6 +40,22 @@
     "reload-new-workers-warm-resource-cache": "same browser process, reloaded page and new workers; resource cache remains warm",
     "cold-network": "not measured; requires a separately identified run with network cache disabled"
   },
+  "pendingCohorts": [
+    {
+      "id": "cold-network",
+      "protocol": "separate run with browser and Pyodide resource caches disabled; not part of the warm-cache baseline"
+    },
+    {
+      "id": "reused-healthy-interpreter",
+      "protocol": "separate run reusing a verified pristine interpreter after a prior eligible execution; not completed-history replay"
+    }
+  ],
+  "measurementDefinitions": {
+    "firstUsefulMs": "Upper bound at completion of the first canvas screenshot containing at least 128 scene-ink pixels.",
+    "firstSubmittedMs": "Elapsed time to the first renderer.render() call completion. This is an upper bound on earlier backend frame submission and the Noon presentation receipt; it is not exact queue-submit start, GPU completion, or physical scanout.",
+    "commandAcceptance": "Elapsed time from the actual DOM request event to endpoint acceptedEpochMs sampled after the Rust mutation.",
+    "commandPresentation": "Elapsed time from the actual DOM request event to a command-correlated Noon presentation receipt; it does not measure physical scanout."
+  },
   "sampling": {
     "warmupsPerArmPerStratum": 1,
     "measuredStartsPerArmPerStratum": 20,

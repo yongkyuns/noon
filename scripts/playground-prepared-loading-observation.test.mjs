@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { sceneInkPixels, distribution, summarizeReadiness,
   validateReadinessContract, validateReadinessTrace, validateReadinessResults,
-  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
+  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
+  activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 function canvas() {
@@ -38,6 +39,16 @@ test("timing summaries retain sample count and nearest-rank tails", () => {
     n: 4, min: 1, median: 4, p90: 9, p95: 9, p99: 9, max: 9, percentileMethod: "midpoint median; nearest-rank tails",
   });
   assert.equal(distribution([]).median, null);
+});
+
+test("minimal readiness timing disables publication-stage probing and bounds capture overhead", () => {
+  assert.deepEqual(readinessInstrumentationPlan("minimal-timing"), {
+    observationPollIntervalMs: 100, usefulCaptureIntervalMs: 250, profilePublicationStages: false,
+  });
+  assert.deepEqual(readinessInstrumentationPlan("bounded-diagnostics"), {
+    observationPollIntervalMs: 25, usefulCaptureIntervalMs: 0, profilePublicationStages: true,
+  });
+  assert.equal(readinessInstrumentationPlan("unknown"), null);
 });
 
 test("active cadence summaries exclude static holds and split reset sessions", () => {
@@ -87,13 +98,19 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
   ready.status = "ready";
   ready.reference.actualAdapterIdentity = { backend: "BrowserWebGpu", vendor: 1, device: 2 };
   ready.bounds = Object.fromEntries(Object.keys(ready.bounds).map(key => [key, 1]));
+  ready.pendingCohorts = [];
   assert.deepEqual(validateReadinessContract(ready, { strict: true }), []);
+  const pending = structuredClone(ready);
+  pending.pendingCohorts = contract.pendingCohorts;
+  assert.ok(validateReadinessContract(pending, { strict: true })
+    .some(error => /cohorts remain pending: cold-network, reused-healthy-interpreter/.test(error)));
   for (const mutate of [
     value => { value.sources[1].sha256 = "invalid"; },
     value => { delete value.productGateAnchor.thresholds.minFpsRatio; },
     value => { value.sampling.measuredStartsPerArmPerStratum = 3; },
     value => { value.sampling.startupPopulationP99 = true; },
     value => { value.sampling.startupPercentiles.push("p99"); },
+    value => { delete value.measurementDefinitions.firstSubmittedMs; },
   ]) {
     const changed = structuredClone(contract);
     mutate(changed);
@@ -120,9 +137,13 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   assert.equal(summary.observedStarts, 1);
   assert.equal(summary.failedStarts, 1);
   assert.equal(summary.startup.firstUsefulMs.n, 1);
+  assert.equal(Object.hasOwn(summary.startup, "runtimeAcceptanceMs"), false,
+    "startup does not report an acceptance value without a startup command");
   assert.equal("p99" in summary.startup.firstUsefulMs, false,
     "twenty-start strata do not publish an unsupported startup population p99");
   assert.equal(summary.commands.pause.feedback.n, 1);
+  assert.equal(summary.commands.pause.accepted.n, 1,
+    "command acceptance remains a separately measured command milestone");
   assert.equal(summary.activeCadenceWindowP99Ms.n, 1);
   assert.equal(summary.buffering.episodes, 1);
   assert.equal(summary.peakProcessRssBytes.n, 1);
@@ -166,23 +187,30 @@ test("readiness requires actual attachment and ordered cleanup/disposition, not 
   }
 });
 
-test("strict readiness fails closed when acceptance and submission receipts are unavailable", async () => {
+test("strict readiness requires the first-submission bound and actual command receipts", async () => {
   const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
   const sourceId = contract.sources[0].id;
   const cases = [{ sourceId, arm: "A", stratum: "fresh-process-warm-resource-cache", warmup: false,
     status: "observed", sourceInvocationIds: [1], profileValidationErrors: [], retirementMs: 2,
-    startup: { firstUsefulMs: 10, firstSubmittedMs: null, runtimeAcceptanceMs: null },
+    startup: { firstUsefulMs: 10, firstSubmittedMs: 12, firstRenderSubmissionCompleteUpperMs: 12 },
     commands: [{ uiFeedbackMs: 2, commandCompletionUpperMs: 4, runtimeAcceptanceEpochMs: null,
       matchingPresentation: null }],
     bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 }, activeCadenceWindows: [] }];
   const errors = validateReadinessResults(cases, contract);
-  assert.ok(errors.some(error => /missing firstSubmittedMs/.test(error)));
-  assert.ok(errors.some(error => /missing runtimeAcceptanceMs/.test(error)));
+  assert.ok(!errors.some(error => /missing runtimeAcceptanceMs/.test(error)),
+    "startup has no command acceptance milestone");
+  assert.ok(errors.some(error => /missing command acceptance receipt/.test(error)),
+    "actual commands still require endpoint acceptance timing");
   assert.ok(errors.some(error => /no command-correlated renderer receipt/.test(error)));
   assert.ok(errors.some(error => /missing ordered presentation-settled receipt/.test(error)));
   assert.ok(errors.some(error => /incomplete starts/.test(error)));
   assert.ok(errors.some(error => /showcase-first-scene\/A: too few command observations/.test(error)),
     "other arms cannot make up a missing command sample population");
+  const missingSubmission = structuredClone(cases);
+  missingSubmission[0].startup.firstSubmittedMs = null;
+  assert.ok(validateReadinessResults(missingSubmission, contract)
+    .some(error => /missing firstSubmittedMs/.test(error)),
+  "renderer-call completion must continue to satisfy a required submission upper bound");
   const wrongSequence = structuredClone(cases);
   wrongSequence[0].commands[0].commandPublication = { session: 1, sequence: 1 };
   wrongSequence[0].commands[0].matchingPresentation = {
@@ -197,18 +225,32 @@ test("readiness command receipts use endpoint timing and matching publication me
     commandTiming: { acceptedEpochMs: 1012, presentationSettledEpochMs: 1018 },
     presentationReceipt: { session: 7, sequence: 9, time: 1.5, unchanged: false } }, 1010);
   assert.deepEqual(measured, { commandPublication: null, runtimeAcceptanceEpochMs: 1012, runtimeAcceptanceMs: 2,
-    presentationSettledEpochMs: 1018, commandPresentationMs: 8,
+    presentationSettledEpochMs: 1018, presentationSettlementSource: "endpoint presentation-settled timestamp",
+    commandPresentationMs: 8,
     matchingPresentation: { session: 7, sequence: 9, time: 1.5, unchanged: false } });
   const joined = readinessCommandReceipt({ commandTiming: { acceptedEpochMs: 1012 },
     commandPublication: { session: 7, sequence: 9, time: 1.5 } }, 1010,
   { session: 7, sequence: 9, time: 1.75, presentedAtMs: 22, clockOriginMs: 1000 });
   assert.deepEqual(joined.commandPublication, { session: 7, sequence: 9 });
   assert.equal(joined.presentationSettledEpochMs, 1022);
+  assert.equal(joined.presentationSettlementSource, "matching renderer publication sample");
   assert.deepEqual(joined.matchingPresentation, { session: 7, sequence: 9, time: 1.75,
     source: "renderer-publication-stage" }, "publication identity joins without authored-time equality");
   assert.equal(readinessCommandReceipt({ commandPublication: { session: 7, sequence: 9 } }, 1010,
     { session: 8, sequence: 9, time: 1.75, presentedAtMs: 22, clockOriginMs: 1000 }).matchingPresentation, null);
   assert.equal(readinessCommandReceipt(null, 1010).matchingPresentation, null);
+  const cached = readinessCommandReceipt({ commandTiming: { acceptedEpochMs: 1012,
+    presentationSettledEpochMs: 1009 }, presentationReceipt: { session: 7, sequence: 9,
+    time: 1.5, unchanged: true } }, 1010);
+  assert.equal(cached.presentationSettledEpochMs, 1012,
+    "a cached picture predating acceptance settles only when the no-change proof is accepted");
+  assert.equal(cached.presentationSettlementSource, "endpoint no-change proof joined at command acceptance");
+  const receiptArrival = readinessCommandReceipt({ commandTiming: { acceptedEpochMs: 1012 },
+    presentationReceipt: { session: 7, sequence: 9, time: 1.5, unchanged: true },
+    receivedEpochMs: 1020 }, 1010);
+  assert.equal(receiptArrival.presentationSettledEpochMs, 1020,
+    "an actual unchanged receipt can use message arrival as a clearly named upper bound");
+  assert.equal(receiptArrival.presentationSettlementSource, "endpoint receipt arrival upper bound");
   const source = await readFile(new URL("./playground-prepared-loading-qualification.mjs", import.meta.url), "utf8");
   assert.match(source, /requestEpochMs: request\.epochMs/);
   assert.match(source, /automationIssuedEpochMs: marker\.epochMs/);

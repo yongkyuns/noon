@@ -10,6 +10,14 @@ export const PRODUCT_GATE_THRESHOLD_ENVS = {
   maxVisualDiffRatio: "NOON_PRODUCT_MAX_VISUAL_DIFF_RATIO",
 };
 
+export function readinessInstrumentationPlan(mode) {
+  if (mode === "minimal-timing") return { observationPollIntervalMs: 100,
+    usefulCaptureIntervalMs: 250, profilePublicationStages: false };
+  if (mode === "bounded-diagnostics") return { observationPollIntervalMs: 25,
+    usefulCaptureIntervalMs: 0, profilePublicationStages: true };
+  return null;
+}
+
 export function readinessCommandReceipt(result, requestEpochMs, rendererSample = null) {
   const timing = result?.commandTiming;
   const acceptedEpochMs = Number.isFinite(timing?.acceptedEpochMs) ? timing.acceptedEpochMs : null;
@@ -21,9 +29,6 @@ export function readinessCommandReceipt(result, requestEpochMs, rendererSample =
     rendererSample.session === commandPublication.session && rendererSample.sequence === commandPublication.sequence &&
     Number.isFinite(rendererSample.time) && Number.isFinite(rendererSample.presentedAtMs) &&
     Number.isFinite(rendererSample.clockOriginMs);
-  const presentationSettledEpochMs = Number.isFinite(timing?.presentationSettledEpochMs)
-    ? timing.presentationSettledEpochMs : sampleMatches
-      ? rendererSample.clockOriginMs + rendererSample.presentedAtMs : null;
   const receipt = result?.presentationReceipt;
   const matchingPresentation = Number.isSafeInteger(receipt?.session) && receipt.session >= 0 &&
     Number.isSafeInteger(receipt?.sequence) && receipt.sequence >= 0 && Number.isFinite(receipt?.time) &&
@@ -31,12 +36,29 @@ export function readinessCommandReceipt(result, requestEpochMs, rendererSample =
     ? { session: receipt.session, sequence: receipt.sequence, time: receipt.time, unchanged: receipt.unchanged }
     : sampleMatches ? { session: rendererSample.session, sequence: rendererSample.sequence,
       time: rendererSample.time, source: "renderer-publication-stage" } : null;
+  const rendererPresentationEpochMs = sampleMatches
+    ? rendererSample.clockOriginMs + rendererSample.presentedAtMs : null;
+  let presentationSettledEpochMs = null;
+  let presentationSettlementSource = null;
+  if (Number.isFinite(timing?.presentationSettledEpochMs)) {
+    presentationSettledEpochMs = matchingPresentation?.unchanged === true && Number.isFinite(acceptedEpochMs)
+      ? Math.max(acceptedEpochMs, timing.presentationSettledEpochMs) : timing.presentationSettledEpochMs;
+    presentationSettlementSource = matchingPresentation?.unchanged === true
+      ? "endpoint no-change proof joined at command acceptance" : "endpoint presentation-settled timestamp";
+  } else if (rendererPresentationEpochMs !== null) {
+    presentationSettledEpochMs = rendererPresentationEpochMs;
+    presentationSettlementSource = "matching renderer publication sample";
+  } else if (matchingPresentation !== null && Number.isFinite(result?.receivedEpochMs)) {
+    presentationSettledEpochMs = result.receivedEpochMs;
+    presentationSettlementSource = "endpoint receipt arrival upper bound";
+  }
   return {
     commandPublication,
     runtimeAcceptanceEpochMs: acceptedEpochMs,
     runtimeAcceptanceMs: Number.isFinite(acceptedEpochMs) && Number.isFinite(requestEpochMs)
       ? acceptedEpochMs - requestEpochMs : null,
     presentationSettledEpochMs,
+    presentationSettlementSource,
     commandPresentationMs: Number.isFinite(presentationSettledEpochMs) && Number.isFinite(requestEpochMs)
       ? presentationSettledEpochMs - requestEpochMs : null,
     matchingPresentation,
@@ -119,6 +141,19 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
       READINESS_STRATA.some(name => typeof contract?.strata?.[name] !== "string" || contract.strata[name].length === 0) ||
       typeof contract?.strata?.["cold-network"] !== "string") {
     errors.push("readiness baseline arms or cache strata are incomplete");
+  }
+  if (!Array.isArray(contract?.pendingCohorts) || contract.pendingCohorts.some(cohort =>
+      typeof cohort?.id !== "string" || typeof cohort?.protocol !== "string" || cohort.protocol.length === 0) ||
+      new Set(contract.pendingCohorts.map(cohort => cohort.id)).size !== contract.pendingCohorts.length) {
+    errors.push("pending readiness cohorts are malformed");
+  } else if (strict && contract.pendingCohorts.length > 0) {
+    errors.push(`readiness cohorts remain pending: ${contract.pendingCohorts.map(cohort => cohort.id).join(", ")}`);
+  }
+  if (!["firstUsefulMs", "firstSubmittedMs", "commandAcceptance", "commandPresentation"].every(key =>
+      typeof contract?.measurementDefinitions?.[key] === "string" &&
+      contract.measurementDefinitions[key].length > 0) ||
+      !contract.measurementDefinitions.firstSubmittedMs.includes("upper bound")) {
+    errors.push("readiness measurement definitions are incomplete");
   }
   if (!Array.isArray(contract?.sources) || contract.sources.length !== 2 ||
       new Set(contract.sources.map(source => source?.id)).size !== 2) {
@@ -230,8 +265,7 @@ export function summarizeReadiness(cases, contract) {
         observedStarts: observed.length,
         failedStarts: rows.filter(row => row.status !== "observed").length,
         startup: Object.fromEntries(["shellReadyObservedUpperMs", "interpreterReadyObservedUpperMs",
-          "firstReaderAttachedObservedUpperMs", "firstSubmittedMs", "firstRenderSubmissionCompleteUpperMs",
-          "runtimeAcceptanceMs", "firstUsefulMs"].map(key =>
+          "firstReaderAttachedObservedUpperMs", "firstSubmittedMs", "firstUsefulMs"].map(key =>
           [key, startupDistribution(observed.map(row => row.startup?.[key]))])),
         commands: commandSummary,
         activeCadenceWindowP99Ms: distribution(cadence.map(window => window.p99Ms)),
@@ -258,8 +292,7 @@ export function validateReadinessResults(cases, contract) {
       for (const row of rows) {
         if ((row.sourceInvocationIds ?? []).length !== 1) errors.push(`${source.id}/${arm}: source invocation identity changed`);
         if ((row.profileValidationErrors ?? []).length) errors.push(`${source.id}/${arm}: profile trace invalid`);
-        const startupFields = ["firstUsefulMs", "firstSubmittedMs", "runtimeAcceptanceMs",
-          "firstRenderSubmissionCompleteUpperMs"];
+        const startupFields = ["firstUsefulMs", "firstSubmittedMs"];
         if (row.arm === "A" || row.arm === "C") startupFields.push(
           "shellReadyObservedUpperMs", "interpreterReadyObservedUpperMs");
         if (row.arm === "A") startupFields.push("firstReaderAttachedObservedUpperMs");

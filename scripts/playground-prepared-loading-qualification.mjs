@@ -16,14 +16,19 @@ import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs"
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
 import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
-  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
+  PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
+  activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = process.env;
 const readinessMode = env.NOON_PLAYBACK_LOADING_READINESS ?? "baseline";
 assert.ok(["baseline", "strict"].includes(readinessMode));
+const instrumentationMode = env.NOON_PLAYBACK_LOADING_INSTRUMENTATION ?? "minimal-timing";
+const instrumentationPlan = readinessInstrumentationPlan(instrumentationMode);
+assert.ok(instrumentationPlan, `unknown readiness instrumentation mode ${instrumentationMode}`);
 const wasmAccounting = env.NOON_PLAYBACK_LOADING_WASM_ACCOUNTING === "1";
+const { observationPollIntervalMs, usefulCaptureIntervalMs, profilePublicationStages } = instrumentationPlan;
 const trials = Number(env.NOON_PLAYBACK_LOADING_TRIALS ?? 20);
 assert.ok(Number.isSafeInteger(trials) && trials > 0);
 const backend = env.NOON_PLAYBACK_LOADING_BACKEND ?? "webgpu";
@@ -75,6 +80,8 @@ for (const [key, envName] of Object.entries(PRODUCT_GATE_THRESHOLD_ENVS)) {
 if (readinessMode === "strict") {
   assert.deepEqual(validateReadinessContract(readinessContract, { strict: true }), [],
     "strict readiness requires a reviewed contract with approved bounds");
+  assert.equal(instrumentationMode, "minimal-timing", "strict timing rejects bounded diagnostic instrumentation");
+  assert.equal(wasmAccounting, false, "strict timing rejects invasive WASM accounting instrumentation");
 }
 for (const source of readinessContract.sources) {
   const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === source.id);
@@ -86,25 +93,32 @@ for (const source of readinessContract.sources) {
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 const report = { status: "running", readinessMode,
   scope: "W7/W8 same-package profile measurements; source pass plus retained replay; warm-resource-cache strata only; not cold-network, physical-scanout or total-memory qualification",
-  instrumentationMode: "bounded-diagnostics",
+  instrumentationMode,
   wasmAccounting: wasmAccounting ? "invasive-diagnostic" : "off",
   instrumentationLimitations: [
-    "first useful capture is an observed upper bound; startup exposes no renderer-submission or separate runtime-acceptance timestamp",
+    "first useful capture is an observed upper bound; firstSubmittedMs uses first renderer.render() call completion as an upper bound on earlier frame submission and Noon presentation receipt, not queue-submit start, GPU completion or physical scanout",
     "command acceptance and presentation receipts come from actual endpoint command results; UI busy-clear remains a separate upper bound",
-    "renderer frame timing is a renderer.render() call-completion timestamp after submission, not GPU completion or physical scanout",
-    "bounded probes can perturb timings; this report is diagnostic, not minimally instrumented timing",
+    "renderer frame timing is a renderer.render() call-completion timestamp; it does not measure GPU completion or physical scanout",
+    ...(instrumentationMode === "minimal-timing"
+      ? ["minimal timing still polls renderer metrics and samples canvas pixels; it is not zero-overhead"]
+      : ["bounded publication-stage and 25ms probes can perturb timings; treat this report as diagnostic"]),
     ...(wasmAccounting ? ["WASM accounting rewrites worker entrypoints and changes cache/timing behavior; exclude these runs from readiness timing comparisons"] : []),
   ],
   harnessRevision: revision, runtimeSourceTrees: runtimeTrees(revision), harnessSha256: digest(await readFile(fileURLToPath(import.meta.url))),
   readinessContract: { path: path.relative(root, readinessContractPath), sha256: digest(readinessContractBytes), status: readinessContract.status },
+  measurementDefinitions: readinessContract.measurementDefinitions,
+  pendingCohorts: readinessContract.pendingCohorts,
   readinessSampling: {
     strata: readinessContract.strata,
     arms: readinessMode === "baseline" ? readinessContract.baselineArms : Object.keys(readinessContract.arms),
     samplePlan: readinessContract.sampling,
     bounds: readinessContract.bounds,
+    observationPollIntervalMs,
+    usefulCaptureIntervalMs,
   },
   backend, trials,
-  launchArgs: browserArgs(backend, { gpuMode: "hardware" }), observer: { inkThreshold: 128, channelDifference: 8, edgeMargin: 8, pollIntervalMs: 25,
+  launchArgs: browserArgs(backend, { gpuMode: "hardware" }), observer: { inkThreshold: 128, channelDifference: 8, edgeMargin: 8,
+    pollIntervalMs: observationPollIntervalMs, usefulCaptureIntervalMs,
     usefulTiming: "upper bound at completion of the first positive canvas capture; native first-any-frame time is separate",
     memoryWindow: "paired source and retained replay plus 750 ms after context close; aggregate sampled browser-process-tree RSS",
     presentation: "renderer active-cadence interval summaries and playback-control buffering events; static publication holds are excluded; physical scanout is not measured" },
@@ -190,11 +204,11 @@ async function observationDeadline(pending) {
   } finally { clearTimeout(timer); }
 }
 
-async function installReadinessPresentationProbe(context) {
-  await context.addInitScript(maxSamples => {
+async function installReadinessPresentationProbe(context, { profilePublicationStages }) {
+  await context.addInitScript(({ maxSamples, profilePublicationStages }) => {
     const NativeWorker = window.Worker;
     const requestId = Number.MAX_SAFE_INTEGER;
-    const probe = { worker: null, pending: false, samples: [], keys: new Set(), error: null,
+    const probe = { worker: null, pending: false, profilePublicationStages, samples: [], keys: new Set(), error: null,
       uiEvents: [], commandResults: [], droppedUiEvents: 0,
       recordUiEvent(event) {
         if (probe.uiEvents.length >= maxSamples) { probe.droppedUiEvents++; return; }
@@ -208,10 +222,10 @@ async function installReadinessPresentationProbe(context) {
           presentationReceipt: message.presentationReceipt ?? null });
       },
       requestMetrics() {
-        if (probe.worker === null || probe.pending) return;
+        if (!probe.profilePublicationStages || probe.worker === null || probe.pending) return;
         probe.pending = true;
         probe.worker.postMessage({ channel: "noon.render", protocolVersion: 1,
-          type: "metrics", requestId, profilePublicationStages: true });
+          type: "metrics", requestId, profilePublicationStages: probe.profilePublicationStages });
       } };
     window.__noonReadinessPresentationProbe = probe;
     if (globalThis.MessagePort?.prototype) {
@@ -289,7 +303,7 @@ async function installReadinessPresentationProbe(context) {
       }
     }
     Object.defineProperty(window, "Worker", { configurable: true, writable: true, value: ObservedWorker });
-  }, 4096);
+  }, { maxSamples: 4096, profilePublicationStages });
 }
 
 function readinessTraceState(row, sample) {
@@ -431,9 +445,13 @@ async function readinessCommand(page, row, desiredPlaying) {
   assert.ok(commandCompleted, "playback command completion transition was not observed");
   const engineResult = await readinessCommandResult(page, issued.commandResultIndex,
     desiredPlaying ? "resume" : "pause");
-  const publicationSample = await readinessPublicationSample(page, engineResult?.commandPublication);
-  const runtimeReceipt = readinessCommandReceipt(engineResult, requestEpochMs, publicationSample);
   const after = await observation(page);
+  const latest = after.metrics?.latestPresentationSample;
+  const minimalRendererSample = latest ? { ...latest,
+    clockOriginMs: after.metrics.performanceTimeOriginMs } : null;
+  const publicationSample = instrumentationMode === "bounded-diagnostics"
+    ? await readinessPublicationSample(page, engineResult?.commandPublication) : minimalRendererSample;
+  const runtimeReceipt = readinessCommandReceipt(engineResult, requestEpochMs, publicationSample);
   const command = {
     name: desiredPlaying ? "play" : "pause",
     automationIssuedEpochMs: issued.automationIssuedEpochMs,
@@ -496,6 +514,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     let sourceRunStart = Number.isFinite(navigation.run?.sourceRunStartedAtMs)
       ? navigation.originMs + navigation.run.sourceRunStartedAtMs : null;
     let lastCaptureKey = null;
+    const lastUsefulCaptureAt = new Map();
     const read = async (targetRow = sourceRow) => {
       const sample = await observation(page);
       targetRow.lastObservation = sample;
@@ -538,8 +557,11 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       }
       if (targetRow.startup.firstUsefulMs === undefined && metric?.ready && metric.objectCount > 0) {
         const key = `${metric.presentedSession}:${metric.presentedFrames}:${metric.time}`;
-        if (key !== lastCaptureKey) {
+        const captureDue = instrumentationMode === "bounded-diagnostics" ||
+          sample.epochMs - (lastUsefulCaptureAt.get(targetRow) ?? -Infinity) >= usefulCaptureIntervalMs;
+        if (key !== lastCaptureKey && captureDue) {
           lastCaptureKey = key;
+          lastUsefulCaptureAt.set(targetRow, sample.epochMs);
           const bytes = await page.locator("#scene").screenshot();
           const ink = sceneInkPixels(PNG.sync.read(bytes));
           const captureEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
@@ -560,7 +582,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     let current = navigation;
     while (sourceRow.startup.firstUsefulMs === undefined && performance.now() < deadline) {
       current = await read();
-      await page.waitForTimeout(25);
+      await page.waitForTimeout(observationPollIntervalMs);
     }
     assert.ok(Number.isFinite(sourceRow.startup.firstUsefulMs), "no useful first-pass presentation");
     const firstState = await observation(page);
@@ -577,7 +599,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     while (!(Number.isFinite(current.run?.sourceRunCompletedAtMs) && current.inFlight === false &&
              lifecycleComplete(current)) && performance.now() < runDeadline) {
       current = await read();
-      await page.waitForTimeout(25);
+      await page.waitForTimeout(observationPollIntervalMs);
     }
     assert.ok(Number.isFinite(current.run?.sourceRunCompletedAtMs) && current.inFlight === false &&
       lifecycleComplete(current), "source cleanup, terminal adoption, or disposition was not observed before timeout");
@@ -641,10 +663,14 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         event.epochMs >= requestEpoch) ?? null, replayStartedAtEpochMs);
     assert.ok(restartCompleted, "restart command completion transition was not observed");
     const restartEngineResult = await readinessCommandResult(page, restartIssued.commandResultIndex, "restart_playback");
-    const restartPublicationSample = await readinessPublicationSample(page, restartEngineResult?.commandPublication);
-    const restartRuntimeReceipt = readinessCommandReceipt(restartEngineResult, replayStartedAtEpochMs,
-      restartPublicationSample);
     const restartPresented = await observation(page);
+    const latestReplay = restartPresented.metrics?.latestPresentationSample;
+    const minimalReplaySample = latestReplay ? { ...latestReplay,
+      clockOriginMs: restartPresented.metrics.performanceTimeOriginMs } : null;
+    const restartPublicationSample = instrumentationMode === "bounded-diagnostics"
+      ? await readinessPublicationSample(page, restartEngineResult?.commandPublication) : null;
+    const restartRuntimeReceipt = readinessCommandReceipt(restartEngineResult, replayStartedAtEpochMs,
+      restartPublicationSample ?? minimalReplaySample);
     replayRow.startup.restartCompletedUiEpochMs = restartCompleted.epochMs;
     replayRow.commands.push({ name: "restart", automationIssuedEpochMs: restartIssued.automationIssuedEpochMs,
       requestEpochMs: replayStartedAtEpochMs,
@@ -667,7 +693,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
            performance.now() < replayDeadline) {
       replayCurrent = await read(replayRow);
       replayMaxTime = Math.max(replayMaxTime, Number(replayCurrent.metrics?.time ?? -Infinity));
-      await page.waitForTimeout(25);
+      await page.waitForTimeout(observationPollIntervalMs);
     }
     assert.ok(replayCurrent.metrics?.presentedFrames > beforeFrames,
       "retained replay produced no new presentation");
@@ -703,22 +729,25 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       Number.isFinite(value.epochMs) && value.epochMs >= replayStartedAtEpochMs &&
       Number.isSafeInteger(value.sample.session) && Number.isSafeInteger(value.sample.sequence))
       .sort((left, right) => left.epochMs - right.epochMs)[0];
-    replayRow.startup.firstRenderSubmissionCompleteUpperMs = firstReplayRender
-      ? firstReplayRender.epochMs - replayStartedAtEpochMs : null;
+    const firstReplayRenderEpochMs = firstReplayRender?.epochMs ??
+      restartRuntimeReceipt.presentationSettledEpochMs;
+    replayRow.startup.firstRenderSubmissionCompleteUpperMs = Number.isFinite(firstReplayRenderEpochMs)
+      ? firstReplayRenderEpochMs - replayStartedAtEpochMs : null;
     replayRow.startup.firstRenderSubmissionLimitation = firstReplayRender
-      ? "renderer call completion after replay publication; not GPU completion or physical scanout"
+      ? "renderer.render() call completion bounds earlier backend submission and the Noon presentation receipt; not exact queue-submit start, GPU completion or physical scanout"
+      : Number.isFinite(firstReplayRenderEpochMs)
+        ? "restart endpoint's command-correlated Noon presentation receipt bounds earlier backend submission; not exact queue-submit start, GPU completion or physical scanout"
       : "no renderer publication was observed after the actual replay request";
     replayRow.uiEvents = await page.evaluate(start =>
       (globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(start), sourceRow.uiEventStart);
     replayRow.bufferingEpisodes = bufferingEpisodes(replayRow.uiEvents);
-    replayRow.startup.firstSubmittedMs = null;
-    replayRow.startup.firstSubmittedLimitation = "queue-submit start is unavailable; renderer call completion is reported separately";
-    replayRow.startup.runtimeAcceptanceMs = null;
-    replayRow.startup.runtimeAcceptanceLimitation = "startup has no command acceptance event; control commands report endpoint acceptance separately";
-    sourceRow.startup.firstSubmittedMs = null;
-    sourceRow.startup.firstSubmittedLimitation = replayRow.startup.firstSubmittedLimitation;
-    sourceRow.startup.runtimeAcceptanceMs = null;
-    sourceRow.startup.runtimeAcceptanceLimitation = replayRow.startup.runtimeAcceptanceLimitation;
+    const submissionBoundLimitation = "upper bound from renderer.render() call completion; backend submission and the Noon presentation receipt occur no later than return, but exact queue-submit start, GPU completion and physical scanout are not measured";
+    replayRow.startup.firstSubmittedMs = replayRow.startup.firstRenderSubmissionCompleteUpperMs;
+    replayRow.startup.firstSubmittedLimitation = replayRow.startup.firstRenderSubmissionCompleteUpperMs === null
+      ? replayRow.startup.firstRenderSubmissionLimitation : submissionBoundLimitation;
+    sourceRow.startup.firstSubmittedMs = sourceRow.startup.firstRenderSubmissionCompleteUpperMs ?? null;
+    sourceRow.startup.firstSubmittedLimitation = sourceRow.startup.firstSubmittedMs === null
+      ? "no first renderer call completion was observed" : submissionBoundLimitation;
     assert.equal((await page.evaluate(() => globalThis.__noonReadinessPresentationProbe?.droppedUiEvents ?? 0)), 0,
       "bounded UI event observer dropped state transitions");
     const probeStatus = await page.evaluate(() => ({ error: globalThis.__noonReadinessPresentationProbe?.error ?? null,
@@ -786,7 +815,9 @@ try {
               deviceScaleFactor: readinessContract.reference.deviceScaleFactor,
             });
             await cache.install(context);
-            await installReadinessPresentationProbe(context);
+            await installReadinessPresentationProbe(context, {
+              profilePublicationStages,
+            });
             if (initialArm === "C") await context.addInitScript(() => {
               globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
                 authoringRunOptions: () => ({ preparedPlayback: false }),
