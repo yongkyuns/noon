@@ -252,6 +252,7 @@ fn initial_audio_schedule_counts_toward_retention_payload_limit() {
 }
 
 #[test]
+#[cfg(feature = "prepared-prefix")]
 fn audio_prefix_keeps_initial_pcm_and_schedule_across_paused_append_and_rewind() {
     let mut source = runtime();
     let (pcm_bytes, source_pcm) = {

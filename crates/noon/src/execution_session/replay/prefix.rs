@@ -68,11 +68,11 @@ fn opaque_continuation_reports_callbacks_only_when_the_schedule_exists() {
     );
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native-text", feature = "bundled-fonts"))]
 mod backdrop_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "native-text", feature = "bundled-fonts"))]
 mod camera_prefix_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "typst", feature = "bundled-fonts"))]
 mod spatial_prefix_tests;
 
 /// Shared engine reasons why the current source needs observed execution.
