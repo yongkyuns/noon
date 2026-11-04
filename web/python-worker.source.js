@@ -1934,11 +1934,11 @@ _manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
 async function runAuthoringSource(pyodide, source, context, requestId) {
   return withAuthoringDiagnostics(pyodide, source, context, requestId, async (globals) => {
     const run = activeAuthoringRun;
-    const proof = authoringLibrariesPristine ? JSON.parse(pyodide.runPython(`
+    const proof = measurePreparationOperation(run, "source-proof", () => authoringLibrariesPristine ? JSON.parse(pyodide.runPython(`
 import json
 from _manim_source_execution import source_execution_proof
 json.dumps(source_execution_proof(__noon_source))
-`, { globals })) : { admitted: false, reason: { code: "interpreter_tainted", span: null } };
+`, { globals })) : { admitted: false, reason: { code: "interpreter_tainted", span: null } });
     if (!isRecord(proof) || typeof proof.admitted !== "boolean" ||
         (proof.admitted ? proof.reason !== null : !isRecord(proof.reason) || typeof proof.reason.code !== "string")) {
       throw new TypeError("source effect proof must contain admission and its reason");
@@ -1957,7 +1957,10 @@ json.dumps(source_execution_proof(__noon_source))
       libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted",
       event: { stage: proof.reason?.code === "interpreter_tainted" ? "interpreter-trust" : "source-proof", ...proof },
     });
-    await prepareAuthoringDependencies(pyodide, source);
+    if (run.diagnosticPreparationTiming) {
+      await awaitOutsidePreparedSourceTurn(run, "dependency-preparation",
+        () => prepareAuthoringDependencies(pyodide, source));
+    } else await prepareAuthoringDependencies(pyodide, source);
     if (run.diagnosticPreparationTiming) startPreparedSourceTurn(run);
     return pyodide.runPythonAsync(diagnosedHostCode(`
 import json

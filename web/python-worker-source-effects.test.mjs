@@ -4,7 +4,10 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 const begin = source.indexOf("async function runAuthoringSource("), end = source.indexOf("async function runCanonicalCallbackPhase", begin);
+const timingBegin = source.indexOf("function preparationTimingEvent(");
+const timingEnd = source.indexOf("function sourceExecutionRequirement(", timingBegin);
 assert.ok(begin >= 0 && end > begin);
+assert.ok(timingBegin >= 0 && timingEnd > timingBegin);
 function worker() {
   const events = [], diagnostics = [], stores = [];
   class WasmAuthoringStore {
@@ -14,9 +17,12 @@ function worker() {
   const run = new Function("WasmAuthoringStore", "withAuthoringDiagnostics", "prepareAuthoringDependencies", "diagnosedHostCode", "isRecord", "post", `
     let activeAuthoringRun = null, authoringLibrariesPristine = true;
     let authoringStore = new WasmAuthoringStore();
+    ${source.slice(timingBegin, timingEnd)}
     ${source.slice(begin, end)}
-    return async (pyodide, preparedPlayback) => {
-      activeAuthoringRun = { preparedPlayback, sourceSceneOnly: false };
+    return async (pyodide, preparedPlayback, diagnosticPreparationTiming = false) => {
+      activeAuthoringRun = { requestId: 1, preparedPlayback, sourceSceneOnly: false,
+        diagnosticPreparationTiming, preparationTimingOrdinal: 0,
+        sourceTurnStartedAtMs: null, continuation: null, completedPreparedContextId: null };
       await runAuthoringSource(pyodide, "source", {}, 1);
       return activeAuthoringRun.sourceSceneOnly;
     };
@@ -31,7 +37,9 @@ function worker() {
     },
     async runPythonAsync() { events.push("source"); return "result"; },
   });
-  return { events, diagnostics, stores, run: (proof, prepared = true) => run(pyodide(proof), prepared) };
+  return { events, diagnostics, stores,
+    run: (proof, prepared = true, diagnosticPreparationTiming = false) =>
+      run(pyodide(proof), prepared, diagnosticPreparationTiming) };
 }
 
 test("source effects are checked before dependencies or source execute", async () => {
@@ -62,4 +70,25 @@ test("malformed proof cannot admit source or load its dependencies", async () =>
   const h = worker();
   await assert.rejects(h.run("scene-only"), /proof must contain admission/);
   assert.deepEqual(h.events, ["proof"]);
+});
+
+test("opt-in source timings include proof and async dependency preparation before Python turns", async () => {
+  const h = worker();
+  assert.equal(await h.run(true, true, true), true);
+  const spans = h.diagnostics.filter(event => event.event.stage === "preparation-timing").map(event => event.event);
+  assert.deepEqual(spans.map(span => span.owner), ["source-proof", "dependency-preparation"]);
+  assert.deepEqual(spans.map(span => span.ordinal), [0, 1]);
+  for (const span of spans) {
+    assert.equal(span.runRequestId, 1);
+    assert.equal(span.contextId, null, "proof/dependencies precede semantic context registration");
+    assert.equal(span.measurement, "wall-clock");
+    assert.ok(Number.isFinite(span.startedAtEpochMs));
+    assert.ok(Number.isFinite(span.completedAtEpochMs));
+    assert.ok(Number.isFinite(span.durationMs) && span.durationMs >= 0);
+  }
+  assert.deepEqual(h.events, ["proof", "dependencies", "source"]);
+
+  const disabled = worker();
+  await disabled.run(true);
+  assert.equal(disabled.diagnostics.some(event => event.event.stage === "preparation-timing"), false);
 });
