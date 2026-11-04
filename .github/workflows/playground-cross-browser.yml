@@ -55,6 +55,7 @@ jobs:
           NOON_SHOWCASE_PROFILE_GATE: strict
           NOON_GALLERY_SHARD_INDEX: "1"
           NOON_GALLERY_SHARD_COUNT: "3"
+          NOON_PLAYGROUND_RAF_DIAGNOSTIC: "1"
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery-webkit-diagnostic
         run: node scripts/playground-gallery-runtime-smoke.mjs
       - name: Preserve diagnostic evidence
