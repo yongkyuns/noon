@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
 import { installStressObservation } from "./playground-stress-observation.mjs";
 
 const { chromium } = playwright;
-const port = Number(process.env.NOON_PLAYGROUND_STRESS_EDIT_PORT ?? "4191");
-const baseUrl = `http://127.0.0.1:${port}`;
+const port = Number(process.env.NOON_PLAYGROUND_STRESS_EDIT_PORT ?? "0");
 const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
 const runShortcut = process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
 const SOURCE_OWNED_DURATION_SECONDS = 600;
@@ -18,30 +17,8 @@ const artifactDir = path.resolve(
 );
 
 await mkdir(artifactDir, { recursive: true });
-
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", "."],
-  { stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground server did not start: ${lastError}\n${serverOutput}`);
-}
+const server = await serveRepository(path.resolve("."), port);
+const { baseUrl } = server;
 
 async function snapshot(page, { reset = false } = {}) {
   return page.evaluate((reset) => window.__noonStressObservation.snapshot({ reset }), reset);
@@ -168,7 +145,6 @@ let browser = null;
 let context = null;
 let page = null;
 try {
-  await waitForServer();
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -338,7 +314,6 @@ try {
     `explicit stress Runs emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
   );
 
-  diagnostics.serverOutput = serverOutput;
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
@@ -346,7 +321,6 @@ try {
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
-  diagnostics.serverOutput = serverOutput;
   if (page !== null) {
     try {
       diagnostics.snapshots.failure = await snapshot(page);
@@ -360,5 +334,5 @@ try {
 } finally {
   await context?.close().catch(() => {});
   await browser?.close().catch(() => {});
-  server.kill("SIGTERM");
+  await server.close();
 }
