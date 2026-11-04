@@ -120,7 +120,8 @@ fn shader_sweep_prepared_history_matches_source_and_pins_shader_versions() {
     assert_eq!(reader.end_time(), Some(5.5));
 
     let mut reference_frames = Vec::new();
-    for time in [0.5, 1.5, 2.5, 5.5] {
+    // The authored 0.65 phase / 0.35 rotation are symmetric at 1.5 and 4.0.
+    for time in [0.5, 1.5, 2.5, 4.0, 5.5] {
         drive(&mut reference, time);
         reference_frames.push((
             time,
@@ -129,7 +130,7 @@ fn shader_sweep_prepared_history_matches_source_and_pins_shader_versions() {
         ));
     }
 
-    for time in [0.5, 1.5, 2.5, 5.5, 1.5, 0.5] {
+    for time in [0.5, 1.5, 2.5, 4.0, 5.5, 1.5, 4.0, 0.5] {
         reader.seek(time).unwrap();
         let (_, expected_left, expected_right) = reference_frames
             .iter()
