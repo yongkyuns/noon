@@ -12,7 +12,6 @@ const baseUrl = `http://127.0.0.1:${port}`;
 const selectAllShortcut = process.platform === "darwin" ? "Meta+A" : "Control+A";
 const runShortcut = process.platform === "darwin" ? "Meta+Enter" : "Control+Enter";
 const SOURCE_OWNED_DURATION_SECONDS = 600;
-const SUPERSESSION_TIMEOUT_MS = 15_000;
 const artifactDir = path.resolve(
   process.env.NOON_PLAYGROUND_STRESS_EDIT_ARTIFACTS ??
     "browser-smoke-artifacts/playground-stress-edit",
@@ -53,7 +52,7 @@ async function waitForPreloadedRuntime(page) {
   assert.deepEqual(
     deferred,
     { runtimeStartup: "deferred", rendererBackend: "", presentedFrames: 0 },
-    "stress playground must be deferred before its first source-owned Run",
+    "stress playground must be deferred before its first explicit Run",
   );
   await page.waitForFunction(
     () => {
@@ -78,7 +77,7 @@ async function waitForPreloadedRuntime(page) {
   assert.equal(
     state.runtimeStartup,
     "started-on-demand",
-    "stress playground must start its execution owner from the first source-owned Run",
+    "stress playground must start its execution owner from the first explicit Run",
   );
   assert.equal(state.liveAuthoring, "ready");
   assert.ok(state.presentedFrames > 0, "stress Run must present a frame");
@@ -86,61 +85,61 @@ async function waitForPreloadedRuntime(page) {
   return state;
 }
 
-async function waitForSourceOwnedPlayback(page) {
+async function waitForLongSourcePlayback(page, expectedGeneration, previousObjectCount) {
   await page.waitForFunction(
-    () => {
+    ({ generation, previousCount }) => {
       const patch = document.querySelector("#patch-status");
       const run = document.querySelector("#replace-scene");
       return (
         window.__noonExampleGallery?.runInFlight === true &&
+        window.__noonExampleGallery?.generationDiagnostics.runGeneration === generation &&
         patch?.dataset.state === "running" &&
-        (patch?.value ?? patch?.textContent ?? "").includes("edits restart automatically") &&
-        run?.disabled === false
+        run?.disabled === false &&
+        document.querySelector("#metric-objects")?.value !== previousCount
       );
     },
-    null,
+    { generation: expectedGeneration, previousCount: previousObjectCount },
     { timeout: 120_000 },
   );
   const state = await snapshot(page);
   assert.equal(state.runInFlight, true);
-  assert.equal(state.runDisabled, false, "Run must stay available during source-owned playback");
+  assert.equal(state.runGeneration, expectedGeneration);
+  assert.equal(state.runDisabled, false, "Run must stay available during the long source continuation");
+  assert.equal(state.patchState, "running");
+  assert.notEqual(state.objectCount, previousObjectCount, "the explicit source replacement must publish its row count");
+  assert.equal(state.patchRunGeneration, String(expectedGeneration));
   return state;
 }
 
-async function waitForAppliedRun(page, previousObjectCount) {
+async function waitForAppliedRun(page, previousObjectCount, expectedGeneration) {
   await page.waitForFunction(
-    (priorObjectCount) => {
+    ({ previousCount, generation }) => {
       const patch = document.querySelector("#patch-status");
       const run = document.querySelector("#replace-scene");
-      if (run?.disabled) return false;
       if (patch?.dataset.state === "error") return true;
-      return (
-        patch?.dataset.state === "applied" &&
-        document.querySelector("#metric-objects")?.value !== priorObjectCount
-      );
+      return patch?.dataset.state === "applied" && !run?.disabled &&
+        patch.dataset.runGeneration === String(generation) &&
+        document.querySelector("#metric-objects")?.value !== previousCount;
     },
-    previousObjectCount,
+    { previousCount: previousObjectCount, generation: expectedGeneration },
     { timeout: 120_000 },
   );
   const state = await snapshot(page);
-  assert.equal(state.patchState, "applied", `stress scene must rerun successfully: ${state.patchText}`);
-  assert.notEqual(
-    state.objectCount,
-    previousObjectCount,
-    "successful structural edit must publish a different object count",
-  );
+  assert.equal(state.patchState, "applied", `explicit stress Run must succeed: ${state.patchText}`);
+  assert.notEqual(state.objectCount, previousObjectCount, "the explicit Run must publish its structural change");
+  assert.equal(state.patchRunGeneration, String(expectedGeneration));
+  assert.equal(state.runGeneration, expectedGeneration);
   return state;
 }
 
-async function waitForSupersedingRun(page, previousGeneration) {
-  await page.waitForFunction(
-    (previous) => window.__noonExampleGallery?.generationDiagnostics.runGeneration > previous,
-    previousGeneration,
-    { timeout: SUPERSESSION_TIMEOUT_MS },
-  );
-  const state = await snapshot(page);
-  assert.ok(state.runGeneration > previousGeneration);
-  return state;
+async function assertDraftOnlyEdit(page, edited, active, label) {
+  assert.equal(edited.runGeneration, active.runGeneration, `${label} must not create a run`);
+  assert.equal(edited.runInFlight, active.runInFlight, `${label} must preserve source execution state`);
+  assert.equal(edited.runDisabled, active.runDisabled, `${label} must preserve explicit Run availability`);
+  assert.equal(edited.objectCount, active.objectCount, `${label} must not publish the draft`);
+  assert.equal(edited.patchState, active.patchState, `${label} must preserve active source status`);
+  assert.equal(edited.playbackPlaying, active.playbackPlaying, `${label} must preserve play intent`);
+  assert.equal(edited.playbackPhase, active.playbackPhase, `${label} must preserve playback phase`);
 }
 
 async function replaceSource(editor, page, nextSource) {
@@ -221,12 +220,12 @@ try {
     null,
     { timeout: 30_000 },
   );
-
   // Highlighting must arrive without requiring the user to focus/click the source first.
   await page.waitForSelector(
     "#scene-editor-panel .python-code-editor[data-editor-ready='true'] .cm-content",
     { timeout: 30_000 },
   );
+  await page.locator("#replace-scene").click();
   diagnostics.snapshots.loaded = await snapshot(page);
   assert.equal(diagnostics.snapshots.loaded.enhanced, true);
   assert.equal(diagnostics.snapshots.loaded.textareaHidden, true);
@@ -248,17 +247,18 @@ try {
   );
 
   diagnostics.snapshots.baseline = await waitForPreloadedRuntime(page);
+  await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === false, null,
+    { timeout: 120_000 });
+  diagnostics.snapshots.baseline = await snapshot(page);
   assert.equal(diagnostics.snapshots.baseline.exampleId, "manim-parity-stress-grid");
   assert.equal(diagnostics.snapshots.baseline.executionMode, "semantic");
-  assert.equal(diagnostics.snapshots.baseline.patchOperation, "Scene rebuilt atomically");
 
   const source = await page.evaluate(
     () => document.querySelector("#python-scene-source")?.value ?? "",
   );
   assert.match(source, /rows = 20/);
-  // Construct the real stress scene and complete its first short source-owned
-  // play before inserting the long ownership interval. The injected wait is
-  // longer than every test wait bound, so an edit must cancel it rather than wait for completion.
+  // Preserve the stress source and put the long ownership interval after its
+  // first play. Draft changes must leave that 600-second continuation running.
   const firstStressPlayBoundary = "            run_time=0.35,\n        )\n";
   assert.ok(
     source.includes(firstStressPlayBoundary),
@@ -275,64 +275,74 @@ try {
   const rows20Source = rows7Source.replace(/rows = \d+/, "rows = 20");
   const baselineObjectCount = diagnostics.snapshots.baseline.objectCount;
 
-  diagnostics.snapshots.rows5Edited = await replaceSource(editor, page, rows5Source);
-  assert.match(diagnostics.snapshots.rows5Edited.patchText, /restarting/i);
-  assert.equal(diagnostics.snapshots.rows5Edited.objectCount, baselineObjectCount);
-  assert.equal(diagnostics.snapshots.rows5Edited.runInFlight, false);
-  assert.ok(diagnostics.snapshots.rows5Edited.runGeneration > diagnostics.snapshots.baseline.runGeneration);
+  diagnostics.snapshots.rows5Draft = await replaceSource(editor, page, rows5Source);
+  assert.equal(diagnostics.snapshots.rows5Draft.draftState, "unapplied");
+  assert.equal(diagnostics.snapshots.rows5Draft.objectCount, baselineObjectCount);
+  assert.equal(diagnostics.snapshots.rows5Draft.runInFlight, false);
+  assert.equal(diagnostics.snapshots.rows5Draft.runGeneration, diagnostics.snapshots.baseline.runGeneration);
 
-  diagnostics.snapshots.rows5Playing = await waitForSourceOwnedPlayback(page);
+  await page.locator("#replace-scene").click();
+  const rows5Generation = diagnostics.snapshots.rows5Draft.runGeneration + 1;
+  diagnostics.snapshots.rows5Playing = await waitForLongSourcePlayback(
+    page, rows5Generation, diagnostics.snapshots.baseline.objectCount,
+  );
   const sourceOwnedGeneration = diagnostics.snapshots.rows5Playing.runGeneration;
 
-  await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > 0.1);
-  assert.equal(await page.locator(".playback-controls").getAttribute("data-controllable"), "false");
+  await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > 2.05);
+  const activeRows5 = await snapshot(page);
 
-  // Reset stops the long continuation immediately. A subsequent edit replaces
-  // its pending restart; only the newest source may become the preview.
+  // Reset and typing only change the draft. The original long continuation
+  // stays active until an explicit Run captures a replacement source.
   diagnostics.snapshots.resetDuringRows5 = await snapshot(page, { reset: true });
   assert.equal(await page.locator("#python-scene-source").inputValue(), source);
-  assert.ok(diagnostics.snapshots.resetDuringRows5.runGeneration > sourceOwnedGeneration);
-  assert.match(diagnostics.snapshots.resetDuringRows5.patchText, /restarting/i);
+  await assertDraftOnlyEdit(page, diagnostics.snapshots.resetDuringRows5, activeRows5, "Reset example");
+  await page.waitForFunction(
+    ({ generation, elapsed }) => window.__noonExampleGallery?.generationDiagnostics.runGeneration === generation &&
+      window.__noonExampleGallery?.runInFlight === true &&
+      Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > elapsed + 0.1,
+    { generation: sourceOwnedGeneration, elapsed: diagnostics.snapshots.resetDuringRows5.elapsedSeconds },
+    { timeout: 15_000 },
+  );
 
   diagnostics.snapshots.rows7EditedDuringRows5 = await replaceSource(editor, page, rows7Source);
-  assert.ok(diagnostics.snapshots.rows7EditedDuringRows5.runGeneration > sourceOwnedGeneration);
-  assert.match(diagnostics.snapshots.rows7EditedDuringRows5.patchText, /restarting/i);
+  await assertDraftOnlyEdit(page, diagnostics.snapshots.rows7EditedDuringRows5, activeRows5, "rows=7 edit");
+  assert.equal(diagnostics.snapshots.rows7EditedDuringRows5.draftState, "unapplied");
 
-  diagnostics.snapshots.rows5Superseded = await waitForSupersedingRun(page, sourceOwnedGeneration);
-  diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(page, baselineObjectCount);
-  assert.equal(diagnostics.snapshots.rows7Rerun.executionMode, "semantic");
-  assert.equal(diagnostics.snapshots.rows7Rerun.patchOperation, "Scene rebuilt atomically");
-  assert.ok(
-    diagnostics.snapshots.rows7Rerun.runGeneration >= diagnostics.snapshots.rows5Superseded.runGeneration,
-    "the applied replacement must follow edit-triggered source invalidation",
+  await page.locator("#replace-scene").click();
+  const rows7Generation = sourceOwnedGeneration + 2;
+  diagnostics.snapshots.rows7Rerun = await waitForAppliedRun(
+    page, diagnostics.snapshots.rows5Playing.objectCount, rows7Generation,
   );
-  assert.equal(
-    diagnostics.snapshots.rows7Rerun.patchRunGeneration,
-    String(diagnostics.snapshots.rows7Rerun.runGeneration),
-    "the applied scene must belong to the latest generation, never an invalidated source run",
-  );
+  await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === false, null,
+    { timeout: 120_000 });
+  diagnostics.snapshots.rows7Rerun = await snapshot(page);
+  assert.equal(diagnostics.snapshots.rows7Rerun.draftState, "applied");
 
   const rows7ObjectCount = diagnostics.snapshots.rows7Rerun.objectCount;
   diagnostics.snapshots.rows20Edited = await replaceSource(editor, page, rows20Source);
   assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
-  assert.match(diagnostics.snapshots.rows20Edited.patchText, /restarting/i);
+  await assertDraftOnlyEdit(page, diagnostics.snapshots.rows20Edited, diagnostics.snapshots.rows7Rerun,
+    "rows=20 edit");
+  assert.equal(diagnostics.snapshots.rows20Edited.draftState, "unapplied");
   await page.keyboard.press(runShortcut);
-  diagnostics.snapshots.rows20Rerun = await waitForAppliedRun(page, rows7ObjectCount);
+  diagnostics.snapshots.rows20Rerun = await waitForAppliedRun(
+    page, rows7ObjectCount, rows7Generation + 1,
+  );
+  assert.equal(diagnostics.snapshots.rows20Rerun.draftState, "applied");
   assert.equal(diagnostics.snapshots.rows20Rerun.executionMode, "semantic");
-  assert.equal(diagnostics.snapshots.rows20Rerun.patchOperation, "Scene rebuilt atomically");
 
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.deepEqual(
     diagnostics.consoleErrors,
     [],
-    `valid automatic structural reruns emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
+    `explicit stress Runs emitted console errors: ${diagnostics.consoleErrors.join("\n")}`,
   );
 
   diagnostics.serverOutput = serverOutput;
   await page.screenshot({ path: path.join(artifactDir, "stress-edited.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
-    `playground automatic structural reruns ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, source-owned rows=5 superseded by rows=7 then rows=20`,
+    `playground draft-only stress edits ok: ${diagnostics.snapshots.loaded.editorHeight}px editor, explicit rows=5 → rows=7 → rows=20 Runs`,
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
