@@ -413,7 +413,10 @@ export async function attachSemanticEngine(
   const notePresentedPublication = (publication) => {
     if (!publication || !Number.isSafeInteger(publication.session) ||
         publication.session < 0 || !Number.isSafeInteger(publication.sequence) ||
-        publication.sequence < 0 || publication.session !== session ||
+        publication.sequence < 0 ||
+        (publication.objectCount !== undefined &&
+          (!Number.isSafeInteger(publication.objectCount) || publication.objectCount < 0)) ||
+        publication.session !== session ||
         lastSentPublication === null ||
         publication.session !== lastSentPublication.session ||
         publication.sequence > lastSentPublication.sequence) {
@@ -439,7 +442,10 @@ export async function attachSemanticEngine(
     }
     const firstPresentation = lastPresentedPublication === null;
     lastPresentedPublication = publication;
-    lastPresentedDeltaMetadata = presentedMetadata;
+    lastPresentedDeltaMetadata = Object.freeze({
+      ...presentedMetadata,
+      ...(publication.objectCount === undefined ? {} : { objectCount: publication.objectCount }),
+    });
     for (const sequence of sentPublicationMetadata.keys()) {
       if (sequence <= publication.sequence) sentPublicationMetadata.delete(sequence);
     }
@@ -482,6 +488,9 @@ export async function attachSemanticEngine(
       const time = type === "state" && preparedClockAdmitted
         ? player.preparedPlaybackTimeAt(observedAt) : observation.time;
       sections = JSON.parse(player.sectionsJson());
+      const presentationReceipt = !receiverFailed && samePublication(lastSentPublication, lastPresentedPublication) &&
+        samePublication(lastPresentedDeltaMetadata, lastPresentedPublication)
+        ? lastPresentedDeltaMetadata : null;
       return {
         type, preparedPlayback: true,
         // Cold initialization and command acknowledgements observe only the
@@ -499,6 +508,7 @@ export async function attachSemanticEngine(
         loopDuration: observation.loopDuration, loopCount: observation.loopCount,
         loopError: observation.loopError,
         heldPresentation: preparedClockAdmitted ? observation.heldPresentation ?? null : null,
+        ...(presentationReceipt === null ? {} : { presentationReceipt }),
         replaySupported: true, replayUnavailable: null,
         canUndoTranslationDrag: false, nextPatchSequence: "0",
       };

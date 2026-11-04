@@ -929,6 +929,7 @@ export function createAuthoringRenderController(host) {
       type: "execution_presented",
       session: publication.session,
       sequence: publication.sequence,
+      objectCount: renderer.objectCount(),
       ...(lastPointerReceipt === null ? {} : { pointerReceipt: lastPointerReceipt }),
     });
   }

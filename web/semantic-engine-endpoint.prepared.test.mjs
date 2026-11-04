@@ -134,10 +134,11 @@ function fixture(mode = "transferable", options = {}) {
       render.port2.postMessage({ type: "execution_ack", session: delta.session, sequence: delta.sequence });
       render.port2.postMessage({ type: "transport_writable" });
     },
-    async present(delta = deltas[0], receipt = undefined) {
+    async present(delta = deltas[0], receipt = undefined, objectCount = undefined) {
       const prior = count("wake");
       render.port2.postMessage({ type: "execution_presented", session: delta.session,
-        sequence: delta.sequence, ...(receipt ? { pointerReceipt: receipt } : {}) });
+        sequence: delta.sequence, ...(objectCount === undefined ? {} : { objectCount }),
+        ...(receipt ? { pointerReceipt: receipt } : {}) });
       await when(() => count("wake") > prior);
     },
     observe(value) { observation = value; },
@@ -447,6 +448,48 @@ test("prepared seek returns a display receipt only for its matching publication"
     assert.equal(result.time, 1);
     assert.deepEqual(result.presentationReceipt, { session: 7, sequence: 1, time: 1, unchanged: false });
   } finally { f.close(); }
+});
+
+test("prepared state exposes only the latest validated renderer receipt with its object count", { timeout: 3000 }, async () => {
+  const f = fixture();
+  try {
+    await f.attach();
+    assert.equal((await f.request("state")).presentationReceipt, undefined);
+    f.acknowledge();
+    await f.present(undefined, undefined, 640);
+    assert.deepEqual((await f.request("state")).presentationReceipt, {
+      session: 7, sequence: 0, snapshot: true, time: 0, objectCount: 640,
+    });
+
+    const seeking = f.request("seek", { time: 1 });
+    await f.when(() => f.deltas.length === 2);
+    assert.equal((await f.request("state")).presentationReceipt, undefined,
+      "the older renderer ack cannot certify the newly sent publication");
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0, objectCount: 640 });
+    assert.equal((await f.request("state")).presentationReceipt, undefined,
+      "a stale ack cannot certify a newer publication");
+    f.rendererMessage({ type: "execution_presented", session: 8, sequence: 1, objectCount: 999 });
+    assert.equal((await f.request("state")).presentationReceipt, undefined,
+      "a foreign-session ack cannot certify this renderer session");
+    f.rendererMessage({ type: "execution_presented", session: 7, sequence: 1, objectCount: 641 });
+    assert.equal((await seeking).time, 1);
+    assert.deepEqual((await f.request("state")).presentationReceipt, {
+      session: 7, sequence: 1, snapshot: false, time: 1, objectCount: 641,
+    });
+  } finally { f.close(); }
+});
+
+test("prepared renderer receipt rejects malformed optional object counts", { timeout: 3000 }, async () => {
+  for (const objectCount of [-1, 1.5, NaN]) {
+    const f = fixture();
+    try {
+      await f.attach();
+      f.rendererMessage({ type: "execution_presented", session: 7, sequence: 0, objectCount });
+      await f.when(() => f.replies.some(reply => reply.type === "error"));
+      assert.equal((await f.request("state")).presentationReceipt, undefined,
+        "an invalid count cannot update the cached renderer receipt");
+    } finally { f.close(); }
+  }
 });
 
 test("no-delta seek joins the latest publication and a stale receipt cannot settle it", { timeout: 3000 }, async () => {

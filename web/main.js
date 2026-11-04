@@ -1815,6 +1815,9 @@ try {
     async executionMetrics(options) {
       return player?.metrics(options) ?? null;
     },
+    async executionState() {
+      return player?.state() ?? null;
+    },
     get generationDiagnostics() {
       return generations.diagnostics;
     },

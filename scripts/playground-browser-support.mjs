@@ -8,7 +8,7 @@ export async function holdPlaygroundPreload(page) {
   const gate = new Promise((resolve) => { release = resolve; });
   await page.route("**/live-authoring-bootstrap.js", async (route) => {
     await gate;
-    await route.continue();
+    if (!page.isClosed()) await route.continue();
   });
   return release;
 }

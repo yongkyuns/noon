@@ -422,6 +422,7 @@ test("cold WebGPU work withholds source admission once, including resize repaint
   const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
   const completion = deferred();
   let waits = 0;
+  harness.createdRenderer.objectCount = () => 37;
   harness.createdRenderer.waitForSubmittedWork = () => { waits += 1; return completion.promise; };
   harness.creation.resolve(harness.createdRenderer);
   await flushTasks();
@@ -435,6 +436,7 @@ test("cold WebGPU work withholds source admission once, including resize repaint
   const receipts = () => harness.nextPort.messages.filter(message => message.type === "execution_presented");
   assert.deepEqual(receipts().map(({session, sequence}) => ({session, sequence})),
     [{ session: 11, sequence: 0 }]);
+  assert.equal(receipts()[0].objectCount, 37, "presentation ack carries the count from the rendered frame");
   assert.equal(harness.mainMessages.filter(message => message.type === "mode_switched").length, 1);
   vm.runInContext('consumeDelta("next", {session:11, sequence:1});', harness.context);
   assert.equal(receipts().at(-1).sequence, 1);
