@@ -20,18 +20,17 @@ jobs:
         shell: bash
         env:
           SOURCE_REVISION: d28af55345aa07b3cf9ce03bd7ce9a5993f74014
+          TEMP_EVENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           cp scripts/showcase-live-review-diagnostic.patch "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
           sha256sum "$RUNNER_TEMP/showcase-capture-diagnostic.patch" > "$RUNNER_TEMP/showcase-capture-diagnostic.patch.sha256"
+          mkdir -p browser-smoke-artifacts/showcase-diagnostic/webgl
+          echo "$TEMP_EVENT_SHA" > browser-smoke-artifacts/showcase-diagnostic/webgl/temp-event-sha.txt
           git fetch --no-tags --depth=1 origin "$SOURCE_REVISION"
           git checkout --detach "$SOURCE_REVISION"
-          git apply --check "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
-          git apply "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
-          mkdir -p browser-smoke-artifacts/showcase-diagnostic/webgl
-          cp "$RUNNER_TEMP/showcase-capture-diagnostic.patch.sha256" browser-smoke-artifacts/showcase-diagnostic/webgl/harness.sha256
           git rev-parse HEAD > browser-smoke-artifacts/showcase-diagnostic/webgl/source.txt
-          sha256sum scripts/showcase-live-review.mjs > browser-smoke-artifacts/showcase-diagnostic/webgl/script.sha256
+          cp "$RUNNER_TEMP/showcase-capture-diagnostic.patch.sha256" browser-smoke-artifacts/showcase-diagnostic/webgl/harness.sha256
           node --version > browser-smoke-artifacts/showcase-diagnostic/webgl/node-version.txt
       - name: Download exact CI runtime
         uses: actions/download-artifact@v8
@@ -47,7 +46,7 @@ jobs:
           run-id: 41890852960
           github-token: ${{ github.token }}
           path: browser-smoke-artifacts/showcase/webgl
-      - name: Verify source, runtime, original capture report, and pinned browser
+      - name: Verify exact pinned-source runtime and original capture report
         env:
           EXPECTED_SOURCE: d28af55345aa07b3cf9ce03bd7ce9a5993f74014
         run: |
@@ -55,26 +54,35 @@ jobs:
           test "$(cat browser-smoke-artifacts/showcase-diagnostic/webgl/source.txt)" = "$EXPECTED_SOURCE"
           node --input-type=module -e '
             import fs from "node:fs";
-            import { createHash } from "node:crypto";
+            import { execFileSync } from "node:child_process";
+            import { verify } from "./.github/ci/wasm-build.mjs";
+            const source = process.env.EXPECTED_SOURCE;
+            if (execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim() !== source)
+              throw new Error("detached source revision mismatch");
+            const manifest = JSON.parse(fs.readFileSync("web/ci-artifact.json", "utf8"));
+            await verify(process.cwd(), { ...process.env, GITHUB_SHA: source }, manifest.build);
             const identity = JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8"));
-            if (identity.sourceRevision !== process.env.EXPECTED_SOURCE) throw new Error("runtime source mismatch");
-            for (const entry of Object.values(identity.files)) {
-              const actual = createHash("sha256").update(fs.readFileSync("web/" + entry.path.replace(/^\.\//, ""))).digest("hex");
-              if (actual !== entry.sha256) throw new Error("runtime file hash mismatch: " + entry.path);
-            }
             const report = JSON.parse(fs.readFileSync("browser-smoke-artifacts/showcase/webgl/report.json", "utf8"));
-            if (identity.sourceRevision !== process.env.EXPECTED_SOURCE ||
-                report.checkoutRevision !== process.env.EXPECTED_SOURCE ||
+            if (report.checkoutRevision !== source ||
                 JSON.stringify(report.servedBuildIdentity) !== JSON.stringify(identity) ||
-                report.backendRequested !== "webgl" || typeof report.browserVersion !== "string" || !report.browserVersion) {
-              throw new Error("runtime or original capture report identity mismatch");
+                report.backendRequested !== "webgl" || typeof report.browserVersion !== "string" || !report.browserVersion ||
+                !report.results.some(result => result.id === "showcase-bloom-emission" && result.outcome === "pass")) {
+              throw new Error("original bloom capture/oracle identity mismatch");
             }
-            if (!report.results.some(result => result.id === "showcase-bloom-emission" && result.outcome === "pass"))
-              throw new Error("original bloom capture/oracle is absent or failed");
           '
           cp web/runtime-build-identity.json browser-smoke-artifacts/showcase-diagnostic/webgl/runtime-build-identity.json
           cp browser-smoke-artifacts/showcase/webgl/report.json browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.json
           sha256sum browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.json > browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.sha256
+      - name: Apply diagnostic-only observer instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
+          git apply "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
+          sha256sum scripts/showcase-live-review.mjs scripts/showcase-renderer-readback.mjs > browser-smoke-artifacts/showcase-diagnostic/webgl/script.sha256
+          echo "full artifact verification passed for pinned source $(cat browser-smoke-artifacts/showcase-diagnostic/webgl/source.txt)" > browser-smoke-artifacts/showcase-diagnostic/webgl/runtime-verification.txt
+      - name: Install pinned browser tools
+        run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
       - name: Observe unchanged bloom first-pass and replay checks
@@ -84,7 +92,7 @@ jobs:
           NOON_SHOWCASE_CASES: showcase-bloom-emission
           NOON_SHOWCASE_DIAGNOSTIC_OUTPUT: browser-smoke-artifacts/showcase-diagnostic/webgl/live
         run: node scripts/showcase-live-review.mjs
-      - name: Preserve diagnostic outcome and logs
+      - name: Preserve diagnostic outcome and runtime hashes
         if: always()
         env:
           DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
