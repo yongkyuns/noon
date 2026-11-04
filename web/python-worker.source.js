@@ -1996,7 +1996,7 @@ json.dumps(source_execution_proof(__noon_source))
     if (run.diagnosticPreparationTiming) startPreparedSourceTurn(run);
     try {
       return await pyodide.runPythonAsync(diagnosedHostCode(`
-if __noon_enable_prepared_source_yield:
+if globals().get("__noon_enable_prepared_source_yield", False):
     from _noon_errors import enable_prepared_source_yield
     enable_prepared_source_yield()
 
