@@ -193,6 +193,7 @@ function preparedAudioPage({ run, observations = [] } = {}) {
     get runInFlight() { return current.runInFlight ?? false; },
     async executionMetrics() {
       metricsCalls += 1;
+      current.captureEvents?.push(`metrics-${metricsCalls}`);
       if (current.wrapOnPostMetric && metricsCalls % 2 === 0) current.looped = true;
       const sample = current.postPresentationSample && metricsCalls % 2 === 0
         ? current.postPresentationSample
@@ -215,6 +216,13 @@ function preparedAudioPage({ run, observations = [] } = {}) {
         { stage: "disposition", disposition: "looped", loopCount: 1 }] } : base;
     },
   };
+  class TestBlob { constructor(dataUrl) { this.dataUrl = dataUrl; } }
+  class TestFileReader {
+    readAsDataURL(blob) {
+      this.result = blob.dataUrl;
+      setTimeout(() => this.onload?.(), 0);
+    }
+  }
   const browser = {
     window: { __noonExampleGallery: gallery },
     document: { querySelector(selector) {
@@ -222,7 +230,17 @@ function preparedAudioPage({ run, observations = [] } = {}) {
         dataset: { state: current.patchState ?? "applied" }, value: current.patchError,
       };
       if (selector === "#status") return { dataset: { rendererBackend: "WebGL2" } };
-      if (selector === "#scene") return { toDataURL: () => "data:image/png;base64,aGVsbG8=" };
+      if (selector === "#scene") return {
+        toBlob(callback) {
+          const copiedDataUrl = current.canvasDataUrl ?? "data:image/png;base64,aGVsbG8=";
+          current.captureEvents?.push("toBlob-copy");
+          setTimeout(() => {
+            current.captureEvents?.push("toBlob-serialize");
+            if (current.wrapDuringBlobSerialization) current.looped = true;
+            callback(new TestBlob(copiedDataUrl));
+          }, 0);
+        },
+      };
       if ([".playback-toggle", ".playback-restart", ".playback-scrubber"].includes(selector)) {
         return { disabled: false };
       }
@@ -237,7 +255,18 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       if (observationIndex === 0) calls.push("published endpoint");
       current = observations[observationIndex++] ?? {};
     }
-    const value = await runInNewContext(`(${fn.toString()})(argument)`, { ...browser, argument });
+    const value = await runInNewContext(`(${fn.toString()})(argument)`, {
+      ...browser,
+      argument,
+      Blob: TestBlob,
+      FileReader: TestFileReader,
+      requestAnimationFrame(callback) {
+        current.captureEvents?.push("requestAnimationFrame");
+        callback(0);
+        return 1;
+      },
+      setTimeout,
+    });
     if (argument !== undefined) ready.push(value);
     return value;
   };
@@ -319,6 +348,34 @@ test("looping first pass captures one unseeked terminal hold before wrap with it
     session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
   });
   assert.match(result.firstPassCapture.pngDataUrl, /^data:image\/png;base64,/);
+});
+
+test("terminal hold bitmap and controls are captured before asynchronous PNG serialization", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const copiedDataUrl = "data:image/png;base64,cHJlLXdyYXA=";
+  const captureEvents = [];
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 7.5, canvasDataUrl: copiedDataUrl, captureEvents,
+        controls: { playing: "true" }, wrapDuringBlobSerialization: true },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true },
+    ],
+  });
+  const result = await runOrdinaryGallery(page, 100, lesson);
+  assert.equal(result.firstPassCapture.pngDataUrl, copiedDataUrl);
+  assert.deepEqual({ ...result.firstPassCapture.controls }, {
+    controllable: "true", busy: "false", playing: "true", durationKnown: "true",
+    buffering: "false", elapsedSeconds: "7.5",
+  });
+  assert.deepEqual(result.firstPassCapture.rendererReceipt, {
+    session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
+  });
+  assert.deepEqual(captureEvents, [
+    "metrics-1", "requestAnimationFrame", "requestAnimationFrame", "toBlob-copy",
+    "metrics-2", "toBlob-serialize",
+  ]);
 });
 
 test("loop wrap without a pre-wrap picture cannot use a post-wrap frame as first-pass evidence", async () => {

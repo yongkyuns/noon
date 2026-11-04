@@ -128,8 +128,21 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
         metrics.time === receipt.time && metrics.needsPresent === false && metrics.bufferedDeltas === 0 &&
         Number.isSafeInteger(metrics.objectCount)) {
       const canvas = document.querySelector("#scene");
-      const pngDataUrl = canvas?.toDataURL?.("image/png");
-      if (typeof pngDataUrl === "string" && pngDataUrl.startsWith("data:image/png;base64,")) {
+      if (typeof canvas?.toBlob === "function") {
+        // A transferred HTML canvas placeholder can lag the worker's present.
+        // Let two main-thread paint updates run, then toBlob synchronously copies
+        // the placeholder bitmap before asynchronous PNG serialization (HTML
+        // canvas toBlob: https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
+        const captureElapsed = Number(captureControls.elapsedSeconds);
+        if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
+            captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
+            captureElapsed < holdStart ||
+            captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration)) return false;
+        const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        // Validate the exact run and renderer receipt before awaiting PNG encoding.
         const afterReport = await gallery.executionMetrics();
         const afterMetrics = afterReport?.metrics;
         const afterReceipt = afterMetrics?.latestPresentationSample;
@@ -146,11 +159,20 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
             afterReceipt.time === receipt.time && afterMetrics.time === receipt.time &&
             afterMetrics.needsPresent === false && afterMetrics.bufferedDeltas === 0 &&
             afterMetrics.objectCount === metrics.objectCount) {
+          const pngBlob = await pngBlobPromise;
+          if (!(pngBlob instanceof Blob)) return false;
+          const pngDataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
+            reader.readAsDataURL(pngBlob);
+          });
+          if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
           window.__showcaseLiveReviewFirstPass = {
             pngDataUrl,
             metrics,
             rendererReceipt: receipt,
-            controls: { ...controls },
+            controls: captureControls,
             authoredDuration: duration,
             holdStart,
             ...runIdentity,
