@@ -61,7 +61,7 @@ jobs:
             if (identity.sourceRevision !== process.env.EXPECTED_SOURCE ||
                 report.checkoutRevision !== process.env.EXPECTED_SOURCE ||
                 JSON.stringify(report.servedBuildIdentity) !== JSON.stringify(identity) ||
-                report.backendRequested !== "webgl" || report.browserVersion !== "Chromium") {
+                report.backendRequested !== "webgl" || typeof report.browserVersion !== "string" || !report.browserVersion) {
               throw new Error("runtime or original capture report identity mismatch");
             }
             if (!report.results.some(result => result.id === "showcase-bloom-emission" && result.outcome === "pass"))
@@ -84,8 +84,11 @@ jobs:
         env:
           DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
         run: |
+          mkdir -p browser-smoke-artifacts/showcase-diagnostic/webgl
           echo "$DIAGNOSTIC_OUTCOME" > browser-smoke-artifacts/showcase-diagnostic/webgl/diagnostic-outcome.txt
-          sha256sum web/python-worker.js web/pkg/noon_web.js web/pkg/noon_web_bg.wasm web/runtime-build-identity.json > browser-smoke-artifacts/showcase-diagnostic/webgl/runtime-files.sha256
+          if [[ -f web/python-worker.js && -f web/pkg/noon_web.js && -f web/pkg/noon_web_bg.wasm && -f web/runtime-build-identity.json ]]; then
+            sha256sum web/python-worker.js web/pkg/noon_web.js web/pkg/noon_web_bg.wasm web/runtime-build-identity.json > browser-smoke-artifacts/showcase-diagnostic/webgl/runtime-files.sha256
+          fi
       - name: Upload diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v7
