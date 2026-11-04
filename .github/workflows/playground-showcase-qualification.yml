@@ -73,6 +73,7 @@ jobs:
           '
           cp web/runtime-build-identity.json browser-smoke-artifacts/showcase-diagnostic/webgl/runtime-build-identity.json
           cp browser-smoke-artifacts/showcase/webgl/report.json browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.json
+          cp browser-smoke-artifacts/showcase/webgl/report.json browser-smoke-artifacts/showcase-diagnostic/webgl/report.json
           sha256sum browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.json > browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.sha256
       - name: Apply diagnostic-only observer instrumentation
         shell: bash
