@@ -627,6 +627,7 @@ export class PlaygroundPlaybackControls {
       this.#presentedSession = receipt.session;
       this.#presentedSequence = receipt.sequence;
       this.#confirmedTimeSeconds = result.time;
+      if (result.sectionState !== undefined) this.#sectionState = result.sectionState;
       this.#seekNotice = null;
     } else {
       this.#seekNotice = `Accepted at ${formatTime(result.time)} s · waiting for display`;

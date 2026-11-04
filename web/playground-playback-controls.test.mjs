@@ -298,7 +298,7 @@ test("silent lessons expose annotated cues and delegate navigation without resol
   assert.equal(selected, null, "retired markers cannot issue commands");
 });
 
-test("prepared playback keeps Rust-provided cues and clears them when a new profile omits metadata", () => {
+test("prepared playback seeks with Rust cue state and clears it when a new profile omits metadata", async () => {
   const f = fixture();
   const sections = [
     { index: 0, name: "Start", time: 0 },
@@ -313,6 +313,20 @@ test("prepared playback keeps Rust-provided cues and clears them when a new prof
   assert.equal(f.preview.querySelector(".playback-section-controls").hidden, false);
   assert.deepEqual(f.preview.querySelector(".playback-section-names").children
     .slice(1).map(option => option.value), ["0", "1"]);
+
+  f.player.seek = async time => ({
+    preparedPlayback: true, replaySupported: true, time, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    sectionState: { current: 1, previous: 0, next: null },
+    presentationReceipt: { session: 1, sequence: 1, time },
+  });
+  f.range.value = "0.5";
+  f.range.dispatchEvent(new Event("input"));
+  await flush();
+  assert.equal(f.preview.querySelector(".playback-section-names").value, "1");
+  assert.equal(f.preview.querySelector(".playback-previous-section").disabled, false);
+  assert.equal(f.preview.querySelector(".playback-next-section").disabled, true);
 
   f.controls.sync({
     preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,

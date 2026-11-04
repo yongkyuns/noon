@@ -35,7 +35,10 @@ async function waitForMetricNear(page, target, tolerance = 0.08, timeout = 10_00
         document.querySelector("#metric-time")?.textContent ??
         "";
       const observed = Number(String(raw).match(/([0-9]+(?:\.[0-9]+)?)\s*s/)?.[1]);
-      return Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
+      const controls = document.querySelector(".playback-controls");
+      return controls?.dataset.busy === "false" &&
+        Math.abs(Number(controls.dataset.elapsedSeconds) - expected) <= allowed &&
+        Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
     },
     { target, tolerance },
     { timeout },
@@ -107,6 +110,7 @@ async function playbackSnapshot(page) {
       runText: document.querySelector("#replace-scene")?.textContent?.trim() ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
       patchState: document.querySelector("#patch-status")?.dataset.state ?? "",
+      draftState: document.querySelector("#draft-status")?.dataset.state ?? "",
       patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
       patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
       runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
@@ -298,13 +302,17 @@ class Lesson(Scene):
   });
   const edited = await playbackSnapshot(page);
   diagnostics.edited = edited;
-  assert.equal(edited.patchState, "ready", "editing must stop before its debounced restart");
-  assert.ok(edited.runGeneration > initialGeneration, "editing must immediately invalidate the old run");
-  assert.equal(edited.canvasHidden, true, "editing must hide the old source preview");
-  assert.equal(edited.playing, "false", "editing must pause the retained execution");
-  assert.ok(edited.playDisabled && edited.restartDisabled && edited.scrubberDisabled,
-    "editing must disable every control for the old replay lease");
-  await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === true);
+  assert.equal(edited.draftState, "unapplied");
+  assert.equal(edited.patchState, "applied");
+  assert.equal(edited.runGeneration, initialGeneration, "editing must retain the active source");
+  assert.equal(edited.canvasHidden, false, "editing must keep the active preview visible");
+  assert.equal(edited.playing, "false");
+  assert.ok(!edited.playDisabled && !edited.restartDisabled && !edited.scrubberDisabled,
+    "draft edits must preserve the active playback controls");
+  await page.waitForTimeout(600);
+  assert.equal((await playbackSnapshot(page)).runGeneration, initialGeneration,
+    "draft edits must not schedule a delayed source restart");
+  await page.locator("#replace-scene").click();
   await page.waitForFunction(
     () =>
       window.__noonExampleGallery?.runInFlight === false &&
@@ -315,11 +323,11 @@ class Lesson(Scene):
   );
   const rerun = await playbackSnapshot(page);
   diagnostics.rerun = rerun;
-  assert.equal(rerun.hasControls, true, "automatic source restart must restore a completed replay lease");
+  assert.equal(rerun.hasControls, true, "Run must expose controls for the replacement source");
   assert.equal(rerun.playbackAvailability, "available");
   assert.equal(rerun.runDisabled, false);
   assert.equal(rerun.patchRunGeneration, String(rerun.runGeneration));
-  assert.ok(rerun.runGeneration > initialGeneration, "automatic restart must apply the newest source generation");
+  assert.ok(rerun.runGeneration > initialGeneration, "Run must apply the newest source generation");
   assert.equal(
     Number(rerun.scrubberMax),
     Number(initial.scrubberMax) + 2,
@@ -328,6 +336,15 @@ class Lesson(Scene):
   assert.equal(rerun.canvasCount, 1, "source replacement must leave exactly one canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
   assert.equal(rerun.canvasCount, 1);
+
+  // Source completion can precede presentation. Inspect lesson controls at the
+  // selected terminal frame instead of depending on a loop's sampling instant.
+  if (rerun.playing === "true") await page.locator(".playback-toggle").click();
+  await page.locator(".playback-scrubber").evaluate(input => {
+    input.value = input.max;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await waitForMetricNear(page, Number(rerun.scrubberMax));
 
   // The existing edit/rerun also proves silent lesson annotations reach the
   // viewer through shared Rust, without an additional scene or browser job.
@@ -422,7 +439,7 @@ class Lesson(Scene):
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ live progress, completed replay controls, fullscreen, and automatic source restart");
+  console.log("✓ playback controls, fullscreen, retained draft editing, and explicit Run");
 } catch (error) {
   if (page !== null) {
     try {
