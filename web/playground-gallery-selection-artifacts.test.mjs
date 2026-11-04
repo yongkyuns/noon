@@ -197,6 +197,12 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     await vm.runInNewContext(`(async () => {${source}\n})()`, {
       assert, path, fileURLToPath, sourceUrl, URL,
       assertNonreplayableShowcase, readLiveState, normalizeShowcaseManifest,
+      seekPausedGallery: async (_page, duration) => {
+        assert.equal(duration, 2.6);
+        endpointRequested = true;
+        events.push("seek:paused-endpoint");
+        return duration;
+      },
       process: { env },
       setTimeout: (callback) => { callback(); return 0; },
       clearTimeout: () => {},
@@ -277,6 +283,7 @@ test("an acknowledged seek cannot baseline an earlier renderer publication", asy
   const result = await runSmoke({ replayable: true, staleEndpointReads: 2 });
   assert.equal(result.error, undefined);
   assert.equal(result.events.filter(event => event === "render:stale").length, 2);
+  assert.ok(result.events.indexOf("seek:paused-endpoint") < result.events.indexOf("render:endpoint"));
   assert.ok(result.events.indexOf("render:endpoint") < result.events.indexOf("capture:authoredBaseline"));
   const report = assertRetained(result, ["authoredBaseline", "indicated", "restored"]);
   assert.equal(report.authoredPlayback.publishedTime, 2.6);
