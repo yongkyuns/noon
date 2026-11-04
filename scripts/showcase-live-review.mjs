@@ -97,25 +97,43 @@ export function assertNaturalFirstPassPublication(entry, authoredDuration, publi
   }
 }
 
-async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
+async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration }) {
   const gallery = window.__noonExampleGallery;
+  const runState = window.__showcaseLiveReviewRun;
+  if (!runState || runState.stop) return true;
+  runState.observerStartedAtEpochMs ??= performance.timeOrigin + performance.now();
   const patch = document.querySelector("#patch-status");
   if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
   if (gallery?.selectedExampleId !== exampleId) throw new Error("gallery selection changed during the first pass");
+  if (gallery?.generationDiagnostics?.runGeneration !== runGeneration) {
+    if (gallery?.generationDiagnostics?.runGeneration > runGeneration) throw new Error("first-pass Run was superseded");
+    return false;
+  }
   const diagnostics = gallery?.executionDiagnostics;
   const events = diagnostics?.events ?? [];
+  if (diagnostics?.context?.runGeneration !== runGeneration) {
+    if (diagnostics?.context?.runGeneration > runGeneration) throw new Error("first-pass source context was superseded");
+    return false;
+  }
+  if (!Number.isSafeInteger(diagnostics?.runRequestId) || !Number.isSafeInteger(diagnostics?.interpreterGeneration)) return false;
   const disposition = events.find((event) => event.stage === "disposition")?.disposition ?? null;
   if (disposition === "looped" || disposition === "finite-complete") return true;
   const heldEvidence = (report, metrics, receipt) => {
     const playback = report?.engineMetrics?.preparedPlayback;
     const observation = playback?.observation;
     const held = observation?.heldPresentation;
+    const observedTime = playback?.observedTime;
+    const roundoff = 8 * Number.EPSILON * Math.max(1, duration);
+    const knownEndMatches = observation?.end == null || (Number.isFinite(observation.end) &&
+      Math.abs(observation.end - duration) <= roundoff);
+    const rustTimeInHold = Number.isFinite(observedTime) && observedTime >= holdStart && observedTime < duration &&
+      Number.isFinite(observation?.frontier) && observation.frontier >= observedTime && knownEndMatches;
     if (!held || observation.loopCount !== 0 || held.publication?.session !== receipt?.session ||
         held.publication?.sequence !== receipt?.sequence || !Number.isFinite(playback.observedTime) ||
         playback.observedTime !== held.time || !Number.isFinite(held.evaluatedTime) ||
         playback.observedTime < held.evaluatedTime || !Number.isFinite(held.validUntil) ||
         playback.observedTime >= held.validUntil || metrics?.needsPresent !== false ||
-        metrics?.bufferedDeltas !== 0 || metrics?.time !== receipt?.time ||
+        metrics?.bufferedDeltas !== 0 || metrics?.time !== receipt?.time || !rustTimeInHold ||
         playback.observedTime < holdStart || playback.observedTime >= duration) return null;
     return { ...held, observedTime: playback.observedTime };
   };
@@ -133,6 +151,11 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
     const receipt = metrics?.latestPresentationSample;
     return { phase, epochMs: performance.timeOrigin + performance.now(),
       ...(timing ?? {}), selectedExampleId: gallery?.selectedExampleId,
+      runRequestedAtEpochMs: window.__showcaseLiveReviewRun?.requestedAtEpochMs ?? null,
+      runResolvedAtEpochMs: window.__showcaseLiveReviewRun?.resolvedAtEpochMs ?? null,
+      observerStartedAtEpochMs: window.__showcaseLiveReviewRun?.observerStartedAtEpochMs ?? null,
+      runGenerationBefore: window.__showcaseLiveReviewRun?.runGenerationBefore ?? null,
+      acceptedRunGeneration: window.__showcaseLiveReviewRun?.acceptedRunGeneration ?? null,
       backend: document.querySelector("#status")?.dataset.rendererBackend ?? null,
       controls: { ...document.querySelector(".playback-controls")?.dataset },
       runRequestId: current?.runRequestId ?? null,
@@ -155,16 +178,16 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
     else captureTrace.droppedAttempts++;
   };
   if (!alreadyCaptured && captureTrace && !captureTrace.firstHoldObservation &&
-      controls?.busy === "false" && controls.durationKnown === "true" &&
-      controls.playing === "true" && Number.isFinite(elapsed) && elapsed >= holdStart) {
+      controls?.busy === "false" && controls.playing === "true" && Number.isFinite(elapsed) &&
+      elapsed >= holdStart && elapsed <= duration + 8 * Number.EPSILON * Math.max(1, duration)) {
     captureTrace.firstHoldObservation = captureState("first-hold-observed");
   }
   if (!alreadyCaptured && diagnostics?.context?.exampleId === exampleId &&
       Number.isSafeInteger(diagnostics.runRequestId) &&
       Number.isSafeInteger(diagnostics.interpreterGeneration) &&
       events.some((event) => event.stage === "attached" && event.publication) &&
-      diagnostics.context?.runGeneration !== null &&
-      controls?.busy === "false" && controls.durationKnown === "true" &&
+      diagnostics.context.runGeneration === runGeneration &&
+      controls?.busy === "false" &&
       controls.playing === "true" && Number.isFinite(elapsed) &&
       elapsed >= holdStart && elapsed <= duration + 8 * Number.EPSILON * Math.max(1, duration)) {
     const runIdentity = {
@@ -173,9 +196,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       context: diagnostics.context,
     };
     const canvas = document.querySelector("#scene");
-    // Pin page-owned evidence before starting either async operation. The metrics
-    // RPC can queue behind GPU work, so copy the placeholder bitmap immediately
-    // while that RPC is in flight; toBlob copies before its parallel encoding.
+    // Record the candidate and obtain fresh metrics before copying the placeholder.
     const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
     const captureElapsed = Number(captureControls.elapsedSeconds);
     const diagnosticsAtCapture = diagnostics;
@@ -200,18 +221,14 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       retainAttempt();
       return false;
     }
-    let diagnosticsAtMetricsResolution = null;
-    let metricsResolvedAtEpochMs = null;
-    let metricsResolutionState = null;
-    const reportPromise = gallery.executionMetrics().then((report) => {
-      metricsResolvedAtEpochMs = performance.timeOrigin + performance.now();
-      diagnosticsAtMetricsResolution = gallery.executionDiagnostics;
-      metricsResolutionState = captureState("metrics-resolved", report, {
-        candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
-        metricsResolvedAtEpochMs,
-      });
-      return report;
+    const report = await gallery.executionMetrics();
+    const metricsResolvedAtEpochMs = performance.timeOrigin + performance.now();
+    const diagnosticsAtMetricsResolution = gallery.executionDiagnostics;
+    const metricsResolutionState = captureState("metrics-resolved", report, {
+      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, metricsResolvedAtEpochMs,
     });
+    const copyControls = { ...document.querySelector(".playback-controls")?.dataset };
+    const copyElapsed = Number(copyControls.elapsedSeconds);
     const bitmapCopyAtEpochMs = performance.timeOrigin + performance.now();
     let bitmapEncodingResolvedAtEpochMs = null;
     const pngBlobPromise = new Promise((resolve) => canvas.toBlob((blob) => {
@@ -219,7 +236,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       resolve(blob);
     }, "image/png"));
     const pngBlob = await pngBlobPromise;
-    const report = await reportPromise;
+    if (runState.stop || gallery.generationDiagnostics?.runGeneration !== runGeneration) return false;
     const current = diagnosticsAtMetricsResolution;
     const metrics = report?.metrics;
     const preparedPlayback = report?.engineMetrics?.preparedPlayback ?? null;
@@ -227,6 +244,16 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
     const rustLoopCount = observation?.loopCount;
     const receipt = metrics?.latestPresentationSample;
     captureAttempt.afterMetrics = metricsResolutionState;
+    captureAttempt.afterCopy = captureState("bitmap-copied", report, {
+      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, metricsResolvedAtEpochMs, bitmapCopyAtEpochMs,
+    });
+    const pngDataUrl = pngBlob instanceof Blob ? await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
+      reader.readAsDataURL(pngBlob);
+    }) : null;
+    if (runState.stop || gallery.generationDiagnostics?.runGeneration !== runGeneration) return false;
     captureAttempt.afterEncoding = captureState("encoding-resolved", report, {
       candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
       metricsResolvedAtEpochMs, bitmapEncodingResolvedAtEpochMs,
@@ -234,22 +261,26 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
     const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
       receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
     const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
-    const pngDataUrl = pngBlob instanceof Blob ? await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
-      reader.readAsDataURL(pngBlob);
-    }) : null;
     const reject = (condition, reason) => { if (condition) captureAttempt.rejectionReasons.push(reason); };
-    reject(captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
-        captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
-        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration),
+    reject(copyControls.busy !== "false" || copyControls.playing !== "true" || !Number.isFinite(copyElapsed) ||
+        copyElapsed < holdStart || copyElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration),
     "controls-outside-terminal-hold");
     reject(current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
         current?.runRequestId !== runIdentity.runRequestId ||
-        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context), "run-identity-changed");
-    reject(candidateDisposition === "looped", "diagnostics-looped-at-copy-candidate");
+        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
+        current?.context?.runGeneration !== runGeneration ||
+        gallery.generationDiagnostics?.runGeneration !== runGeneration, "run-identity-changed");
+    reject(candidateDisposition === "looped" ||
+        current?.events?.some((event) => event.stage === "disposition" && event.disposition === "looped"),
+    "diagnostics-looped-during-capture");
     reject(rustLoopCount !== 0, "rust-loop-count-not-zero-at-metrics-snapshot");
+    const observedTime = preparedPlayback?.observedTime;
+    const roundoff = 8 * Number.EPSILON * Math.max(1, duration);
+    const knownEndMatches = observation?.end == null || (Number.isFinite(observation.end) &&
+      Math.abs(observation.end - duration) <= roundoff);
+    reject(!Number.isFinite(observedTime) || observedTime < holdStart || observedTime >= duration ||
+        !Number.isFinite(observation?.frontier) || observation.frontier < observedTime || !knownEndMatches,
+    "rust-clock-frontier-outside-terminal-hold");
     reject(!attached?.publication ||
         attached.publication.session !== receipt?.session, "attached-and-renderer-session-differ");
     reject(!Number.isSafeInteger(receipt?.sequence) ||
@@ -293,7 +324,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       preparedPlayback,
       rustPlaybackObservation: observation,
       wakePlanReason: "not exposed by existing worker metrics; heldPresentation is the only emitted wake eligibility proof",
-      rendererReceipt: receipt, heldPresentation, controls: captureControls,
+      rendererReceipt: receipt, heldPresentation, controls: copyControls,
       authoredDuration: duration, holdStart, ...runIdentity, attached,
       diagnosticsAtCapture,
       diagnosticsAtMetricsResolution: current,
@@ -309,25 +340,87 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
   return false;
 }
 
+function stopObserver(page, runGeneration) {
+  page.evaluate((generation) => {
+    const state = window.__showcaseLiveReviewRun;
+    if (state?.acceptedRunGeneration === generation &&
+        window.__noonExampleGallery?.generationDiagnostics?.runGeneration === generation) state.stop = true;
+  }, runGeneration).catch(() => {});
+}
+
 export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null) {
   const started = performance.now();
   let timer;
   let firstPassCapture = null;
   let firstPassCompletion = null;
+  let observerPromise = null;
+  let runStateInstalled = false;
+  let acceptedRunGeneration = null;
   try {
     await Promise.race([
       (async () => {
-        const run = await page.evaluate(() => {
+        const kickoff = await page.evaluate(() => {
           window.__showcaseLiveReviewCaptureDiagnostic = { firstHoldObservation: null,
             attempts: [], droppedAttempts: 0 };
-          return window.__noonExampleGallery.run();
+          const gallery = window.__noonExampleGallery;
+          const state = { requestedAtEpochMs: performance.timeOrigin + performance.now(),
+            runGenerationBefore: gallery.generationDiagnostics.runGeneration, stop: false };
+          window.__showcaseLiveReviewFirstPass = null;
+          window.__showcaseLiveReviewRun = state;
+          let promise;
+          try { promise = gallery.run(); }
+          catch (error) { promise = Promise.reject(error); }
+          state.acceptedRunGeneration = gallery.generationDiagnostics.runGeneration;
+          state.promise = Promise.resolve(promise).then((result) => {
+            state.resolvedAtEpochMs = performance.timeOrigin + performance.now();
+            return result;
+          }, (error) => {
+            state.error = String(error?.message ?? error);
+            state.resolvedAtEpochMs = performance.timeOrigin + performance.now();
+            throw error;
+          });
+          state.promise.catch(() => {});
+          return { requestedAtEpochMs: state.requestedAtEpochMs,
+            runGenerationBefore: state.runGenerationBefore,
+            acceptedRunGeneration: state.acceptedRunGeneration };
         });
+        runStateInstalled = true;
+        acceptedRunGeneration = kickoff.acceptedRunGeneration;
+        assert.ok(Number.isSafeInteger(kickoff.acceptedRunGeneration) &&
+          kickoff.acceptedRunGeneration > kickoff.runGenerationBefore,
+        "gallery Run did not accept a fresh generation");
+        const roundoff = 8 * Number.EPSILON * Math.max(1, entry?.duration ?? 1);
+        const terminalHold = entry?.still_intervals?.find(([, end]) => Math.abs(end - entry.duration) <= roundoff);
+        if (entry && terminalHold !== undefined) {
+          observerPromise = waitForBrowserObservation(page, observeNaturalFirstPassWrap, {
+            duration: entry.duration, holdStart: terminalHold[0], exampleId: entry.id,
+            runGeneration: kickoff.acceptedRunGeneration,
+          }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
+          observerPromise.catch(() => {});
+        }
+        const runResultPromise = page.evaluate(async () => {
+          const state = window.__showcaseLiveReviewRun;
+          return { result: await state.promise, resolvedAtEpochMs: state.resolvedAtEpochMs };
+        });
+        const observerFailure = observerPromise
+          ? observerPromise.then(() => new Promise(() => {}), (error) => Promise.reject(error))
+          : new Promise(() => {});
+        const settled = await Promise.race([runResultPromise, observerFailure]);
+        const run = settled.result;
+        const runResolvedAtEpochMs = settled.resolvedAtEpochMs;
+        assert.equal(run?.stale, false, "gallery Run was superseded");
         const audio = run?.result?.hasAudio === true;
-        if (!audio && run?.result?.preparedPlayback !== true) return;
+        if (audio || run?.result?.preparedPlayback !== true) {
+          if (observerPromise) {
+            stopObserver(page, acceptedRunGeneration);
+            observerPromise.catch(() => {});
+            observerPromise = null;
+          }
+          if (!audio) return;
+        }
         // Complete finite audio authoring intentionally prepares a silent,
         // paused scene. Exercise the same trusted Play gesture as a viewer;
         // seeking would invalidate the independent first-pass pixel oracle.
-        assert.equal(run.stale, false, "gallery Run was superseded");
         if (audio) {
           assert.equal(run.result.time, 0, "finite audio Run did not prepare at time zero");
           assert.equal(run.result.playing, false, "finite audio Run must prepare paused");
@@ -335,24 +428,23 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
         const duration = run.result.durationSeconds;
         assert.ok(Number.isFinite(duration) && (audio ? duration > 0 : duration >= 0),
           `${audio ? "finite audio" : "prepared playback"} Run has no authored duration`);
-        if (duration === 0) return;
+        if (duration === 0) {
+          if (observerPromise) stopObserver(page, acceptedRunGeneration);
+          return;
+        }
+        if (!audio && entry) assertNaturalFirstPassPublication(entry, duration, duration);
         const publicationEntry = entry ?? { id: "finite playback", duration, still_intervals: [] };
         validateCaptureIntervals(publicationEntry);
         // Preparation completion can precede the natural playback endpoint.
         // Non-audio prepared Runs already autoplay; preserve that first pass.
         if (audio) await page.getByRole("button", { name: "Play animation", exact: true }).click();
-        const roundoff = 8 * Number.EPSILON * Math.max(1, duration);
-        const terminalHold = entry?.still_intervals?.find(([, end]) => Math.abs(end - duration) <= roundoff);
         if (!audio && run.result.preparedPlayback === true && terminalHold !== undefined) {
-          await waitForBrowserObservation(page, observeNaturalFirstPassWrap, {
-            duration,
-            holdStart: terminalHold[0],
-            exampleId: entry.id,
-          }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
-          const observed = await page.evaluate(async () => {
+          await observerPromise;
+          const observed = await page.evaluate(async ({ runResolvedAtEpochMs }) => {
             const gallery = window.__noonExampleGallery;
             const capture = window.__showcaseLiveReviewFirstPass ?? null;
             delete window.__showcaseLiveReviewFirstPass;
+            const runState = window.__showcaseLiveReviewRun;
             const report = await gallery.executionMetrics();
             const diagnostics = gallery.executionDiagnostics;
             const metrics = report?.metrics;
@@ -379,8 +471,16 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
                 needsPresent: metrics.needsPresent, bufferedDeltas: metrics.bufferedDeltas,
                 objectCount: metrics.objectCount } : null,
             };
-            return { capture, captureDiagnostic, diagnostics, selectedExampleId: gallery.selectedExampleId };
-          });
+            return { capture, captureDiagnostic, diagnostics,
+              generationDiagnostics: gallery.generationDiagnostics,
+              runRequestedAtEpochMs: runState?.requestedAtEpochMs,
+              observerStartedAtEpochMs: runState?.observerStartedAtEpochMs,
+              acceptedRunGeneration: runState?.acceptedRunGeneration,
+              requestedRunGeneration: runState?.runGenerationBefore,
+              stateResolvedAtEpochMs: runState?.resolvedAtEpochMs,
+              acceptedRunGeneration: runState?.acceptedRunGeneration,
+              runResolvedAtEpochMs, selectedExampleId: gallery.selectedExampleId };
+          }, { runResolvedAtEpochMs });
           const disposition = observed.diagnostics?.events?.find((event) => event.stage === "disposition")?.disposition;
           if (disposition === "looped") {
             const capture = observed.capture;
@@ -390,6 +490,10 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
               "terminal capture belongs to a different interpreter generation");
             assert.equal(capture.runRequestId, observed.diagnostics.runRequestId,
               "terminal capture belongs to a different source run");
+            assert.equal(observed.generationDiagnostics?.runGeneration, observed.acceptedRunGeneration,
+              "terminal capture belongs to a superseded Run generation");
+            assert.equal(observed.diagnostics.context?.runGeneration, observed.acceptedRunGeneration,
+              "terminal capture source context differs from its accepted Run generation");
             assert.deepEqual(capture.context, observed.diagnostics.context,
               "terminal capture belongs to a different gallery run context");
             assert.ok(observed.diagnostics.events.some((event) =>
@@ -403,6 +507,10 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
             assertNaturalFirstPassPublication(entry, duration,
               capture.heldPresentation?.observedTime ?? capture.metrics.time);
             firstPassCapture = capture;
+            firstPassCapture.runRequestedAtEpochMs = observed.runRequestedAtEpochMs;
+            firstPassCapture.observerStartedAtEpochMs = observed.observerStartedAtEpochMs;
+            firstPassCapture.runResolvedAtEpochMs = observed.runResolvedAtEpochMs;
+            firstPassCapture.acceptedRunGeneration = observed.acceptedRunGeneration;
             firstPassCompletion = {
               disposition: "looped",
               loopCount: observed.diagnostics.events.find((event) =>
@@ -452,6 +560,8 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
     ]);
   } finally {
     clearTimeout(timer);
+    if (runStateInstalled) stopObserver(page, acceptedRunGeneration);
+    if (observerPromise) observerPromise.catch(() => {});
   }
   return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion };
 }
