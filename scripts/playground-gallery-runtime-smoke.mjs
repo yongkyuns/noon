@@ -10,6 +10,7 @@ import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
 import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
+import { installPlaybackDiagnostics } from './playground-playback-diagnostics.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { seekPausedGallery, waitForPublishedGalleryFrame } from './showcase-playback.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
@@ -214,6 +215,7 @@ try {
     const caseStartedAt = performance.now();
     const caseStartedWallMs = Date.now();
     const context = await caseBrowser.newContext({ ...options });
+    const playbackDiagnosticProbe = await installPlaybackDiagnostics(context);
     await runtimeCache.install(context);
     if (noJspi) await disableAuthoringJspi(context);
     // Observe the existing result envelope without guessing its payload shape.
@@ -268,12 +270,13 @@ try {
       profilePublications: Object.hasOwn(liveMathAnimations, entry.id) });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
-    const trace = createBrowserFailureTrace();
+    const trace = createBrowserFailureTrace({ maxEvents: 128 });
     const detachTrace = trace.attach(caseBrowser, context, page);
     const expectedProfile = profileGateMode === 'disabled' ? null
       : SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === entry.id) ?? null;
     const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(),
       runtimeBuildIdentity: { beforeBuildId: runtimeBuildIdentity.buildId, afterBuildId: null, unchanged: false },
+      playbackDiagnosticProbe: { ...playbackDiagnosticProbe, runtimeAssetIdentity: servedRuntimeBuildIdentity },
       ...(expectedProfile ? { source: { path: expectedProfile.path, sha256: expectedProfile.sha256 } } : {}),
       errors: [], failedRequests: [], samples: [], presentations: [] };
     let audioGestureIssued = false;
@@ -556,10 +559,12 @@ try {
         }),
       ]);
       result.outcome = 'pass';
+      result.playbackDiagnostics = await page.evaluate(() => window.__noonPlaybackDiagnostics?.snapshot?.() ?? null);
     } catch (error) {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
         browserTrace: trace.snapshot(),
+        playbackDiagnostics: await page.evaluate(() => window.__noonPlaybackDiagnostics?.snapshot?.() ?? null).catch(() => null),
         httpServer: httpServerState ?? null,
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({

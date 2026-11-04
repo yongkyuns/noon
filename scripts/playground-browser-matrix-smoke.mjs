@@ -9,6 +9,7 @@ import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvid
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
+import { installPlaybackDiagnostics } from "./playground-playback-diagnostics.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseDiagnostics } from "./playground-profile-expectations.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,9 @@ await mkdir(artifactDir, { recursive: true });
 
 const server = await serveRepository(repoRoot, port);
 const baseUrl = server.baseUrl;
+const runtimeAssetIdentity = await fetch(`${baseUrl}/web/runtime-build-identity.json`)
+  .then(response => response.ok ? response.json() : { error: `HTTP ${response.status}` })
+  .catch(error => ({ error: String(error).slice(0, 500) }));
 
 async function baselineCapabilities(page) {
   return page.evaluate(() => ({
@@ -551,7 +555,7 @@ async function writeDiagnostics(fileName, diagnostics) {
   );
 }
 
-const trace = createBrowserFailureTrace();
+const trace = createBrowserFailureTrace({ maxEvents: 128 });
 const native = createNativeWebKitEvidence({
   enabled: browserName === "webkit" && process.platform === "darwin" && process.env.GITHUB_ACTIONS === "true",
   executablePath: playwright.webkit.executablePath(),
@@ -567,6 +571,7 @@ const consoleErrors = [];
 let capabilities = null;
 let runtimeSupported = null;
 let finalRuntime = null;
+let playbackDiagnosticProbe = null;
 
 try {
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
@@ -574,6 +579,7 @@ try {
     viewport: profile.viewport,
     deviceScaleFactor: profile.deviceScaleFactor,
   });
+  playbackDiagnosticProbe = await installPlaybackDiagnostics(context);
   page = await context.newPage();
   trace.attach(browser, context, page);
   trace.setPhase("initial-navigation");
@@ -718,6 +724,8 @@ ${consoleErrors.join("\n")}`,
         metrics: showcaseMetrics,
       },
       trapRecovery,
+      playbackDiagnosticProbe: { ...playbackDiagnosticProbe, runtimeAssetIdentity },
+      playbackDiagnostics: await page.evaluate(() => window.__noonPlaybackDiagnostics?.snapshot?.() ?? null),
       lifecycle: trace.snapshot(),
       pageErrors,
       consoleErrors,
@@ -730,6 +738,8 @@ ${consoleErrors.join("\n")}`,
   trace.record("test-failure", { message: String(error).slice(0, 300) });
   // Do not misattribute the previously successful scene to this failed run.
   const attemptedPage = await captureAttemptedPage(page);
+  attemptedPage.playbackDiagnostics = await page?.evaluate(() =>
+    window.__noonPlaybackDiagnostics?.snapshot?.() ?? null).catch(() => null);
   if (page !== null) {
     try { await page.screenshot({ path: path.join(artifactDir, "failure.png"), fullPage: true }); }
     catch { /* A closed page has no valid screenshot. */ }
@@ -744,6 +754,7 @@ ${consoleErrors.join("\n")}`,
     runtime: null,
     attemptedPage,
     lastCompletedRuntime,
+    playbackDiagnosticProbe: { ...playbackDiagnosticProbe, runtimeAssetIdentity },
     lifecycle: trace.snapshot(),
     nativeProcessSnapshots: native.snapshots(),
     nativeCrashReports,

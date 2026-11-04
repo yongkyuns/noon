@@ -83,8 +83,10 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
   // cannot evict lifecycle evidence. Never resolve console arguments or RPCs.
   const consoleMessages = [];
   const consoleErrors = [];
+  const playbackDiagnostics = [];
   let consoleMessageCount = 0;
   let consoleErrorCount = 0;
+  let playbackDiagnosticCount = 0;
   const record = (kind, facts = {}) => {
     events.push({ atMs: now(), phase, kind, ...facts });
     if (events.length > maxEvents) events.shift();
@@ -96,6 +98,8 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
   };
   const attach = (browser, context, page) => {
     const subscriptions = new Set();
+    const workerIds = new WeakMap();
+    let nextWorkerId = 0;
     const on = (target, event, listener) => {
       target.on(event, listener);
       const subscription = [target, event, listener];
@@ -109,15 +113,31 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     on(page, "console", message => {
       const text = message.text();
       const location = message.location();
+      const worker = typeof message.worker === "function" ? message.worker() : null;
+      let playbackDiagnostic = null;
+      if (text.startsWith("[NOON_PLAYBACK_DIAG]")) {
+        try { playbackDiagnostic = JSON.parse(text.slice("[NOON_PLAYBACK_DIAG]".length)); }
+        catch { playbackDiagnostic = { parseError: true, text: short(text, 2048) }; }
+      }
       consoleMessageCount++;
       const messageEvidence = {
         atMs: now(), phase, type: short(message.type(), 32),
         text: short(text, 2048), textTruncated: text.length > 2048,
         url: short(location.url, 500),
+        workerId: worker === null ? null : workerIds.get(worker) ?? null,
+        workerUrl: worker === null ? null : short(worker.url(), 500),
+        ...(playbackDiagnostic === null ? {} : { playbackDiagnostic }),
         lineNumber: location.lineNumber, columnNumber: location.columnNumber,
       };
       consoleMessages.push(messageEvidence);
       if (consoleMessages.length > maxEvents) consoleMessages.shift();
+      if (playbackDiagnostic !== null) {
+        playbackDiagnosticCount++;
+        if (playbackDiagnostics.length < maxEvents) playbackDiagnostics.push({
+          atMs: messageEvidence.atMs, phase, workerId: messageEvidence.workerId,
+          workerUrl: messageEvidence.workerUrl, event: playbackDiagnostic,
+        });
+      }
       // Later GPU warnings must not erase the phase/location of an earlier
       // interpreter error. Retain a separately bounded error tail.
       if (messageEvidence.type === "error") {
@@ -136,8 +156,27 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     });
     on(page, "worker", worker => {
       const url = short(worker.url(), 500);
-      record("worker-created", { url });
-      const detach = on(worker, "close", () => { record("worker-close", { url }); detach(); });
+      const workerId = ++nextWorkerId;
+      workerIds.set(worker, workerId);
+      record("worker-created", { workerId, url });
+      on(worker, "console", message => record("worker-console", {
+        workerId, url, type: short(message.type(), 32), text: short(message.text(), 2048),
+        location: message.location(),
+      }));
+      if (typeof worker.evaluate === "function") {
+        worker.evaluate(() => {
+          self.addEventListener("unhandledrejection", event => {
+            const reason = event.reason;
+            console.info("[NOON_PLAYBACK_DIAG]" + JSON.stringify({ type: "worker-unhandledrejection",
+              at: performance.now(), epochMs: Date.now(), timeOrigin: performance.timeOrigin,
+              reason: { name: reason?.name ?? null, message: reason?.message ?? String(reason),
+                stack: typeof reason?.stack === "string" ? reason.stack.slice(0, 1000) : null } }));
+          });
+        }).catch(error => record("worker-diagnostic-install-failed", {
+          workerId, url, error: short(String(error), 500),
+        }));
+      }
+      const detach = on(worker, "close", () => { record("worker-close", { workerId, url }); detach(); });
     });
     on(page, "framenavigated", frame => {
       try {
@@ -157,6 +196,8 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     consoleMessages: consoleMessages.map(message => ({ ...message })),
     consoleErrorCount, consoleErrorsOmitted: consoleErrorCount - consoleErrors.length,
     consoleErrors: consoleErrors.map(message => ({ ...message })),
+    playbackDiagnosticCount, playbackDiagnosticsOmitted: playbackDiagnosticCount - playbackDiagnostics.length,
+    playbackDiagnostics: playbackDiagnostics.map(event => ({ ...event })),
   }) });
 }
 
