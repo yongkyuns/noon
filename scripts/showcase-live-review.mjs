@@ -146,6 +146,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
     const current = gallery.executionDiagnostics;
     const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
     const metrics = report?.metrics;
+    const rustLoopCount = report?.engineMetrics?.preparedPlayback?.observation?.loopCount;
     const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
     const receipt = metrics?.latestPresentationSample;
     const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
@@ -159,7 +160,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
         current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
         current?.runRequestId !== runIdentity.runRequestId ||
         JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
-        currentDisposition === "looped" || !attached?.publication ||
+        currentDisposition === "looped" || rustLoopCount !== 0 || !attached?.publication ||
         attached.publication.session !== receipt?.session || !Number.isSafeInteger(receipt?.sequence) ||
         receipt.sequence < attached.publication.sequence || !Number.isFinite(receipt.time) ||
         !(naturalTerminalReceipt || heldPresentation !== null) || metrics.time !== receipt.time ||
@@ -167,7 +168,8 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       return false;
     }
 
-    // toBlob copies the bitmap synchronously before serializing it in parallel.
+    // toBlob copies the bitmap synchronously before serializing it in parallel
+    // (https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
     // Keep the validated run, receipt, and controls as this snapshot's evidence;
     // playback may advance while toBlob returns and the PNG is encoded.
     const capture = { metrics, rendererReceipt: receipt, heldPresentation, controls: captureControls,
