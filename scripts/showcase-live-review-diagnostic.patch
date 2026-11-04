@@ -1,11 +1,11 @@
 --- a/scripts/showcase-live-review.mjs
 +++ b/scripts/showcase-live-review.mjs
-@@ -97,25 +97,43 @@
+@@ -97,25 +97,55 @@
    }
  }
  
 -async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
-+async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration }) {
++async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGenerationBefore }) {
    const gallery = window.__noonExampleGallery;
 +  const runState = window.__showcaseLiveReviewRun;
 +  if (!runState || runState.stop) return true;
@@ -13,14 +13,26 @@
    const patch = document.querySelector("#patch-status");
    if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
    if (gallery?.selectedExampleId !== exampleId) throw new Error("gallery selection changed during the first pass");
-+  if (gallery?.generationDiagnostics?.runGeneration !== runGeneration) {
-+    if (gallery?.generationDiagnostics?.runGeneration > runGeneration) throw new Error("first-pass Run was superseded");
++  const currentGeneration = gallery?.generationDiagnostics?.runGeneration;
++  let runGeneration = runState.acceptedRunGeneration;
++  if (!Number.isSafeInteger(runGeneration)) {
++    const phase = gallery?.runPhaseMetrics;
++    if (!Number.isSafeInteger(currentGeneration) || currentGeneration <= runGenerationBefore ||
++        phase?.runGeneration !== currentGeneration || phase?.exampleId !== exampleId) return false;
++    runGeneration = currentGeneration;
++    runState.acceptedRunGeneration = runGeneration;
++  }
++  if (currentGeneration !== runGeneration) {
++    if (Number.isSafeInteger(currentGeneration) && currentGeneration > runGeneration) {
++      throw new Error("first-pass Run was superseded");
++    }
 +    return false;
 +  }
    const diagnostics = gallery?.executionDiagnostics;
    const events = diagnostics?.events ?? [];
 +  if (diagnostics?.context?.runGeneration !== runGeneration) {
-+    if (diagnostics?.context?.runGeneration > runGeneration) throw new Error("first-pass source context was superseded");
++    if (Number.isSafeInteger(diagnostics?.context?.runGeneration) &&
++        diagnostics.context.runGeneration > runGeneration) throw new Error("first-pass source context was superseded");
 +    return false;
 +  }
 +  if (!Number.isSafeInteger(diagnostics?.runRequestId) || !Number.isSafeInteger(diagnostics?.interpreterGeneration)) return false;
@@ -46,7 +58,7 @@
          playback.observedTime < holdStart || playback.observedTime >= duration) return null;
      return { ...held, observedTime: playback.observedTime };
    };
-@@ -123,12 +141,53 @@
+@@ -123,12 +153,53 @@
    const controls = document.querySelector(".playback-controls")?.dataset;
    const elapsed = Number(controls?.elapsedSeconds);
    const alreadyCaptured = window.__showcaseLiveReviewFirstPass;
@@ -102,7 +114,7 @@
        controls.playing === "true" && Number.isFinite(elapsed) &&
        elapsed >= holdStart && elapsed <= duration + 8 * Number.EPSILON * Math.max(1, duration)) {
      const runIdentity = {
-@@ -137,73 +196,231 @@
+@@ -137,73 +208,255 @@
        context: diagnostics.context,
      };
      const canvas = document.querySelector("#scene");
@@ -111,9 +123,30 @@
 -    // bitmap before validating the exact publication that toBlob will snapshot.
 -    await new Promise((resolve) => requestAnimationFrame(resolve));
 -    await new Promise((resolve) => requestAnimationFrame(resolve));
+-    const report = await gallery.executionMetrics();
+-    const current = gallery.executionDiagnostics;
+-    const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
+-    const metrics = report?.metrics;
+-    const rustLoopCount = report?.engineMetrics?.preparedPlayback?.observation?.loopCount;
+-    const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
+-    const receipt = metrics?.latestPresentationSample;
 +    // Record the candidate and obtain fresh metrics before copying the placeholder.
-+    const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
-+    const captureElapsed = Number(captureControls.elapsedSeconds);
+     const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
+     const captureElapsed = Number(captureControls.elapsedSeconds);
+-    const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
+-      receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
+-    const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
+-    if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
+-        captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
+-        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
+-        current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
+-        current?.runRequestId !== runIdentity.runRequestId ||
+-        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
+-        currentDisposition === "looped" || rustLoopCount !== 0 || !attached?.publication ||
+-        attached.publication.session !== receipt?.session || !Number.isSafeInteger(receipt?.sequence) ||
+-        receipt.sequence < attached.publication.sequence || !Number.isFinite(receipt.time) ||
+-        !(naturalTerminalReceipt || heldPresentation !== null) || metrics.time !== receipt.time ||
+-        metrics.needsPresent !== false || metrics.bufferedDeltas !== 0 || !Number.isSafeInteger(metrics.objectCount)) {
 +    const diagnosticsAtCapture = diagnostics;
 +    const attached = [...events].reverse().find((event) => event.stage === "attached");
 +    const candidateDisposition = disposition;
@@ -134,11 +167,17 @@
 +      captureAttempt.outcome = "canvas-toBlob-unavailable";
 +      captureAttempt.rejectionReasons.push("canvas-toBlob-unavailable");
 +      retainAttempt();
-+      return false;
-+    }
-     const report = await gallery.executionMetrics();
--    const current = gallery.executionDiagnostics;
--    const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
+       return false;
+     }
+-
+-    // toBlob copies the bitmap synchronously before serializing it in parallel
+-    // (https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
+-    // Keep the validated run, receipt, and controls as this snapshot's evidence;
+-    // playback may advance while toBlob returns and the PNG is encoded.
+-    const capture = { metrics, rendererReceipt: receipt, heldPresentation, controls: captureControls,
+-      authoredDuration: duration, holdStart, ...runIdentity, attached };
+-    const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
++    const report = await gallery.executionMetrics();
 +    const metricsResolvedAtEpochMs = performance.timeOrigin + performance.now();
 +    const diagnosticsAtMetricsResolution = gallery.executionDiagnostics;
 +    const metricsResolutionState = captureState("metrics-resolved", report, {
@@ -152,52 +191,43 @@
 +      bitmapEncodingResolvedAtEpochMs = performance.timeOrigin + performance.now();
 +      resolve(blob);
 +    }, "image/png"));
-+    const pngBlob = await pngBlobPromise;
+     const pngBlob = await pngBlobPromise;
+-    if (!(pngBlob instanceof Blob)) return false;
+-    const pngDataUrl = await new Promise((resolve, reject) => {
 +    if (runState.stop || gallery.generationDiagnostics?.runGeneration !== runGeneration) return false;
 +    const current = diagnosticsAtMetricsResolution;
-     const metrics = report?.metrics;
--    const rustLoopCount = report?.engineMetrics?.preparedPlayback?.observation?.loopCount;
--    const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
++    const metrics = report?.metrics;
 +    const preparedPlayback = report?.engineMetrics?.preparedPlayback ?? null;
 +    const observation = preparedPlayback?.observation ?? null;
 +    const rustLoopCount = observation?.loopCount;
-     const receipt = metrics?.latestPresentationSample;
--    const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
--    const captureElapsed = Number(captureControls.elapsedSeconds);
++    const receipt = metrics?.latestPresentationSample;
 +    captureAttempt.afterMetrics = metricsResolutionState;
 +    captureAttempt.afterCopy = captureState("bitmap-copied", report, {
 +      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, metricsResolvedAtEpochMs, bitmapCopyAtEpochMs,
 +    });
 +    const pngDataUrl = pngBlob instanceof Blob ? await new Promise((resolve, reject) => {
-+      const reader = new FileReader();
-+      reader.onload = () => resolve(reader.result);
-+      reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
-+      reader.readAsDataURL(pngBlob);
+       const reader = new FileReader();
+       reader.onload = () => resolve(reader.result);
+       reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
+       reader.readAsDataURL(pngBlob);
 +    }) : null;
 +    if (runState.stop || gallery.generationDiagnostics?.runGeneration !== runGeneration) return false;
 +    captureAttempt.afterEncoding = captureState("encoding-resolved", report, {
 +      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
 +      metricsResolvedAtEpochMs, bitmapEncodingResolvedAtEpochMs,
-+    });
-     const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
-       receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
-     const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
--    if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
--        captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
--        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
--        current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
+     });
+-    if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
+-    window.__showcaseLiveReviewFirstPass = { pngDataUrl, ...capture };
++    const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
++      receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
++    const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
 +    const reject = (condition, reason) => { if (condition) captureAttempt.rejectionReasons.push(reason); };
 +    reject(copyControls.busy !== "false" || copyControls.playing !== "true" || !Number.isFinite(copyElapsed) ||
 +        copyElapsed < holdStart || copyElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration),
 +    "controls-outside-terminal-hold");
 +    reject(current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
-         current?.runRequestId !== runIdentity.runRequestId ||
-         JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
--        currentDisposition === "looped" || rustLoopCount !== 0 || !attached?.publication ||
--        attached.publication.session !== receipt?.session || !Number.isSafeInteger(receipt?.sequence) ||
--        receipt.sequence < attached.publication.sequence || !Number.isFinite(receipt.time) ||
--        !(naturalTerminalReceipt || heldPresentation !== null) || metrics.time !== receipt.time ||
--        metrics.needsPresent !== false || metrics.bufferedDeltas !== 0 || !Number.isSafeInteger(metrics.objectCount)) {
++        current?.runRequestId !== runIdentity.runRequestId ||
++        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
 +        current?.context?.runGeneration !== runGeneration ||
 +        gallery.generationDiagnostics?.runGeneration !== runGeneration, "run-identity-changed");
 +    reject(candidateDisposition === "looped" ||
@@ -231,23 +261,9 @@
 +        captureAttempt.unqualifiedCandidatePngDataUrl = pngDataUrl;
 +      }
 +      retainAttempt();
-       return false;
-     }
- 
--    // toBlob copies the bitmap synchronously before serializing it in parallel
--    // (https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
--    // Keep the validated run, receipt, and controls as this snapshot's evidence;
--    // playback may advance while toBlob returns and the PNG is encoded.
--    const capture = { metrics, rendererReceipt: receipt, heldPresentation, controls: captureControls,
--      authoredDuration: duration, holdStart, ...runIdentity, attached };
--    const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
--    const pngBlob = await pngBlobPromise;
--    if (!(pngBlob instanceof Blob)) return false;
--    const pngDataUrl = await new Promise((resolve, reject) => {
--      const reader = new FileReader();
--      reader.onload = () => resolve(reader.result);
--      reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
--      reader.readAsDataURL(pngBlob);
++      return false;
++    }
++
 +    captureAttempt.outcome = "guards-passed";
 +    retainAttempt();
 +
@@ -263,9 +279,7 @@
 +    captureAttempt.afterEncoding = captureState("encoding-resolved", report, {
 +      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
 +      metricsResolvedAtEpochMs, bitmapEncodingResolvedAtEpochMs,
-     });
--    if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
--    window.__showcaseLiveReviewFirstPass = { pngDataUrl, ...capture };
++    });
 +    window.__showcaseLiveReviewFirstPass = { pngDataUrl, metrics,
 +      preparedPlayback,
 +      rustPlaybackObservation: observation,
@@ -286,12 +300,12 @@
    return false;
  }
  
-+function stopObserver(page, runGeneration) {
-+  page.evaluate((generation) => {
++function stopObserver(page, { requestedAtEpochMs, runGeneration }) {
++  page.evaluate(({ requestedAtEpochMs: requested, runGeneration }) => {
 +    const state = window.__showcaseLiveReviewRun;
-+    if (state?.acceptedRunGeneration === generation &&
-+        window.__noonExampleGallery?.generationDiagnostics?.runGeneration === generation) state.stop = true;
-+  }, runGeneration).catch(() => {});
++    if (state?.requestedAtEpochMs === requested &&
++        (runGeneration === null || state.acceptedRunGeneration === runGeneration)) state.stop = true;
++  }, { requestedAtEpochMs, runGeneration }).catch(() => {});
 +}
 +
  export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null) {
@@ -302,6 +316,7 @@
 +  let observerPromise = null;
 +  let runStateInstalled = false;
 +  let acceptedRunGeneration = null;
++  let runRequestedAtEpochMs = null;
    try {
      await Promise.race([
        (async () => {
@@ -317,7 +332,6 @@
 +          let promise;
 +          try { promise = gallery.run(); }
 +          catch (error) { promise = Promise.reject(error); }
-+          state.acceptedRunGeneration = gallery.generationDiagnostics.runGeneration;
 +          state.promise = Promise.resolve(promise).then((result) => {
 +            state.resolvedAtEpochMs = performance.timeOrigin + performance.now();
 +            return result;
@@ -327,21 +341,25 @@
 +            throw error;
 +          });
 +          state.promise.catch(() => {});
++          const phase = gallery.runPhaseMetrics;
++          if (gallery.generationDiagnostics.runGeneration > state.runGenerationBefore &&
++              phase?.runGeneration === gallery.generationDiagnostics.runGeneration &&
++              phase?.exampleId === gallery.selectedExampleId) {
++            state.acceptedRunGeneration = gallery.generationDiagnostics.runGeneration;
++          }
 +          return { requestedAtEpochMs: state.requestedAtEpochMs,
 +            runGenerationBefore: state.runGenerationBefore,
 +            acceptedRunGeneration: state.acceptedRunGeneration };
 +        });
 +        runStateInstalled = true;
++        runRequestedAtEpochMs = kickoff.requestedAtEpochMs;
 +        acceptedRunGeneration = kickoff.acceptedRunGeneration;
-+        assert.ok(Number.isSafeInteger(kickoff.acceptedRunGeneration) &&
-+          kickoff.acceptedRunGeneration > kickoff.runGenerationBefore,
-+        "gallery Run did not accept a fresh generation");
 +        const roundoff = 8 * Number.EPSILON * Math.max(1, entry?.duration ?? 1);
 +        const terminalHold = entry?.still_intervals?.find(([, end]) => Math.abs(end - entry.duration) <= roundoff);
 +        if (entry && terminalHold !== undefined) {
 +          observerPromise = waitForBrowserObservation(page, observeNaturalFirstPassWrap, {
 +            duration: entry.duration, holdStart: terminalHold[0], exampleId: entry.id,
-+            runGeneration: kickoff.acceptedRunGeneration,
++            runGenerationBefore: kickoff.runGenerationBefore,
 +          }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
 +          observerPromise.catch(() => {});
 +        }
@@ -349,18 +367,38 @@
 +          const state = window.__showcaseLiveReviewRun;
 +          return { result: await state.promise, resolvedAtEpochMs: state.resolvedAtEpochMs };
 +        });
-+        const observerFailure = observerPromise
-+          ? observerPromise.then(() => new Promise(() => {}), (error) => Promise.reject(error))
-+          : new Promise(() => {});
-+        const settled = await Promise.race([runResultPromise, observerFailure]);
++        const settled = observerPromise
++          ? await Promise.race([runResultPromise, observerPromise.then(() => runResultPromise)])
++          : await runResultPromise;
 +        const run = settled.result;
 +        const runResolvedAtEpochMs = settled.resolvedAtEpochMs;
 +        assert.equal(run?.stale, false, "gallery Run was superseded");
++        const accepted = await page.evaluate(() => {
++          const gallery = window.__noonExampleGallery;
++          const state = window.__showcaseLiveReviewRun;
++          const generation = gallery?.generationDiagnostics?.runGeneration;
++          const phase = gallery?.runPhaseMetrics;
++          if (!Number.isSafeInteger(state?.acceptedRunGeneration) &&
++              Number.isSafeInteger(generation) && generation > state?.runGenerationBefore &&
++              phase?.runGeneration === generation && phase?.exampleId === gallery?.selectedExampleId) {
++            state.acceptedRunGeneration = generation;
++          }
++          return { before: state?.runGenerationBefore, generation,
++            accepted: state?.acceptedRunGeneration, runInFlight: gallery?.runInFlight,
++            phaseGeneration: phase?.runGeneration, phaseExampleId: phase?.exampleId,
++            selectedExampleId: gallery?.selectedExampleId, error: state?.error };
++        });
++        acceptedRunGeneration = accepted.accepted;
++        assert.ok(Number.isSafeInteger(acceptedRunGeneration) && acceptedRunGeneration > accepted.before &&
++          accepted.generation === acceptedRunGeneration && accepted.phaseGeneration === acceptedRunGeneration &&
++          accepted.phaseExampleId === accepted.selectedExampleId,
++        `Run did not bind a fresh generation: ${JSON.stringify(accepted)}`);
          const audio = run?.result?.hasAudio === true;
 -        if (!audio && run?.result?.preparedPlayback !== true) return;
 +        if (audio || run?.result?.preparedPlayback !== true) {
 +          if (observerPromise) {
-+            stopObserver(page, acceptedRunGeneration);
++            stopObserver(page, { requestedAtEpochMs: kickoff.requestedAtEpochMs,
++              runGeneration: acceptedRunGeneration });
 +            observerPromise.catch(() => {});
 +            observerPromise = null;
 +          }
@@ -373,13 +411,14 @@
          if (audio) {
            assert.equal(run.result.time, 0, "finite audio Run did not prepare at time zero");
            assert.equal(run.result.playing, false, "finite audio Run must prepare paused");
-@@ -211,35 +428,72 @@
+@@ -211,35 +464,73 @@
          const duration = run.result.durationSeconds;
          assert.ok(Number.isFinite(duration) && (audio ? duration > 0 : duration >= 0),
            `${audio ? "finite audio" : "prepared playback"} Run has no authored duration`);
 -        if (duration === 0) return;
 +        if (duration === 0) {
-+          if (observerPromise) stopObserver(page, acceptedRunGeneration);
++          if (observerPromise) stopObserver(page, { requestedAtEpochMs: kickoff.requestedAtEpochMs,
++            runGeneration: acceptedRunGeneration });
 +          return;
 +        }
 +        if (!audio && entry) assertNaturalFirstPassPublication(entry, duration, duration);
@@ -459,7 +498,7 @@
              assert.deepEqual(capture.context, observed.diagnostics.context,
                "terminal capture belongs to a different gallery run context");
              assert.ok(observed.diagnostics.events.some((event) =>
-@@ -253,6 +507,10 @@
+@@ -253,6 +544,10 @@
              assertNaturalFirstPassPublication(entry, duration,
                capture.heldPresentation?.observedTime ?? capture.metrics.time);
              firstPassCapture = capture;
@@ -470,16 +509,17 @@
              firstPassCompletion = {
                disposition: "looped",
                loopCount: observed.diagnostics.events.find((event) =>
-@@ -302,6 +560,8 @@
+@@ -302,6 +597,9 @@
      ]);
    } finally {
      clearTimeout(timer);
-+    if (runStateInstalled) stopObserver(page, acceptedRunGeneration);
++    if (runStateInstalled) stopObserver(page, { requestedAtEpochMs: runRequestedAtEpochMs,
++      runGeneration: acceptedRunGeneration });
 +    if (observerPromise) observerPromise.catch(() => {});
    }
    return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion };
  }
-@@ -634,6 +894,61 @@
+@@ -634,6 +932,61 @@
          console.log(`PASS live ${entry.id}: normal source run, replay endpoint, and ${result.intermediateSamples.length} intermediate comparisons`);
        } catch (error) {
          result.error = String(error.stack ?? error);
