@@ -127,7 +127,7 @@ const report = { status: "running", readinessMode,
     pollIntervalMs: observationPollIntervalMs, usefulCaptureIntervalMs,
     usefulTiming: "upper bound at completion of the first positive canvas capture; native first-any-frame time is separate",
     memoryWindow: "paired source and retained replay plus 750 ms after context close; aggregate sampled browser-process-tree RSS",
-    presentation: "renderer active-cadence interval summaries and playback-control buffering events; static publication holds are excluded; physical scanout is not measured" },
+    presentation: "opt-in raw renderer intervals aggregated over full run-owned source and replay windows, plus Rust reader lead and playback buffering; static holds are excluded and physical scanout is not measured" },
   clockOrigins: {
     pageEvents: "performance.timeOrigin + performance.now(), epoch milliseconds",
     rendererEvents: "renderer performance.timeOrigin + presentedAtMs; per-session gaps use one renderer clock origin",
