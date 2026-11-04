@@ -335,9 +335,14 @@ export function activeFrameGapEvidence(capture, { startEpochMs, endEpochMs, sess
     const at = sample.clockOriginMs + sample.presentedAtMs;
     return at >= startEpochMs && at <= endEpochMs;
   }).map(sample => sample.generation))];
-  if (generations.length > 1 || (capture?.generationChanges ?? []).some(change =>
-      change.workerOrdinal === rendererWorkerOrdinal && change.observedAtEpochMs >= startEpochMs &&
-      change.observedAtEpochMs <= endEpochMs)) {
+  const unattributedGenerationChange = (capture?.generationChanges ?? []).some(change => {
+    if (change.workerOrdinal !== rendererWorkerOrdinal || change.observedAtEpochMs < startEpochMs ||
+        change.observedAtEpochMs > endEpochMs) return false;
+    const delta = change.to - change.from;
+    return change.session === session || !Number.isSafeInteger(change.session) ||
+      !Number.isFinite(delta) || Math.abs(delta) > 1;
+  });
+  if (generations.length > 1 || unattributedGenerationChange) {
     errors.push("renderer generation changed during the active frame-gap window");
   }
   const intervalMs = distribution(selected.map(sample => sample.intervalMs));

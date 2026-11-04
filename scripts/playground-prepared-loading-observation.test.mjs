@@ -243,6 +243,22 @@ test("raw cadence coverage handles late renderer startup and rejects generation 
   const result = activeFrameGapEvidence(capture, { startEpochMs: 25, endEpochMs: 40,
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60 });
   assert.ok(result.coverageErrors.some(error => /generation changed/.test(error)));
+  const transition = { ...capture, workers: [{ ordinal: 1, latestMetricsEpochMs: 42, latestOrdinal: 2 }],
+    samples: capture.samples.map((sample, index) => ({ ...sample, generation: 3, presentedAtMs: 32 + index * 10 })),
+    generationChanges: [{ workerOrdinal: 1, from: 0, to: 1, session: 8, observedAtEpochMs: 35 }] };
+  assert.deepEqual(activeFrameGapEvidence(transition, { startEpochMs: 25, endEpochMs: 42,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors, [],
+  "a single-generation renderer handoff to a new receiver session does not invalidate the completed source session");
+  for (const generationChange of [
+    { workerOrdinal: 1, from: 0, to: 1, session: 7, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, session: null, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 2, session: 8, observedAtEpochMs: 35 },
+  ]) {
+    const invalidTransition = { ...transition, generationChanges: [generationChange] };
+    assert.ok(activeFrameGapEvidence(invalidTransition, { startEpochMs: 25, endEpochMs: 42,
+      session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors
+      .some(error => /generation changed/.test(error)), JSON.stringify(generationChange));
+  }
   const missingHeader = { ...capture, headerObservedAtEpochMs: null };
   assert.ok(activeFrameGapEvidence(missingHeader, { startEpochMs: 25, endEpochMs: 40,
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors

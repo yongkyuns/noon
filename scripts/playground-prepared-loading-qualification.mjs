@@ -405,6 +405,8 @@ async function installReadinessPresentationProbe(context, { profilePublicationSt
             if (worker.generation !== null && raw.generation !== worker.generation) {
               if (probe.cadenceGenerationChanges.length < 64) {
                 probe.cadenceGenerationChanges.push({ workerOrdinal, from: worker.generation, to: raw.generation,
+                  session: Number.isSafeInteger(message.metrics.latestPresentationSample?.session)
+                    ? message.metrics.latestPresentationSample.session : null,
                   observedAtEpochMs: message.metrics.performanceTimeOriginMs + message.metrics.sampledAtMs });
               } else probe.cadenceError ??= "renderer generation change collector bound exceeded";
             }
