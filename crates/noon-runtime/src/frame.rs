@@ -873,6 +873,9 @@ mod frame_changes_tests {
         assert!(pending.requires_presentation_redraw());
         pending.accumulate(FrameChanges::default());
         assert_eq!(pending.object_indices(), &[1, 2, 4]);
+        pending.accumulate(FrameChanges::structural(vec![2], vec![4]));
+        assert_eq!(pending.added_indices(), &[2, 4]);
+        assert_eq!(pending.removed_indices(), &[2, 4]);
     }
 
     #[test]
