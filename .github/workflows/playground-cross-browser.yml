@@ -28,6 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git merge-base HEAD 411a984f54fd9cfff17e4794c1c52382e8dbd19d)" = "411a984f54fd9cfff17e4794c1c52382e8dbd19d"
+          test "$(git rev-parse 411a984f54fd9cfff17e4794c1c52382e8dbd19d^{tree})" = "d482ace94931c24795195a3bad26bdce5310cd3f"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Download and verify the exact failed-run runtime artifact
@@ -50,12 +51,12 @@ jobs:
           import { readFileSync } from "node:fs";
           import path from "node:path";
           const identity = JSON.parse(readFileSync("web/runtime-build-identity.json", "utf8"));
-          assert.equal(identity.sourceRevision, "411a984f54fd9cfff17e4794c1c52382e8dbd19d");
-          assert.equal(identity.buildId, "29bdcba22d733e3d4ecacad7d992016b8c2e813562e7780782ab57f3759e9620");
+          assert.equal(identity.sourceRevision, "becce6a1b03e2b60e79f0bc17ac8e9c391c7a3f7");
+          assert.equal(identity.buildId, "1c9148aaad13f08576c983b84f039ac82b4ba320c826962cf42dce518e6ab8ef");
           const expected = {
             worker: "6a9fcde391a56b62ee78ee9cd68504cb3b063707bad4bc8d9c5179781df2d8f6",
-            wasm: "56f0234af33e350efcb9c0685bd0583930a8240246dd6bca1b3f8f2626742ecd",
-            glue: "99bcb19de5a012553f4b53c0a267e62e09a4d29228b266276101e31ad39448d7",
+            wasm: "f35f8f05304803d52d93c3a1101199ff100f383251737b0d873ebd76362a9ffb",
+            glue: "37ded3a32b4d1f6847203a271e9fa979dca90e20ee64803509e395837a5b51fe",
             verifier: "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869",
           };
           for (const [name, sha256] of Object.entries(expected)) {
