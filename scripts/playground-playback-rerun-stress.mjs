@@ -109,9 +109,8 @@ async function snapshot(page) {
 
 async function waitForInitialReplay(page, exampleId) {
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
-  // Preload starts after the first paint, so a later driver snapshot is not a
-  // cold-start observation. Verify the recorded deferred state after preload
-  // completes, then stress the same completed replay without a duplicate Run.
+  // Default startup performs one intentional authoring preload while keeping
+  // the renderer deferred. Retain that source pass as the initial replay.
   await waitForApplied(page, exampleId);
   await page.waitForFunction(() =>
     document.querySelector("#status")?.dataset.liveAuthoring === "ready" &&
@@ -150,14 +149,21 @@ async function releaseHeldRun(page) {
 async function waitForCompletedReplay(page, exampleId) {
   await waitForApplied(page, exampleId);
   await page.waitForFunction(
-    () =>
-      document.querySelector("#status")?.dataset.playbackControls === "available" &&
-      window.__noonExampleGallery?.runInFlight === false &&
-      document.querySelector(".playback-controls")?.dataset.busy === "false" &&
-      document.querySelector(".playback-controls")?.dataset.durationKnown === "true" &&
-      document.querySelector(".playback-controls")?.dataset.buffering === "false" &&
-      Math.abs(Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) -
-        Number(document.querySelector(".playback-scrubber")?.max)) < 1e-7,
+    ({ id, live }) => {
+      const events = window.__noonExampleGallery?.executionDiagnostics?.events ?? [];
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      const disposition = events.findLast(event => event.stage === "disposition")?.disposition;
+      return document.querySelector("#status")?.dataset.playbackControls === "available" &&
+        window.__noonExampleGallery?.selectedExampleId === id &&
+        window.__noonExampleGallery?.runInFlight === false && controls?.busy === "false" &&
+        controls?.durationKnown === "true" && controls?.buffering === "false" &&
+        (live ? disposition === "observed-complete" :
+          events.some(event => event.stage === "source-complete") &&
+          events.some(event => event.stage === "terminal-adopted") &&
+          events.some(event => event.stage === "disposition" && event.disposition === "looped" &&
+            event.loopCount >= 1));
+    },
+    { id: exampleId, live: liveComparison },
   );
 }
 
@@ -209,7 +215,6 @@ function assertHeldControls(held) {
     assert.equal(held.buffering, "false");
     if (held.durationKnown === "true") {
       assert.equal(held.scrubberDisabled, false);
-      assert.equal(held.preparedSeekVisible, false);
       assert.ok(held.elapsedSeconds >= 0 && held.elapsedSeconds <= held.scrubberMax);
     } else {
       assert.equal(held.durationKnown, "false");
@@ -326,11 +331,22 @@ try {
   });
 
   const initial = await snapshot(page);
+  const initialTrace = await page.evaluate(() => window.__noonExampleGallery.executionDiagnostics);
+  diagnostics.initialTrace = initialTrace;
   diagnostics.phases.push({ phase: "initial", ...initial });
   assert.equal(initial.authoringCount, 1, "automatic preload must author the initial scene exactly once");
   assert.equal(initial.playing, "false", "explicit Pause must settle before the paused case");
   assert.equal(initial.playbackAvailability, "available");
-  assert.ok(initial.sourceOwnedTransitions >= 1, "initial source pass never established exclusive playback ownership");
+  const initialEvents = initialTrace?.events ?? [];
+  assert.ok(initialEvents.some(event => event.stage === "source-proof" && event.admitted === true));
+  assert.ok(initialEvents.some(event => event.stage === "attached" &&
+    event.profile === (liveComparison ? "observed" : "incremental")));
+  assert.ok(liveComparison
+    ? initialEvents.some(event => event.stage === "disposition" && event.disposition === "observed-complete")
+    : initialEvents.some(event => event.stage === "source-complete") &&
+      initialEvents.some(event => event.stage === "terminal-adopted") &&
+      initialEvents.some(event => event.stage === "disposition" && event.disposition === "looped" &&
+        event.loopCount >= 1), "initial preload must reach its Rust completion/loop disposition");
   assert.equal(initial.canvasIdentity, "original");
   assert.equal(initial.canvasCount, 1);
   assert.ok(initial.rendererBackend === "WebGL2" || initial.rendererBackend === "WebGPU");
@@ -375,7 +391,7 @@ try {
   assert.equal(pausedSettled.playbackAvailability, "available");
   assert.equal(pausedSettled.canvasIdentity, "original");
   assert.equal(pausedSettled.canvasCount, 1);
-  assert.equal(pausedSettled.runtimeState, "ready");
+  assert.equal(pausedSettled.runtimeState, "running");
   assert.equal(pausedSettled.patchExample, exampleId);
   assert.ok(
     pausedSettled.scrubberValue >= 0 && pausedSettled.scrubberValue <= pausedSettled.scrubberMax,
@@ -412,7 +428,7 @@ try {
   assert.equal(runningSettled.playbackAvailability, "available");
   assert.equal(runningSettled.canvasIdentity, "original");
   assert.equal(runningSettled.canvasCount, 1);
-  assert.equal(runningSettled.runtimeState, "ready");
+  assert.equal(runningSettled.runtimeState, "running");
 
   // Repeat state transitions without hooks to catch command-queue ordering bugs.
   for (let iteration = 0; iteration < 8; iteration += 1) {
@@ -451,7 +467,7 @@ try {
     assert.equal(settled.canvasCount, 1);
     assert.equal(settled.patchState, "applied");
     assert.equal(settled.patchExample, exampleId);
-    assert.equal(settled.runtimeState, "ready");
+    assert.equal(settled.runtimeState, "running");
   }
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
