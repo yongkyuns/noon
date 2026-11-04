@@ -435,6 +435,18 @@ jobs:
       - name: Install Playwright browser and system dependencies
         timeout-minutes: 15
         run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
+      - name: Start headless Firefox audio sink
+        if: matrix.browser == 'firefox'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pulseaudio pulseaudio-utils
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=noon_ci rate=48000
+          pactl set-default-sink noon_ci
+          pactl info
+          pactl list short sinks
       - name: Qualify the full gallery shard, including portable no-JSPI controls
         timeout-minutes: 20
         env:
