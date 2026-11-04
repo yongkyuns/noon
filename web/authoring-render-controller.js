@@ -93,6 +93,16 @@ export function createAuthoringRenderController(host) {
   const presentationIntervals = new SampleWindow(120);
   let lastContinuousPresentationAtMs = null;
   let continuousPresentation = false;
+  // Optional W8 capture of the same gaps already measured above. The rolling
+  // UI summary keeps its existing reset/retention behavior; this separate ring
+  // survives cadence resets so polling cannot erase unobserved intervals.
+  const rawPresentationIntervalCapacity = 120;
+  const rawPresentationIntervalSamples = [];
+  let rawPresentationIntervalNext = 0;
+  let rawPresentationIntervalOrdinal = 0;
+  let rawPresentationIntervalOrdinalOverflow = false;
+  let rawPresentationIntervalGeneration = 0;
+  let rawPresentationIntervalCaptureEnabled = false;
   let rendererReadyAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
@@ -150,6 +160,7 @@ export function createAuthoringRenderController(host) {
         case "metrics":
           if (!drainGpuDiagnostics()) return;
           if (message.profilePublicationStages === true) publicationStageProfiling = true;
+          if (message.includePresentationIntervals === true) rawPresentationIntervalCaptureEnabled = true;
           if (message.profileRenderSubstages === true) {
             renderSubstageProfiling = true;
             renderer?.setRenderSubstageProfiling(true);
@@ -228,6 +239,7 @@ export function createAuthoringRenderController(host) {
     event.preventDefault();
     webglContextLost = true;
     resetPresentationIntervals();
+    invalidateRawPresentationIntervalHistory();
     invalidatePointerReceipt();
     cancelScheduledFrame();
   }
@@ -818,7 +830,21 @@ export function createAuthoringRenderController(host) {
     }
     if (continuousPresentation) {
       if (lastContinuousPresentationAtMs !== null) {
-        presentationIntervals.record(presentedAtMs - lastContinuousPresentationAtMs);
+        const intervalMs = presentedAtMs - lastContinuousPresentationAtMs;
+        presentationIntervals.record(intervalMs);
+        if (Number.isSafeInteger(rawPresentationIntervalOrdinal + 1)) {
+          rawPresentationIntervalOrdinal += 1;
+          if (rawPresentationIntervalCaptureEnabled) {
+            const sample = { ordinal: rawPresentationIntervalOrdinal,
+              session: presentedSession, intervalMs };
+            if (rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity) {
+              rawPresentationIntervalSamples.push(sample);
+            } else {
+              rawPresentationIntervalSamples[rawPresentationIntervalNext] = sample;
+              rawPresentationIntervalNext = (rawPresentationIntervalNext + 1) % rawPresentationIntervalCapacity;
+            }
+          }
+        } else rawPresentationIntervalOrdinalOverflow = true;
       }
       lastContinuousPresentationAtMs = presentedAtMs;
     }
@@ -1130,7 +1156,7 @@ export function createAuthoringRenderController(host) {
     }
   }
 
-  function currentMetrics({ profileRenderSubstages, profileGpuCompletion } = {}) {
+  function currentMetrics({ profileRenderSubstages, profileGpuCompletion, includePresentationIntervals } = {}) {
     const base = {
       ready: renderer !== null,
       mode,
@@ -1139,6 +1165,18 @@ export function createAuthoringRenderController(host) {
       presentedFrames,
       presentationIntervalMs: presentationIntervals.summary(),
       presentationIntervalSamples: presentationIntervals.size,
+      ...(includePresentationIntervals === true ? {
+        rawPresentationIntervals: {
+          enabled: rawPresentationIntervalCaptureEnabled,
+          generation: rawPresentationIntervalGeneration,
+          latestOrdinal: rawPresentationIntervalOrdinal,
+          ordinalOverflow: rawPresentationIntervalOrdinalOverflow,
+          samples: rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity
+            ? rawPresentationIntervalSamples.slice()
+            : rawPresentationIntervalSamples.slice(rawPresentationIntervalNext)
+              .concat(rawPresentationIntervalSamples.slice(0, rawPresentationIntervalNext)),
+        },
+      } : {}),
       lastDeltaApplyMs,
       lastRendererCallMs,
       modeSwitches,
@@ -1211,6 +1249,7 @@ export function createAuthoringRenderController(host) {
     if (renderer === null) {
       return;
     }
+    invalidateRawPresentationIntervalHistory();
     pendingPublicationStageSample = null;
     const retiredRenderer = renderer;
     renderer = null;
@@ -1225,6 +1264,12 @@ export function createAuthoringRenderController(host) {
     } else {
       retiredRenderer.free?.();
     }
+  }
+
+  function invalidateRawPresentationIntervalHistory() {
+    rawPresentationIntervalGeneration += 1;
+    rawPresentationIntervalSamples.length = 0;
+    rawPresentationIntervalNext = 0;
   }
 
   function modeFlags() {

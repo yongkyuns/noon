@@ -1027,8 +1027,42 @@ test("continuous frame-gap windows exclude holds and reset on session and surfac
   assert.equal(vm.runInContext("continuousPresentation", harness.context), false);
 });
 
+test("optional raw cadence capture keeps ordinal gaps across ordinary cadence resets", async () => {
+  const harness = await createManagedWakeHarness();
+  assert.equal(vm.runInContext("currentMetrics().rawPresentationIntervals", harness.context), undefined,
+    "raw cadence data is absent from ordinary metrics");
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:84, includePresentationIntervals:true});`, harness.context);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  const present = (sequence, timestamp) => {
+    harness.setClock(timestamp);
+    vm.runInContext(`consumeDelta("frame", {session:12, sequence:${sequence}});`, harness.context);
+  };
+  present(1, 100); present(2, 116); present(3, 132);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);
+  present(4, 2000); // Not continuous; no gap is attributed to the static hold.
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  present(5, 3000); present(6, 3017);
+
+  const raw = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);
+  assert.equal(raw.enabled, true);
+  assert.equal(raw.latestOrdinal, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(raw.samples)), [
+    { ordinal: 1, session: 12, intervalMs: 16 },
+    { ordinal: 2, session: 12, intervalMs: 16 },
+    { ordinal: 3, session: 12, intervalMs: 17 },
+  ], "the optional ring preserves all gaps in chronological order across reset windows");
+  vm.runInContext("disposeRenderer()", harness.context);
+  const replaced = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);
+  assert.equal(replaced.generation, raw.generation + 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(replaced.samples)), [],
+    "renderer retirement cannot expose samples from the replaced surface");
+});
+
 test("live frame-gap collection is bounded and adds no timer or engine drive", async () => {
   const harness = await createManagedWakeHarness();
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:85, includePresentationIntervals:true});`, harness.context);
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
   for (let sequence = 0; sequence <= 240; sequence += 1) {
     harness.setClock(sequence === 0 ? 0 : 1000 + sequence * 16);
@@ -1037,6 +1071,12 @@ test("live frame-gap collection is bounded and adds no timer or engine drive", a
   assert.equal(vm.runInContext("currentMetrics().presentationIntervalSamples", harness.context), 120);
   assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs.max", harness.context), 16,
     "a spike older than the rolling window must retire");
+  const raw = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);
+  assert.equal(raw.ordinalOverflow, false);
+  assert.equal(raw.latestOrdinal, 240);
+  assert.equal(raw.samples.length, 120, "the opt-in history remains bounded to the existing capacity");
+  assert.equal(raw.samples[0].ordinal, 121, "the oldest retained raw ordinal exposes any cursor overrun");
+  assert.equal(raw.samples.at(-1).ordinal, 240);
   assert.equal(harness.timers.size, 0);
   assert.equal(harness.nextPort.messages.filter(message => message.type === "tick").length, 0);
   // This fake retains cancelled RAF callbacks. Tickets must still admit only
