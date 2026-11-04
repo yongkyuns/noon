@@ -329,6 +329,12 @@ test("first render and useful picture must belong to the measured run", () => {
   assert.equal(readinessPresentationMatchesRun(attached,
     { session: 9, sequence: 2, presentedAtMs: 120 }, 1000, null), false,
   "an unavailable run start cannot admit a stale presentation");
+  const restart = { session: 10, sequence: 2 };
+  const replayFrame = { session: 10, sequence: 2, presentedAtMs: 120 };
+  assert.equal(readinessPresentationMatchesRun(attached, replayFrame, 1000, 1110), false,
+    "the original source attachment cannot identify a replacement replay receiver");
+  assert.equal(readinessPresentationMatchesRun(restart, replayFrame, 1000, 1110), true,
+    "the restart receipt identifies the replay receiver's first-useful picture");
 });
 
 test("replay requires its own terminal hold, near-end clock and newer postwrap frame", () => {

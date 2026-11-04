@@ -728,6 +728,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       }
       const events = diagnostic?.events ?? [];
       const attachedPublication = events.find(event => event.stage === "attached")?.publication;
+      const presentationAnchor = targetRow === sourceRow ? attachedPublication : targetRow.restartPublication;
       const latestPresentation = sample.metrics?.latestPresentationSample;
       const targetRunStart = targetRow === sourceRow ? sourceRunStart : targetRow.replayStartedAtEpochMs;
       const firstSessionPresentationEpochMs = Number.isFinite(sample.metrics?.performanceTimeOriginMs) &&
@@ -744,7 +745,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
           sourceRunStart !== null) {
         targetRow.startup.firstReaderAttachedObservedUpperMs = sample.epochMs - sourceRunStart;
       }
-      const hasCurrentRunPresentation = readinessPresentationMatchesRun(attachedPublication,
+      const hasCurrentRunPresentation = readinessPresentationMatchesRun(presentationAnchor,
         latestPresentation, sample.metrics?.performanceTimeOriginMs, targetRunStart);
       if (targetRow === sourceRow && hasCurrentRunPresentation &&
           sourceRunStart !== null &&
@@ -890,6 +891,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assert.ok(Number.isSafeInteger(restartPublication?.session) &&
       Number.isSafeInteger(restartPublication?.sequence),
     "restart command has no renderer publication identity for retained replay");
+    replayRow.restartPublication = restartPublication;
     replayRow.startup.restartCompletedUiEpochMs = restartCompleted.epochMs;
     replayRow.commands.push({ name: "restart", automationIssuedEpochMs: restartIssued.automationIssuedEpochMs,
       requestEpochMs: replayStartedAtEpochMs,
