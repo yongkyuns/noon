@@ -41,8 +41,7 @@ impl PreparedExecutionPlayer {
     /// Existing logical prefix charges, not additive allocation or total-memory
     /// measurements. Source history, scalar schedules, interpreter/JS heaps, WASM
     /// capacity and renderer/GPU ownership require separate observations.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedRetentionMetricsJson))]
-    pub fn prepared_retention_metrics_json(&self) -> String {
+    pub(super) fn retention_metrics_json(&self) -> String {
         let reader = &self.playback.reader;
         let stats = reader.replay_stats();
         let source = self.source.as_ref();
@@ -50,6 +49,7 @@ impl PreparedExecutionPlayer {
         serde_json::json!({
             "reader": {
                 "historyPayloadBytes": reader.retained_history_payload_bytes(),
+                "historyPayloadBudgetBytes": reader.history_payload_budget_bytes(),
                 "resourceBytes": reader.retained_resource_bytes(),
                 "resourceBudgetBytes": reader.resource_budget_bytes(),
                 "revisions": stats.revisions_retained,

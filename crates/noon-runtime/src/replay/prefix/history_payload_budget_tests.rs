@@ -164,6 +164,7 @@ fn history_payload_bootstrap_charges_reported_capacity_and_keeps_readiness_prece
     let (publisher, runtime, receiver) = source
         .create_prefix_projection_with_budgets(0, bytes)
         .unwrap();
+    assert_eq!(receiver.history_payload_budget_bytes(), bytes);
     assert_eq!(publisher.extracted_history_payload_bytes(), bytes);
     assert_eq!(receiver.retained_history_payload_bytes(), bytes);
     assert!(retained_bytes(&runtime) <= bytes);

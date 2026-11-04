@@ -18,6 +18,10 @@ impl HistoryPayloadBudget {
         self.bytes
     }
 
+    pub(super) fn limit(self) -> usize {
+        self.limit
+    }
+
     /// Pure admission; only publication/adoption commits the returned charge.
     /// Outstanding batches count at extraction. Rewind never refunds history.
     pub(super) fn with_additional(self, additional: usize) -> Result<Self, PrefixError> {

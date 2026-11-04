@@ -284,6 +284,9 @@ impl PrefixReceiver {
     pub fn retained_history_payload_bytes(&self) -> usize {
         self.history_payload_budget.bytes()
     }
+    pub fn history_payload_budget_bytes(&self) -> usize {
+        self.history_payload_budget.limit()
+    }
 
     /// Logical immutable-resource bytes pinned by the adopted history, not heap/VRAM.
     /// Future resources remain charged even while an older frame is displayed.

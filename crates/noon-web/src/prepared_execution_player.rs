@@ -532,6 +532,11 @@ impl PreparedExecutionPlayer {
             .expect("prepared playback observation is serializable")
     }
 
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedRetentionMetricsJson))]
+    pub fn prepared_retention_metrics_json(&self) -> String {
+        self.retention_metrics_json()
+    }
+
     /// Observe elapsed time in a sleeping static interval through the existing
     /// Rust clock. This never starts/reanchors that clock or evaluates a frame.
     /// Active animation stays at its last coherent sample; a static observation
