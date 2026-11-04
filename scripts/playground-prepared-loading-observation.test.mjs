@@ -59,12 +59,14 @@ test("minimal readiness timing disables publication-stage probing and bounds cap
   assert.equal(readinessInstrumentationPlan("unknown"), null);
 });
 
-test("readiness draft binds showcase sources and the cumulative Product Gate anchor", async () => {
+test("readiness contract binds showcase sources and the cumulative Product Gate anchor", async () => {
   const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
   assert.deepEqual(validateReadinessContract(contract), []);
   assert.deepEqual(READINESS_STRATA, ["fresh-process-warm-resource-cache",
     "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"]);
-  assert.ok(validateReadinessContract(contract, { strict: true }).some(error => /not been reviewed and frozen/.test(error)));
+  const strictErrors = validateReadinessContract(contract, { strict: true });
+  if (contract.status === "ready") assert.deepEqual(strictErrors, []);
+  else assert.ok(strictErrors.some(error => /not been reviewed and frozen/.test(error)));
   assert.match(contract.measurementDefinitions.runAcceptedAt, /queued before page acceptance/);
   const manifest = JSON.parse(await readFile(new URL("../web/python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
   assert.deepEqual(contract.sources.map(source => source.id), ["showcase-first-scene", "showcase-dynamic-scene"]);
@@ -77,6 +79,12 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
   const anchor = JSON.parse(await readFile(new URL("../.github/ci/product-performance-anchor.json", import.meta.url), "utf8"));
   const anchorLock = new URL(`../.github/ci/${anchor.dependencyLock.file}`, import.meta.url);
   const sha256 = async url => createHash("sha256").update(await readFile(url)).digest("hex");
+  const evidenceUrl = new URL(`../${contract.baselineEvidence.path}`, import.meta.url);
+  assert.equal(await sha256(evidenceUrl), contract.baselineEvidence.sha256);
+  const evidence = JSON.parse(await readFile(evidenceUrl, "utf8"));
+  assert.equal(evidence.summaries.length, 16);
+  assert.deepEqual([evidence.rows, evidence.measured, evidence.warmups, evidence.rowsWithWorkersRetired], [336, 320, 16, 336]);
+  assert.deepEqual(evidence.reference.rendererGpuIdentity, contract.reference.actualAdapterIdentity);
   assert.equal(contract.productGateAnchor.sourceRevision, anchor.source);
   assert.equal(contract.productGateAnchor.manifestSha256, await sha256(new URL("../.github/ci/product-performance-anchor.json", import.meta.url)));
   assert.equal(contract.productGateAnchor.dependencyLockSha256, await sha256(anchorLock));
@@ -91,6 +99,22 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
     assert.ok(match, `missing Product Gate default ${envName}`);
     assert.equal(contract.productGateAnchor.thresholds[key], Number(match[1]));
   }
+  const pendingDraft = structuredClone(contract);
+  pendingDraft.status = "baseline-pending";
+  pendingDraft.reference.actualAdapterIdentity = null;
+  pendingDraft.pendingCohorts = [
+    { id: "cold-network", protocol: "pending review" },
+    { id: "reused-healthy-interpreter", protocol: "pending review" },
+  ];
+  pendingDraft.allowedRegression.firstUsefulP95 = { maxRatio: null, slackMs: null };
+  pendingDraft.bounds = Object.fromEntries(Object.keys(pendingDraft.bounds).map(key => [key, key === "firstUsefulMs"
+    ? Object.fromEntries(pendingDraft.sources.map(source => [source.id, Object.fromEntries(READINESS_STRATA.map(stratum =>
+      [stratum, { sourceRun: null, historyReplay: null }]))]))
+    : null]));
+  assert.deepEqual(validateReadinessContract(pendingDraft), []);
+  assert.ok(validateReadinessContract(pendingDraft, { strict: true })
+    .some(error => /not been reviewed and frozen/.test(error)));
+
   const ready = structuredClone(contract);
   ready.status = "ready";
   ready.reference.actualAdapterIdentity = { backend: "BrowserWebGpu", vendor: 1, device: 2 };
@@ -108,7 +132,10 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
       .includes("missing approved bound: missedRefreshFraction"), value < 0 || value > 1);
   }
   const pending = structuredClone(ready);
-  pending.pendingCohorts = contract.pendingCohorts;
+  pending.pendingCohorts = [
+    { id: "cold-network", protocol: "pending review" },
+    { id: "reused-healthy-interpreter", protocol: "pending review" },
+  ];
   assert.ok(validateReadinessContract(pending, { strict: true })
     .some(error => /cohorts remain pending: cold-network, reused-healthy-interpreter/.test(error)));
   for (const mutate of [
@@ -208,7 +235,8 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
     bufferingEvidence: { capture: "captured", episodes: [{ durationMs: 40 }], count: 1, totalMs: 40, maxMs: 40 },
     memory: { peakSampledRssBytes: 100 }, ...overrides });
   const summary = summarizeReadiness([
-    row("A", { commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12,
+    row("A", { startup: { firstUsefulMs: 20, firstPresentedMs: 14, firstSubmittedMs: 15 },
+      commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12,
       commandQueueTiming: { requestToEnqueueMs: 1, queueWaitMs: 2, dequeueToAcceptanceMs: 3 } },
     { name: "seek", commandPhase: "completed-history-warm", feedbackMs: 6, acceptedMs: 9, presentedMs: 13 }] }),
     row("A", { warmup: true, startup: { firstUsefulMs: 1 } }),
@@ -219,7 +247,12 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   assert.equal(summary.observedStarts, 1);
   assert.equal(summary.failedStarts, 1);
   assert.equal(summary.startup.firstUsefulMs.n, 1);
-  assert.deepEqual(summary.startupBound, { firstUsefulMs: null, phase: "sourceRun" });
+  assert.equal(summary.startup.firstPresentedMs.p95, 14,
+    "startup summaries retain the renderer presentation receipt independently from submission and usefulness");
+  assert.equal(summary.startup.firstSubmittedMs.p95, 15);
+  assert.deepEqual(summary.startupBound, {
+    firstUsefulMs: contract.bounds.firstUsefulMs[sourceId][stratum].sourceRun, phase: "sourceRun",
+  });
   assert.equal(Object.hasOwn(summary.startup, "runtimeAcceptanceMs"), false,
     "startup does not report an acceptance value without a startup command");
   assert.equal("p99" in summary.startup.firstUsefulMs, false,
@@ -565,7 +598,8 @@ test("strict readiness requires the first-submission bound and actual command re
   const sourceId = contract.sources[0].id;
   const cases = [{ sourceId, arm: "A", stratum: "fresh-process-warm-resource-cache", warmup: false,
     status: "observed", sourceInvocationIds: [1], profileValidationErrors: [], retirementMs: 2,
-    startup: { firstUsefulMs: 10, firstSubmittedMs: 12, firstRenderSubmissionCompleteUpperMs: 12 },
+    observedContext: { viewport: { ...contract.reference.viewport }, devicePixelRatio: contract.reference.deviceScaleFactor },
+    startup: { firstUsefulMs: 10, firstPresentedMs: 11, firstSubmittedMs: 12, firstRenderSubmissionCompleteUpperMs: 12 },
     commands: [{ uiFeedbackMs: 2, commandCompletionUpperMs: 4, runtimeAcceptanceEpochMs: null,
       matchingPresentation: null }],
     bufferingEvidence: { capture: "captured", episodes: [], count: 0, totalMs: 0, maxMs: 0 },
@@ -587,6 +621,19 @@ test("strict readiness requires the first-submission bound and actual command re
   assert.ok(validateReadinessResults(missingSubmission, contract)
     .some(error => /missing firstSubmittedMs/.test(error)),
   "renderer-call completion must continue to satisfy a required submission upper bound");
+  const missingPresented = structuredClone(cases);
+  missingPresented[0].startup.firstPresentedMs = null;
+  assert.ok(validateReadinessResults(missingPresented, contract)
+    .some(error => /missing firstPresentedMs/.test(error)),
+  "the actual renderer presentation receipt is required separately from submission completion");
+  const wrongViewport = structuredClone(cases);
+  wrongViewport[0].observedContext.viewport.width++;
+  assert.ok(validateReadinessResults(wrongViewport, contract)
+    .some(error => /observed context viewport or devicePixelRatio differs from the reference/.test(error)));
+  const missingViewport = structuredClone(cases);
+  delete missingViewport[0].observedContext;
+  assert.ok(validateReadinessResults(missingViewport, contract)
+    .some(error => /missing observed context viewport and devicePixelRatio/.test(error)));
   const wrongSequence = structuredClone(cases);
   wrongSequence[0].commands[0].commandPublication = { session: 1, sequence: 1 };
   wrongSequence[0].commands[0].matchingPresentation = {
@@ -644,6 +691,31 @@ test("strict replay arms require a full per-stratum completed-history seek sampl
   errors = validateReadinessResults([row], contract);
   assert.ok(errors.some(error => /actual closed endpoint differs from the storyboard duration/.test(error)),
     "an actual endpoint outside the existing storyboard roundoff allowance is rejected");
+});
+
+test("presentation p95 is independently bounded for all commands and completed-history seeks", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  contract.bounds.commandPresentationP95Ms = 5;
+  contract.bounds.commandPresentationP99Ms = 100;
+  const sourceId = contract.sources[0].id, stratum = READINESS_STRATA[0];
+  const command = (name, commandPresentationMs) => ({ name,
+    ...(name === "seek" ? { commandPhase: "completed-history-warm" } : {}), commandPresentationMs });
+  const row = commands => ({ sourceId, arm: "B", stratum, warmup: false, status: "failed", commands });
+
+  const seekErrors = validateReadinessResults([row(Array.from({ length: 100 }, () => command("seek", 10)))], contract);
+  assert.ok(seekErrors.includes(`${sourceId}/B: command presentation p95 exceeds its bound`));
+  assert.ok(seekErrors.includes(`${sourceId}/B/${stratum}: completed-history seek presentation p95 exceeds its bound`));
+  assert.ok(!seekErrors.some(error => /command presentation p99 exceeds/.test(error)),
+    "a presentation p95 regression is rejected while p99 remains under its separate bound");
+
+  const mixedErrors = validateReadinessResults([row([
+    ...Array.from({ length: 90 }, () => command("seek", 1)),
+    ...Array.from({ length: 10 }, () => command("pause", 10)),
+  ])], contract);
+  assert.ok(mixedErrors.includes(`${sourceId}/B: command presentation p95 exceeds its bound`),
+    "non-seek commands contribute to the full command-set p95");
+  assert.ok(!mixedErrors.some(error => /completed-history seek presentation p95/.test(error)),
+    "the seek-specific p95 uses only completed-history seek observations");
 });
 
 test("cold-network evidence records actual external responses and job-cache bypass", () => {

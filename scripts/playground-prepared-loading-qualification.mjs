@@ -749,6 +749,13 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     if (stratum === "reload-new-workers-warm-resource-cache") await page.reload();
     else await page.goto(`${servers.runtime.baseUrl}/web/index.html?example=${source.id}${catalog}`);
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+    const observedContext = await page.evaluate(() => ({ viewport: { width: window.innerWidth, height: window.innerHeight },
+      devicePixelRatio: window.devicePixelRatio }));
+    sourceRow.observedContext = observedContext;
+    replayRow.observedContext = observedContext;
+    assert.deepEqual(observedContext, { viewport: readinessContract.reference.viewport,
+      devicePixelRatio: readinessContract.reference.deviceScaleFactor },
+    "observed browser viewport and devicePixelRatio differ from the readiness reference");
     if (previousWorkers.length > 0) {
       const retired = await Promise.all(previousWorkers.map(worker => retiredWorkerObservation(worker)));
       sourceRow.previousWorkersRetirement = { requestedAtEpochMs: retirementStartedAtEpochMs,
@@ -928,6 +935,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
           Number.isSafeInteger(attachedPublication?.session) &&
           targetRow.startup.firstRenderSubmissionCompleteUpperMs === undefined) {
         targetRow.startup.firstRenderSubmissionCompleteUpperMs = firstSessionPresentationEpochMs - sourceRunAcceptedEpochMs;
+        targetRow.startup.firstPresentedMs = targetRow.startup.firstRenderSubmissionCompleteUpperMs;
+        targetRow.startup.firstPresentedLimitation = "renderer firstPresentedSessionAtMs receipt; observer timestamp, not GPU completion or physical scanout";
       }
       const metric = sample.metrics;
       targetRow.rendererGpuIdentity = metric?.rendererGpuIdentity ?? targetRow.rendererGpuIdentity ?? null;
@@ -1124,6 +1133,11 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         ? "endpoint command result did not expose an acceptance timestamp" : null,
       presentationReceiptLimitation: restartRuntimeReceipt.matchingPresentation === null
         ? "endpoint command result did not expose a validated matching publication receipt" : null });
+    replayRow.startup.firstPresentedMs = Number.isFinite(restartRuntimeReceipt.presentationSettledEpochMs)
+      ? restartRuntimeReceipt.presentationSettledEpochMs - replayStartedAtEpochMs : null;
+    replayRow.startup.firstPresentedLimitation = Number.isFinite(replayRow.startup.firstPresentedMs)
+      ? "command-correlated restart presentation receipt; observer timestamp, not GPU completion or physical scanout"
+      : "restart command did not expose a matching presentation receipt";
     if (restartPresented.controls?.playing !== "true") await readinessCommand(page, replayRow, true);
     let replayCurrent = await read(replayRow);
     const clockToleranceSeconds = Math.max(0.001, 2 * observationPollIntervalMs / 1000);

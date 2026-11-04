@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "baseline-pending",
+  "status": "ready",
   "reference": {
     "host": "Apple M6, 24 GB RAM, 12 GPU cores",
     "os": "macOS 27.0.1",
@@ -10,7 +10,24 @@
     "deviceScaleFactor": 1,
     "backend": "WebGPU",
     "gpuMode": "hardware",
-    "actualAdapterIdentity": null
+    "actualAdapterIdentity": {
+      "backend": "BrowserWebGpu",
+      "browserDeviceInfo": {
+        "architecture": "metal-3",
+        "description": "",
+        "device": "",
+        "isFallbackAdapter": false,
+        "vendor": "apple"
+      },
+      "device": 0,
+      "deviceType": "Other",
+      "driver": "",
+      "driverInfo": "",
+      "name": "",
+      "vendor": 0
+    },
+    "gpuClassification": "hardware-like-unverified",
+    "display": "LG HDR 4K, awake main display, 60 Hz; macOS built-in Apple M6 GPU inventory"
   },
   "sources": [
     {
@@ -36,7 +53,7 @@
   },
   "baselineArms": ["C", "D"],
   "allowedRegression": {
-    "firstUsefulP95": { "maxRatio": null, "slackMs": null }
+    "firstUsefulP95": { "maxRatio": 1.2, "slackMs": 250 }
   },
   "strata": {
     "fresh-process-warm-resource-cache": "new browser process and workers; browser resource cache may already be primed",
@@ -44,19 +61,11 @@
     "cold-network": "fresh Chromium process/context; context-wide no-cache routing bypasses browser and job-local Pyodide cache interception; CDN edge may already have the object",
     "reused-healthy-interpreter": "same page and Python worker; a second Run uses the same pristine interpreter generation after a completed eligible source execution"
   },
-  "pendingCohorts": [
-    {
-      "id": "cold-network",
-      "protocol": "fresh process and context with job resource cache interception absent, service workers blocked, and routed no-cache requests; record actual request/response cache metadata and do not claim CDN-edge coldness"
-    },
-    {
-      "id": "reused-healthy-interpreter",
-      "protocol": "seed an eligible source run, then issue a new Run in the same page; require the same Python worker and interpreter generation, pristine trust, and a distinct runRequestId; not completed-history replay"
-    }
-  ],
+  "pendingCohorts": [],
   "measurementDefinitions": {
     "runAcceptedAt": "Page epoch timestamp when the current Run is accepted, before clientForRun/interpreter preparation; time queued before page acceptance, including click/dispatch delay, is excluded. sourceRunStartedAt remains the later source-invocation origin used to join causal publications.",
     "firstUsefulMs": "Elapsed from accepted Run to completion of the first canvas screenshot containing at least 128 scene-ink pixels.",
+    "firstPresentedMs": "Elapsed from accepted Run or replay restart to a matching Noon renderer presentation receipt; the timestamp is an observer upper bound, not GPU completion or physical scanout.",
     "firstSubmittedMs": "Elapsed from accepted Run to the first renderer.render() call completion. This is an upper bound on earlier backend frame submission and the Noon presentation receipt; it is not exact queue-submit start, GPU completion, or physical scanout.",
     "firstControlsReady": "Elapsed from accepted Run to an enabled playback toggle observed with a matching current-run presentation.",
     "commandAcceptance": "Elapsed time from the actual DOM request event to endpoint acceptedEpochMs sampled after the Rust mutation.",
@@ -79,29 +88,30 @@
   "bounds": {
     "firstUsefulMs": {
       "showcase-first-scene": {
-        "fresh-process-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
-        "reload-new-workers-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
-        "cold-network": { "sourceRun": null, "historyReplay": null },
-        "reused-healthy-interpreter": { "sourceRun": null, "historyReplay": null }
+        "fresh-process-warm-resource-cache": { "sourceRun": 2900, "historyReplay": 850 },
+        "reload-new-workers-warm-resource-cache": { "sourceRun": 2900, "historyReplay": 850 },
+        "cold-network": { "sourceRun": 3100, "historyReplay": 850 },
+        "reused-healthy-interpreter": { "sourceRun": 1000, "historyReplay": 850 }
       },
       "showcase-dynamic-scene": {
-        "fresh-process-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
-        "reload-new-workers-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
-        "cold-network": { "sourceRun": null, "historyReplay": null },
-        "reused-healthy-interpreter": { "sourceRun": null, "historyReplay": null }
+        "fresh-process-warm-resource-cache": { "sourceRun": 3700, "historyReplay": 850 },
+        "reload-new-workers-warm-resource-cache": { "sourceRun": 3200, "historyReplay": 850 },
+        "cold-network": { "sourceRun": 3300, "historyReplay": 850 },
+        "reused-healthy-interpreter": { "sourceRun": 1000, "historyReplay": 850 }
       }
     },
-    "commandFeedbackMs": null,
-    "commandAcceptanceP95Ms": null,
-    "commandPresentationP99Ms": null,
-    "bufferingEpisodeCount": null,
-    "bufferingTotalMs": null,
-    "bufferingEpisodeMs": null,
-    "activeFrameGapP99Ms": null,
-    "missedRefreshFraction": null,
-    "maxActiveFrameGapMs": null,
-    "peakProcessRssBytes": null,
-    "liveOwnerRetirementMs": null
+    "commandFeedbackMs": 50,
+    "commandAcceptanceP95Ms": 100,
+    "commandPresentationP95Ms": 100,
+    "commandPresentationP99Ms": 200,
+    "bufferingEpisodeCount": 2,
+    "bufferingTotalMs": 500,
+    "bufferingEpisodeMs": 250,
+    "activeFrameGapP99Ms": 33.4,
+    "missedRefreshFraction": 0.02,
+    "maxActiveFrameGapMs": 250,
+    "peakProcessRssBytes": 2415919104,
+    "liveOwnerRetirementMs": 1000
   },
   "failurePolicy": "retain every attempt; missing identities, traces, samples or required arm results fail strict qualification",
   "productGateAnchor": {
@@ -125,5 +135,17 @@
       "maxVisualDiffRatio": 0.015
     },
     "preserveOriginalWorkloadAndThresholds": true
+  },
+  "baselineEvidence": {
+    "path": "benchmarks/playground-readiness-reference.json",
+    "sha256": "e1dab4c82b7c4905595d5e21e71b38861a392b3690477473cefdbd772504c33a",
+    "review": "Coordinator-reviewed C/D reference distributions and engineering targets; ready freezes the contract, not candidate qualification."
+  },
+  "boundRationale": {
+    "startup": "Per-source/phase/stratum sample-p95 absolute ceilings plus A/C and B/D p95 <= reference*1.20+250 ms. Limits allow modest loading delay; screenshot-completion timing includes the capture cadence. Cold-network excludes CDN-edge coldness.",
+    "commands": "Feedback p95 <=50 ms; runtime acceptance and matching presentation p95 <=100 ms; matching presentation p99 <=200 ms. Apply with preparation active and independently to completed-history seeks.",
+    "cadence": "At 60 Hz, p99 <= two nominal intervals, <=2% estimated missed opportunities, and no renderer interval >250 ms. The reference 371 ms outlier exceeds the chosen stall target and remains recorded.",
+    "buffering": "Both ordinary and dense prefix playback permit at most two brief waits, each <=250 ms and <=500 ms total per run. These are UX targets, not derived from candidate diagnostics or the inapplicable C/D prefix path.",
+    "memory": "Paired-run sampled process-tree RSS p95 <=2.25 GiB; every worker retires within a 1000 ms observer upper bound including a fixed 750 ms tail. Existing logical category caps and separate owner/capacity diagnostics remain required; RSS is not total GPU or live retained bytes."
   }
 }

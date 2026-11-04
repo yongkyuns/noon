@@ -6,7 +6,7 @@ const READINESS_STARTUP_PHASES = ["sourceRun", "historyReplay"];
 export const READINESS_STRATA = ["fresh-process-warm-resource-cache",
   "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"];
 export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceP95Ms",
-  "commandPresentationP99Ms", "bufferingEpisodeCount", "bufferingTotalMs", "bufferingEpisodeMs",
+  "commandPresentationP95Ms", "commandPresentationP99Ms", "bufferingEpisodeCount", "bufferingTotalMs", "bufferingEpisodeMs",
   "activeFrameGapP99Ms", "missedRefreshFraction",
   "maxActiveFrameGapMs", "peakProcessRssBytes", "liveOwnerRetirementMs"];
 const READINESS_FIRST_USEFUL_PAIRS = [["A", "C"], ["B", "D"]];
@@ -453,7 +453,7 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
   } else if (strict && contract.pendingCohorts.length > 0) {
     errors.push(`readiness cohorts remain pending: ${contract.pendingCohorts.map(cohort => cohort.id).join(", ")}`);
   }
-  if (!["firstUsefulMs", "firstSubmittedMs", "commandAcceptance", "commandPresentation"].every(key =>
+  if (!["firstUsefulMs", "firstPresentedMs", "firstSubmittedMs", "commandAcceptance", "commandPresentation"].every(key =>
       typeof contract?.measurementDefinitions?.[key] === "string" &&
       contract.measurementDefinitions[key].length > 0) ||
       !contract.measurementDefinitions.firstSubmittedMs.includes("upper bound")) {
@@ -632,7 +632,7 @@ export function summarizeReadiness(cases, contract) {
         failedStarts: rows.filter(row => row.status !== "observed").length,
         startup: Object.fromEntries(["navigationShellReadyObservedUpperMs", "shellReadyObservedUpperMs",
           "interpreterReadyObservedUpperMs", "firstControlsReadyObservedUpperMs", "sourceCompleteMs",
-          "firstReaderAttachedObservedUpperMs", "firstSubmittedMs", "firstUsefulMs"].map(key =>
+          "firstReaderAttachedObservedUpperMs", "firstPresentedMs", "firstSubmittedMs", "firstUsefulMs"].map(key =>
           [key, startupDistribution(observed.map(row => row.startup?.[key]))])),
         startupBound: { firstUsefulMs: contract.bounds.firstUsefulMs?.[source.id]?.[stratum]?.[firstUsefulPhase] ?? null,
           phase: firstUsefulPhase },
@@ -800,7 +800,17 @@ export function validateReadinessResults(cases, contract) {
       for (const row of rows) {
         if ((row.sourceInvocationIds ?? []).length !== 1) errors.push(`${source.id}/${arm}: source invocation identity changed`);
         if ((row.profileValidationErrors ?? []).length) errors.push(`${source.id}/${arm}: profile trace invalid`);
-        const startupFields = ["firstUsefulMs", "firstSubmittedMs"];
+        const observedContext = row.observedContext;
+        if (!Number.isSafeInteger(observedContext?.viewport?.width) ||
+            !Number.isSafeInteger(observedContext?.viewport?.height) ||
+            !Number.isFinite(observedContext?.devicePixelRatio) || observedContext.devicePixelRatio <= 0) {
+          errors.push(`${source.id}/${arm}: missing observed context viewport and devicePixelRatio`);
+        } else if (observedContext.viewport.width !== contract.reference.viewport.width ||
+            observedContext.viewport.height !== contract.reference.viewport.height ||
+            observedContext.devicePixelRatio !== contract.reference.deviceScaleFactor) {
+          errors.push(`${source.id}/${arm}: observed context viewport or devicePixelRatio differs from the reference`);
+        }
+        const startupFields = ["firstUsefulMs", "firstPresentedMs", "firstSubmittedMs"];
         if (row.arm === "A" || row.arm === "C") startupFields.push(
           "navigationShellReadyObservedUpperMs", "shellReadyObservedUpperMs",
           "interpreterReadyObservedUpperMs", "firstControlsReadyObservedUpperMs",
@@ -983,6 +993,10 @@ export function validateReadinessResults(cases, contract) {
           errors.push(`${source.id}/${arm}/${stratum}: completed-history seek acceptance p95 exceeds its bound`);
         }
         const seekPresentation = distribution(seeks.map(command => command.commandPresentationMs));
+        if (Number.isFinite(contract.bounds.commandPresentationP95Ms) &&
+            seekPresentation.p95 > contract.bounds.commandPresentationP95Ms) {
+          errors.push(`${source.id}/${arm}/${stratum}: completed-history seek presentation p95 exceeds its bound`);
+        }
         if (Number.isFinite(contract.bounds.commandPresentationP99Ms) &&
             seekPresentation.p99 > contract.bounds.commandPresentationP99Ms) {
           errors.push(`${source.id}/${arm}/${stratum}: completed-history seek presentation p99 exceeds its bound`);
@@ -997,6 +1011,10 @@ export function validateReadinessResults(cases, contract) {
         errors.push(`${source.id}/${arm}: command acceptance p95 exceeds its bound`);
       }
       const presentation = distribution(commands.map(command => command.commandPresentationMs));
+      if (Number.isFinite(contract.bounds.commandPresentationP95Ms) &&
+          presentation.p95 > contract.bounds.commandPresentationP95Ms) {
+        errors.push(`${source.id}/${arm}: command presentation p95 exceeds its bound`);
+      }
       if (Number.isFinite(contract.bounds.commandPresentationP99Ms) && presentation.p99 > contract.bounds.commandPresentationP99Ms) {
         errors.push(`${source.id}/${arm}: command presentation p99 exceeds its bound`);
       }
