@@ -2,455 +2,69 @@ name: Playground cross-browser matrix
 
 on:
   push:
-    branches:
-      - master
-    paths:
-      - ".github/workflows/playground-cross-browser.yml"
-      - "scripts/ci-install-reference-deps.sh"
-      - "scripts/ci_reference_apt_sources.py"
-      - "scripts/test_ci_install_reference_deps.py"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
-      - "!crates/**/tests/**"
-      - "scripts/build-web-demo.sh"
-      - "scripts/build-python-worker.mjs"
-      - "scripts/build-runtime-identity.mjs"
-      - "scripts/playground-browser-matrix-smoke.mjs"
-      - "scripts/playground-example-browser-smoke.mjs"
-      - "scripts/playground-main-thread-mobile-smoke.mjs"
-      - "scripts/playground-gallery-runtime-smoke.mjs"
-      - "scripts/playground-stress-edit-smoke.mjs"
-      - "scripts/playground-stress-observation.mjs"
-      - "scripts/playground-stress-observation.test.mjs"
-      - "scripts/gallery-shards.mjs"
-      - "scripts/gallery-shards.test.mjs"
-      - "scripts/playground-profile-expectations.mjs"
-      - "scripts/playground-profile-expectations.test.mjs"
-      - "scripts/ci-install-playwright-browser.sh"
-      - "scripts/test_ci_install_playwright_browser.py"
-      - "scripts/playground-gallery-selection-smoke.mjs"
-      - "scripts/showcase-viewport.mjs"
-      - "scripts/playground-python-family-transform-smoke.mjs"
-      - "scripts/playground-browser-support.mjs"
-      - "scripts/playground-browser-failure-evidence.mjs"
-      - "scripts/pyodide-resource-cache.mjs"
-      - "scripts/paired-authoring-qualification.mjs"
-      - "scripts/object-membership-qualification.mjs"
-      - "scripts/point-promotion-qualification.mjs"
-      - "scripts/xyz-queries-qualification.mjs"
-      - "scripts/manim-xyz-queries-reference*"
-      - "scripts/manim_xyz_query_observation.py"
-      - "scripts/manim_depth_affine_observation.py"
-      - "scripts/manim-raster-support.mjs"
-      - "fixtures/manim-v0.21/xyz-queries.json"
-      - "scripts/table-*"
-      - "scripts/manim-table-*"
-      - "fixtures/manim-v0.21/table-*"
-      - "scripts/manim-family-*"
-      - "fixtures/manim-v0.21/family-*"
-      - "scripts/code-*"
-      - "scripts/special-camera-qualification.mjs"
-      - "web/**"
-      - "!web/**/*.test.mjs"
-      - "web/code-block-bootstrap.test.mjs"
-  pull_request:
-    paths:
-      - ".github/workflows/playground-cross-browser.yml"
-      - "scripts/ci-install-reference-deps.sh"
-      - "scripts/ci_reference_apt_sources.py"
-      - "scripts/test_ci_install_reference_deps.py"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**"
-      - "!crates/**/tests/**"
-      - "scripts/build-web-demo.sh"
-      - "scripts/build-python-worker.mjs"
-      - "scripts/build-runtime-identity.mjs"
-      - "scripts/playground-browser-matrix-smoke.mjs"
-      - "scripts/playground-example-browser-smoke.mjs"
-      - "scripts/playground-main-thread-mobile-smoke.mjs"
-      - "scripts/playground-gallery-runtime-smoke.mjs"
-      - "scripts/playground-stress-edit-smoke.mjs"
-      - "scripts/playground-stress-observation.mjs"
-      - "scripts/playground-stress-observation.test.mjs"
-      - "scripts/gallery-shards.mjs"
-      - "scripts/gallery-shards.test.mjs"
-      - "scripts/playground-profile-expectations.mjs"
-      - "scripts/playground-profile-expectations.test.mjs"
-      - "scripts/ci-install-playwright-browser.sh"
-      - "scripts/test_ci_install_playwright_browser.py"
-      - "scripts/playground-gallery-selection-smoke.mjs"
-      - "scripts/showcase-viewport.mjs"
-      - "scripts/playground-python-family-transform-smoke.mjs"
-      - "scripts/playground-browser-support.mjs"
-      - "scripts/playground-browser-failure-evidence.mjs"
-      - "scripts/pyodide-resource-cache.mjs"
-      - "scripts/paired-authoring-qualification.mjs"
-      - "scripts/object-membership-qualification.mjs"
-      - "scripts/point-promotion-qualification.mjs"
-      - "scripts/xyz-queries-qualification.mjs"
-      - "scripts/manim-xyz-queries-reference*"
-      - "scripts/manim_xyz_query_observation.py"
-      - "scripts/manim_depth_affine_observation.py"
-      - "scripts/manim-raster-support.mjs"
-      - "fixtures/manim-v0.21/xyz-queries.json"
-      - "scripts/table-*"
-      - "scripts/manim-table-*"
-      - "fixtures/manim-v0.21/table-*"
-      - "scripts/manim-family-*"
-      - "fixtures/manim-v0.21/family-*"
-      - "scripts/code-*"
-      - "scripts/special-camera-qualification.mjs"
-      - "web/**"
-      - "!web/**/*.test.mjs"
-      - "web/code-block-bootstrap.test.mjs"
+    branches: [codex/2421-firefox-diagnostic]
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: playground-cross-browser-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  actions: read
 
 jobs:
-  build:
-    name: Build browser package
+  firefox-diagnostic:
+    name: Firefox audio and worker retirement diagnosis
     runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Use repository-pinned Rust and WASM target
+      - uses: actions/checkout@v7
+      - name: Apply only diagnostic harness changes to the tested source
+        shell: bash
         run: |
-          rustup install
-          rustup show active-toolchain
-          rustc --version --verbose
-          rustup target add wasm32-unknown-unknown
-      - name: Cache Cargo sources
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-sources-
-      - name: Use sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-      - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: wasm-pack@0.15.0
-          fallback: none
-      - name: Verify gallery inventory, dependency setup and edit observations
-        run: |
-          node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs
-          python3 -S scripts/test_ci_install_reference_deps.py
-          python3 -S scripts/test_ci_install_playwright_browser.py
-      - name: Build browser package
-        env:
-          NOON_WASM_SKIP_OPT: "1"
-          NOON_RENDERER_SMOKE: "1"
-        run: bash scripts/build-web-demo.sh
-      - name: Upload browser runtime assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: playground-cross-browser-web-runtime
-          path: |
-            web/pkg
-            web/python-worker.js
-            web/runtime-build-identity.json
-            web/python/compat-bundle.*.json
-          if-no-files-found: error
-          retention-days: 1
-
-  browser:
-    name: ${{ matrix.browser }} / ${{ matrix.profile }}
-    runs-on: ${{ matrix.os }}
-    needs: build
-    env:
-      DEBUG: ${{ matrix.browser == 'webkit' && 'pw:browser' || '' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - browser: chromium
-            profile: desktop-dpr1
-            os: ubuntu-latest
-            display: "xvfb-run -a"
-          - browser: firefox
-            profile: desktop-dpr2
-            os: ubuntu-latest
-            display: "xvfb-run -a"
-          - browser: webkit
-            profile: mobile-dpr2
-            os: macos-latest
-            display: ""
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Download browser runtime assets
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
+          git diff --binary 50d0dbe79306764da6cdbc6ab173756bf7bea8a3 -- scripts > "$RUNNER_TEMP/noon-2421-firefox.patch"
+          git checkout --detach 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
+          git apply "$RUNNER_TEMP/noon-2421-firefox.patch"
+          mkdir -p browser-smoke-artifacts/firefox-diagnostic
+          cp "$RUNNER_TEMP/noon-2421-firefox.patch" browser-smoke-artifacts/firefox-diagnostic/harness.patch
+          sha256sum "$RUNNER_TEMP/noon-2421-firefox.patch" > browser-smoke-artifacts/firefox-diagnostic/harness.sha256
+          git rev-parse HEAD > browser-smoke-artifacts/firefox-diagnostic/source.txt
+          node --version > browser-smoke-artifacts/firefox-diagnostic/node-version.txt
+      - name: Reuse the exact hosted browser package
         uses: actions/download-artifact@v8
         with:
-          name: playground-cross-browser-web-runtime
+          artifact-ids: 13301655134
+          run-id: 41784702322
+          github-token: ${{ github.token }}
           path: web
-      - name: Cache Playwright browser
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/ms-playwright
-            ~/Library/Caches/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
-      - name: Install pinned browser npm dependencies
-        timeout-minutes: 10
-        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-      - name: Install Playwright browser and system dependencies
-        timeout-minutes: 15
-        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
-      - name: Test examples browser presentation
-        env:
-          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
-          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
-        run: node scripts/playground-example-browser-smoke.mjs
-      - name: Test public playground workflow
-        env:
-          NOON_PLAYGROUND_REQUIRE_RUNTIME: ${{ matrix.browser == 'webkit' && '1' || '0' }}
-          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
-          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
-        run: ${{ matrix.display }} node scripts/playground-browser-matrix-smoke.mjs
-      - name: Test Python unequal-family return capture
-        env:
-          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
-          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/python-family-transform
-        run: ${{ matrix.display }} node scripts/playground-python-family-transform-smoke.mjs
-      - name: Qualify native Code pixels and Python live authoring on both GPU backends
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 5
-        env:
-          NOON_CODE_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/code
-        run: node scripts/code-qualification.mjs
-      - name: Retain Code rendering and lifecycle evidence
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7
-        with:
-          name: code-browser-qualification
-          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/code
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Qualify Table pixels, lifecycle and pinned position protocols
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 10
-        env:
-          NOON_TABLE_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/table
-        run: node scripts/table-qualification.mjs
-      - name: Retain Table rendering and position evidence
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7
-        with:
-          name: table-browser-qualification
-          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/table
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Qualify held family root points and native drawing intent
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 10
-        env:
-          NOON_FAMILY_ROOT_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-root
-        run: node scripts/family-root-points-qualification.mjs
-      - name: Retain family root held-frame evidence
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7
-        with:
-          name: family-root-browser-qualification
-          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-root
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Qualify captured and live member-query selections across Rust and Python
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 10
-        env:
-          NOON_FAMILY_QUERY_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-query
-        run: node scripts/family-member-queries-qualification.mjs
-      - name: Retain member-query held-frame evidence
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7
-        with:
-          name: family-query-browser-qualification
-          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/family-query
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Qualify XYZ object copies and member queries across Rust and Python
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 10
-        env:
-          NOON_OBJECT_MEMBERSHIP_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/object-xyz-queries
-        run: node scripts/object-membership-qualification.mjs
-      - name: Retain XYZ object-copy paired renders
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7
-        with:
-          name: object-xyz-query-browser-qualification
-          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/object-xyz-queries
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Qualify own-point promotion across native Rust semantics and Python
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 15
-        env:
-          NOON_POINT_PROMOTION_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/point-promotion
-        run: node scripts/point-promotion-qualification.mjs
-      - name: Retain own-point promotion observations and paired renders
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7
-        with:
-          name: point-promotion-browser-qualification
-          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/point-promotion
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Qualify full XYZ queries through authored, bound, edited and removed states
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 15
-        env:
-          NOON_XYZ_QUERY_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/xyz-queries
-        run: node scripts/xyz-queries-qualification.mjs
-      - name: Retain full XYZ query observations and exact reference comparisons
-        if: always() && matrix.browser == 'chromium'
-        uses: actions/upload-artifact@v7
-        with:
-          name: xyz-query-browser-qualification
-          path: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/xyz-queries
-          if-no-files-found: warn
-          retention-days: 3
-      - name: Test gallery click animation and idle restoration
-        timeout-minutes: 5
-        env:
-          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
-          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
-          NOON_GALLERY_SELECTION_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}/selection
-        run: ${{ matrix.display }} node scripts/playground-gallery-selection-smoke.mjs
-      - name: Test dense gallery scene with the default shared mailbox
-        if: matrix.browser == 'chromium'
-        timeout-minutes: 5
-        env:
-          NOON_PLAYGROUND_BROWSER: chromium
-          NOON_PLAYGROUND_PROFILE: desktop-dpr1
-          NOON_GALLERY_COI: "1"
-          NOON_GALLERY_CASES: showcase-dynamic-scene
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/chromium-desktop-dpr1/shared-dense-gallery
-        run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
-      - name: Repeat WebKit optional-compiler cold starts
-        if: matrix.browser == 'webkit'
-        timeout-minutes: 10
-        env:
-          NOON_PLAYGROUND_BROWSER: webkit
-          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
-          NOON_GALLERY_CASES: noon-ordinary-matrix,noon-ordinary-table,noon-ordinary-variable
-        # Every cold start must pass. This is repeated admission, not a retry of
-        # failures; each invocation retains its own diagnostics and native stacks.
+      - name: Install existing pinned browser tools
         run: |
-          for iteration in 1 2 3; do
-            NOON_PLAYGROUND_MATRIX_ARTIFACTS="browser-smoke-artifacts/playground-matrix/webkit-${{ matrix.profile }}/cold-start-${iteration}" \
-              node scripts/playground-gallery-runtime-smoke.mjs
-          done
-      - name: Test main-thread mobile render fallback
-        if: matrix.browser == 'webkit' && matrix.profile == 'mobile-dpr2'
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps firefox
+          node scripts/check-web-package.mjs
+          git diff --exit-code -- web
+      - name: Diagnose immutable audio through the unchanged gallery gate
+        id: gallery
         env:
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
-        run: node scripts/playground-main-thread-mobile-smoke.mjs
-      - name: Qualify mobile camera callbacks without JSPI
-        if: matrix.browser == 'webkit'
-        timeout-minutes: 5
-        env:
-          NOON_CAMERA_BROWSER: webkit
-          NOON_CAMERA_NO_JSPI: "1"
-          NOON_PAIRED_CASES: following_graph_camera-1.5,moving_zoomed_scene_around-9.5
-          NOON_CAMERA_ARTIFACTS: browser-smoke-artifacts/playground-matrix/webkit-mobile-dpr2/special-camera
-        run: node scripts/special-camera-qualification.mjs
-      # Preserve large per-case screenshots only when a browser test fails.
-      - name: Upload playground diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playground-matrix-${{ matrix.browser }}-${{ matrix.profile }}
-          path: browser-smoke-artifacts/playground-matrix/${{ matrix.browser }}-${{ matrix.profile }}
-          if-no-files-found: error
-          retention-days: 3
-
-  # Run every gallery case on every browser. Within each WebKit shard the
-  # harness still launches fresh browser processes and executes cases
-  # sequentially; independent shards run on separate hosted macOS runners.
-  gallery:
-    name: Gallery ${{ matrix.browser }} / shard ${{ matrix.shard }}
-    runs-on: ${{ matrix.os }}
-    needs: build
-    env:
-      DEBUG: ${{ matrix.browser == 'webkit' && 'pw:browser' || '' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        browser: [chromium, firefox, webkit]
-        shard: [0, 1, 2]
-        include:
-          - browser: chromium
-            profile: desktop-dpr1
-            os: ubuntu-latest
-            display: "xvfb-run -a"
-          - browser: firefox
-            profile: desktop-dpr2
-            os: ubuntu-latest
-            display: "xvfb-run -a"
-          - browser: webkit
-            profile: mobile-dpr2
-            os: macos-latest
-            display: ""
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Download the exact browser runtime
-        uses: actions/download-artifact@v8
-        with:
-          name: playground-cross-browser-web-runtime
-          path: web
-      - name: Cache Playwright browser
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/ms-playwright
-            ~/Library/Caches/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ matrix.browser }}-1.62.1
-      - name: Install pinned browser npm dependencies
-        timeout-minutes: 10
-        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-      - name: Install Playwright browser and system dependencies
-        timeout-minutes: 15
-        run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
-      - name: Qualify the full gallery shard, including portable no-JSPI controls
-        timeout-minutes: 20
-        env:
-          NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
-          NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
-          NOON_GALLERY_SHARD_INDEX: "${{ matrix.shard }}"
-          NOON_GALLERY_SHARD_COUNT: "3"
+          NOON_PLAYGROUND_BROWSER: firefox
+          NOON_PLAYGROUND_PROFILE: desktop-dpr2
           NOON_SHOWCASE_PROFILE_GATE: strict
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery/${{ matrix.browser }}/shard-${{ matrix.shard }}
-        run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
-      # Keep exact shard evidence on failures, not on every passing run.
-      - name: Upload exact shard inventory and diagnostics
-        if: failure()
+          NOON_GALLERY_CASES: showcase-background-music
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/gallery
+        run: xvfb-run -a node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Diagnose public edit and replacement through the unchanged workflow
+        if: ${{ !cancelled() }}
+        id: matrix
+        env:
+          NOON_PLAYGROUND_BROWSER: firefox
+          NOON_PLAYGROUND_PROFILE: desktop-dpr2
+          NOON_PLAYGROUND_REQUIRE_RUNTIME: '0'
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/matrix
+        run: xvfb-run -a node scripts/playground-browser-matrix-smoke.mjs
+      - name: Preserve complete diagnostic evidence
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playground-gallery-${{ matrix.browser }}-shard-${{ matrix.shard }}
-          path: browser-smoke-artifacts/playground-gallery/${{ matrix.browser }}/shard-${{ matrix.shard }}
+          name: noon-2421-firefox-diagnostic
+          path: browser-smoke-artifacts/firefox-diagnostic
           if-no-files-found: error
           retention-days: 3
