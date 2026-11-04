@@ -12,6 +12,7 @@ import { NONREPLAYABLE_SHOWCASE_CAPABILITIES } from "../web/showcase-gallery.js"
 import { qualifyGlowViewport } from "./showcase-glow-viewport.mjs";
 import { holdPlaygroundPreload, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { assertCaptureTime, validateCaptureIntervals } from "./showcase-capture-checks.mjs";
+import { assertRendererReadback, installAuthoringRendererReadback } from "./showcase-renderer-readback.mjs";
 
 const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 
@@ -97,7 +98,7 @@ export function assertNaturalFirstPassPublication(entry, authoredDuration, publi
   }
 }
 
-async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration }) {
+async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration, rendererReadbackEnabled }) {
   const gallery = window.__noonExampleGallery;
   const runState = window.__showcaseLiveReviewRun;
   if (!runState || runState.stop) return true;
@@ -198,6 +199,12 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
       observerStartedAtEpochMs: runState.observerStartedAtEpochMs,
       acceptedRunGeneration: runGeneration, capturedAtEpochMs: performance.timeOrigin + performance.now(),
       ...runIdentity, attached };
+    if (naturalTerminalReceipt && rendererReadbackEnabled) {
+      capture.captureKind = "renderer-owned";
+      capture.proofReceipt = receipt;
+      window.__showcaseLiveReviewFirstPass = capture;
+      return false;
+    }
     const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     pngBlobPromise.catch(() => {});
     // Bracket the copy with Rust observations. A delayed main-thread callback
@@ -233,7 +240,8 @@ function stopObserver(page, { requestedAtEpochMs, runGeneration }) {
   }, { requestedAtEpochMs, runGeneration }).catch(() => {});
 }
 
-export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null, { expectColdStart = false } = {}) {
+export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null,
+  { expectColdStart = false, rendererReadback = null } = {}) {
   const started = performance.now();
   let timer;
   let firstPassCapture = null;
@@ -307,6 +315,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
             holdStart: terminalHold[0],
             exampleId: entry.id,
             runGeneration: acceptedRunGeneration,
+            rendererReadbackEnabled: rendererReadback !== null,
           }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
           observerPromise.catch(() => {});
         }
@@ -384,6 +393,34 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
               "terminal picture predates the attached source publication");
             assertNaturalFirstPassPublication(entry, duration,
               capture.heldPresentation?.observedTime ?? capture.rendererReceipt.time);
+            if (capture.captureKind === "renderer-owned") {
+              const readback = await page.evaluate(async (timeoutMs) => {
+                const gallery = window.__noonExampleGallery;
+                const deadline = performance.now() + timeoutMs;
+                while (performance.now() < deadline) {
+                  const metrics = await gallery.executionMetrics();
+                  const value = metrics?.metrics?.showcaseRendererReadback;
+                  if (value?.status === "ready" || value?.status === "error") return value;
+                  await new Promise((resolve) => setTimeout(resolve, 25));
+                }
+                return null;
+              }, Math.max(1, deadlineMs - (performance.now() - started)));
+              assertRendererReadback(readback, {
+                attachedPublication: capture.attached.publication,
+                proofReceipt: capture.proofReceipt,
+                holdStart: capture.holdStart,
+                duration: capture.authoredDuration,
+                minimumObjectCount: entry.performance ? 600 : 1,
+              });
+              capture.proofObservedAtEpochMs = capture.capturedAtEpochMs;
+              capture.capturedAtEpochMs = readback.copyCalledAtEpochMs;
+              capture.rendererReceipt = {
+                session: readback.session, sequence: readback.sequence, time: readback.time,
+                objectCount: readback.objectCount,
+              };
+              capture.rendererReadback = { ...readback, pngDataUrl: undefined };
+              capture.pngDataUrl = readback.pngDataUrl;
+            }
             firstPassCapture = capture;
             firstPassCapture.runResolvedAtEpochMs = runResolvedAtEpochMs;
             firstPassCompletion = {
@@ -594,6 +631,12 @@ async function main() {
       const video = page.video();
       try {
         releasePreload = await holdPlaygroundPreload(page);
+        const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration);
+        const terminalHold = entry.still_intervals?.find(([, end]) => Math.abs(end - entry.duration) <= roundoff);
+        const rendererReadback = terminalHold === undefined ? null : await installAuthoringRendererReadback(page, {
+          holdStart: terminalHold[0], duration: entry.duration,
+        });
+        result.rendererControllerInstrumentation = rendererReadback?.report ?? null;
         await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`, {
           waitUntil: "domcontentloaded",
         });
@@ -610,7 +653,8 @@ async function main() {
         result.stage = "ordinary first pass";
         result.firstPassOutcome = "fail";
         // Closing the page in finally retires its workers on timeout; no stuck run survives.
-        const firstPassRun = await runOrdinaryGallery(page, 360000, entry, { expectColdStart: true });
+        const firstPassRun = await runOrdinaryGallery(page, 360000, entry, { expectColdStart: true, rendererReadback });
+        await rendererReadback?.assertServed();
         result.firstPassWallMsIncludingAuthoring = firstPassRun.wallMs;
         // Check execution before viewport convergence so a runtime panic is not
         // obscured by the renderer's consequently unchanged backing dimensions.
@@ -639,6 +683,7 @@ async function main() {
           result.firstPassCapture = {
             method: "unseeked terminal hold before first loop wrap",
             executionState: firstPassRun.firstPassCapture.executionState,
+            proofReceipt: firstPassRun.firstPassCapture.proofReceipt ?? null,
             controls: firstPassRun.firstPassCapture.controls,
             interpreterGeneration: firstPassRun.firstPassCapture.interpreterGeneration,
             runRequestId: firstPassRun.firstPassCapture.runRequestId,
@@ -646,8 +691,14 @@ async function main() {
             attachedPublication: firstPassRun.firstPassCapture.attached.publication,
             rendererReceipt: firstPassRun.firstPassCapture.rendererReceipt,
             heldPresentation: firstPassRun.firstPassCapture.heldPresentation,
+            rendererReadback: firstPassRun.firstPassCapture.rendererReadback ?? null,
+            captureKind: firstPassRun.firstPassCapture.captureKind ?? "held-html",
             rendererReceiptScope: "renderer publication sample; does not prove physical scanout",
           };
+          if (result.firstPassCapture.rendererReadback !== null) {
+            result.firstPassCapture.rendererReadback.pngPath = path.basename(firstPassPath);
+            result.firstPassCapture.rendererReadback.pngSha256 = hash(firstPassBytes);
+          }
         } else {
           firstPassBytes = await canvas.screenshot({ path: firstPassPath });
         }
