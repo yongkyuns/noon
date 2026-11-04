@@ -1,143 +1,69 @@
 name: Showcase qualification
 
 on:
-  pull_request:
-    paths:
-      - 'web/*gallery*'
-      - 'web/showcase-*'
-      - 'web/thumbnails/showcase/**'
-      - 'web/playground-playback-controls*'
-      - 'web/authoring-execution-client.js'
-      - 'web/python/examples/showcase_*.py'
-      - 'web/python/examples/noon_showcase_manifest.json'
-      - 'web/python/test_showcase*.py'
-      - 'scripts/showcase-*'
-      - 'crates/noon/src/execution_session.rs'
-      - 'crates/noon/src/execution_session/**'
-      - 'crates/noon/src/live_session.rs'
-      - 'crates/noon/src/live_session/**'
-      - 'crates/noon/src/host_callbacks.rs'
-      - 'crates/noon/tests/callback_lifecycle_admission.rs'
-      - 'crates/noon/tests/scalar_timeline_replay.rs'
-      - 'crates/noon-runtime/src/signal_timeline.rs'
-      - 'crates/noon-runtime/src/prepared_frame.rs'
-      - 'crates/noon-runtime/src/execution_slots/runtime_transaction.rs'
-      - 'crates/noon-compile/src/replay_revision.rs'
-      - 'crates/noon-runtime/src/lib.rs'
-      - 'crates/noon-runtime/tests/display_channel_mutation.rs'
-      - 'crates/noon-runtime/src/replay.rs'
-      - 'crates/noon-runtime/src/replay/**'
-      - 'crates/noon-render-wgpu/**'
-      - '.github/actions/dev-wasm-build/**'
-      - '.github/ci/wasm-build.mjs'
-      - '.github/workflows/playground-showcase-qualification.yml'
-  workflow_dispatch:
+  push:
+    branches: [codex/2421-showcase-diagnostic]
 
 permissions:
   contents: read
-
-concurrency:
-  group: showcase-${{ github.ref }}
-  cancel-in-progress: true
+  actions: read
 
 jobs:
-  build:
-    name: Build shared showcase runtime
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    outputs:
-      artifact-id: ${{ steps.runtime.outputs.artifact-id }}
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-    steps:
-      - uses: actions/checkout@v7
-      - name: Source and editorial contracts
-        run: |
-          node --test web/showcase-gallery.test.mjs web/playground-playback-controls.test.mjs scripts/showcase-*.test.mjs
-          python3 -m unittest discover -s web/python -p 'test_showcase*.py'
-          node --check scripts/showcase-capture.mjs
-          node --check scripts/showcase-live-review.mjs
-      - name: Build the existing browser runtime
-        uses: ./.github/actions/dev-wasm-build
-        with:
-          preflight: 'true'
-      - name: Share the exact-source browser runtime
-        id: runtime
-        uses: actions/upload-artifact@v7
-        with:
-          name: showcase-runtime-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            web/pkg/
-            web/python-worker.js
-            web/python/compat-bundle.*.json
-            web/runtime-build-identity.json
-            web/ci-artifact.json
-            web/ci-Cargo.lock
-          if-no-files-found: error
-          retention-days: 1
-
-  callback-lifecycle:
-    name: Native callback lifecycle admission
+  capture-diagnostic:
+    name: Diagnose first-pass capture on the tested WebGL package
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
     steps:
       - uses: actions/checkout@v7
-      - name: Qualify lifecycle and updater coexistence in shared Rust
+      - name: Apply only diagnostic harness changes to the tested source
+        shell: bash
         run: |
-          cargo test -p noon --no-default-features --test callback_lifecycle_admission
-          cargo test -p noon-runtime --test display_channel_mutation
-          cargo test -p noon --no-default-features --test scalar_timeline_replay
-          cargo test -p noon-runtime replay::family_tests
-      - name: Qualify current glyph packing and retained renderer locality
-        run: |
-          cargo test -p noon-render-wgpu --lib
-          cargo test -p noon-render-wgpu --test text_retained_object_update_locality --test retained_scratch_reuse --test text_live_atlas_pages --test glyph_atlas_residency_churn
-          cargo clippy -p noon-render-wgpu --lib -- -D warnings
-
-  capture:
-    name: Actual showcase frames (${{ matrix.backend }})
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [webgpu, webgl]
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      NOON_SHOWCASE_BACKEND: ${{ matrix.backend }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Download the shared browser runtime
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
+          git diff --binary 50d0dbe79306764da6cdbc6ab173756bf7bea8a3 -- scripts > "$RUNNER_TEMP/noon-2421-showcase.patch"
+          git checkout --detach 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
+          git apply "$RUNNER_TEMP/noon-2421-showcase.patch"
+          mkdir -p browser-smoke-artifacts/showcase-diagnostic
+          cp "$RUNNER_TEMP/noon-2421-showcase.patch" browser-smoke-artifacts/showcase-diagnostic/harness.patch
+          sha256sum "$RUNNER_TEMP/noon-2421-showcase.patch" > browser-smoke-artifacts/showcase-diagnostic/harness.sha256
+          git rev-parse HEAD > browser-smoke-artifacts/showcase-diagnostic/source.txt
+          node --version > browser-smoke-artifacts/showcase-diagnostic/node-version.txt
+      - name: Reuse the exact hosted showcase package
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          artifact-ids: 13300981317
+          run-id: 41784702227
+          github-token: ${{ github.token }}
           path: web
-      - name: Verify the exact-source browser runtime
-        run: node .github/ci/wasm-build.mjs verify
-      - name: Install the repository-pinned browser tools
+      - name: Reuse the original independent source captures
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: 13302960477
+          run-id: 41784702227
+          github-token: ${{ github.token }}
+          path: browser-smoke-artifacts/showcase/webgl
+      - name: Preserve original reports and install existing pinned tools
         run: |
+          set -eu
+          mv browser-smoke-artifacts/showcase/webgl/live "$RUNNER_TEMP/noon-2421-original-live"
+          sha256sum browser-smoke-artifacts/showcase/webgl/report.json > browser-smoke-artifacts/showcase-diagnostic/oracle.sha256
+          cp web/runtime-build-identity.json browser-smoke-artifacts/showcase-diagnostic/runtime-build-identity.json
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
-      - name: Capture exact Noon sources, validate temporal samples, and exercise real selection
-        id: capture
-        run: node scripts/showcase-capture.mjs
-      - name: Record ordinary playback and qualify replay endpoints
-        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+          node scripts/check-web-package.mjs
+          git diff --exit-code -- web
+      - name: Observe unchanged ordinary first-pass and replay checks
+        env:
+          NOON_SHOWCASE_BACKEND: webgl
+          NOON_SHOWCASE_CASES: showcase-gpu-glow,showcase-pointer-selection,showcase-shader-material,showcase-wave-interference
         run: node scripts/showcase-live-review.mjs
-      - name: Check visible motion inside the first triangle-light flight
-        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
-        run: node scripts/showcase-triangle-light-motion.mjs browser-smoke-artifacts/showcase/${{ matrix.backend }}
-      - name: Retain the review evidence even on failure
+      - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: showcase-review-${{ matrix.backend }}
-          path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
-          if-no-files-found: warn
+          name: noon-2421-showcase-diagnostic
+          path: |
+            browser-smoke-artifacts/showcase-diagnostic
+            browser-smoke-artifacts/showcase/webgl/live
+          if-no-files-found: error
           retention-days: 3
