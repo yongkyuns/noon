@@ -78,3 +78,16 @@ index 1fb3f5e2d..f1d8bd5ff 100644
          result.failureState = await page.evaluate(() => ({
            patch: document.querySelector("#patch-status")?.value,
            status: document.querySelector("#status-text")?.textContent,
+diff --git a/scripts/showcase-renderer-readback.mjs b/scripts/showcase-renderer-readback.mjs
+index bb13514ef..182a66014 100644
+--- a/scripts/showcase-renderer-readback.mjs
++++ b/scripts/showcase-renderer-readback.mjs
+@@ -47,7 +47,7 @@ export function decorateAuthoringRenderController(source, { holdStart, duration
+           rejectReadback(error);
+         }
+       }`;
+-  const metrics = `            if (__showcaseRendererReadback !== null && __showcaseRendererReadback.status !== "pending") {
++  const metrics = `            if (__showcaseRendererReadback !== null) {
+               metrics.showcaseRendererReadback = __showcaseRendererReadback;
+             }` + "\n" + METRICS_MARKER;
+   const instrumented = source.replace(INITIAL_MARKER, initial)
