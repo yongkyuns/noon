@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PORT ?? "4185");
-const baseUrl = `http://127.0.0.1:${port}`;
 const presentationProfile = process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PROFILE ?? "default";
 assert.ok(["default", "live"].includes(presentationProfile));
 const liveComparison = presentationProfile === "live";
@@ -68,29 +67,8 @@ class TaintLibrary(Scene):
 
 await mkdir(artifactDir, { recursive: true });
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", "."],
-  { stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground server did not start: ${lastError}\n${serverOutput}`);
-}
+const server = await serveRepository(path.resolve("."), port);
+const { baseUrl } = server;
 
 async function snapshot(page) {
   return page.evaluate(() => {
@@ -455,7 +433,7 @@ const diagnostics = {
   consoleErrors: [],
   failedRequests: [],
   unexpectedNavigations: 0,
-  serverOutput: "",
+  testServer: { baseUrl },
 };
 
 let browser = null;
@@ -463,7 +441,6 @@ let context = null;
 let page = null;
 let phase = "startup";
 try {
-  await waitForServer();
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -790,7 +767,6 @@ try {
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.equal(diagnostics.unexpectedNavigations, 0, "failure/recovery must not reload the Playground");
 
-  diagnostics.serverOutput = serverOutput;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
     `playground live authoring recovery ok: ${diagnostics.snapshots.baseline.objectCount} -> ` +
@@ -798,7 +774,6 @@ try {
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
-  diagnostics.serverOutput = serverOutput;
   if (page !== null) {
     try {
       diagnostics.snapshots.failure = await snapshot(page);
@@ -812,5 +787,5 @@ try {
 } finally {
   await context?.close().catch(() => {});
   await browser?.close().catch(() => {});
-  server.kill("SIGTERM");
+  await server.close();
 }
