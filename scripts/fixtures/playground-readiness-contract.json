@@ -88,7 +88,7 @@
       "showcase-raster-images",
       "showcase-bezier-paths"
     ],
-    "runnerSha256": "19ceae9aca559ccec9324094bf71a5c9d941e6ecf720369b1641b7f4813e7d2b",
+    "runnerSha256": "60cee44d8715523657f4f9eb480d3df6078387ee379b89b7d205f9896dd234e4",
     "workloadSha256": "5137eef8aa71b8d70df845ad769278d934fd8eca53f585ca09c4f8d5e3ddbe96",
     "comparisonSha256": "94cf8fd9ecec1d4c7d4f7fe4af123595e7d0b7f788ed422187e650bda64125a0",
     "thresholds": {

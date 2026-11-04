@@ -23,6 +23,11 @@ assert.match(source, /rendered\?\.ready === true/);
 assert.match(source, /rendered\.needsPresent === false/);
 assert.match(source, /rendered\.bufferedDeltas === 0/);
 assert.match(source, /await synchronizeFinalFrame\(page, measurement\.sourceEndSeconds\)/);
+assert.match(source, /authoredPassLifecycleReady\(lifecycle\)/);
+assert.match(source, /runPhaseMetrics\.sourceRunCompletedAtMs/);
+assert.doesNotMatch(source, /Number\(controls\.elapsedSeconds\)\s*>=/);
+assert.match(source, /sample\.sequence >= publication\.sequence/);
+assert.match(source, /firstPassEndpointSample\(presentationSamples, terminal\)/);
 assert.match(source, /const screenshotName = "frame-final\.png"/);
 assert.match(source, /authoredEndpointSeconds: measurement\.sourceEndSeconds/);
 assert.doesNotMatch(source, /frame-0\.5\.png/);
@@ -61,7 +66,7 @@ function probeHarness() {
   }
   const window = { Worker };
   const start = source.indexOf("await page.addInitScript(") + "await page.addInitScript(".length;
-  const end = source.indexOf("}, measurement.gapClock !== null);", start) + 1;
+  const end = source.indexOf("}, true);", start) + 1;
   assert.ok(end > start, "browser probe hook must be found");
   vm.runInNewContext(`(${source.slice(start, end)})(true)`, { window, performance: { now: () => 100 } });
   return { window, probe: window.__noonProductRenderProbe };

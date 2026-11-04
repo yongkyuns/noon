@@ -11,6 +11,7 @@ import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRe
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -25,11 +26,64 @@ const artifactDir = path.resolve(
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
+const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
+const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
+  disposition: profileExpectation?.disposition ?? "looped" };
 const showcaseEntry = JSON.parse(await readFile(path.join(repoRoot,
   "web/python/examples/noon_showcase_manifest.json"), "utf8")).entries.find(entry => entry.id === exampleId) ?? null;
 if (showcaseEntry !== null) {
   assert.equal(showcaseEntry.path, measurement.sourcePath, "product source differs from its declared lesson");
   assert.equal(showcaseEntry.duration, measurement.sourceEndSeconds, "product endpoint differs from its declared lesson");
+}
+
+function authoredPassLifecycleReady({ runInFlight, run, diagnostics }) {
+  const context = diagnostics?.context;
+  if (runInFlight !== false || run?.exampleId !== exampleId ||
+      context?.exampleId !== exampleId || context.runGeneration !== run.runGeneration ||
+      context.selectionGeneration !== run.selectionGeneration ||
+      !Number.isFinite(run.sourceRunCompletedAtMs) || !Number.isSafeInteger(diagnostics.runRequestId) ||
+      diagnostics.droppedEvents !== 0 || !Array.isArray(diagnostics.events)) return false;
+  const events = diagnostics.events;
+  const attached = events.find(event => event.stage === "attached");
+  const sourceComplete = events.find(event => event.stage === "source-complete");
+  const terminal = events.find(event => event.stage === "terminal-adopted");
+  const final = events.findLast(event => event.stage === "disposition");
+  if (attached?.profile !== completionExpectation.attachedProfile ||
+      events.some(event => event.stage === "profile-change") || !sourceComplete || !terminal ||
+      !Number.isSafeInteger(sourceComplete.sequence) || !Number.isSafeInteger(terminal.sequence) ||
+      !Number.isSafeInteger(final?.sequence) ||
+      final.sequence <= Math.max(sourceComplete.sequence, terminal.sequence)) return false;
+  if (completionExpectation.disposition === "looped") return final.disposition === "looped" &&
+    Number.isSafeInteger(final.loopCount) && final.loopCount >= 1 &&
+    Number.isSafeInteger(final.publication?.session) && final.publication.session >= 0 &&
+    Number.isSafeInteger(final.publication?.sequence) && final.publication.sequence >= 0;
+  const tolerance = 8 * Number.EPSILON * Math.max(1, measurement.sourceEndSeconds);
+  return ["observed-complete", "finite-complete"].includes(completionExpectation.disposition) &&
+    final.disposition === completionExpectation.disposition && Number.isFinite(final.time) &&
+    Math.abs(final.time - measurement.sourceEndSeconds) <= tolerance;
+}
+
+function firstPassEndpointSample(samples, disposition) {
+  const publication = disposition?.publication;
+  if (!Array.isArray(samples) || !Number.isSafeInteger(publication?.session) ||
+      !Number.isSafeInteger(publication?.sequence)) return null;
+  for (const sample of samples) {
+    if (sample.session !== publication.session || sample.session < 0 ||
+        !Number.isSafeInteger(sample.sequence) || sample.sequence < 0 ||
+        sample.sequence >= publication.sequence || !Number.isFinite(sample.time) ||
+        sample.time < 0 || sample.time > measurement.sourceEndSeconds ||
+        !Number.isFinite(sample.presentedAtMs) || sample.presentedAtMs < 0) continue;
+    if (showcaseEntry !== null) {
+      try {
+        assertNaturalFirstPassPublication(showcaseEntry, measurement.sourceEndSeconds, sample.time);
+      } catch {
+        continue;
+      }
+    } else if (Math.abs(sample.time - measurement.sourceEndSeconds) >
+        8 * Number.EPSILON * Math.max(1, measurement.sourceEndSeconds)) continue;
+    return sample;
+  }
+  return null;
 }
 const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
 const startedAtMs = Date.now();
@@ -146,23 +200,54 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
     const state = await waitForApplied(page);
-    // Incremental preparation may finish before presentation. Complete the
-    // same authored pass in every arm before ending this run or its samples.
-    await page.waitForFunction(end => {
-      const controls = document.querySelector(".playback-controls")?.dataset;
-      return controls?.busy === "false" &&
-        Number(controls.elapsedSeconds) >= end - 1e-7;
-    }, measurement.sourceEndSeconds, { timeout: 30_000 });
+    // Elapsed time wraps at the configured loop, so it is not a durable
+    // completion signal. Wait for the same run's source cleanup and final
+    // profile disposition, including one actual loop before accepting a
+    // replayable pass.
+    await page.waitForFunction(exampleId => {
+      const gallery = window.__noonExampleGallery;
+      const events = gallery?.executionDiagnostics?.events ?? [];
+      return gallery?.runInFlight === false && gallery.runPhaseMetrics?.exampleId === exampleId &&
+        Number.isFinite(gallery.runPhaseMetrics.sourceRunCompletedAtMs) &&
+        events.some(event => event.stage === "source-complete") &&
+        events.some(event => event.stage === "terminal-adopted") &&
+        events.some(event => event.stage === "disposition");
+    }, exampleId, { timeout: 30_000 });
+    const lifecycle = await page.evaluate(() => {
+      const gallery = window.__noonExampleGallery;
+      return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
+        diagnostics: gallery.executionDiagnostics };
+    });
+    assert.ok(authoredPassLifecycleReady(lifecycle),
+    `authored source did not complete its expected lifecycle: ${JSON.stringify({
+      disposition: lifecycle.diagnostics?.events?.findLast(event => event.stage === "disposition"),
+      context: lifecycle.diagnostics?.context, run: lifecycle.run,
+    })}`);
+    const disposition = lifecycle.diagnostics.events.findLast(event => event.stage === "disposition");
+    evidence.completion = { runGeneration: lifecycle.run.runGeneration,
+      runRequestId: lifecycle.diagnostics.runRequestId, attachedProfile: completionExpectation.attachedProfile,
+      disposition: disposition.disposition, loopCount: disposition.loopCount ?? null,
+      sourceRunCompletedAtMs: lifecycle.run.sourceRunCompletedAtMs };
     const milliseconds = performance.now() - started;
     if (captureFrames) {
-      // This is the final observation for this exact run, after its renderer
-      // has presented the authored endpoint and before any warm/edit rerun.
+      // This current observation is separate from the retained first-pass
+      // endpoint publication captured in the bounded stage samples below.
       const endpoint = { phase: "endpoint", ...await sampleRendererObservation(page) };
       frameSamples.push(endpoint);
     }
     const presentationSamples = await page.evaluate(() => window.__noonProductRenderProbe.presentationSamples);
+    if (captureFrames) {
+      const terminal = lifecycle.diagnostics.events.findLast(event => event.stage === "disposition");
+      const firstPassEndpoint = firstPassEndpointSample(presentationSamples, terminal);
+      assert.ok(firstPassEndpoint !== null,
+        `no pre-wrap terminal publication was rendered in this authored pass: ${JSON.stringify({
+          terminal: terminal?.publication, samples: presentationSamples.slice(-8),
+        })}`);
+      evidence.firstPassEndpoint = firstPassEndpoint;
+    }
     evidence.presentationSamples = presentationSamples;
-    return { milliseconds, state, frameSamples, presentationSamples };
+    return { milliseconds, state, frameSamples, presentationSamples,
+      completion: evidence.completion, firstPassEndpoint: evidence.firstPassEndpoint ?? null };
   } finally {
     sampling = false;
     try {
@@ -389,7 +474,7 @@ try {
       writable: true,
       value: ObservedWorker,
     });
-  }, measurement.gapClock !== null);
+  }, true);
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -524,8 +609,12 @@ try {
     shellReadyMs,
     shell,
     coldRunMs: cold.milliseconds,
+    coldPassLifecycle: cold.completion,
     warmRunMs: warm.milliseconds,
+    warmPassLifecycle: warm.completion,
+    warmFirstPassEndpoint: warm.firstPassEndpoint,
     editRunMs: edited.milliseconds,
+    editPassLifecycle: edited.completion,
     fps,
     // Preserve the actual observations so a short-window regression can be
     // diagnosed without reconstructing telemetry from an aggregate FPS value.
