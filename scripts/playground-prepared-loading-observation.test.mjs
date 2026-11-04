@@ -161,12 +161,15 @@ test("warm seek targets are five distinct manifest beats or closed terminal endp
   const manifest = JSON.parse(await readFile(new URL("../web/python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
   for (const id of ["showcase-first-scene", "showcase-dynamic-scene"]) {
     const entry = manifest.entries.find(row => row.id === id);
-    const targets = readinessWarmSeekTargets(entry);
+    const actualEnd = entry.duration === 8 ? 7.999999999999999 : entry.duration;
+    const targets = readinessWarmSeekTargets(entry, actualEnd);
     assert.equal(targets.length, 5);
     assert.equal(new Set(targets).size, 5);
-    assert.equal(targets.at(-1), entry.duration, "the closed authored endpoint remains selectable");
+    assert.equal(targets.at(-1), actualEnd, "the exact closed Rust endpoint remains selectable");
     assert.ok(targets.every(time => entry.beats.some(beat => beat.time === time) ||
-      entry.still_intervals.some(([start, end]) => start === time && end === entry.duration) || time === entry.duration));
+      entry.still_intervals.some(([start, end]) => start === time && end === entry.duration) || time === actualEnd));
+    assert.equal(readinessWarmSeekTargets(entry, entry.duration + 1e-6).length, 0,
+      "an endpoint outside the storyboard's validated duration is rejected");
   }
 });
 

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, writeFile, mkdir, readdir, symlink, mkdtemp, rm, stat } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, readdir, symlink, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import { serveRepository } from "./browser-test-server.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support.mjs";
+import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
 import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
@@ -137,6 +138,13 @@ const report = { status: "running", readinessMode,
       { encoding: "utf8" }).stdout.trim() || null : null,
     logicalCpus: os.cpus().length, totalMemoryBytes: os.totalmem() }, packages: {}, cases: [] };
 await mkdir(output, { recursive: true });
+const reportPath = path.join(output, "report.json");
+async function writeReport() {
+  const temporaryPath = `${reportPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, encode(report));
+  await rename(temporaryPath, reportPath);
+}
+await writeReport();
 let overlay, browser, browserServer;
 const servers = {};
 
@@ -536,21 +544,27 @@ async function readinessWarmSeek(page, row, targetTime) {
   const slider = page.locator(".playback-scrubber");
   assert.equal(await slider.isDisabled(), false, "completed replay seek control is unavailable");
   const selectedTime = await slider.evaluate((input, target) => {
-    if (Number(input.max) < target || Number(input.min) > target) throw new Error("seek target is outside the DOM range");
+    const minimum = Number(input.min), maximum = Number(input.max);
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum > target || maximum < target) {
+      throw new Error("seek target is outside the DOM range");
+    }
     input.value = String(target);
+    const rawInputValue = input.value;
+    const rawInputTime = Number(rawInputValue);
+    const clampedInputTime = Math.max(minimum, Math.min(maximum, rawInputTime));
+    if (clampedInputTime !== target) throw new Error("DOM range clamp differs from the exact Rust target");
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    return Number(input.value);
+    return { rawInputValue, rawInputTime, clampedInputTime, minimum, maximum };
   }, targetTime);
-  assert.equal(selectedTime, targetTime, "range control rounded an authored seek target");
   const request = await page.evaluate(({ index, target }) =>
     (window.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(index).find(event =>
       event.kind === "request" && event.control === "playback-scrubber" && event.requestedTime === target) ?? null,
-  { index: marker.uiEventIndex, target: selectedTime });
+  { index: marker.uiEventIndex, target: selectedTime.rawInputTime });
   assert.ok(request, "DOM range input did not produce the requested seek event");
   await page.waitForFunction(target => {
     const controls = document.querySelector(".playback-controls")?.dataset;
     return controls?.busy === "false" && Number(controls.elapsedSeconds) === target;
-  }, selectedTime, { timeout: 30_000 });
+  }, targetTime, { timeout: 30_000 });
   const events = await page.evaluate(index =>
     (window.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(index), marker.uiEventIndex);
   const feedback = events.find(event => event.kind === "state" && event.attribute === "data-busy" &&
@@ -566,7 +580,10 @@ async function readinessWarmSeek(page, row, targetTime) {
   const publicationSample = instrumentationMode === "bounded-diagnostics"
     ? await readinessPublicationSample(page, result.commandPublication) : minimalRendererSample;
   const receipt = readinessCommandReceipt(result, request.epochMs, publicationSample);
-  const command = { name: "seek", commandPhase: "completed-history-warm", targetTime: selectedTime,
+  const command = { name: "seek", commandPhase: "completed-history-warm", targetTime,
+    domRange: { minimum: selectedTime.minimum, maximum: selectedTime.maximum,
+      rawInputValue: selectedTime.rawInputValue, rawInputTime: selectedTime.rawInputTime,
+      clampedInputTime: selectedTime.clampedInputTime, eventRequestedTime: request.requestedTime },
     receiptTime: receipt.matchingPresentation?.time ?? null,
     automationIssuedEpochMs: marker.automationIssuedEpochMs, requestEpochMs: request.epochMs,
     uiFeedbackEpochMs: feedback?.epochMs ?? null,
@@ -920,8 +937,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     });
     let replayCycleComplete = replayCycle();
     const replayDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
-    while (!(Number.isFinite(replayRow.startup.firstUsefulMs) && replayCycleComplete !== null) &&
-           performance.now() < replayDeadline) {
+    while (replayCycleComplete === null && performance.now() < replayDeadline) {
       replayCurrent = await read(replayRow);
       replayCycleComplete = replayCycle();
       await page.waitForTimeout(observationPollIntervalMs);
@@ -934,15 +950,17 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
           playing: sample.controls?.playing, latestPresentationSample: sample.metrics?.latestPresentationSample,
         })),
       })}`);
+    assert.ok(Number.isFinite(replayRow.startup.firstUsefulMs), "retained replay produced no useful picture in its first cycle");
     assert.ok(replayCurrent.metrics?.presentedFrames > beforeFrames,
       "retained replay produced no new presentation");
-    assert.ok(Number.isFinite(replayRow.startup.firstUsefulMs), "retained replay produced no useful picture");
     replayRow.activeCadenceWindows = activeCadenceWindows(replayRow.cadenceObservations);
     replayRow.startup.replayRequestToRestartCompletionMs =
       replayRow.startup.restartCompletedUiEpochMs - replayStartedAtEpochMs;
     replayRow.startup.replayToWrapMs = replayCycleComplete.wrapped.observationEpochMs - replayStartedAtEpochMs;
     replayRow.replayCycleEvidence = replayCycleComplete;
-    const seekTargets = readinessWarmSeekTargets(showcaseEntry);
+    const actualEnd = replayCurrent.controls?.seekEnd;
+    assertNaturalFirstPassPublication(showcaseEntry, actualEnd, actualEnd);
+    const seekTargets = readinessWarmSeekTargets(showcaseEntry, actualEnd);
     assert.equal(seekTargets.length, 5, "manifest does not supply five distinct warm-seek targets");
     replayRow.warmSeekTargets = seekTargets;
     if (replayCurrent.controls?.playing === "true") replayCurrent = await readinessCommand(page, replayRow, false);
@@ -1030,7 +1048,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     sourceRow.finishedAtEpochMs = Date.now();
     replayRow.finishedAtEpochMs = sourceRow.finishedAtEpochMs;
     page.off("pageerror", onPageError); page.off("console", onConsole);
-    await writeFile(path.join(output, "report.json"), encode(report));
+    await writeReport();
     console.log(JSON.stringify({ source: source.id, arms: [initialArm, replayArm], stratum, trial,
       initialStatus: sourceRow.status, replayStatus: replayRow.status, error: sourceRow.error }));
   }
@@ -1086,8 +1104,13 @@ try {
                   await cache.install(context);
                   resourceCacheInstalled = true;
                 }
+                const pairStart = report.cases.length;
                 await measureReadinessPair(page, workers, source, initialArm, replayArm, stratum,
                   trial, trial < 0, contextIdentity);
+                const measuredPair = report.cases.slice(pairStart);
+                if (measuredPair.length !== 2 || measuredPair.some(row => row.status !== "observed")) {
+                  throw new Error(`aborting after first failed readiness pair: ${source.id}/${initialArm}+${replayArm}/${stratum}/${trial}`);
+                }
                 if (coldNetwork !== null) {
                   const evidence = summarizeColdNetworkObservations(coldNetwork.records, cache.stats().baseUrl);
                   const jobCacheAfter = cache.stats();
@@ -1181,7 +1204,7 @@ try {
   report.status = "failed"; report.error = String(error.stack ?? error); process.exitCode = 1;
 } finally {
   report.resourceCache = cache.stats();
-  await writeFile(path.join(output, "report.json"), encode(report));
+  await writeReport();
   try { await browser?.close(); }
   finally {
     try { await browserServer?.close(); }

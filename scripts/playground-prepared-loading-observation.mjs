@@ -126,11 +126,12 @@ export function readinessRendererSamples(stagedSamples, observations) {
     left.clockOriginMs + left.presentedAtMs - right.clockOriginMs - right.presentedAtMs);
 }
 
-export function readinessWarmSeekTargets(entry) {
+export function readinessWarmSeekTargets(entry, actualEnd = entry?.duration) {
   const duration = entry?.duration;
+  if (!Number.isFinite(duration) || !Number.isFinite(actualEnd) || actualEnd <= 0 || actualEnd > duration) return [];
   const terminalHold = entry?.still_intervals?.findLast(([, end]) => end === duration);
-  const candidates = [...(entry?.beats ?? []).map(beat => beat.time), terminalHold?.[0], duration]
-    .filter(Number.isFinite).filter(time => time > 0 && time <= duration).sort((a, b) => a - b);
+  const candidates = [...(entry?.beats ?? []).map(beat => beat.time), terminalHold?.[0], actualEnd]
+    .filter(Number.isFinite).filter(time => time > 0 && time <= actualEnd).sort((a, b) => a - b);
   const unique = [...new Set(candidates)];
   if (unique.length < 5) return [];
   const targets = Array.from({ length: 5 }, (_, index) => unique[Math.round(index * (unique.length - 1) / 4)]);
