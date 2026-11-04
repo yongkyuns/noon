@@ -25,12 +25,30 @@ assert.match(source, /rendered\.bufferedDeltas === 0/);
 assert.match(source, /await synchronizeFinalFrame\(page, measurement\.sourceEndSeconds\)/);
 assert.match(source, /authoredPassLifecycleReady\(lifecycle\)/);
 assert.match(source, /run\.sourceRunCompletedAtMs/);
-assert.match(source, /if \(diagnostics == null\) return controls\?\.busy === "false"/);
+assert.match(source, /diagnostics == null\) return allowLegacyBaseline && controls\?\.busy === "false"/);
 assert.match(source, /firstPassEndpointSample\(warm\.frameSamples, fps, warm\.runGeneration\)/);
 assert.match(source, /sample\.runGeneration !== runGeneration/);
 assert.match(source, /const screenshotName = "frame-final\.png"/);
 assert.match(source, /authoredEndpointSeconds: measurement\.sourceEndSeconds/);
 assert.doesNotMatch(source, /frame-0\.5\.png/);
+
+test("legacy diagnostics are accepted only for the frozen Product Gate baseline role", () => {
+  const start = source.indexOf("function authoredPassLifecycleReady(");
+  const end = source.indexOf("\n}\n\nfunction firstPassEndpointSample", start) + 2;
+  assert.ok(start >= 0 && end > start, "Product Gate lifecycle validator must be present");
+  const state = { runInFlight: false, run: { exampleId: "showcase-first-scene",
+    sourceRunCompletedAtMs: 10 }, controls: { busy: "false", elapsedSeconds: "8" }, diagnostics: null };
+  const accepts = label => {
+    const validate = vm.runInNewContext(`(${source.slice(start, end)})`, {
+      allowLegacyBaseline: label === "baseline", exampleId: "showcase-first-scene",
+      measurement: { sourceEndSeconds: 8 }, completionExpectation: {}, Number,
+    });
+    return validate(state);
+  };
+  assert.equal(accepts("baseline"), true);
+  assert.equal(accepts("candidate"), false);
+});
+
 // Counter/clock reset behavior is exercised by playground-product-fps.test.mjs;
 // this contract only checks that the real browser harness uses that scorer.
 assert.match(source, /sampleRendererFps\(warm\.frameSamples, measurement\.windowEndSeconds/);

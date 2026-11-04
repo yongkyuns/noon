@@ -24,6 +24,8 @@ const artifactDir = path.resolve(
   process.env.NOON_PRODUCT_ARTIFACT_DIR ?? path.join(repoRoot, "browser-smoke-artifacts/product-e2e"),
 );
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
+assert.ok(["baseline", "candidate"].includes(label), "product measurement role must be baseline or candidate");
+const allowLegacyBaseline = label === "baseline";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
 const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
@@ -37,7 +39,7 @@ if (showcaseEntry !== null) {
 }
 
 function authoredPassLifecycleReady({ runInFlight, run, diagnostics, controls }) {
-  if (diagnostics == null) return runInFlight === false && run?.exampleId === exampleId &&
+  if (diagnostics == null) return allowLegacyBaseline && runInFlight === false && run?.exampleId === exampleId &&
     Number.isFinite(run.sourceRunCompletedAtMs) && controls?.busy === "false" &&
     Number(controls.elapsedSeconds) >= measurement.sourceEndSeconds - 1e-7;
   const context = diagnostics?.context;
@@ -209,14 +211,15 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     // completion signal. Wait for the same run's source cleanup and final
     // profile disposition, including one actual loop before accepting a
     // replayable pass.
-    await page.waitForFunction(({ exampleId, expectedProfile, expectedDisposition, durationSeconds }) => {
+    await page.waitForFunction(({ exampleId, expectedProfile, expectedDisposition, durationSeconds,
+      allowLegacyBaseline }) => {
       const gallery = window.__noonExampleGallery;
       const run = gallery?.runPhaseMetrics;
       const diagnostics = gallery?.executionDiagnostics;
       const controls = document.querySelector(".playback-controls")?.dataset;
       if (gallery?.runInFlight !== false || run?.exampleId !== exampleId ||
           !Number.isFinite(run.sourceRunCompletedAtMs)) return false;
-      if (diagnostics == null) return controls?.busy === "false" &&
+      if (diagnostics == null) return allowLegacyBaseline && controls?.busy === "false" &&
         Number(controls.elapsedSeconds) >= durationSeconds - 1e-7;
       const events = diagnostics.events ?? [];
       const attached = events.find(event => event.stage === "attached");
@@ -233,7 +236,8 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
       return diagnostics.droppedEvents === 0 && attached?.profile === expectedProfile && ordered &&
         !events.some(event => event.stage === "profile-change") && dispositionReady;
     }, { exampleId, expectedProfile: completionExpectation.attachedProfile,
-      expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds },
+      expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds,
+      allowLegacyBaseline },
     { timeout: 30_000 });
     const lifecycle = await page.evaluate(() => {
       const gallery = window.__noonExampleGallery;
