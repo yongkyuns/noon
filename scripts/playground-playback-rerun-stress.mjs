@@ -16,6 +16,9 @@ const profile = process.env.NOON_PLAYGROUND_RERUN_STRESS_PROFILE ?? "default";
 assert.ok(["default", "live"].includes(profile));
 const liveComparison = profile === "live";
 const memoryEnabled = process.env.NOON_PLAYGROUND_RERUN_STRESS_MEMORY === "1";
+const wasmAccountingEnabled = process.env.NOON_PLAYGROUND_RERUN_STRESS_WASM_ACCOUNTING === "1";
+assert.ok(!wasmAccountingEnabled || memoryEnabled,
+  "WASM accounting requires NOON_PLAYGROUND_RERUN_STRESS_MEMORY=1");
 const exampleId = process.env.NOON_PLAYGROUND_RERUN_STRESS_EXAMPLE_ID ?? "parity-create-circle";
 const artifactDir = path.resolve(
   repoRoot,
@@ -51,8 +54,9 @@ async function memoryBuildIdentity() {
 
 const memory = memoryEnabled ? { enabled: true, build: await memoryBuildIdentity(), marks: [],
   status: "running", errors: [],
-  unaccounted: ["JavaScript live heap", "GPU/out-of-process allocations", "WASM live allocator and capacity"],
-  caveat: "Rust retained charges are category-local logical bytes; sampled Chromium process-tree RSS is separate and may double-count shared pages." }
+  ...(wasmAccountingEnabled ? { wasmCapacityDiagnostic: { enabled: true, workerEntrypoints: {} } } : {}),
+  unaccounted: ["JavaScript live heap", "GPU/out-of-process allocations", "WASM live allocator"] ,
+  caveat: "Rust retained charges are category-local logical bytes; sampled Chromium process-tree RSS is separate and may double-count shared pages. WASM linear-memory byteLength is capacity, not live allocation." }
   : null;
 
 let serverOutput = "";
@@ -156,7 +160,50 @@ async function memoryMark(page, phase) {
       "geometryCacheMisses"].map(name => [name, metrics[name] ?? null])), retention };
   });
   if (state.retention === null) memory.errors.push(`prepared retention metrics missing at ${phase}`);
-  memory.marks.push({ phase, ...state, workers: page.workers().map(workerIdentity) });
+  const workers = page.workers().map(workerIdentity);
+  const wasmAccounting = wasmAccountingEnabled ? await wasmAccountingSnapshot(page.workers()) : undefined;
+  if (wasmAccountingEnabled && (wasmAccounting.length === 0 ||
+      wasmAccounting.some(item => item.accounting === null || item.error))) {
+    memory.errors.push(`WASM capacity probe missing at ${phase}`);
+  }
+  memory.marks.push({ phase, ...state, workers, ...(wasmAccountingEnabled ? { wasmAccounting } : {}) });
+}
+
+async function installWasmCapacityProbe(page) {
+  const entries = new Set(["/web/python-worker.js", "/web/execution-render-worker.js"]);
+  memory.wasmCapacityDiagnostic.probeSha256 = sha256(
+    await readFile(path.join(repoRoot, "web/playground-cold-start-wasm-accounting.js")));
+  await page.route(url => entries.has(new URL(url).pathname), async route => {
+    if (!["script", "worker"].includes(route.request().resourceType())) return route.continue();
+    const response = await route.fetch();
+    const original = await response.text();
+    const executed = `import "./playground-cold-start-wasm-accounting.js";\n${original}`;
+    const pathname = new URL(route.request().url()).pathname;
+    memory.wasmCapacityDiagnostic.workerEntrypoints[pathname] = {
+      originalSha256: sha256(original), executedSha256: sha256(executed),
+    };
+    const headers = { ...response.headers() };
+    delete headers["content-length"]; delete headers["content-encoding"];
+    await route.fulfill({ response, headers, body: executed });
+  });
+}
+
+async function wasmAccountingSnapshot(workers) {
+  const entries = workers.filter(worker => /\/(python-worker|execution-render-worker)\.js(?:\?|$)/.test(worker.url()));
+  return Promise.all(entries.map(async worker => {
+    const identity = workerIdentity(worker);
+    try {
+      const accounting = await worker.evaluate(() => {
+        const probe = globalThis.__noonColdStartWasmAccounting;
+        return probe ? { records: probe.records, linearMemory: probe.snapshot() } : null;
+      });
+      if (accounting === null || accounting.records.length === 0 || accounting.linearMemory.length === 0 ||
+          accounting.linearMemory.some(memory => !memory.available || memory.samplingError !== null)) {
+        return { ...identity, accounting, error: "probe or capacity sample unavailable" };
+      }
+      return { ...identity, accounting };
+    } catch (error) { return { ...identity, error: String(error) }; }
+  }));
 }
 
 async function pausedRendererWindow(page) {
@@ -327,6 +374,7 @@ try {
     exampleContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     page = await exampleContext.newPage();
   } else page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  if (wasmAccountingEnabled) await installWasmCapacityProbe(page);
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -612,6 +660,14 @@ try {
     if (!Array.isArray(memory.workersAfterContextClose) || memory.workersAfterContextClose.length === 0 ||
         memory.workersAfterContextClose.some(worker => worker.retired !== true)) {
       memory.errors.push("one or more browser workers were not confirmed retired");
+    }
+    if (wasmAccountingEnabled) {
+      const sampledWorkerIds = new Set(memory.marks.flatMap(mark =>
+        (mark.wasmAccounting ?? []).filter(item => item.accounting !== null && !item.error).map(item => item.id)));
+      const observedWorkerIds = new Set(memory.marks.flatMap(mark => mark.workers.map(worker => worker.id)));
+      if (observedWorkerIds.size === 0 || [...observedWorkerIds].some(id => !sampledWorkerIds.has(id))) {
+        memory.errors.push("WASM capacity probe did not produce a valid sample for every observed worker");
+      }
     }
     if (!Number.isFinite(memory.pausedRendererWindow?.before?.presentedFrames) ||
         !Number.isFinite(memory.pausedRendererWindow?.after?.presentedFrames)) {
