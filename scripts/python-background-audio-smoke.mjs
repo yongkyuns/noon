@@ -30,11 +30,11 @@ assert.ok(entry);
 const source = await readFile(path.join(root, "web", entry.path));
 const fourierMusicPreview = await readFile(path.join(root, "scripts/fixtures/noon_fourier_music_preview.py"));
 const fourierEpicycles = await readFile(path.join(root, "scripts/fixtures/noon_fourier_epicycles.py"));
+const fourierAudioCall = "        self.audio(AudioSource.small_discovery(), duration=34.65, gain=0.5, fade_in=1.5, fade_out=2.5)\n";
 const fourierWithAudio = Buffer.from(fourierEpicycles.toString().replace(
-  "        stages = [prepare_stage(frequencies, coefficients, offset, n) for n in TERM_COUNTS]",
-  "        stages = [prepare_stage(frequencies, coefficients, offset, n) for n in TERM_COUNTS]\n"
-  + "        self.audio(AudioSource.small_discovery(), duration=34.65, gain=0.5, fade_in=1.5, fade_out=2.5)",
-));
+  "    def construct(self):\n", "    def construct(self):\n" + fourierAudioCall));
+assert.equal(fourierWithAudio.toString().replace(fourierAudioCall, ""), fourierEpicycles.toString(),
+  "combined Fourier fixture differs only by the documented first-statement soundtrack insertion");
 assert.notEqual(fourierWithAudio.toString(), fourierEpicycles.toString(), "combined fixture adds only the documented soundtrack call");
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const json = value => `${JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2)}\n`;
@@ -48,6 +48,7 @@ const report = {
 await mkdir(artifacts, { recursive: true });
 let browser, server, page, context, cache;
 let poster, posterRecord;
+let fourierReferencePixels = null;
 const near = (actual, expected, label, tolerance = 1e-6) =>
   assert.ok(Math.abs(actual - expected) <= tolerance, `${label}: ${actual} != ${expected}`);
 
@@ -114,6 +115,100 @@ async function play() {
   await page.getByRole("button", { name: "Play animation", exact: true }).click();
   await waitForBrowserObservation(page, async () => (await audioQualification.execution.state()).playing);
   return audible();
+}
+
+async function runFourierSource(label, fixture, expectedAudio) {
+  const before = await state();
+  const beforeAttachments = await page.evaluate(() => audioQualification.attachments);
+  const traceStart = await page.evaluate(() => audioQualification.sourceTrace.length);
+  const runKey = `${label}Run`;
+  await page.evaluate(({ fixture, runKey, attachments, traceStart }) => {
+    const editor = document.querySelector("#python-scene-source");
+    if (!(editor instanceof HTMLTextAreaElement)) throw new Error("ordinary Python editor is unavailable");
+    window.audioQualification[`${runKey}Error`] = null;
+    window.audioQualification[`${runKey}Started`] = false;
+    window.audioQualification[`${runKey}BeforeAttachments`] = attachments;
+    window.audioQualification[`${runKey}TraceStart`] = traceStart;
+    editor.value = fixture;
+    window.__noonExampleGallery.run().catch(error => {
+      window.audioQualification[`${runKey}Error`] = String(error?.stack ?? error);
+    });
+    window.audioQualification[`${runKey}Started`] = true;
+  }, { fixture: fixture.toString(), runKey, attachments: beforeAttachments, traceStart });
+  await waitForBrowserObservation(page, key => {
+    const observation = window.audioQualification;
+    if (observation[`${key}Error`]) throw new Error(observation[`${key}Error`]);
+    return observation[`${key}Started`] && window.__noonExampleGallery?.runInFlight === true;
+  }, runKey, { timeout: 90_000 });
+  try {
+    await waitForBrowserObservation(page, async ({ key, expectedAudio: hasAudio }) => {
+      const observation = window.audioQualification;
+      if (observation[`${key}Error`]) throw new Error(observation[`${key}Error`]);
+      if (!observation.sourceTrace.slice(observation[`${key}TraceStart`]).some(event =>
+        event.phase === "source-run-start")) return false;
+      try {
+        const playback = await observation.execution.state();
+        return playback.preparedPlayback === true && playback.durationSeconds === null &&
+          playback.hasAudio === hasAudio && playback.preparedFrontier > playback.time;
+      } catch { return false; }
+    }, { key: runKey, expectedAudio }, { timeout: 180_000 });
+  } catch (error) {
+    const diagnostics = await page.evaluate(async key => {
+      const observation = window.audioQualification;
+      const playback = await observation.execution?.state?.().catch(failure => ({ unavailable: String(failure) })) ?? null;
+      return { runError: observation[`${key}Error`], runStarted: observation[`${key}Started`],
+        attachments: observation.attachments, traceStart: observation[`${key}TraceStart`],
+        runInFlight: window.__noonExampleGallery?.runInFlight,
+        trace: observation.sourceTrace.slice(-12), playback };
+    }, runKey);
+    throw new Error(`${String(error.stack ?? error)}\nFourier attachment diagnostics: ${JSON.stringify(diagnostics)}`);
+  }
+  const attached = await state();
+  assert.equal(attached.starts.length, before.starts.length, "device output stays silent before explicit Play");
+  assert.equal(attached.transport.hasAudio, expectedAudio);
+  return { before, attached, traceStart, runKey };
+}
+
+async function finishFourierSource(run, expectedAudio) {
+  const { runKey, traceStart } = run;
+  await waitForBrowserObservation(page, async ({ key, start }) => {
+    const observation = window.audioQualification;
+    if (observation[`${key}Error`]) throw new Error(observation[`${key}Error`]);
+    const trace = observation.sourceTrace.slice(start);
+    return window.__noonExampleGallery?.runInFlight === false &&
+      trace.some(event => event.phase === "source-run-result");
+  }, { key: runKey, start: traceStart }, { timeout: 360_000 });
+  let sourceState = await state();
+  if (sourceState.transport.loopDuration !== null && sourceState.transport.loopCount < 1) {
+    await waitForBrowserObservation(page, async firstLoop => {
+      const playback = await audioQualification.execution.state();
+      return playback.completed === true || playback.loopCount > firstLoop;
+    }, sourceState.transport.loopCount, { timeout: 120_000 });
+    sourceState = await state();
+  } else if (sourceState.transport.completed !== true && sourceState.transport.loopDuration === null) {
+    await waitForBrowserObservation(page, async () => {
+      const playback = await audioQualification.execution.state();
+      return playback.completed === true;
+    }, null, { timeout: 120_000 });
+    sourceState = await state();
+  }
+  if (sourceState.transport.playing) await command("pause");
+  const finalSnapshot = await state();
+  const events = await page.evaluate(start => audioQualification.sourceTrace.slice(start), traceStart);
+  const starts = events.filter(event => event.phase === "source-run-start");
+  const results = events.filter(event => event.phase === "source-run-result");
+  assert.equal(starts.length, 1, "each fixture is authored once");
+  assert.equal(results.length, 1, "the original authoring run reaches its natural result");
+  assert.equal(starts[0].requestedProfile, "incremental");
+  assert.equal(results[0].generation, starts[0].generation, "source completion stays on its original worker generation");
+  assert.equal(sourceState.transport.preparedPlayback, true);
+  assert.equal(sourceState.transport.durationSeconds, 34.65, "the terminal Rust history owns the authored endpoint");
+  assert.equal(sourceState.transport.preparedFrontier, 34.65);
+  assert.equal(sourceState.transport.buffering, false);
+  assert.equal(sourceState.transport.replaySupported, true);
+  assert.equal(sourceState.transport.hasAudio, expectedAudio);
+  assert.equal(finalSnapshot.transport.playing, false, "the completed source can be paused for retained seeking");
+  return { finalState: finalSnapshot, sourceState, events };
 }
 
 async function pausedSeek(time) {
@@ -230,6 +325,57 @@ try {
     const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
     const { PythonAuthoringClient } = await import("./authoring-client.js");
     const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+    audioQualification.audioResourceSessions = [];
+    const installAudioDevice = WorkerAudioDevice.prototype.install;
+    WorkerAudioDevice.prototype.install = async function (bytes) {
+      if (bytes instanceof Uint8Array && bytes.byteLength >= 4) {
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const metadataLength = view.getUint32(0, true);
+        const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + metadataLength)));
+        audioQualification.audioResourceSessions.push(metadata.session);
+        audioQualification.audioResourceSession = metadata.session;
+      }
+      return installAudioDevice.call(this, bytes);
+    };
+    audioQualification.pointerViews = [];
+    audioQualification.audioDeviceAnchors = [];
+    audioQualification.audioApplyAnchors = [];
+    audioQualification.devicePauses = [];
+    const extendDeviceAnchor = WorkerAudioDevice.prototype.extendAnchor;
+    WorkerAudioDevice.prototype.extendAnchor = function (anchor, session) {
+      const startsBefore = audioQualification.starts.length;
+      const receivedEpochMs = performance.timeOrigin + performance.now();
+      const accepted = extendDeviceAnchor.call(this, anchor, session);
+      audioQualification.audioDevice = this;
+      audioQualification.audioDeviceAnchors.push({ anchor, session, accepted,
+        receivedEpochMs, starts: audioQualification.starts.slice(startsBefore) });
+      return accepted;
+    };
+    const applyDeviceAnchor = WorkerAudioDevice.prototype.applyAnchor;
+    WorkerAudioDevice.prototype.applyAnchor = function (anchor, session) {
+      const receivedEpochMs = performance.timeOrigin + performance.now();
+      const result = applyDeviceAnchor.call(this, anchor, session);
+      audioQualification.audioApplyAnchors.push({ anchor, session, receivedEpochMs });
+      return result;
+    };
+    const pauseDevice = WorkerAudioDevice.prototype.pause;
+    WorkerAudioDevice.prototype.pause = function (...args) {
+      audioQualification.devicePauses.push({ method: "pause", receivedEpochMs: performance.timeOrigin + performance.now(),
+        stack: new Error().stack });
+      return pauseDevice.apply(this, args);
+    };
+    const stopDevice = WorkerAudioDevice.prototype.stop;
+    WorkerAudioDevice.prototype.stop = function (...args) {
+      audioQualification.devicePauses.push({ method: "stop", receivedEpochMs: performance.timeOrigin + performance.now(),
+        stack: new Error().stack });
+      return stopDevice.apply(this, args);
+    };
+    const registerPointerView = ExecutionWorkerClient.prototype.setBrowserPointerView;
+    ExecutionWorkerClient.prototype.setBrowserPointerView = function (revision, width, height) {
+      audioQualification.pointerViews.push({ revision, width, height });
+      return registerPointerView.call(this, revision, width, height);
+    };
     const original = AuthoringExecutionClient.prototype.startSemanticExecution;
     audioQualification.attachments = 0;
     audioQualification.sourceTrace = [];
@@ -319,14 +465,67 @@ try {
       }
     };
     const { WasmWorkerAudioOutput } = await import("./pkg/noon_web.js");
+    audioQualification.deviceTransitions = [];
+    audioQualification.captureDeviceTransitions = false;
+    const captureDeviceTransition = (kind, node, context) => {
+      if (!audioQualification.captureDeviceTransitions) return;
+      const transition = { kind, node, deviceTime: context.currentTime,
+        requestStartedEpochMs: performance.timeOrigin + performance.now(), state: "pending" };
+      audioQualification.deviceTransitions.push(transition);
+      const execution = audioQualification.execution;
+      if (!execution) { transition.state = "unavailable"; return; }
+      execution.state().then(playback => Object.assign(transition, {
+        requestFinishedEpochMs: performance.timeOrigin + performance.now(),
+        state: "captured", time: playback.time, playing: playback.playing,
+        buffering: playback.buffering ?? null, frontier: playback.preparedFrontier ?? null,
+        duration: playback.durationSeconds ?? null,
+      }), error => Object.assign(transition, { requestFinishedEpochMs: performance.timeOrigin + performance.now(),
+        state: "error", error: String(error) }));
+    };
+    const nativeSourceStart = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+      const value = nativeSourceStart.apply(this, args);
+      const node = audioQualification.starts.at(-1)?.node ?? null;
+      captureDeviceTransition("start", node, this.context);
+      this.addEventListener("ended", () => captureDeviceTransition("ended", node, this.context), { once: true });
+      return value;
+    };
     const start = WasmWorkerAudioOutput.prototype.start;
     audioQualification.anchors = [];
     WasmWorkerAudioOutput.prototype.start = function (session, time, sampledEpochMs, receivedEpochMs) {
       const before = audioQualification.starts.length;
-      const result = start.call(this, session, time, sampledEpochMs, receivedEpochMs);
-      audioQualification.anchors.push({ session, time, sampledEpochMs, receivedEpochMs,
-        sources: audioQualification.starts.slice(before).map(source => source.node) });
-      return result;
+      const entry = { operation: "start", session, resourceSession: audioQualification.audioResourceSession,
+        time, sampledEpochMs, receivedEpochMs };
+      try {
+        const result = start.call(this, session, time, sampledEpochMs, receivedEpochMs);
+        entry.sources = audioQualification.starts.slice(before).map(source => source.node);
+        return result;
+      } catch (error) { entry.error = String(error?.stack ?? error); throw error; }
+      finally { audioQualification.anchors.push(entry); }
+    };
+    const startUntil = WasmWorkerAudioOutput.prototype.startUntil;
+    WasmWorkerAudioOutput.prototype.startUntil = function (session, time, authorizedUntil, sampledEpochMs, receivedEpochMs) {
+      const before = audioQualification.starts.length;
+      const entry = { operation: "startUntil", session, resourceSession: audioQualification.audioResourceSession,
+        time, authorizedUntil, sampledEpochMs, receivedEpochMs };
+      try {
+        const result = startUntil.call(this, session, time, authorizedUntil, sampledEpochMs, receivedEpochMs);
+        entry.sources = audioQualification.starts.slice(before).map(source => source.node);
+        return result;
+      } catch (error) { entry.error = String(error?.stack ?? error); throw error; }
+      finally { audioQualification.anchors.push(entry); }
+    };
+    const extendUntil = WasmWorkerAudioOutput.prototype.extendUntil;
+    WasmWorkerAudioOutput.prototype.extendUntil = function (session, time, authorizedUntil, sampledEpochMs, receivedEpochMs) {
+      const before = audioQualification.starts.length;
+      const entry = { operation: "extendUntil", session, resourceSession: audioQualification.audioResourceSession,
+        time, authorizedUntil, sampledEpochMs, receivedEpochMs };
+      try {
+        const result = extendUntil.call(this, session, time, authorizedUntil, sampledEpochMs, receivedEpochMs);
+        entry.sources = audioQualification.starts.slice(before).map(source => source.node);
+        return result;
+      } catch (error) { entry.error = String(error?.stack ?? error); throw error; }
+      finally { audioQualification.anchors.push(entry); }
     };
   });
   release();
@@ -743,62 +942,277 @@ class AudioWithOrdinaryPlay(Scene):
     };
   });
 
-  await record("original Fourier epicycles use the prepared visual source and retained native history", async () => {
+  await record("original Fourier scene reaches finite source completion and replays retained frames", async () => {
     assert.equal(hash(fourierEpicycles), "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9");
-    const beforeStarts = await page.evaluate(() => audioQualification.starts.length);
-    const beforeAttachments = await page.evaluate(() => audioQualification.attachments);
-    await page.evaluate(({ source, beforeAttachments }) => {
-      const editor = document.querySelector("#python-scene-source");
-      if (!(editor instanceof HTMLTextAreaElement)) throw new Error("ordinary Python editor is unavailable");
-      window.audioQualification.fourierRunError = null;
-      window.audioQualification.fourierRunStarted = false;
-      window.audioQualification.fourierBeforeAttachments = beforeAttachments;
-      editor.value = source;
-      window.__noonExampleGallery.run().catch(error => {
-        window.audioQualification.fourierRunError = String(error?.stack ?? error);
+    const run = await runFourierSource("fourier", fourierEpicycles, false);
+    assert.ok(run.attached.transport.preparedFrontier > run.attached.transport.time);
+    assert.equal(run.attached.transport.durationSeconds, null, "the open prefix is not reported as terminal");
+    const completed = await finishFourierSource(run, false);
+    const canvas = page.locator("#scene");
+    const canvasStyle = await canvas.getAttribute("style");
+    await layoutReplayViewport(canvas, { width: 960, height: 540 });
+    await replayViewport(canvas, { width: 960, height: 540 });
+    const pixelsAt = async (time, filename) => {
+      const result = await pausedSeek(time);
+      const viewport = await replayViewport(canvas, { width: 960, height: 540 });
+      const render = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+      const view = await canvas.evaluate(element => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return { bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          style: { position: style.position, width: style.width, height: style.height,
+            transform: style.transform, filter: style.filter, opacity: style.opacity,
+            objectFit: style.objectFit, borderRadius: style.borderRadius,
+            imageRendering: style.imageRendering } };
       });
-      window.audioQualification.fourierRunStarted = true;
-    }, { source: fourierEpicycles.toString(), beforeAttachments });
-    await page.waitForFunction(() => {
-      if (window.audioQualification.fourierRunError) throw new Error(window.audioQualification.fourierRunError);
-      return window.audioQualification.fourierRunStarted
-        && window.__noonExampleGallery?.runInFlight === true;
-    }, null, { timeout: 90_000 });
+      const pointerViews = await page.evaluate(() => audioQualification.pointerViews.slice(-4));
+      const backingUrl = await canvas.evaluate(element => element.toDataURL("image/png"));
+      const backingRaster = PNG.sync.read(Buffer.from(backingUrl.split(",", 2)[1], "base64"));
+      const bytes = await page.locator("#scene").screenshot({ path: path.join(artifacts, filename) });
+      const raster = PNG.sync.read(bytes);
+      return { time: result.time, pixels: hash(raster.data), width: raster.width,
+        height: raster.height, bytes: bytes.length, viewport, view,
+        backingPixels: hash(backingRaster.data), backingWidth: backingRaster.width,
+        backingHeight: backingRaster.height,
+        receipt: result.presentationReceipt ?? null, pointerViews,
+        render: { time: render.metrics.time, session: render.metrics.presentedSession,
+          backend: render.metrics.backend, objectCount: render.metrics.objectCount,
+          drawCalls: render.metrics.drawCalls, instancesDrawn: render.metrics.instancesDrawn,
+          bytesUploaded: render.metrics.bytesUploaded, geometryCacheMisses: render.metrics.geometryCacheMisses,
+          outlineCacheMisses: render.metrics.outlineCacheMisses, rendererRebuilds: render.metrics.rendererRebuilds,
+          gpuGeneration: render.metrics.gpuGeneration, needsPresent: render.metrics.needsPresent } };
+    };
+    const firstStage = await pixelsAt(4, "fourier-original-stage-1.png");
+    const secondStage = await pixelsAt(15, "fourier-original-stage-2.png");
+    const thirdStage = await pixelsAt(27, "fourier-original-stage-3.png");
+    assert.notEqual(firstStage.pixels, secondStage.pixels, "the retained scene changes across authored stages");
+    assert.notEqual(secondStage.pixels, thirdStage.pixels, "the final epicycle stage has its own observed frame");
+    const repeated = await pixelsAt(15, "fourier-original-stage-2-repeat.png");
+    assert.equal(repeated.pixels, secondStage.pixels, "seeking the same authored time reproduces the same pixels");
+    fourierReferencePixels = secondStage;
+    await canvas.evaluate((element, style) => style === null ? element.removeAttribute("style") : element.setAttribute("style", style), canvasStyle);
+    await pausedSeek(15);
+    const runCountBeforeReplay = completed.events.filter(event => event.phase === "source-run-start").length;
+    await page.locator(".playback-restart").click();
     await waitForBrowserObservation(page, async () => {
-      if (window.audioQualification.fourierRunError) throw new Error(window.audioQualification.fourierRunError);
-      if (audioQualification.attachments <= window.audioQualification.fourierBeforeAttachments) return false;
-      try {
-        const playback = await audioQualification.execution.state();
-        return playback.preparedPlayback === true || playback.sourceExecution === "observed";
-      } catch { return false; }
-    }, null, { timeout: 180_000 });
-    let initial;
-    try {
-      initial = await state();
-    } catch (stateError) {
-      await page.waitForFunction(() => window.audioQualification.fourierRunError !== null ||
-        window.__noonExampleGallery?.runInFlight === false, null, { timeout: 120_000 });
-      const lifecycle = await page.evaluate(() => ({
-        runError: window.audioQualification.fourierRunError,
-        sourceTrace: window.audioQualification.sourceTrace,
-        sourceDiagnostics: window.__noonExampleGallery?.executionDiagnostics ?? null,
-        runPhaseMetrics: window.__noonExampleGallery?.runPhaseMetrics ?? null,
-        generationDiagnostics: window.__noonExampleGallery?.generationDiagnostics ?? null,
-        patchStatus: { state: document.querySelector("#patch-status")?.dataset.state ?? null,
-          text: document.querySelector("#patch-status")?.value ?? document.querySelector("#patch-status")?.textContent ?? null },
-        pythonDiagnostic: document.querySelector("#python-diagnostics")?.textContent ?? null,
-        pythonTraceback: document.querySelector("#python-traceback")?.textContent ?? null,
-      }));
-      throw new Error(`Fourier attachment state failed: ${String(stateError?.stack ?? stateError)}\n`+
-        `Authoring lifecycle: ${JSON.stringify(lifecycle)}`);
-    }
-    assert.equal(initial.starts.length, beforeStarts, "the visual-only source remains silent");
-    assert.equal(initial.transport.preparedPlayback, true, "the actual reader, not a final replay, owns playback");
-    assert.ok(initial.transport.preparedFrontier > initial.transport.time);
-    assert.equal(initial.transport.durationSeconds, null, "the open prefix is not reported as final duration");
-    const poster = await page.locator("#scene").screenshot();
-    assert.ok(poster.length > 0);
-    return { fixtureSha256: hash(fourierEpicycles), state: initial.transport, posterBytes: poster.length };
+      const result = await audioQualification.execution.state();
+      return result.time === 0 && result.playing === false;
+    });
+    await page.getByRole("button", { name: "Play animation", exact: true }).click();
+    await waitForBrowserObservation(page, async () => (await audioQualification.execution.state()).playing);
+    await waitForBrowserObservation(page, async () => (await audioQualification.execution.state()).time > 0.1);
+    const replayed = await command("pause");
+    const replayMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+    near(Number(replayMetrics.metrics.time), replayed.time, "replayed frame receipt", 0);
+    const replayEvents = await page.evaluate(start => audioQualification.sourceTrace.slice(start), run.traceStart);
+    assert.equal(replayEvents.filter(event => event.phase === "source-run-start").length, runCountBeforeReplay,
+      "transport replay never executes Python source again");
+    assert.equal((await state()).starts.length, run.before.starts.length, "visual-only replay remains silent");
+    const sourceResult = completed.events.find(event => event.phase === "source-run-result");
+    const terminalEvent = sourceResult?.diagnostics?.events?.find(event => event.stage === "terminal-adopted");
+    return { fixtureSha256: hash(fourierEpicycles), initial: run.attached.transport,
+      sourceComplete: completed.sourceState.transport, completed: completed.finalState.transport,
+      publication: terminalEvent?.publication ?? null,
+      stages: [firstStage, secondStage, thirdStage], repeated,
+      replayed: { time: replayed.time, metricsTime: Number(replayMetrics.metrics.time) } };
+  });
+
+  await record("Fourier plus the documented soundtrack shares one finite scene clock", async () => {
+    assert.equal(hash(fourierEpicycles), "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9");
+    assert.equal(hash(fourierWithAudio), "d23682aff80b5e9a50e0c0b0c3444bb8ff94fa73218278a07e51077fcccac9d9");
+    const run = await runFourierSource("combinedFourier", fourierWithAudio, true);
+    assert.ok(run.attached.transport.preparedFrontier > run.attached.transport.time);
+    assert.equal(run.attached.transport.durationSeconds, null, "open audio preparation does not invent the final endpoint");
+    assert.equal(run.attached.transport.playing, false, "audio-bearing source waits for the normal Play gesture");
+    assert.equal(run.attached.transport.audioReady, true);
+    assert.equal(await page.locator(".playback-audio-controls").isVisible(), true);
+    await quiet();
+    const startsBeforePlay = run.before.starts.length;
+    await page.evaluate(() => {
+      audioQualification.deviceTransitions = [];
+      audioQualification.audioDeviceAnchors = [];
+      audioQualification.audioApplyAnchors = [];
+      audioQualification.devicePauses = [];
+      audioQualification.captureDeviceTransitions = true;
+    });
+    await page.getByRole("button", { name: "Play animation", exact: true }).click();
+    await waitForBrowserObservation(page, async count => audioQualification.starts.length > count, startsBeforePlay);
+    const firstPass = await audible();
+    const voice = firstPass.starts.at(-1);
+    const anchor = firstPass.anchors.find(item => item.sources.includes(voice.node));
+    assert.ok(anchor, "the audio voice uses the accepted shared Rust time anchor");
+    const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
+    near(voice.args[1], phase, "initial prepared soundtrack sample offset", 0.02);
+    assert.equal(voice.args.length, 2, "the open prefix schedules a stoppable voice without a premature duration");
+    const initialStop = firstPass.stops.filter(stop => stop.node === voice.node && stop.args.length > 0).at(-1);
+    assert.ok(initialStop && initialStop.args[0] > initialStop.observedAt,
+      "the source is initially limited by the admitted visual prefix");
+    assert.equal(firstPass.transport.hasAudio, true);
+    assert.equal(firstPass.transport.playing, true);
+    const completed = await finishFourierSource(run, true);
+    await page.evaluate(() => { audioQualification.captureDeviceTransitions = false; });
+    await waitForBrowserObservation(page, () => audioQualification.deviceTransitions.every(item => item.state !== "pending"));
+    const finalState = completed.finalState;
+    assert.equal(finalState.transport.durationSeconds, 34.65);
+    assert.equal(finalState.transport.preparedFrontier, 34.65);
+    assert.ok(completed.sourceState.transport.loopCount >= 1 || completed.sourceState.transport.completed,
+      "source completion is followed by one natural visual traversal");
+    const deviceAnchorHistory = (await page.evaluate(() => audioQualification.audioDeviceAnchors))
+      .filter(item => item.session === anchor.session);
+    const bufferedIndex = deviceAnchorHistory.findIndex(item => item.anchor.buffering === true);
+    assert.ok(bufferedIndex >= 0, "Rust buffering holds the already-started audio device");
+    const heldAnchor = deviceAnchorHistory[bufferedIndex];
+    assert.equal(heldAnchor.accepted, true);
+    assert.equal(heldAnchor.starts.length, 0, "buffer entry does not start another audio source");
+    const bufferResumeAnchor = deviceAnchorHistory.slice(bufferedIndex + 1)
+      .find(item => item.anchor.buffering === false && item.accepted === true);
+    assert.ok(bufferResumeAnchor, "new Rust history resumes the held audio device");
+    assert.ok(bufferResumeAnchor.anchor.sampledEpochMs > heldAnchor.anchor.sampledEpochMs);
+    assert.ok(bufferResumeAnchor.starts.length > 0, "buffer recovery starts from the newly admitted Rust anchor");
+    const bufferResumeAnchorPhase = bufferResumeAnchor.anchor.time +
+      (bufferResumeAnchor.receivedEpochMs - bufferResumeAnchor.anchor.sampledEpochMs) / 1000;
+    near(bufferResumeAnchor.starts[0].args[1], bufferResumeAnchorPhase,
+      "audio buffer recovery uses the refreshed Rust sample offset", 0.02);
+    const extendedStops = finalState.stops.filter(stop => stop.node === voice.node && stop.args.length > 0);
+    assert.ok(extendedStops.at(-1).args[0] > initialStop.args[0],
+      "terminal history extends the same active device voice to its full authored interval");
+    assert.equal(finalState.starts.filter(start => start.node === voice.node).length, 1);
+    assertEnvelope(finalState, voice, [
+      [0, Math.min(0.5, 0.5 * phase / 1.5)],
+      [1.5 - phase, 0.5], [32.15 - phase, 0.5], [34.65 - phase, 0],
+    ]);
+    const canvas = page.locator("#scene");
+    const canvasStyle = await canvas.getAttribute("style");
+    await layoutReplayViewport(canvas, { width: 960, height: 540 });
+    await replayViewport(canvas, { width: 960, height: 540 });
+    const combinedSeek = await pausedSeek(15);
+    await replayViewport(canvas, { width: 960, height: 540 });
+    const combinedView = await canvas.evaluate(element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return { bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        style: { position: style.position, width: style.width, height: style.height,
+          transform: style.transform, filter: style.filter, opacity: style.opacity,
+          objectFit: style.objectFit, borderRadius: style.borderRadius,
+          imageRendering: style.imageRendering } };
+    });
+    const combinedPointerViews = await page.evaluate(() => audioQualification.pointerViews.slice(-4));
+    const combinedStage = await page.locator("#scene").screenshot({ path: path.join(artifacts, "fourier-with-audio-stage-2.png") });
+    const combinedRaster = PNG.sync.read(combinedStage);
+    const combinedPixels = hash(combinedRaster.data);
+    const combinedBackingUrl = await canvas.evaluate(element => element.toDataURL("image/png"));
+    const combinedBacking = PNG.sync.read(Buffer.from(combinedBackingUrl.split(",", 2)[1], "base64"));
+    const combinedBackingPixels = hash(combinedBacking.data);
+    const combinedRender = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+    const combinedViewport = await replayViewport(canvas, { width: 960, height: 540 });
+    const combinedReceipt = combinedSeek.presentationReceipt ?? null;
+    await page.evaluate(diagnostic => { audioQualification.pixelDiagnostic = diagnostic; }, {
+      time: combinedSeek.time, pixels: combinedPixels, viewport: combinedViewport,
+      backingPixels: combinedBackingPixels, backingWidth: combinedBacking.width, backingHeight: combinedBacking.height,
+      view: combinedView, receipt: combinedReceipt, pointerViews: combinedPointerViews,
+      render: { time: combinedRender.metrics.time, session: combinedRender.metrics.presentedSession,
+        backend: combinedRender.metrics.backend, objectCount: combinedRender.metrics.objectCount,
+        drawCalls: combinedRender.metrics.drawCalls, instancesDrawn: combinedRender.metrics.instancesDrawn,
+        bytesUploaded: combinedRender.metrics.bytesUploaded,
+        geometryCacheMisses: combinedRender.metrics.geometryCacheMisses,
+        outlineCacheMisses: combinedRender.metrics.outlineCacheMisses,
+        rendererRebuilds: combinedRender.metrics.rendererRebuilds,
+        gpuGeneration: combinedRender.metrics.gpuGeneration, needsPresent: combinedRender.metrics.needsPresent },
+    });
+    await pausedSeek(15);
+    await replayViewport(canvas, { width: 960, height: 540 });
+    const combinedRepeat = await page.locator("#scene").screenshot({ path: path.join(artifacts, "fourier-with-audio-stage-2-repeat.png") });
+    assert.equal(hash(PNG.sync.read(combinedRepeat).data), combinedPixels,
+      "the combined scene reproduces pixels for a repeated seek at the same authored time");
+    assert.deepEqual({ width: combinedRaster.width, height: combinedRaster.height },
+      { width: fourierReferencePixels.width, height: fourierReferencePixels.height });
+    assert.equal(combinedPixels, fourierReferencePixels.pixels,
+      "the documented soundtrack insertion leaves the matching authored scene pixels unchanged");
+    await canvas.evaluate((element, style) => style === null ? element.removeAttribute("style") : element.setAttribute("style", style), canvasStyle);
+    await pausedSeek(15);
+    const seek = await pausedSeek(2);
+    assert.equal(seek.playing, false);
+    const startsBeforeSeekPlay = (await state()).starts.length;
+    assert.equal(startsBeforeSeekPlay, finalState.starts.length, "seek does not start another device source");
+    await page.getByRole("button", { name: "Play animation", exact: true }).click();
+    await waitForBrowserObservation(page, async count => audioQualification.starts.length > count, startsBeforeSeekPlay);
+    const resumed = await audible();
+    const resumedVoice = resumed.starts.at(-1);
+    const resumedAnchor = resumed.anchors.find(item => item.sources.includes(resumedVoice.node));
+    assert.ok(resumedAnchor);
+    const resumedPhase = resumedAnchor.time + (resumedAnchor.receivedEpochMs - resumedAnchor.sampledEpochMs) / 1000;
+    near(resumedVoice.args[1], resumedPhase, "seeked soundtrack sample offset", 0.02);
+    assert.equal(resumedVoice.args.length, 2, "prepared seek uses the bounded source stop path");
+    const resumedStop = resumed.stops.filter(stop => stop.node === resumedVoice.node && stop.args.length > 0).at(-1);
+    assert.ok(resumedStop, "the seeked voice has an explicit Rust-authorized end");
+    near(resumedStop.args[0] - resumedVoice.args[0], 34.65 - resumedPhase,
+      "seeked soundtrack remaining duration", 0.02);
+    assert.equal(resumed.transport.hasAudio, true);
+    assertEnvelope(resumed, resumedVoice, [[0, 0.5], [32.15 - resumedPhase, 0.5], [34.65 - resumedPhase, 0]]);
+    await page.waitForTimeout(180);
+    const paused = await command("pause");
+    const pauseMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
+    near(Number(pauseMetrics.metrics.time), paused.time, "paused renderer receipt", 0);
+    await quiet();
+    const afterPause = await state();
+    const startsAfterPause = afterPause.starts.length;
+    assert.ok(afterPause.stops.some(stop => stop.node === resumedVoice.node && stop.args.length === 0),
+      "pause retires the seeked audio voice immediately");
+    const staleExtension = await page.evaluate(() => {
+      const latest = audioQualification.audioDeviceAnchors.at(-1);
+      const before = audioQualification.starts.length;
+      return { accepted: audioQualification.audioDevice.extendAnchor(latest.anchor, latest.session),
+        startsBefore: before, startsAfter: audioQualification.starts.length };
+    });
+    assert.equal(staleExtension.accepted, false, "an old buffer extension cannot resume after explicit Pause");
+    assert.equal(staleExtension.startsAfter, staleExtension.startsBefore,
+      "a stale audio anchor after Pause creates no device source");
+    const replaySeek = await pausedSeek(33);
+    assert.equal(replaySeek.playing, false);
+    assert.equal((await state()).starts.length, startsAfterPause, "a later seek remains silent until Play");
+    await page.getByRole("button", { name: "Play animation", exact: true }).click();
+    await waitForBrowserObservation(page, async count => audioQualification.starts.length > count, startsAfterPause);
+    const fadePlay = await audible();
+    assert.equal(fadePlay.transport.time >= 33, true);
+    const fadeVoice = fadePlay.starts.at(-1);
+    const fadeAnchor = fadePlay.anchors.find(item => item.sources.includes(fadeVoice.node));
+    assert.ok(fadeAnchor, "the fade-out voice also uses a Rust transport anchor");
+    const fadePhase = fadeAnchor.time + (fadeAnchor.receivedEpochMs - fadeAnchor.sampledEpochMs) / 1000;
+    assert.ok(fadePhase >= 33 && fadePhase < 34.65);
+    const fadeGain = 0.5 * Math.max(0, Math.min(1, (34.65 - fadePhase) / 2.5));
+    assertEnvelope(fadePlay, fadeVoice, [[0, fadeGain], [34.65 - fadePhase, 0]]);
+    const priorLoopCount = fadePlay.transport.loopCount;
+    await waitForBrowserObservation(page, async firstLoop => {
+      const playback = await audioQualification.execution.state();
+      return playback.completed === true || playback.loopCount > firstLoop;
+    }, priorLoopCount, { timeout: 10_000 });
+    if ((await state()).transport.playing) await command("pause");
+    const ended = await state();
+    assert.ok(ended.ended.some(item => item.node === fadeVoice.node),
+      "the finite schedule retires its final device source after the authored fade");
+    await quiet();
+    const sourceEvents = await page.evaluate(start => audioQualification.sourceTrace.slice(start), run.traceStart);
+    assert.equal(sourceEvents.filter(event => event.phase === "source-run-start").length, 1,
+      "seeking and replaying never rerun the combined Python source");
+    return { originalSha256: hash(fourierEpicycles), combinedSha256: hash(fourierWithAudio),
+      insertion: fourierAudioCall.trim(), initial: run.attached.transport, completed: finalState.transport,
+      sourceComplete: completed.sourceState.transport,
+      publication: completed.events.filter(event => event.phase === "terminal-adopted").at(-1)?.publication ?? null,
+      render: { time: combinedRender.metrics.time, session: combinedRender.metrics.presentedSession,
+        backend: combinedRender.metrics.backend, objectCount: combinedRender.metrics.objectCount,
+        drawCalls: combinedRender.metrics.drawCalls, instancesDrawn: combinedRender.metrics.instancesDrawn,
+        rendererRebuilds: combinedRender.metrics.rendererRebuilds, pointerView: combinedRender.pointerView ?? null },
+      viewport: combinedViewport,
+      initialVoice: { node: voice.node, anchor: anchor.time, phase, initialStop: initialStop.args[0],
+        finalStop: extendedStops.at(-1).args[0] },
+      deviceBuffering: { held: heldAnchor.anchor, resumed: bufferResumeAnchor.anchor,
+        resumedNode: bufferResumeAnchor.starts[0].node, resumedPhase: bufferResumeAnchorPhase },
+      seek: seek.time, resumedVoice: { node: resumedVoice.node, phase: resumedPhase,
+        duration: resumedVoice.args[2] },
+      paused: { time: paused.time, starts: startsAfterPause }, fadePlay: { time: fadePlay.transport.time,
+        anchor: fadeAnchor.time, phase: fadePhase, gain: fadeGain },
+      deviceTransitions: await page.evaluate(() => audioQualification.deviceTransitions),
+      ended: ended.transport };
   });
 
   assert.deepEqual(report.browserErrors, [], "no uncaught browser/WASM errors");
@@ -831,6 +1245,17 @@ class AudioWithOrdinaryPlay(Scene):
   report.failureState = hasExecution ? await state().catch(error => ({ unavailable: String(error) }))
     : { unavailable: "the authoring execution owner was not ready" };
   if (hasExecution) {
+    report.failureLifecycle = await page.evaluate(() => ({
+      sourceTrace: window.audioQualification.sourceTrace.slice(-16),
+      deviceTransitions: window.audioQualification.deviceTransitions ?? [],
+      deviceAnchorHistory: window.audioQualification.audioDeviceAnchors ?? [],
+      audioApplyAnchors: window.audioQualification.audioApplyAnchors ?? [],
+      devicePauses: window.audioQualification.devicePauses ?? [],
+      documentHidden: document.hidden,
+      visibilityState: document.visibilityState,
+      audioDeviceReady: window.audioQualification.audioDevice?.ready ?? null,
+      pixelDiagnostic: window.audioQualification.pixelDiagnostic ?? null,
+    })).catch(error => ({ unavailable: String(error) }));
     report.failureFrame = await command("debugFrame").catch(error => ({ unavailable: String(error) }));
     report.failureMetrics = await command("metrics").catch(error => ({ unavailable: String(error) }));
   }
