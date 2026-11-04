@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
-import { isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
+import { isSquareToCircleNaturalWrap, isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const { webkit, devices } = playwright;
@@ -195,7 +195,7 @@ try {
       }
       if (sample && previousTime !== null && sample.time > previousTime) madeForwardProgress = true;
       if (sample && previousTime !== null && sample.time < previousTime) {
-        assert.ok(madeForwardProgress && previousTime > 2.5 && sample.time < 0.5,
+        assert.ok(isSquareToCircleNaturalWrap(previousTime, sample.time, madeForwardProgress),
           `first observed Rust time decrease was not the authored endpoint wrap: ${previousTime} -> ${sample.time}`);
         naturalFirstWrap = { beforeTime: previousTime, afterTime: sample.time,
           sourceRunExampleId: sample.sourceRunExampleId, sourceRunGeneration: sample.sourceRunGeneration,
