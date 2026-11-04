@@ -123,6 +123,42 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
   const controls = document.querySelector(".playback-controls")?.dataset;
   const elapsed = Number(controls?.elapsedSeconds);
   const alreadyCaptured = window.__showcaseLiveReviewFirstPass;
+  const captureTrace = window.__showcaseLiveReviewCaptureDiagnostic;
+  const captureState = (phase, report = null, timing = null) => {
+    const current = gallery?.executionDiagnostics;
+    const disposition = [...(current?.events ?? [])].reverse()
+      .find((event) => event.stage === "disposition") ?? null;
+    const metrics = report?.metrics;
+    const playback = report?.engineMetrics?.preparedPlayback ?? null;
+    const receipt = metrics?.latestPresentationSample;
+    return { phase, epochMs: performance.timeOrigin + performance.now(),
+      ...(timing ?? {}), selectedExampleId: gallery?.selectedExampleId,
+      backend: document.querySelector("#status")?.dataset.rendererBackend ?? null,
+      controls: { ...document.querySelector(".playback-controls")?.dataset },
+      runRequestId: current?.runRequestId ?? null,
+      interpreterGeneration: current?.interpreterGeneration ?? null,
+      context: current?.context ?? null,
+      disposition: disposition?.disposition ?? null,
+      dispositionLoopCount: disposition?.loopCount ?? null,
+      preparedPlayback: playback,
+      rustPlaybackObservation: playback?.observation ?? null,
+      wakePlanReason: "not exposed by existing worker metrics; heldPresentation is the only emitted wake eligibility proof",
+      rendererReceipt: receipt ? { session: receipt.session, sequence: receipt.sequence,
+        time: receipt.time, presentedAtMs: receipt.presentedAtMs } : null,
+      rendererState: metrics ? { sampledAtMs: metrics.sampledAtMs,
+        time: metrics.time, needsPresent: metrics.needsPresent,
+        bufferedDeltas: metrics.bufferedDeltas, objectCount: metrics.objectCount } : null };
+  };
+  const retainCaptureAttempt = (attempt) => {
+    if (!captureTrace) return;
+    if (captureTrace.attempts.length < 32) captureTrace.attempts.push(attempt);
+    else captureTrace.droppedAttempts++;
+  };
+  if (!alreadyCaptured && captureTrace && !captureTrace.firstHoldObservation &&
+      controls?.busy === "false" && controls.durationKnown === "true" &&
+      controls.playing === "true" && Number.isFinite(elapsed) && elapsed >= holdStart) {
+    captureTrace.firstHoldObservation = captureState("first-hold-observed");
+  }
   if (!alreadyCaptured && diagnostics?.context?.exampleId === exampleId &&
       Number.isSafeInteger(diagnostics.runRequestId) &&
       Number.isSafeInteger(diagnostics.interpreterGeneration) &&
@@ -137,52 +173,138 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       context: diagnostics.context,
     };
     const canvas = document.querySelector("#scene");
-    if (typeof canvas?.toBlob !== "function") return false;
-    // Avoid waiting for display animation frames: a starved RAF can outlast the
-    // terminal hold. The independent pixel oracle checks the copied bitmap.
-    const report = await gallery.executionMetrics();
-    const current = gallery.executionDiagnostics;
-    const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
-    const metrics = report?.metrics;
-    const rustLoopCount = report?.engineMetrics?.preparedPlayback?.observation?.loopCount;
-    const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
-    const receipt = metrics?.latestPresentationSample;
+    // Pin page-owned evidence before starting either async operation. The metrics
+    // RPC can queue behind GPU work, so copy the placeholder bitmap immediately
+    // while that RPC is in flight; toBlob copies before its parallel encoding.
     const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
     const captureElapsed = Number(captureControls.elapsedSeconds);
+    const diagnosticsAtCapture = diagnostics;
+    const attached = [...events].reverse().find((event) => event.stage === "attached");
+    const candidateDisposition = disposition;
+    const candidateCapturedAtEpochMs = performance.timeOrigin + performance.now();
+    const metricsRequestedAtEpochMs = performance.timeOrigin + performance.now();
+    const captureAttempt = { candidate: { ...captureState("candidate", null, {
+      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs,
+    }), authoredDuration: duration, holdStart }, rejectionReasons: [] };
+    let attemptRetained = false;
+    const retainAttempt = () => {
+      if (!attemptRetained) {
+        retainCaptureAttempt(captureAttempt);
+        attemptRetained = true;
+      }
+    };
+    retainAttempt();
+    if (typeof canvas?.toBlob !== "function") {
+      captureAttempt.outcome = "canvas-toBlob-unavailable";
+      captureAttempt.rejectionReasons.push("canvas-toBlob-unavailable");
+      retainAttempt();
+      return false;
+    }
+    let diagnosticsAtMetricsResolution = null;
+    let metricsResolvedAtEpochMs = null;
+    let metricsResolutionState = null;
+    const reportPromise = gallery.executionMetrics().then((report) => {
+      metricsResolvedAtEpochMs = performance.timeOrigin + performance.now();
+      diagnosticsAtMetricsResolution = gallery.executionDiagnostics;
+      metricsResolutionState = captureState("metrics-resolved", report, {
+        candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
+        metricsResolvedAtEpochMs,
+      });
+      return report;
+    });
+    const bitmapCopyAtEpochMs = performance.timeOrigin + performance.now();
+    let bitmapEncodingResolvedAtEpochMs = null;
+    const pngBlobPromise = new Promise((resolve) => canvas.toBlob((blob) => {
+      bitmapEncodingResolvedAtEpochMs = performance.timeOrigin + performance.now();
+      resolve(blob);
+    }, "image/png"));
+    const pngBlob = await pngBlobPromise;
+    const report = await reportPromise;
+    const current = diagnosticsAtMetricsResolution;
+    const metrics = report?.metrics;
+    const preparedPlayback = report?.engineMetrics?.preparedPlayback ?? null;
+    const observation = preparedPlayback?.observation ?? null;
+    const rustLoopCount = observation?.loopCount;
+    const receipt = metrics?.latestPresentationSample;
+    captureAttempt.afterMetrics = metricsResolutionState;
+    captureAttempt.afterEncoding = captureState("encoding-resolved", report, {
+      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
+      metricsResolvedAtEpochMs, bitmapEncodingResolvedAtEpochMs,
+    });
     const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
       receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
     const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
-    if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
-        captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
-        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
-        current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
-        current?.runRequestId !== runIdentity.runRequestId ||
-        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
-        currentDisposition === "looped" || rustLoopCount !== 0 || !attached?.publication ||
-        attached.publication.session !== receipt?.session || !Number.isSafeInteger(receipt?.sequence) ||
-        receipt.sequence < attached.publication.sequence || !Number.isFinite(receipt.time) ||
-        !(naturalTerminalReceipt || heldPresentation !== null) || metrics.time !== receipt.time ||
-        metrics.needsPresent !== false || metrics.bufferedDeltas !== 0 || !Number.isSafeInteger(metrics.objectCount)) {
-      return false;
-    }
-
-    // toBlob copies the bitmap synchronously before serializing it in parallel
-    // (https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
-    // Keep the validated run, receipt, and controls as this snapshot's evidence;
-    // playback may advance while toBlob returns and the PNG is encoded.
-    const capture = { metrics, rendererReceipt: receipt, heldPresentation, controls: captureControls,
-      authoredDuration: duration, holdStart, ...runIdentity, attached };
-    const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-    const pngBlob = await pngBlobPromise;
-    if (!(pngBlob instanceof Blob)) return false;
-    const pngDataUrl = await new Promise((resolve, reject) => {
+    const pngDataUrl = pngBlob instanceof Blob ? await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
       reader.readAsDataURL(pngBlob);
+    }) : null;
+    const reject = (condition, reason) => { if (condition) captureAttempt.rejectionReasons.push(reason); };
+    reject(captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
+        captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
+        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration),
+    "controls-outside-terminal-hold");
+    reject(current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
+        current?.runRequestId !== runIdentity.runRequestId ||
+        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context), "run-identity-changed");
+    reject(candidateDisposition === "looped", "diagnostics-looped-at-copy-candidate");
+    reject(rustLoopCount !== 0, "rust-loop-count-not-zero-at-metrics-snapshot");
+    reject(!attached?.publication ||
+        attached.publication.session !== receipt?.session, "attached-and-renderer-session-differ");
+    reject(!Number.isSafeInteger(receipt?.sequence) ||
+        receipt.sequence < attached.publication?.sequence || !Number.isFinite(receipt?.time),
+    "renderer-receipt-invalid");
+    reject(!(naturalTerminalReceipt || heldPresentation !== null), "no-terminal-receipt-or-held-proof");
+    reject(metrics?.time !== receipt?.time || metrics?.needsPresent !== false ||
+        metrics?.bufferedDeltas !== 0 || !Number.isSafeInteger(metrics?.objectCount),
+    "renderer-metrics-not-settled");
+    const receiptAtEpochMs = metrics?.performanceTimeOriginMs + receipt?.presentedAtMs;
+    reject(!Number.isFinite(receiptAtEpochMs) || receiptAtEpochMs > bitmapCopyAtEpochMs,
+    "renderer-receipt-after-bitmap-copy");
+    if (captureAttempt.rejectionReasons.length > 0) {
+      captureAttempt.outcome = "rejected-by-proof-guards";
+      if (captureTrace && !captureTrace.unqualifiedCandidatePngSaved &&
+          typeof pngDataUrl === "string" && pngDataUrl.startsWith("data:image/png;base64,")) {
+        captureTrace.unqualifiedCandidatePngSaved = true;
+        captureAttempt.unqualifiedCandidatePngDataUrl = pngDataUrl;
+      }
+      retainAttempt();
+      return false;
+    }
+
+    captureAttempt.outcome = "guards-passed";
+    retainAttempt();
+
+    if (!(pngBlob instanceof Blob)) {
+      captureAttempt.outcome = "toBlob-returned-no-Blob";
+      return false;
+    }
+    if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) {
+      captureAttempt.outcome = "png-data-url-invalid";
+      return false;
+    }
+    captureAttempt.outcome = "captured";
+    captureAttempt.afterEncoding = captureState("encoding-resolved", report, {
+      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
+      metricsResolvedAtEpochMs, bitmapEncodingResolvedAtEpochMs,
     });
-    if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
-    window.__showcaseLiveReviewFirstPass = { pngDataUrl, ...capture };
+    window.__showcaseLiveReviewFirstPass = { pngDataUrl, metrics,
+      preparedPlayback,
+      rustPlaybackObservation: observation,
+      wakePlanReason: "not exposed by existing worker metrics; heldPresentation is the only emitted wake eligibility proof",
+      rendererReceipt: receipt, heldPresentation, controls: captureControls,
+      authoredDuration: duration, holdStart, ...runIdentity, attached,
+      diagnosticsAtCapture,
+      diagnosticsAtMetricsResolution: current,
+      candidateCapturedAtEpochMs, metricsRequestedAtEpochMs, bitmapCopyAtEpochMs,
+      metricsResolvedAtEpochMs, bitmapEncodingResolvedAtEpochMs,
+      metricsRequestMs: metricsResolvedAtEpochMs - metricsRequestedAtEpochMs,
+      bitmapEncodingMs: bitmapEncodingResolvedAtEpochMs - bitmapCopyAtEpochMs,
+      dispositionAtCapture: candidateDisposition,
+      dispositionAtMetricsResolution: current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null,
+      rustLoopCountAtMetricsResolution: rustLoopCount,
+    };
   }
   return false;
 }
@@ -195,7 +317,11 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
   try {
     await Promise.race([
       (async () => {
-        const run = await page.evaluate(() => window.__noonExampleGallery.run());
+        const run = await page.evaluate(() => {
+          window.__showcaseLiveReviewCaptureDiagnostic = { firstHoldObservation: null,
+            attempts: [], droppedAttempts: 0 };
+          return window.__noonExampleGallery.run();
+        });
         const audio = run?.result?.hasAudio === true;
         if (!audio && run?.result?.preparedPlayback !== true) return;
         // Complete finite audio authoring intentionally prepares a silent,
@@ -223,16 +349,42 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
             holdStart: terminalHold[0],
             exampleId: entry.id,
           }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
-          const observed = await page.evaluate(() => {
+          const observed = await page.evaluate(async () => {
+            const gallery = window.__noonExampleGallery;
             const capture = window.__showcaseLiveReviewFirstPass ?? null;
             delete window.__showcaseLiveReviewFirstPass;
-            return { capture, diagnostics: window.__noonExampleGallery.executionDiagnostics,
-              selectedExampleId: window.__noonExampleGallery.selectedExampleId };
+            const report = await gallery.executionMetrics();
+            const diagnostics = gallery.executionDiagnostics;
+            const metrics = report?.metrics;
+            const preparedPlayback = report?.engineMetrics?.preparedPlayback ?? null;
+            const disposition = [...(diagnostics?.events ?? [])].reverse()
+              .find((event) => event.stage === "disposition") ?? null;
+            const captureDiagnostic = window.__showcaseLiveReviewCaptureDiagnostic ?? null;
+            if (captureDiagnostic) captureDiagnostic.firstWrapObservation = {
+              phase: "first-wrap-after-capture-window",
+              epochMs: performance.timeOrigin + performance.now(),
+              selectedExampleId: gallery.selectedExampleId,
+              backend: document.querySelector("#status")?.dataset.rendererBackend ?? null,
+              controls: { ...document.querySelector(".playback-controls")?.dataset },
+              runRequestId: diagnostics?.runRequestId ?? null,
+              interpreterGeneration: diagnostics?.interpreterGeneration ?? null,
+              context: diagnostics?.context ?? null,
+              disposition: disposition?.disposition ?? null,
+              dispositionLoopCount: disposition?.loopCount ?? null,
+              preparedPlayback,
+              rustPlaybackObservation: preparedPlayback?.observation ?? null,
+              wakePlanReason: "not exposed by existing worker metrics; heldPresentation is the only emitted wake eligibility proof",
+              rendererReceipt: metrics?.latestPresentationSample ?? null,
+              rendererState: metrics ? { sampledAtMs: metrics.sampledAtMs, time: metrics.time,
+                needsPresent: metrics.needsPresent, bufferedDeltas: metrics.bufferedDeltas,
+                objectCount: metrics.objectCount } : null,
+            };
+            return { capture, captureDiagnostic, diagnostics, selectedExampleId: gallery.selectedExampleId };
           });
           const disposition = observed.diagnostics?.events?.find((event) => event.stage === "disposition")?.disposition;
           if (disposition === "looped") {
             const capture = observed.capture;
-            assert.ok(capture, "first traversal wrapped before its terminal hold picture was captured");
+            assert.ok(capture, "first traversal wrapped before its terminal hold picture was qualified");
             assert.equal(observed.selectedExampleId, entry.id, "terminal capture belongs to a different gallery selection");
             assert.equal(capture.interpreterGeneration, observed.diagnostics.interpreterGeneration,
               "terminal capture belongs to a different interpreter generation");
@@ -632,6 +784,61 @@ async function main() {
         console.log(`PASS live ${entry.id}: normal source run, replay endpoint, and ${result.intermediateSamples.length} intermediate comparisons`);
       } catch (error) {
         result.error = String(error.stack ?? error);
+        const captureDiagnostic = await page.evaluate(() =>
+          window.__showcaseLiveReviewCaptureDiagnostic ?? null).catch(() => null);
+        if (captureDiagnostic) {
+          const candidate = captureDiagnostic.attempts?.find((attempt) =>
+            typeof attempt.unqualifiedCandidatePngDataUrl === "string");
+          if (candidate) {
+            const filename = `${entry.id}-unqualified-terminal-candidate.png`;
+            const bytes = Buffer.from(candidate.unqualifiedCandidatePngDataUrl
+              .slice("data:image/png;base64,".length), "base64");
+            await writeFile(path.join(output, filename), bytes);
+            const { unqualifiedCandidatePngDataUrl, ...attempt } = candidate;
+            result.unqualifiedTerminalCandidate = {
+              classification: "UNQUALIFIED diagnostic bitmap; not first-pass evidence",
+              filename, byteLength: bytes.length, attempt,
+            };
+            const holdStart = candidate.candidate.holdStart;
+            const duration = candidate.candidate.authoredDuration;
+            try {
+              const checkpoints = replayOracle(entry, captureReport, {
+                sourceSha256: result.sourceSha256, buildIdentity: report.servedBuildIdentity,
+                browserVersion: report.browserVersion, backendRequested: backend,
+              });
+              const checkpoint = [...checkpoints].reverse().find((sample) =>
+                sample.requestedTime >= holdStart && sample.requestedTime <= duration);
+              if (!checkpoint) throw new Error("original capture has no checkpoint within the terminal hold");
+              const referenceBytes = await readFile(path.join(output, "..", checkpoint.filename));
+              const referenceImage = PNG.sync.read(referenceBytes);
+              assertOracleImage(checkpoint, referenceBytes, referenceImage);
+              const candidateImage = PNG.sync.read(bytes);
+              let matchesOriginalPixelTolerance = true, toleranceError = null;
+              try { assertLivePixels(referenceImage, candidateImage); }
+              catch (error) { matchesOriginalPixelTolerance = false; toleranceError = String(error.message); }
+              result.unqualifiedTerminalCandidate.advisoryPixelComparison = {
+                classification: "advisory only; cannot qualify the first-pass capture",
+                referenceFilename: checkpoint.filename,
+                referenceRequestedTime: checkpoint.requestedTime,
+                matchesOriginalPixelTolerance, toleranceError,
+                exactRgbaMatch: candidateImage.width === referenceImage.width &&
+                  candidateImage.height === referenceImage.height &&
+                  candidateImage.data.equals(referenceImage.data),
+                candidateWidth: candidateImage.width,
+                candidateHeight: candidateImage.height,
+                referenceWidth: referenceImage.width,
+                referenceHeight: referenceImage.height,
+              };
+            } catch (comparisonError) {
+              result.unqualifiedTerminalCandidate.advisoryPixelComparison = {
+                classification: "unavailable; candidate remains unqualified",
+                error: String(comparisonError.stack ?? comparisonError),
+              };
+            }
+          }
+          result.captureDiagnostic = { ...captureDiagnostic, attempts:
+            (captureDiagnostic.attempts ?? []).map(({ unqualifiedCandidatePngDataUrl, ...attempt }) => attempt) };
+        }
         result.unexpectedReplayDenial = entry.playbackCapability === "deterministic-retained-replay" &&
           result.firstPass?.controls?.controllable === "false";
         result.failureState = await page.evaluate(() => ({

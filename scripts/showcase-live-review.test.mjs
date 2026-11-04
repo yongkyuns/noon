@@ -195,17 +195,23 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       metricsCalls += 1;
       current.captureEvents?.push(`metrics-${metricsCalls}`);
       if (current.wrapOnFreshMetrics) current.looped = true;
+      const loopCount = current.rustLoopCount ?? (current.wrapOnFreshMetrics ? 1 : 0);
       const sample = current.postPresentationSample && metricsCalls === 1
         ? current.postPresentationSample
         : current.presentationSample ?? {
           session: current.session ?? 7, sequence: current.sequence ?? 5,
           time: current.publishedTime, presentedAtMs: 100,
         };
-      return { metrics: { time: sample.time, objectCount: current.objectCount ?? 55,
+      return { metrics: { time: sample.time, performanceTimeOriginMs: 1_000_000,
+        objectCount: current.objectCount ?? 55,
         needsPresent: current.needsPresent ?? false, bufferedDeltas: current.bufferedDeltas ?? 0,
         latestPresentationSample: sample },
       ...(current.omitPreparedPlayback ? {} : { engineMetrics: { preparedPlayback: current.preparedPlayback ?? {
-        observation: { loopCount: current.rustLoopCount ?? 0 },
+        observedTime: current.publishedTime,
+        observation: { time: current.publishedTime, frontier: 8, end: 8, seekRange: null,
+          playing: true, buffering: false, completed: false, advancing: true,
+          loopDuration: null, loopCount, loopError: null, interactions: false,
+          ...(current.heldPresentation ? { heldPresentation: current.heldPresentation } : {}) },
       } } }) };
     },
     get executionDiagnostics() {
@@ -264,6 +270,7 @@ function preparedAudioPage({ run, observations = [] } = {}) {
     const value = await runInNewContext(`(${fn.toString()})(argument)`, {
       ...browser,
       argument,
+      performance: { timeOrigin: 1_000_000, now: (() => { let now = 100; return () => ++now; })() },
       Blob: TestBlob,
       FileReader: TestFileReader,
       requestAnimationFrame(callback) {
@@ -414,9 +421,24 @@ test("terminal snapshot remains valid when toBlob blocks across the loop wrap", 
     session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
   });
   assert.deepEqual(captureEvents, [
-    "requestAnimationFrame", "requestAnimationFrame", "metrics-1", "toBlob-copy",
-    "wrap-during-toBlob", "toBlob-serialize",
+    "metrics-1", "toBlob-copy", "wrap-during-toBlob", "toBlob-serialize",
   ]);
+  assert.equal(result.firstPassCapture.dispositionAtCapture, null,
+    "a later UI loop event must not relabel the bitmap copied before the wrap");
+  assert.equal(result.firstPassCapture.dispositionAtMetricsResolution, "looped",
+    "post-copy UI disposition is recorded separately from capture-time state");
+  assert.equal(result.firstPassCapture.rustLoopCountAtMetricsResolution, 0);
+  assert.ok(result.firstPassCapture.candidateCapturedAtEpochMs <=
+    result.firstPassCapture.metricsRequestedAtEpochMs);
+  assert.ok(result.firstPassCapture.metricsRequestedAtEpochMs <
+    result.firstPassCapture.bitmapCopyAtEpochMs);
+  assert.ok(result.firstPassCapture.bitmapCopyAtEpochMs <
+    result.firstPassCapture.metricsResolvedAtEpochMs);
+  assert.ok(result.firstPassCapture.metricsResolvedAtEpochMs <
+    result.firstPassCapture.bitmapEncodingResolvedAtEpochMs);
+  assert.equal(result.firstPassCapture.rustPlaybackObservation.time, 7.5);
+  assert.equal(result.firstPassCapture.wakePlanReason,
+    "not exposed by existing worker metrics; heldPresentation is the only emitted wake eligibility proof");
 });
 
 test("loop wrap without a pre-wrap picture cannot use a post-wrap frame as first-pass evidence", async () => {
@@ -466,6 +488,7 @@ test("fresh pre-copy metrics reject a wrapped or out-of-window frame", async () 
   for (const invalid of [
     { wrapOnFreshMetrics: true },
     { postPresentationSample: { session: 7, sequence: 6, time: 8.01, presentedAtMs: 110 } },
+    { postPresentationSample: { session: 7, sequence: 6, time: 7.5, presentedAtMs: 1_000 } },
     { rustLoopCount: 1 },
     { omitPreparedPlayback: true },
   ]) {
