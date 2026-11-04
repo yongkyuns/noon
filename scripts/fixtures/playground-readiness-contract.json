@@ -35,6 +35,9 @@
     "D": "observed-completed-history-replay"
   },
   "baselineArms": ["C", "D"],
+  "allowedRegression": {
+    "firstUsefulP95": { "maxRatio": null, "slackMs": null }
+  },
   "strata": {
     "fresh-process-warm-resource-cache": "new browser process and workers; browser resource cache may already be primed",
     "reload-new-workers-warm-resource-cache": "same browser process, reloaded page and new workers; resource cache remains warm",

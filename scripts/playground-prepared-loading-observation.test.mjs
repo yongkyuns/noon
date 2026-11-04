@@ -11,6 +11,7 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   readinessRunTimingOriginErrors,
   readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
   readinessPreparedReaderLead, activeFrameGapEvidence, summarizeReaderLead,
+  readinessFirstUsefulRegressionErrors,
   READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
@@ -96,6 +97,7 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
     ? Object.fromEntries(ready.sources.map(source => [source.id, Object.fromEntries(READINESS_STRATA.map(stratum =>
       [stratum, { sourceRun: 1, historyReplay: 1 }]))]))
     : 1]));
+  ready.allowedRegression.firstUsefulP95 = { maxRatio: 1, slackMs: 0 };
   ready.pendingCohorts = [];
   assert.deepEqual(validateReadinessContract(ready, { strict: true }), []);
   for (const value of [0, 1, -0.01, 1.01]) {
@@ -115,6 +117,7 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
     value => { value.sampling.startupPopulationP99 = true; },
     value => { value.sampling.startupPercentiles.push("p99"); },
     value => { delete value.measurementDefinitions.firstSubmittedMs; },
+    value => { delete value.allowedRegression.firstUsefulP95.maxRatio; },
   ]) {
     const changed = structuredClone(contract);
     mutate(changed);
@@ -127,6 +130,42 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
   delete missingStartupCell.bounds.firstUsefulMs[ready.sources[0].id][READINESS_STRATA[0]].historyReplay;
   assert.ok(validateReadinessContract(missingStartupCell, { strict: true })
     .some(error => /first-useful bounds are malformed/.test(error)));
+  const missingRegressionThreshold = structuredClone(ready);
+  missingRegressionThreshold.allowedRegression.firstUsefulP95.maxRatio = null;
+  assert.ok(validateReadinessContract(missingRegressionThreshold, { strict: true })
+    .some(error => /missing approved allowed regression: firstUsefulP95/.test(error)));
+  const invalidPendingRegression = structuredClone(contract);
+  invalidPendingRegression.allowedRegression.firstUsefulP95.slackMs = -1;
+  assert.ok(validateReadinessContract(invalidPendingRegression)
+    .some(error => /first-useful allowed regression is malformed/.test(error)));
+});
+
+test("first-useful regression compares A/C and B/D within each source and stratum", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  contract.allowedRegression.firstUsefulP95 = { maxRatio: 1.2, slackMs: 0 };
+  const rows = [];
+  for (const source of contract.sources) for (const stratum of READINESS_STRATA) {
+    const failingCell = source.id === contract.sources[1].id && stratum === READINESS_STRATA[2];
+    const values = { A: 10, B: 20, C: 10, D: 20 };
+    if (source.id === contract.sources[0].id && stratum === READINESS_STRATA[0]) {
+      values.A = 11;
+      values.B = 22;
+    }
+    if (failingCell) {
+      values.A = 13;
+      values.B = 27;
+    }
+    for (const [arm, firstUsefulMs] of Object.entries(values)) {
+      rows.push({ sourceId: source.id, arm, stratum, warmup: false, status: "observed",
+        startup: { firstUsefulMs } });
+    }
+  }
+  const errors = readinessFirstUsefulRegressionErrors(rows, contract);
+  assert.equal(errors.length, 2);
+  assert.ok(errors.some(error => error.startsWith(`${contract.sources[1].id}/A/${READINESS_STRATA[2]}:`)));
+  assert.ok(errors.some(error => error.startsWith(`${contract.sources[1].id}/B/${READINESS_STRATA[2]}:`)));
+  assert.ok(!errors.some(error => error.startsWith(`${contract.sources[0].id}/A/${READINESS_STRATA[0]}:`)),
+    "zero-slack ratio allowance passes the matching A/C cell");
 });
 
 test("first-useful bounds isolate source, stratum and source-run versus history-replay cohorts", async () => {

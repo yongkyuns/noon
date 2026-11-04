@@ -8,6 +8,7 @@ export const READINESS_STRATA = ["fresh-process-warm-resource-cache",
 export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceP95Ms",
   "commandPresentationP99Ms", "bufferingEpisodeMs", "activeFrameGapP99Ms", "missedRefreshFraction",
   "maxActiveFrameGapMs", "peakProcessRssBytes", "liveOwnerRetirementMs"];
+const READINESS_FIRST_USEFUL_PAIRS = [["A", "C"], ["B", "D"]];
 export const PRODUCT_GATE_THRESHOLD_ENVS = {
   maxLatencyRatio: "NOON_PRODUCT_MAX_LATENCY_RATIO",
   latencySlackMs: "NOON_PRODUCT_LATENCY_SLACK_MS",
@@ -382,6 +383,15 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
       typeof contract?.strata?.["cold-network"] !== "string") {
     errors.push("readiness baseline arms or cache strata are incomplete");
   }
+  const allowedRegression = contract?.allowedRegression;
+  const firstUsefulRegression = allowedRegression?.firstUsefulP95;
+  if (JSON.stringify(Object.keys(allowedRegression ?? {}).sort()) !== JSON.stringify(["firstUsefulP95"]) ||
+      JSON.stringify(Object.keys(firstUsefulRegression ?? {}).sort()) !== JSON.stringify(["maxRatio", "slackMs"]) ||
+      [firstUsefulRegression?.maxRatio, firstUsefulRegression?.slackMs].some(value => value !== null &&
+        (!Number.isFinite(value) || value < 0)) ||
+      (firstUsefulRegression?.maxRatio !== null && firstUsefulRegression?.maxRatio < 1)) {
+    errors.push("first-useful allowed regression is malformed");
+  }
   if (!Array.isArray(contract?.pendingCohorts) || contract.pendingCohorts.some(cohort =>
       typeof cohort?.id !== "string" || typeof cohort?.protocol !== "string" || cohort.protocol.length === 0) ||
       new Set(contract.pendingCohorts.map(cohort => cohort.id)).size !== contract.pendingCohorts.length) {
@@ -447,6 +457,10 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
   if (strict) {
     if (contract.status !== "ready") errors.push("readiness contract has not been reviewed and frozen");
     if (!contract.reference?.actualAdapterIdentity) errors.push("actual reference GPU adapter is not pinned");
+    if (!Number.isFinite(firstUsefulRegression?.maxRatio) || firstUsefulRegression.maxRatio < 1 ||
+        !Number.isFinite(firstUsefulRegression?.slackMs) || firstUsefulRegression.slackMs < 0) {
+      errors.push("missing approved allowed regression: firstUsefulP95");
+    }
     for (const name of READINESS_BOUND_KEYS) {
       if (name === "firstUsefulMs") {
         for (const sourceId of sourceIds) for (const stratum of READINESS_STRATA) {
@@ -581,8 +595,30 @@ export function summarizeReadiness(cases, contract) {
     })));
 }
 
+export function readinessFirstUsefulRegressionErrors(cases, contract) {
+  const { maxRatio, slackMs } = contract?.allowedRegression?.firstUsefulP95 ?? {};
+  if (!Number.isFinite(maxRatio) || maxRatio < 1 || !Number.isFinite(slackMs) || slackMs < 0) return [];
+  const errors = [];
+  for (const source of contract.sources) for (const stratum of READINESS_STRATA) {
+    for (const [candidateArm, referenceArm] of READINESS_FIRST_USEFUL_PAIRS) {
+      const p95 = arm => distribution(cases.filter(row => row.sourceId === source.id && row.arm === arm &&
+        row.stratum === stratum && !row.warmup && row.status === "observed")
+        .map(row => row.startup?.firstUsefulMs)).p95;
+      const candidateP95 = p95(candidateArm), referenceP95 = p95(referenceArm);
+      if (!Number.isFinite(candidateP95) || !Number.isFinite(referenceP95)) continue;
+      const allowedP95 = referenceP95 * maxRatio + slackMs;
+      if (candidateP95 > allowedP95) {
+        errors.push(`${source.id}/${candidateArm}/${stratum}: first useful p95 ${candidateP95}ms exceeds ` +
+          `${referenceArm} p95 ${referenceP95}ms × ${maxRatio} + ${slackMs}ms (${allowedP95}ms)`);
+      }
+    }
+  }
+  return errors;
+}
+
 export function validateReadinessResults(cases, contract) {
   const errors = [];
+  errors.push(...readinessFirstUsefulRegressionErrors(cases, contract));
   const expected = contract.sampling.measuredStartsPerArmPerStratum;
   for (const source of contract.sources) for (const arm of Object.keys(contract.arms)) {
     for (const stratum of READINESS_STRATA) {
