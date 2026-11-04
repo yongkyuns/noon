@@ -800,12 +800,39 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       assert.ok(seedWorker, "healthy-interpreter seed did not create a Python worker");
       await seedWorker.evaluate(() => true);
       const seedSource = await page.locator("#python-scene-source").inputValue();
+      const seedCommands = [];
+      let seedPaused = navigation;
+      if (seedPaused.controls?.playing === "true") {
+        seedPaused = await readinessCommand(page, { commands: seedCommands }, false);
+      }
+      await page.waitForFunction(() => {
+        const controls = document.querySelector(".playback-controls");
+        return controls?.dataset.playing === "false" && controls.dataset.busy === "false";
+      });
+      seedPaused = await observation(page);
+      assert.ok(seedCommands.every(command => command.matchingPresentation),
+        "healthy-interpreter seed Pause lacked a matching presentation receipt");
+      // Drain the unmeasured seed before its renderer is replaced; otherwise reset can discard
+      // unpolled ring entries and make the next run look like it lost measured cadence samples.
+      const seedRendererWorkerOrdinal = seedPaused.presentationProbe?.rendererWorkerOrdinal;
+      const seedCadence = await rawCadenceCapture(page, seedRendererWorkerOrdinal);
+      assert.equal(seedCadence.error, null, "healthy-interpreter seed cadence was not fully drained");
+      const seedCadenceOwner = seedCadence.workers.find(worker => worker.ordinal === seedRendererWorkerOrdinal);
+      assert.ok(seedCadenceOwner, "healthy-interpreter seed cadence owner was not captured");
       sourceRow.interpreterReuseSeed = { runRequestId: navigation.executionDiagnostics.runRequestId,
         interpreterGeneration: navigation.executionDiagnostics.interpreterGeneration,
         libraryTrust: navigation.executionDiagnostics.libraryTrust,
         sourceRunStartedAtMs: navigation.run.sourceRunStartedAtMs,
         sourceRunCompletedAtMs: navigation.run.sourceRunCompletedAtMs,
-        completedAtEpochMs: navigation.epochMs };
+        completedAtEpochMs: navigation.epochMs,
+        quiescence: { paused: true, pauseCommands: seedCommands,
+          rendererWorkerOrdinal: seedRendererWorkerOrdinal,
+          drainLatestOrdinal: seedCadenceOwner.latestOrdinal,
+          drainGeneration: seedCadenceOwner.generation,
+          drainSession: seedCadenceOwner.session,
+          drainSamplesReceived: seedCadence.samples?.length ?? 0,
+          drainGenerationChanges: seedCadence.generationChanges?.length ?? 0,
+          metricsAtEpochMs: seedCadence.latestMetricsEpochMs } };
       await page.evaluate(() => {
         const probe = globalThis.__noonReadinessPresentationProbe;
         probe.samples = []; probe.keys.clear(); probe.uiEvents = []; probe.commandResults = [];
