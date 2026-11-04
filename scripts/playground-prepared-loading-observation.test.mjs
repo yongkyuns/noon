@@ -97,6 +97,12 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
     : 1]));
   ready.pendingCohorts = [];
   assert.deepEqual(validateReadinessContract(ready, { strict: true }), []);
+  for (const value of [0, 1, -0.01, 1.01]) {
+    const fractionBound = structuredClone(ready);
+    fractionBound.bounds.missedRefreshFraction = value;
+    assert.equal(validateReadinessContract(fractionBound, { strict: true })
+      .includes("missing approved bound: missedRefreshFraction"), value < 0 || value > 1);
+  }
   const pending = structuredClone(ready);
   pending.pendingCohorts = contract.pendingCohorts;
   assert.ok(validateReadinessContract(pending, { strict: true })

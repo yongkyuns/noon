@@ -454,7 +454,9 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
         continue;
       }
       const value = contract.bounds?.[name];
-      if (!Number.isFinite(value) || value <= 0) errors.push(`missing approved bound: ${name}`);
+      if (!Number.isFinite(value) || (name === "missedRefreshFraction" ? value < 0 || value > 1 : value <= 0)) {
+        errors.push(`missing approved bound: ${name}`);
+      }
     }
   }
   return errors;
