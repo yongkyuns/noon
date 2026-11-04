@@ -115,7 +115,7 @@ export class WorkerAudioDevice {
     // Such an old extension carries no authority and must be a quiet no-op.
     if (anchor.sampledEpochMs <= this.#sampledEpochMs ||
         (this.#authorizedUntil !== null && anchor.authorizedUntil < this.#authorizedUntil) ||
-        (!this.#buffering && this.#authorizedUntil !== null &&
+        (!anchor.buffering && !this.#buffering && this.#authorizedUntil !== null &&
          anchor.authorizedUntil <= this.#authorizedUntil)) return false;
     if (!this.ready) throw new Error("audio device was interrupted");
     if (anchor.buffering) {
