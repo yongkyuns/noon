@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { installPreparedSourceCounterProbe } from "../scripts/prepared-source-counter-probe.mjs";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
+
+test("source counter probe matches the real worker and preserves awaited source cleanup", async () => {
+  let instrumented;
+  const evidence = {};
+  await installPreparedSourceCounterProbe({
+    async route(_match, handler) {
+      await handler({
+        request: () => ({ resourceType: () => "worker" }),
+        fetch: async () => ({ text: async () => source, headers: () => ({}) }),
+        fulfill: async ({ body }) => { instrumented = body; },
+      });
+    },
+  }, "counter-test", evidence);
+  assert.ok(instrumented.includes("return await observeQualificationRun(globals,"));
+  assert.notEqual(evidence.counterProbe.originalWorkerSha256, evidence.counterProbe.executedWorkerSha256);
+});
 
 function preparedSourceYieldHook(run, setTimer) {
   const start = source.indexOf("  self.noonPreparedSourceYield = () => {");
