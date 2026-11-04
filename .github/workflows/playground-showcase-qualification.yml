@@ -1,4 +1,5 @@
 name: Showcase capture timing diagnostic
+run-name: Verify bloom endpoint capture fix
 
 on:
   push:
