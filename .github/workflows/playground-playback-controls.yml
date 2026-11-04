@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - codex/2421-highlight-diagnostic
     paths:
       - ".github/workflows/playground-playback-controls.yml"
       - "crates/noon/**"
@@ -105,6 +106,7 @@ concurrency:
 
 jobs:
   playback-controls:
+    if: github.ref == 'refs/heads/master'
     name: Public transport controls
     runs-on: ubuntu-latest
     env:
@@ -244,6 +246,14 @@ jobs:
       SCCACHE_GHA_RW_MODE: "READ_ONLY"
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Pin the exact original smoke source and stage the diagnostic patch
+        run: |
+          git diff 7c50b9faf5cfe7c700c59995c2d6696134a6cb7c -- scripts/prepared-source-qualification.mjs > "$RUNNER_TEMP/prepared-source-highlight-diagnostic.patch"
+          test -s "$RUNNER_TEMP/prepared-source-highlight-diagnostic.patch"
+          git checkout --detach 7c50b9faf5cfe7c700c59995c2d6696134a6cb7c
+          test "$(git rev-parse HEAD)" = 7c50b9faf5cfe7c700c59995c2d6696134a6cb7c
       - name: Use repository-pinned Rust
         run: rustup install
       - uses: actions/cache@v6
@@ -281,6 +291,11 @@ jobs:
           node scripts/build-python-editor.mjs
           node scripts/build-runtime-identity.mjs
           node scripts/check-web-package.mjs
+      - name: Apply bounded presentation trace after exact package build
+        run: |
+          git apply "$RUNNER_TEMP/prepared-source-highlight-diagnostic.patch"
+          node --check scripts/prepared-source-qualification.mjs
+          git diff --exit-code -- crates/noon-web/src/prepared_canvas_smoke.rs crates/noon-web/src/execution_canvas.rs web
       - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
@@ -289,18 +304,9 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
-      - name: Qualify actual prepared canvas, DOM input and buffering
+      - name: Capture bounded highlight presentation trace (diagnostic only)
         run: |
-          node scripts/prepared-canvas-qualification.mjs
           node scripts/prepared-source-qualification.mjs
-          node scripts/prepared-python-qualification.mjs
-          node scripts/prepared-construct-qualification.mjs
-          node scripts/prepared-worker-qualification.mjs
-          NOON_PREPARED_WORKER_SOURCE=python node scripts/prepared-worker-qualification.mjs
-          node scripts/prepared-authoring-worker-qualification.mjs
-          node scripts/prepared-observed-source-qualification.mjs
-          node scripts/prepared-source-effects-qualification.mjs
-          node scripts/playground-prepared-lifecycle-qualification.mjs
       - name: Retain prepared canvas evidence
         if: always()
         uses: actions/upload-artifact@v7

@@ -1,7 +1,8 @@
 // Actual autonomous source tasks interleave with the existing canvas/input driver.
 // All source control flow, scene state and history delivery remain inside Rust.
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
@@ -11,28 +12,47 @@ import { browserArgs } from "./manim-raster-support.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = process.env.NOON_PREPARED_SOURCE_ARTIFACTS ?? path.join(root, "browser-smoke-artifacts/prepared-canvas/source");
 await mkdir(output, { recursive: true });
-const report = { status: "running", cases: [] };
+const runtimeBuildIdentity = JSON.parse(await readFile(path.join(root, "web/runtime-build-identity.json"), "utf8"));
+const instrumentedHarnessSha256 = createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex");
+const report = {
+  status: "running", diagnosticOnly: true,
+  diagnosticScope: "WebGPU bounded interaction presentation trace; not a full qualification run",
+  sourceRevision: runtimeBuildIdentity.sourceRevision,
+  runtimeBuildIdentity,
+  originalHarnessSha256: "cfd40171b40ea1760efde68140f9991329a4c0b778862f0612502ddddc3da6b2",
+  instrumentedHarnessSha256,
+  cases: [],
+};
 let server, browser;
 function equalPixels(a, b) { return a.width === b.width && a.height === b.height && a.data.equals(b.data); }
 try {
   server = await serveRepository(root, 0, { crossOriginIsolated: true });
-  for (const backend of ["webgpu", "webgl"]) {
+  for (const backend of ["webgpu"]) {
     browser = await playwright.chromium.launch({ headless: true, args: browserArgs(backend), channel: "chromium" });
-    for (const scenario of ["complete", "failure", "cancel", "bounded", "starved"]) {
+    for (const scenario of ["bounded"]) {
       const result = { backend, scenario, status: "running", checks: [] }; report.cases.push(result);
       const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
       page.setDefaultTimeout(60_000);
       const errors = []; page.on("pageerror", error => errors.push(String(error)));
       const state = () => page.evaluate(() => ({ playback: JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()), calls: autoCanvas.source.calls(), dropped: autoCanvas.source.producerDropped(), pump: autoCanvas.pump?.stats(), errors: autoCanvas.errors }));
       const capture = async name => {
+        if (backend === "webgpu" && scenario === "bounded") {
+          await page.evaluate(name => autoCanvas.trace.mark(`capture-${name}-before-raf`), name);
+        }
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        if (backend === "webgpu" && scenario === "bounded") {
+          await page.evaluate(name => autoCanvas.trace.mark(`capture-${name}-after-raf`), name);
+        }
         const bytes = await page.locator("#scene").screenshot();
+        if (backend === "webgpu" && scenario === "bounded") {
+          await page.evaluate(name => autoCanvas.trace.mark(`capture-${name}-after-screenshot`), name);
+        }
         await writeFile(path.join(output, `${backend}-${scenario}-${name}.png`), bytes);
         return PNG.sync.read(bytes);
       };
       try {
         await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
-        await page.evaluate(async scenario => {
+        await page.evaluate(async ({ scenario, backend }) => {
           globalThis.Worker = class { constructor() { throw new Error("source preparation introduced worker transport"); } };
           const { default: init, CooperativeCanvasFixture } = await import("./pkg/noon_web.js"); await init();
           const { attachNativeInputs } = await import("./native-inputs.js");
@@ -44,16 +64,61 @@ try {
           renderer.setPreparedPlaying(false);
           const errors = [];
           let pump = null;
+          let direct = null;
           const samples = [];
           let bufferedWakes = 0;
-          const direct = createDirectExecutionWakeDriver(renderer, { onDemand() {
+          const trace = scenario === "bounded" ? {
+            events: [], dropped: 0,
+            snapshot(label, detail = {}) {
+              if (this.events.length >= 256) { this.dropped++; return; }
+              this.events.push({ label, atMs: performance.now(),
+                playback: JSON.parse(renderer.debugPreparedPlaybackJson()),
+                pointerReceipt: renderer.debugPointerPresentationJson(),
+                direct: direct?.stats() ?? null, ...detail });
+            },
+            mark(label) { this.snapshot(label); },
+            result() { return { events: this.events, dropped: this.dropped }; },
+          } : null;
+          if (trace && backend === "webgpu") {
+            const directive = renderer.directWakeDirectiveJson;
+            renderer.directWakeDirectiveJson = function (...args) {
+              const value = directive.apply(this, args);
+              trace.snapshot("direct-wake-directive", { wallTimeMs: args[0], directive: JSON.parse(value) });
+              return value;
+            };
+            const render = renderer.render;
+            renderer.render = function (...args) {
+              trace.snapshot("render-before");
+              const presented = render.apply(this, args);
+              trace.snapshot("render-after", { returnedPresented: presented });
+              return presented;
+            };
+            const input = renderer.nativePointerInput;
+            renderer.nativePointerInput = function (...args) {
+              trace.snapshot("pointer-input-before", { input: args });
+              const publication = input.apply(this, args);
+              trace.snapshot("pointer-input-after", { publication });
+              return publication;
+            };
+          }
+          direct = createDirectExecutionWakeDriver(renderer, { onDemand() {
             if (JSON.parse(renderer.debugPreparedPlaybackJson()).buffering) bufferedWakes++;
             pump?.wake();
           } });
+          if (trace && backend === "webgpu") {
+            const wake = direct.wake;
+            direct.wake = function (...args) {
+              trace.snapshot("driver-wake-before");
+              const result = wake.apply(this, args);
+              trace.snapshot("driver-wake-after");
+              return result;
+            };
+            trace.snapshot("bounded-initial-state");
+          }
           const detach = attachNativeInputs(renderer, canvas, { inspectionZoom: true, onInput: () => direct.wake(), onError: error => errors.push(String(error)) });
           // Registering a logical view can require a fresh receipt.
           direct.wake();
-          globalThis.autoCanvas = { source, renderer, errors, direct, detach, pump: null, samples,
+          globalThis.autoCanvas = { source, renderer, errors, direct, detach, pump: null, samples, trace,
             bufferedWakes: () => bufferedWakes,
             start() {
               const ahead = scenario === "bounded" ? 1 : scenario === "starved" ? 0.125 : 60;
@@ -66,7 +131,7 @@ try {
                 onError: error => errors.push(String(error)),
               });
             } };
-        }, scenario);
+        }, { scenario, backend });
         assert.equal(await page.evaluate(() => autoCanvas.renderer.rendererBackend()), backend === "webgpu" ? "WebGPU" : "WebGL2");
         const baseline = await capture("baseline");
         assert.equal((await state()).calls, 1);
@@ -87,10 +152,16 @@ try {
           result.checks.push("bounded-ahead-while-paused", "no-preparation-or-frame-polling", "not-falsely-finished");
           if (scenario === "bounded") {
             const rect = await page.locator("#scene").boundingBox();
+            if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("before-dom-click"));
             await page.mouse.click(rect.x + 320, rect.y + 180);
+            if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("dom-click-returned"));
             await page.waitForFunction(() => JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions);
+            if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("interaction-active"));
             await page.waitForTimeout(100);
-            assert.ok(!equalPixels(baseline, await capture("capped-highlight")));
+            if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("after-existing-100ms"));
+            const highlight = await capture("capped-highlight");
+            if (backend === "webgpu") result.highlightDiagnosticTrace = await page.evaluate(() => autoCanvas.trace.result());
+            assert.ok(!equalPixels(baseline, highlight));
             assert.equal((await state()).calls, capped.calls);
             await page.waitForFunction(() => !JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions && autoCanvas.direct.stats().idle && autoCanvas.pump.stats().waiting);
             assert.ok(equalPixels(baseline, await capture("capped-restored")));
@@ -177,7 +248,14 @@ try {
         assert.deepEqual(errors, []);
         result.status = "passed";
         console.log(`[PASS] cooperative ${backend}/${scenario}: ${result.checks.join(", ")}`);
-      } catch (error) { result.status = "failed"; result.error = String(error); result.pageErrors = errors; throw error; }
+      } catch (error) {
+        result.status = "failed"; result.error = String(error); result.pageErrors = errors;
+        if (backend === "webgpu" && scenario === "bounded") {
+          try { result.highlightDiagnosticTrace = await page.evaluate(() => autoCanvas?.trace?.result() ?? null); }
+          catch (traceError) { result.highlightDiagnosticTraceError = String(traceError); }
+        }
+        throw error;
+      }
       finally { await page.close(); }
     }
     await browser.close(); browser = null;
