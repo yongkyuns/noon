@@ -1116,6 +1116,17 @@ class _SceneOnlySource(ast.NodeVisitor):
             and _static_numpy_literal(node.value)
         }
         self.numpy_integer_parameters = {name: set() for name in self.numpy_functions}
+        integer_names_by_call = {}
+
+        def integer_names_at_call(function, call, parameters):
+            # Each call belongs to one immutable lexical body. Reuse its proof
+            # across formals, recomputing when the fixed-point entry facts change.
+            key = (call, frozenset(parameters))
+            if key not in integer_names_by_call:
+                integer_names_by_call[key] = _integer_names_at_node(
+                    function.body, call, parameters, self.module_numpy_literals)
+            return integer_names_by_call[key]
+
         changed = True
         while changed:
             changed = False
@@ -1134,9 +1145,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 for formal in formals:
                     proven_at_any_call = False
                     for caller, caller_function, call in sites:
-                        caller_names = _integer_names_at_node(
-                            caller_function.body, call, self.numpy_integer_parameters[caller],
-                            self.module_numpy_literals)
+                        caller_names = integer_names_at_call(
+                            caller_function, call, self.numpy_integer_parameters[caller])
                         actuals = dict(zip(formals, call.args))
                         actuals.update({keyword.arg: keyword.value for keyword in call.keywords
                                         if keyword.arg in formals})
@@ -1165,8 +1175,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 for formal in tuple(parameters):
                     proven_at_every_call = bool(sites)
                     for caller, function, call in sites:
-                        caller_names = _integer_names_at_node(
-                            function.body, call, self.numpy_integer_parameters[caller], self.module_numpy_literals)
+                        caller_names = integer_names_at_call(
+                            function, call, self.numpy_integer_parameters[caller])
                         actuals = dict(zip(formals, call.args))
                         actuals.update({keyword.arg: keyword.value for keyword in call.keywords
                                         if keyword.arg in formals})
