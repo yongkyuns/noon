@@ -102,6 +102,7 @@ export function createAuthoringRenderController(host) {
   let rawPresentationIntervalOrdinal = 0;
   let rawPresentationIntervalOrdinalOverflow = false;
   let rawPresentationIntervalGeneration = 0;
+  let rawPresentationIntervalGenerationStartedAtMs = performance.now();
   let rawPresentationIntervalCaptureEnabled = false;
   let rendererReadyAtMs = null;
   let modeSwitches = 0;
@@ -1157,6 +1158,7 @@ export function createAuthoringRenderController(host) {
   }
 
   function currentMetrics({ profileRenderSubstages, profileGpuCompletion, includePresentationIntervals } = {}) {
+    const sampledAtMs = performance.now();
     const base = {
       ready: renderer !== null,
       mode,
@@ -1170,6 +1172,7 @@ export function createAuthoringRenderController(host) {
           enabled: rawPresentationIntervalCaptureEnabled,
           capacity: rawPresentationIntervalCapacity,
           generation: rawPresentationIntervalGeneration,
+          generationStartedAtMs: rawPresentationIntervalGenerationStartedAtMs,
           latestOrdinal: rawPresentationIntervalOrdinal,
           ordinalOverflow: rawPresentationIntervalOrdinalOverflow,
           samples: rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity
@@ -1182,7 +1185,7 @@ export function createAuthoringRenderController(host) {
       lastRendererCallMs,
       modeSwitches,
       rendererRebuilds,
-      sampledAtMs: performance.now(),
+      sampledAtMs,
       performanceTimeOriginMs: performance.timeOrigin,
       rendererReadyAtMs,
       firstPresentedAtMs,
@@ -1269,6 +1272,7 @@ export function createAuthoringRenderController(host) {
 
   function invalidateRawPresentationIntervalHistory() {
     rawPresentationIntervalGeneration += 1;
+    rawPresentationIntervalGenerationStartedAtMs = performance.now();
     rawPresentationIntervalSamples.length = 0;
     rawPresentationIntervalNext = 0;
   }

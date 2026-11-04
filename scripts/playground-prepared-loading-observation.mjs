@@ -362,16 +362,25 @@ export function activeFrameGapEvidence(capture, { startEpochMs, endEpochMs, sess
     const at = sample.clockOriginMs + sample.presentedAtMs;
     return at >= startEpochMs && at <= endEpochMs;
   }).map(sample => sample.generation))];
+  if (targetGenerations.some(generation => !Number.isSafeInteger(generation))) {
+    errors.push("measured renderer generation is missing or malformed");
+  }
   if (targetGenerations.length > 1) errors.push("renderer generation changed within the measured session");
-  const generationChanges = (capture?.generationChanges ?? []).filter(change => {
-    if (change.workerOrdinal !== rendererWorkerOrdinal || change.observedAtEpochMs < startEpochMs ||
-        change.observedAtEpochMs > endEpochMs) return false;
-    return true;
-  });
+  const ownerGenerationChanges = (capture?.generationChanges ?? []).filter(change =>
+    change.workerOrdinal === rendererWorkerOrdinal);
+  const headerObservedAtEpochMs = capture?.headerObservedAtEpochMs;
+  const malformedGenerationTimes = ownerGenerationChanges.some(change =>
+    !Number.isFinite(change.changedAtEpochMs) || !Number.isFinite(change.observedAtEpochMs) ||
+    !Number.isFinite(headerObservedAtEpochMs) || change.observedAtEpochMs < headerObservedAtEpochMs ||
+    change.observedAtEpochMs > ownerMetricsEpochMs || change.changedAtEpochMs > change.observedAtEpochMs);
+  if (malformedGenerationTimes) errors.push("raw cadence generation timestamp is missing or invalid");
+  const generationChanges = ownerGenerationChanges.filter(change =>
+    change.changedAtEpochMs >= startEpochMs && change.changedAtEpochMs <= endEpochMs);
   const targetSessionChanges = generationChanges.filter(change => change.session === session);
   const validTargetSessionEstablishment = targetSessionChanges.length === 1 && (() => {
     const change = targetSessionChanges[0];
-    return change.to - change.from === 1 && Number.isSafeInteger(change.previousSession) &&
+    return Number.isSafeInteger(change.from) && Number.isSafeInteger(change.to) &&
+      change.to - change.from === 1 && Number.isSafeInteger(change.previousSession) &&
       change.previousSession !== session && targetGenerations.length === 1 && targetGenerations[0] === change.to;
   })();
   const unattributedGenerationChange = generationChanges.some(change => {
@@ -379,7 +388,8 @@ export function activeFrameGapEvidence(capture, { startEpochMs, endEpochMs, sess
     if (change.session === session) return !validTargetSessionEstablishment;
     if (Number.isSafeInteger(postTerminalReceiverSession) &&
         change.session === postTerminalReceiverSession && postTerminalReceiverSession !== session) {
-      return delta !== 1 || change.previousSession !== session || targetGenerations.length !== 1 ||
+      return !Number.isSafeInteger(change.from) || !Number.isSafeInteger(change.to) || delta !== 1 ||
+        change.previousSession !== session || targetGenerations.length !== 1 ||
         targetGenerations[0] !== change.from;
     }
     return true;

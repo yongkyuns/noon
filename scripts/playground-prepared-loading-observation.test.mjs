@@ -293,7 +293,7 @@ test("raw cadence coverage handles late renderer startup and rejects generation 
   const transition = { ...capture, workers: [{ ordinal: 1, latestMetricsEpochMs: 42, latestOrdinal: 2 }],
     samples: capture.samples.map((sample, index) => ({ ...sample, generation: 2, presentedAtMs: 32 + index * 10 })),
     generationChanges: [{ workerOrdinal: 1, from: 2, to: 3, previousSession: 7,
-      session: 8, observedAtEpochMs: 35 }] };
+      session: 8, changedAtEpochMs: 35, observedAtEpochMs: 35 }] };
   assert.deepEqual(activeFrameGapEvidence(transition, { startEpochMs: 25, endEpochMs: 42,
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60,
     postTerminalReceiverSession: 8 }).coverageErrors, [],
@@ -301,17 +301,30 @@ test("raw cadence coverage handles late renderer startup and rejects generation 
   const measuredSessionStart = { ...transition,
     samples: transition.samples.map(sample => ({ ...sample, generation: 3 })),
     generationChanges: [{ workerOrdinal: 1, from: 2, to: 3, previousSession: 6,
-      session: 7, observedAtEpochMs: 35 }] };
+      session: 7, changedAtEpochMs: 35, observedAtEpochMs: 35 }] };
   assert.deepEqual(activeFrameGapEvidence(measuredSessionStart, { startEpochMs: 25, endEpochMs: 42,
     session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors, [],
   "one known forward generation change into the measured session is its initial receiver establishment");
+  const delayedPriorReset = { ...transition, generationChanges: [{ workerOrdinal: 1, from: 0, to: 1,
+    previousSession: 6, session: 8, changedAtEpochMs: 20, observedAtEpochMs: 35 }] };
+  assert.deepEqual(activeFrameGapEvidence(delayedPriorReset, { startEpochMs: 25, endEpochMs: 42,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors, [],
+  "a pre-window reset polled during the window is excluded by its owner timestamp");
+  const hiddenInWindowReset = { ...transition, generationChanges: [{ workerOrdinal: 1, from: 1, to: 2,
+    previousSession: 7, session: 8, changedAtEpochMs: 30, observedAtEpochMs: 35 }] };
+  assert.ok(activeFrameGapEvidence(hiddenInWindowReset, { startEpochMs: 25, endEpochMs: 42,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60 }).coverageErrors
+    .some(error => /generation changed/.test(error)), "an actual in-window reset cannot hide behind late polling");
   for (const generationChange of [
-    { workerOrdinal: 1, from: 0, to: 1, previousSession: 7, session: 7, observedAtEpochMs: 35 },
-    { workerOrdinal: 1, from: 0, to: 1, previousSession: null, session: 7, observedAtEpochMs: 35 },
-    { workerOrdinal: 1, from: 0, to: 2, previousSession: 6, session: 7, observedAtEpochMs: 35 },
-    { workerOrdinal: 1, from: 0, to: 1, previousSession: 6, session: null, observedAtEpochMs: 35 },
-    { workerOrdinal: 1, from: 1, to: 2, previousSession: 6, session: 8, observedAtEpochMs: 35 },
-    { workerOrdinal: 1, from: 1, to: 2, previousSession: 7, session: 8, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: 7, session: 7, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: null, session: 7, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 2, previousSession: 6, session: 7, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: 6, session: null, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 1, to: 2, previousSession: 6, session: 8, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 1, to: 2, previousSession: 7, session: 8, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: 7, session: 8, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: 8, session: 8, changedAtEpochMs: 35, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 0, to: 1, previousSession: null, session: 8, changedAtEpochMs: 35, observedAtEpochMs: 35 },
   ]) {
     const invalidTransition = { ...measuredSessionStart, generationChanges: [generationChange] };
     assert.ok(activeFrameGapEvidence(invalidTransition, { startEpochMs: 25, endEpochMs: 42,
@@ -320,13 +333,20 @@ test("raw cadence coverage handles late renderer startup and rejects generation 
       .some(error => /generation changed/.test(error)), JSON.stringify(generationChange));
   }
   const unprovenForeignTransition = { ...transition, generationChanges: [
-    { workerOrdinal: 1, from: 2, to: 3, previousSession: 7, session: 9, observedAtEpochMs: 35 },
+    { workerOrdinal: 1, from: 2, to: 3, previousSession: 7, session: 9,
+      changedAtEpochMs: 35, observedAtEpochMs: 35 },
   ] };
   for (const postTerminalReceiverSession of [null, 8]) {
     assert.ok(activeFrameGapEvidence(unprovenForeignTransition, { startEpochMs: 25, endEpochMs: 42,
       session: 7, rendererWorkerOrdinal: 1, targetHz: 60, postTerminalReceiverSession }).coverageErrors
       .some(error => /generation changed/.test(error)), "unproven foreign generation changes fail closed");
   }
+  const missingChangeTime = { ...transition,
+    generationChanges: [{ workerOrdinal: 1, from: 2, to: 3, previousSession: 7,
+      session: 8, observedAtEpochMs: 35 }] };
+  assert.ok(activeFrameGapEvidence(missingChangeTime, { startEpochMs: 25, endEpochMs: 42,
+    session: 7, rendererWorkerOrdinal: 1, targetHz: 60, postTerminalReceiverSession: 8 }).coverageErrors
+    .some(error => /generation timestamp is missing or invalid/.test(error)), "missing reset time fails closed");
   const mixedMeasuredSession = { ...measuredSessionStart,
     samples: measuredSessionStart.samples.map((sample, index) => ({ ...sample, generation: index === 0 ? 2 : 3 })) };
   assert.ok(activeFrameGapEvidence(mixedMeasuredSession, { startEpochMs: 25, endEpochMs: 42,

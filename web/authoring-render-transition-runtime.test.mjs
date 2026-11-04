@@ -52,7 +52,7 @@ test("controller instances isolate dispatch and shutdown", async () => {
   const firstMessages = [];
   const secondMessages = [];
   const closed = [];
-  const context = vm.createContext({ firstMessages, secondMessages, closed });
+  const context = vm.createContext({ firstMessages, secondMessages, closed, performance: { now: () => 0 } });
   vm.runInContext(executableSource, context);
   vm.runInContext(
     `first = createAuthoringRenderController({
@@ -87,6 +87,7 @@ test("a terminated main-thread adapter cannot shut down a later adapter", async 
   const context = vm.createContext({
     EventTarget,
     MessageEvent,
+    performance: { now: () => 0 },
     queueMicrotask,
     loadControllerModule: () => moduleLoad.promise,
     messages,
@@ -135,6 +136,7 @@ test("retired geometry mode is rejected before canvas or port admission", async 
   const context = vm.createContext({
     port,
     messages,
+    performance: { now: () => 0 },
     MessagePort: FakePort,
     init: () => { throw new Error("invalid mode must not initialize WASM"); },
   });
@@ -166,6 +168,7 @@ test("shutdown during asynchronous initialization cannot revive a controller", a
     canvas,
     port,
     closed,
+    performance: { now: () => 0 },
     init: () => initialization.promise,
     OffscreenCanvas: FakeCanvas,
     MessagePort: FakePort,
@@ -214,6 +217,7 @@ test("concurrent controllers share wasm initialization without sharing lifecycle
     secondCanvas: new FakeCanvas(),
     firstMessages,
     secondMessages,
+    performance: { now: () => 0 },
     init: () => {
       initializationCalls += 1;
       return initialization.promise;
@@ -267,6 +271,7 @@ test("failed shared wasm initialization can be retried by a new controller", asy
     firstCanvas: new FakeCanvas(),
     secondCanvas: new FakeCanvas(),
     messages,
+    performance: { now: () => 0 },
     init: () => {
       initializationCalls += 1;
       return initializationCalls === 1
@@ -348,13 +353,13 @@ function createRenderer(renderResults) {
   };
 }
 
-function createWorkerHarness(renderResults = [false, true], publication = null) {
+function createWorkerHarness(renderResults = [false, true], publication = null, performanceSource = performance) {
   const creation = deferred();
   const animationFrames = [];
   const mainMessages = [];
   const context = vm.createContext({
     console,
-    performance,
+    performance: performanceSource,
     Promise,
     Uint8Array,
     setTimeout,
@@ -588,15 +593,14 @@ test("a stale no-op cannot acknowledge ahead of a pending present", async () => 
 });
 
 async function createManagedWakeHarness(renderResults = [true]) {
-  const harness = createWorkerHarness(renderResults);
+  let clock = 0;
+  const harness = createWorkerHarness(renderResults, null, { now: () => clock });
   harness.creation.resolve(harness.createdRenderer);
   await flushTasks();
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
   for (const callback of harness.animationFrames.splice(0)) callback(0);
-  let clock = 0;
   let timerId = 0;
   const timers = new Map();
-  harness.context.performance = { now: () => clock };
   harness.context.setTimeout = (callback, delay) => {
     const id = ++timerId;
     timers.set(id, { callback, delay });
@@ -1047,14 +1051,22 @@ test("optional raw cadence capture keeps ordinal gaps across ordinary cadence re
   const raw = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);
   assert.equal(raw.enabled, true);
   assert.equal(raw.latestOrdinal, 3);
+  assert.equal(raw.generationStartedAtMs, 0, "ordinary cadence resets preserve the raw generation start");
   assert.deepEqual(JSON.parse(JSON.stringify(raw.samples)), [
     { ordinal: 1, session: 12, presentedAtMs: 116, intervalMs: 16 },
     { ordinal: 2, session: 12, presentedAtMs: 132, intervalMs: 16 },
     { ordinal: 3, session: 12, presentedAtMs: 3017, intervalMs: 17 },
   ], "the optional ring preserves all gaps in chronological order across reset windows");
   vm.runInContext("disposeRenderer()", harness.context);
-  const replaced = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);
+  harness.setClock(4000);
+  const replacedMetrics = vm.runInContext("currentMetrics({includePresentationIntervals:true})", harness.context);
+  const replaced = replacedMetrics.rawPresentationIntervals;
   assert.equal(replaced.generation, raw.generation + 1);
+  assert.equal(replaced.generationStartedAtMs, 3017,
+    "renderer retirement timestamps the new raw generation");
+  assert.equal(replacedMetrics.sampledAtMs, 4000);
+  assert.ok(replaced.generationStartedAtMs <= replacedMetrics.sampledAtMs,
+    "the generation start precedes the later metrics observation");
   assert.deepEqual(JSON.parse(JSON.stringify(replaced.samples)), [],
     "renderer retirement cannot expose samples from the replaced surface");
 });

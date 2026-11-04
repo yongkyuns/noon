@@ -381,6 +381,8 @@ async function installReadinessPresentationProbe(context, { profilePublicationSt
           }
           const raw = message.metrics.rawPresentationIntervals;
           if (raw?.enabled !== true || !Number.isSafeInteger(raw.generation) ||
+              !Number.isFinite(raw.generationStartedAtMs) || raw.generationStartedAtMs < 0 ||
+              raw.generationStartedAtMs > message.metrics.sampledAtMs ||
               !Number.isSafeInteger(raw.latestOrdinal) || raw.latestOrdinal < 0 ||
               !Number.isSafeInteger(raw.capacity) || raw.capacity <= 0 ||
               raw.ordinalOverflow !== false || !Array.isArray(raw.samples) || raw.samples.length > raw.capacity ||
@@ -401,6 +403,7 @@ async function installReadinessPresentationProbe(context, { profilePublicationSt
               if (probe.cadenceGenerationChanges.length < 64) {
                 const change = { workerOrdinal, from: worker.generation, to: raw.generation,
                   previousSession: worker.session, session: observedSession,
+                  changedAtEpochMs: message.metrics.performanceTimeOriginMs + raw.generationStartedAtMs,
                   observedAtEpochMs: message.metrics.performanceTimeOriginMs + message.metrics.sampledAtMs };
                 probe.cadenceGenerationChanges.push(change);
                 worker.pendingGenerationChange = observedSession === null ? change : null;
