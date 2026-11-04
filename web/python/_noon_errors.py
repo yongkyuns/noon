@@ -7,6 +7,7 @@ observes their original JS error before projection.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 from typing import NoReturn
 
 
@@ -93,6 +94,45 @@ _EXCEPTION_TYPES = {
     "ownership": NoonOwnershipError,
 }
 
+_PREPARED_SOURCE_YIELD = None
+_PREPARED_SOURCE_YIELD_QUANTUM_SECONDS = 0.001
+
+
+def _configure_prepared_source_yield(callback, can_run_sync, run_sync, now=perf_counter) -> bool:
+    """Install the optional JSPI yield hook for one admitted source run."""
+    global _PREPARED_SOURCE_YIELD
+    _PREPARED_SOURCE_YIELD = None
+    if not can_run_sync():
+        return False
+    last_yield_at = now()
+
+    def yield_if_due():
+        nonlocal last_yield_at
+        if now() - last_yield_at < _PREPARED_SOURCE_YIELD_QUANTUM_SECONDS:
+            return
+        promise = callback()
+        if promise:
+            run_sync(promise)
+        last_yield_at = now()
+
+    _PREPARED_SOURCE_YIELD = yield_if_due
+    return True
+
+
+def enable_prepared_source_yield() -> bool:
+    disable_prepared_source_yield()
+    try:
+        from js import noonPreparedSourceYield
+        from pyodide.ffi import can_run_sync, run_sync
+    except ImportError:
+        return False
+    return _configure_prepared_source_yield(noonPreparedSourceYield, can_run_sync, run_sync)
+
+
+def disable_prepared_source_yield() -> None:
+    global _PREPARED_SOURCE_YIELD
+    _PREPARED_SOURCE_YIELD = None
+
 
 def _diagnostic(value: object) -> NoonErrorCause | None:
     if getattr(value, "noonErrorVersion", None) != 1:
@@ -146,9 +186,12 @@ def raise_engine_error(error: Exception, *, operation: str | None = None) -> NoR
 def engine_call(function, *args, operation: str | None = None):
     """Explicit callsite adapter; successful calls and their return values are unchanged."""
     try:
-        return function(*args)
+        result = function(*args)
     except Exception as error:
         raise_engine_error(error, operation=operation)
+    if _PREPARED_SOURCE_YIELD is not None:
+        _PREPARED_SOURCE_YIELD()
+    return result
 
 
 async def engine_await(awaitable, *, operation: str | None = None):

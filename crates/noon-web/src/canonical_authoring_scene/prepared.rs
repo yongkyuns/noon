@@ -41,12 +41,21 @@ impl CanonicalAuthoringScene {
             .begin_observed_prepared_source(effects)
     }
 
-    pub(crate) fn prepare_prefix_segment(
+    pub(crate) fn advance_prepared_prefix_segment(
         &mut self,
         publisher: &PrefixPublisher,
+    ) -> Result<crate::semantic_execution_player::PreparedPrefixAdvance, AuthoringFailure> {
+        self.active_live_player()?
+            .live_advance_prepared_prefix_segment(Some(publisher))
+    }
+
+    pub(crate) fn complete_prepared_prefix_segment(
+        &mut self,
+        segment: noon::ExecutionSegment,
+        publication: noon_core::PublicationContext,
     ) -> Result<f64, AuthoringFailure> {
         self.active_live_player()?
-            .live_prepare_prefix_segment(Some(publisher))
+            .live_complete_prepared_prefix_segment(segment, publication)
     }
 
     pub(crate) fn validate_prepared_publisher(

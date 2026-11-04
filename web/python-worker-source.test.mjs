@@ -4,6 +4,72 @@ import test from "node:test";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
+function preparedSourceYieldHook(run, setTimer) {
+  const start = source.indexOf("  self.noonPreparedSourceYield = () => {");
+  const end = source.indexOf("  self.noonCreateCanonicalAuthoringSceneContext =", start);
+  assert.ok(start >= 0 && end > start, "prepared source yield hook boundaries must exist");
+  const worker = {};
+  return new Function("self", "initialRun", "setTimeout", "awaitOutsidePreparedSourceTurn", `
+    let activeAuthoringRun = initialRun;
+    ${source.slice(start, end)}
+    return { hook: self.noonPreparedSourceYield, replaceRun: next => { activeAuthoringRun = next; } };
+  `)(worker, run, setTimer, (_run, _owner, operation) => operation());
+}
+
+test("cooperative source yield is disabled outside its attached prepared reader turn", () => {
+  for (const mutate of [
+    run => { run.preparedPlayback = false; },
+    run => { run.continuation.preparedPlayer = null; },
+    run => { run.continuation.terminal = true; },
+    run => { run.continuation.observedExecution = true; },
+    run => { run.continuation.callbackRequest = {}; },
+    run => { run.preparedDriver.state = () => "preparing"; },
+  ]) {
+    const run = {
+      sourceSceneOnly: true, preparedPlayback: true,
+      continuation: { preparedPlayer: {}, observedExecution: false, callbackRequest: null, terminal: false },
+      preparedDriver: { state: () => "running" },
+    };
+    mutate(run);
+    const timers = [];
+    const { hook } = preparedSourceYieldHook(run, (callback, delay) => timers.push({ callback, delay }));
+    assert.equal(hook(), false);
+    assert.deepEqual(timers, []);
+  }
+});
+
+test("cooperative source yield resumes once and rejects a retired reader turn", async () => {
+  const create = () => {
+    let state = "running";
+    const continuation = { preparedPlayer: {}, observedExecution: false, callbackRequest: null, terminal: false };
+    const run = { sourceSceneOnly: true, preparedPlayback: true, continuation,
+      preparedDriver: { state: () => state } };
+    const timers = [];
+    const controller = preparedSourceYieldHook(run, (callback, delay) => timers.push({ callback, delay }));
+    return { run, continuation, timers, ...controller, setState(value) { state = value; } };
+  };
+
+  const active = create();
+  const settled = active.hook();
+  assert.equal(active.timers.length, 1);
+  assert.equal(active.timers[0].delay, 0);
+  active.timers[0].callback();
+  await settled;
+
+  for (const retire of [
+    item => item.setState("cancelled"),
+    item => { item.continuation.preparedPlayer = {}; },
+    item => { item.continuation.observedExecution = true; },
+    item => item.replaceRun({}),
+  ]) {
+    const pending = create();
+    const rejected = pending.hook();
+    retire(pending);
+    pending.timers[0].callback();
+    await assert.rejects(rejected, /retired/);
+  }
+});
+
 test("source disposal retires canonical input before releasing its retained context", async () => {
   const begin = source.indexOf("function retireSemanticContext(");
   const end = source.indexOf("\nasync function prepareAuthoringDependencies", begin);

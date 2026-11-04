@@ -29,12 +29,12 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false, staticAdmission = true, opaque = false, lateCallbacks = false } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false, staticAdmission = true, opaque = false, lateCallbacks = false, yieldSegmentStage = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
   let callbackSchedule = observed && !lateCallbacks;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
-  let pending, freed = false;
+  let pending, freed = false, stageYielded = false;
   const alive = () => assert.equal(freed, false, "retired WASM handle must never be reused");
   const trap = operation => { if (operation === trapAt) throw new WebAssembly.RuntimeError(`trap during ${operation}`); };
   const player = {
@@ -43,9 +43,14 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     preparedPlaybackStateJson: () => JSON.stringify({ time: 1, frontier: 1 }),
     get sourceExecutionRequirementJson() { return JSON.stringify({ code: "native_input" }); },
     setPreparedLoopDuration(value) { alive(); events.push(["loop", value]); },
-    prepareSourceSegment(value) {
+    prepareSourceSegmentStep(value) {
       if (late) { events.push("require-source"); return false; }
-      alive(); trap("segment"); assert.equal(value, context); counters.segments++; pending = 4; events.push("segment");
+      alive(); trap("segment"); assert.equal(value, context);
+      if (yieldSegmentStage && !stageYielded) {
+        stageYielded = true; events.push("segment-advanced"); return undefined;
+      }
+      counters.segments++; pending = 4; events.push("segment-complete");
+      return true;
     },
     beginSourceExecution(value) { alive(); assert.equal(value, context); observed = true; events.push("handoff"); return false; },
     finishSourcePreparation(value) {
@@ -251,6 +256,30 @@ for (const loopDurationSeconds of [null, 1]) test(`production source completes e
     "timing spans are disabled unless the run explicitly requests them");
   const result = h.posts.find(post => post.type === "result");
   assert.equal(JSON.parse(result.resultJson).semantic_execution.prepared_playback, true);
+  h.endpoint().stop();
+});
+
+test("prepared source completion yields one host task before staging its suffix", async () => {
+  const h = host({ yieldSegmentStage: true });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  });
+  await microtasks(); const initial = h.tick(); await h.attach(); await initial;
+  h.demand(true); await h.tick(); await microtasks();
+  h.demand(false);
+  const next = h.tick();
+  await microtasks();
+  assert.equal(h.events.includes("segment-advanced"), true);
+  assert.equal(h.events.includes("segment-complete"), false);
+  assert.equal(h.counters.adopted, 0);
+  await next;
+  await microtasks();
+  assert.equal(h.events.includes("segment-complete"), true);
+  assert.equal(h.counters.adopted, 1);
+  assert.deepEqual(h.errors, []);
+  h.demand(true); await h.tick(); await done;
   h.endpoint().stop();
 });
 

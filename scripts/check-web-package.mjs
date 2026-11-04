@@ -684,7 +684,7 @@ if (javascript.includes("export class PreparedExecutionPlayer") || declarations.
   expectedTypeSurface.push("prepareFinishedSource(): boolean", "observedSourceExecutionRequirementJson(): string");
   expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(",
     "preparedPlaybackStateJson(", "preparedTime(", "takePreparedNoChangePresentationJson(",
-    "setPreparedLoopDuration(", "get sourceExecutionRequirementJson()");
+    "setPreparedLoopDuration(", "get sourceExecutionRequirementJson()", "prepareSourceSegmentStep(");
   expectedTypeSurface.push("export class PreparedExecutionPlayer",
     "resetReceiver(transport_session: number): void",
     "beginObservedPreparedSource(scene_only_source?: boolean | null): string",
@@ -694,6 +694,7 @@ if (javascript.includes("export class PreparedExecutionPlayer") || declarations.
     "readonly sourceExecutionRequirementJson: string",
     "createFinishedPreparedExecutionPlayer(transport_session: number): PreparedExecutionPlayer | undefined",
     "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
+    "prepareSourceSegmentStep(context: CanonicalAuthoringSceneContext): boolean | undefined",
     "finishSourcePreparation(context: CanonicalAuthoringSceneContext): boolean",
     "beginSourceExecution(context: CanonicalAuthoringSceneContext): boolean", "sourceExecutionReady(): boolean");
 }

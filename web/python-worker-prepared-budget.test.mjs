@@ -63,10 +63,11 @@ function fixture({ failureAt = null, failure = "budget rejected", catchBarrier =
       runs.push(record);
       const player = {
         setPreparedLoopDuration() {},
-        prepareSourceSegment(scene) {
+        prepareSourceSegmentStep(scene) {
           assert.equal(scene, continuation.context);
           attempt("prepare", id);
           record.pending = quiet ? null : { terminal: false };
+          return true;
         },
         reserveSourcePrefixCapacity() {
           if (record.pending === null) return false;

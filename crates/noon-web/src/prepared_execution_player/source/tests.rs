@@ -234,6 +234,7 @@ fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
         pending: Some(batch),
         staged_navigation: None,
         required: None,
+        in_progress: None,
         finished: false,
     });
     player

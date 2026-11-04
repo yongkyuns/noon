@@ -3,7 +3,7 @@
 //! No scene/history payload crosses JavaScript between these Rust owners.
 use super::PreparedExecutionPlayer;
 use crate::canonical_authoring_scene::CanonicalAuthoringScene;
-use noon::{PrefixBatch, PrefixPublisher};
+use noon::{ExecutionSegment, PrefixBatch, PrefixPublisher};
 
 pub(crate) fn source_execution_requirement_json(
     requirement: Option<noon::SourceExecutionRequirement>,
@@ -34,6 +34,7 @@ pub(super) struct SourceDelivery {
     pending: Option<PrefixBatch>,
     staged_navigation: Option<noon::SceneSectionNavigation>,
     required: Option<noon::SourceExecutionRequirement>,
+    in_progress: Option<(ExecutionSegment, noon_core::PublicationContext)>,
     finished: bool,
 }
 
@@ -84,6 +85,7 @@ impl PreparedExecutionPlayer {
             pending: None,
             staged_navigation: None,
             required: None,
+            in_progress: None,
             finished: false,
         });
         Ok(player)
@@ -106,44 +108,78 @@ impl PreparedExecutionPlayer {
             .map_err(|e| e.to_string())
     }
 
-    /// Complete once and retain its new suffix until explicit adoption.
-    /// Validation rejects foreign sources before they can advance.
+    /// Preserve the synchronous Rust API by running both preparation stages
+    /// without yielding between them.
     pub fn prepare_interpreter_segment(
         &mut self,
         context: &mut CanonicalAuthoringScene,
     ) -> Result<bool, String> {
+        loop {
+            if let Some(prepared) = self.prepare_interpreter_segment_step(context)? {
+                return Ok(prepared);
+            }
+        }
+    }
+
+    /// Advance one source segment in two atomic semantic stages. `None` leaves
+    /// its completion unpublished so the host can yield before reconciliation.
+    pub fn prepare_interpreter_segment_step(
+        &mut self,
+        context: &mut CanonicalAuthoringScene,
+    ) -> Result<Option<bool>, String> {
         self.validate_source(context)?;
-        let source = self.source.as_mut().expect("validated source delivery");
-        if source.finished {
+        if self
+            .source
+            .as_ref()
+            .expect("validated source delivery")
+            .finished
+        {
             return Err("prepared source already finished".into());
         }
-        source.required = context
-            .prefix_source_requirement(&source.publisher, false)
-            .map_err(|e| e.to_string())?;
-        if source.required.is_some() {
-            return Ok(false);
+        if let Some((segment, publication)) =
+            self.source.as_ref().and_then(|source| source.in_progress)
+        {
+            let mut source = self.source.take().expect("validated source delivery");
+            source.in_progress = None;
+            let endpoint = context
+                .complete_prepared_prefix_segment(segment, publication)
+                .map_err(|e| e.to_string())?;
+            if endpoint > source.publisher.frontier() {
+                source.pending = Some(
+                    context
+                        .publish_prepared_prefix(&mut source.publisher)
+                        .map_err(|e| e.to_string())?,
+                );
+            } else if endpoint != source.publisher.frontier() {
+                return Err("prepared source moved behind its publication frontier".into());
+            }
+            source.staged_navigation = Some(context.section_navigation_snapshot());
+            self.source = Some(source);
+            return Ok(Some(true));
         }
+
         // An engine failure/unwind cannot leave partially completed work eligible
         // for another attempt. The historical reader remains independent. This
         // does not catch a panic, recover a WASM trap, or retry user statements.
         let mut source = self.source.take().expect("validated source delivery");
-        let endpoint = context
-            .prepare_prefix_segment(&source.publisher)
+        let advance = context
+            .advance_prepared_prefix_segment(&source.publisher)
             .map_err(|e| e.to_string())?;
-        if endpoint > source.publisher.frontier() {
-            source.pending = Some(
-                context
-                    .publish_prepared_prefix(&mut source.publisher)
-                    .map_err(|e| e.to_string())?,
-            );
-        } else if endpoint != source.publisher.frontier() {
-            return Err("prepared source moved behind its publication frontier".into());
-        }
-        source.staged_navigation = Some(context.section_navigation_snapshot());
-        // A zero-duration segment may complete without a new readable interval.
-        // Its same-time edits remain in ordinary source history for a later suffix.
+        let (segment, publication) = match advance {
+            crate::semantic_execution_player::PreparedPrefixAdvance::Required(requirement) => {
+                source.required = Some(requirement);
+                self.source = Some(source);
+                return Ok(Some(false));
+            }
+            crate::semantic_execution_player::PreparedPrefixAdvance::Advanced {
+                segment,
+                publication,
+            } => (segment, publication),
+        };
+        source.required = None;
+        source.in_progress = Some((segment, publication));
         self.source = Some(source);
-        Ok(true)
+        Ok(None)
     }
 
     pub fn begin_source_execution(
@@ -151,11 +187,14 @@ impl PreparedExecutionPlayer {
         context: &mut CanonicalAuthoringScene,
     ) -> Result<bool, String> {
         self.validate_source(context)?;
+        let source = self.source.as_ref().expect("validated source delivery");
+        if source.in_progress.is_some() {
+            return Err("complete the suspended source segment before observed execution".into());
+        }
         if !self.source_execution_ready() {
             return Err("source execution requires actual playback demand at its frontier".into());
         }
         let playing = self.playback.playing();
-        let source = self.source.as_ref().expect("validated source delivery");
         let finished = source.finished;
         context
             .begin_observed_prefix_source(
@@ -180,6 +219,9 @@ impl PreparedExecutionPlayer {
         let source = self.source.as_mut().expect("validated source delivery");
         if source.finished {
             return Err("prepared source already finished".into());
+        }
+        if source.in_progress.is_some() {
+            return Err("complete the suspended source segment before sealing source".into());
         }
         source.required = context
             .prefix_source_requirement(&source.publisher, true)
@@ -340,6 +382,15 @@ mod wasm {
             context: &mut CanonicalAuthoringSceneContext,
         ) -> Result<bool, JsValue> {
             self.prepare_interpreter_segment(&mut context.inner)
+                .map_err(|e| JsValue::from_str(&e))
+        }
+
+        #[wasm_bindgen(js_name = prepareSourceSegmentStep)]
+        pub fn prepare_source_segment_step(
+            &mut self,
+            context: &mut CanonicalAuthoringSceneContext,
+        ) -> Result<Option<bool>, JsValue> {
+            self.prepare_interpreter_segment_step(&mut context.inner)
                 .map_err(|e| JsValue::from_str(&e))
         }
 

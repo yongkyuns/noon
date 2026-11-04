@@ -24,6 +24,8 @@ mod numbers;
 mod pointer_input;
 #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
 mod prepared;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+pub(crate) use prepared::PreparedPrefixAdvance;
 mod provisional_geometry;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;

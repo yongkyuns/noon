@@ -128,6 +128,27 @@ async function initializePyodide() {
   const resourcesReadyAt = performance.now();
   authoringStore = new WasmAuthoringStore();
   const authoringStoreCreatedAt = performance.now();
+  self.noonPreparedSourceYield = () => {
+    const run = activeAuthoringRun;
+    const continuation = run?.continuation;
+    const preparedPlayer = continuation?.preparedPlayer;
+    if (!run?.sourceSceneOnly || !run.preparedPlayback ||
+        !preparedPlayer || continuation.terminal || continuation.observedExecution ||
+        continuation.callbackRequest != null || run.preparedDriver?.state() !== "running") return false;
+    return awaitOutsidePreparedSourceTurn(run, "cooperative-yield", () => new Promise((resolve, reject) => {
+      setTimeout(() => {
+        if (activeAuthoringRun !== run || !run.sourceSceneOnly || !run.preparedPlayback ||
+            run.preparedDriver?.state() !== "running" ||
+            run.continuation !== continuation || continuation.preparedPlayer !== preparedPlayer ||
+            continuation.terminal || continuation.observedExecution ||
+            continuation.callbackRequest != null) {
+          reject(new Error("prepared source continuation retired during cooperative yield"));
+          return;
+        }
+        resolve();
+      }, 0);
+    }));
+  };
   self.noonCreateCanonicalAuthoringSceneContext = () => {
     const context = authoringStore.createSceneContext();
     authoringMilestones.firstSceneContextCreatedAtMs ??= performance.now();
@@ -973,8 +994,18 @@ function createPreparedSourceDriver(run) {
         continuation.preparedBootstrapObserved = true;
         return;
       }
-      const prepared = measurePreparationOperation(run, "segment-prepare",
-        () => invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceSegment(context)));
+      const preparedPlayer = continuation.preparedPlayer;
+      let prepared;
+      for (;;) {
+        prepared = measurePreparationOperation(run, "segment-prepare",
+          () => invokePreparedEngine(() => preparedPlayer.prepareSourceSegmentStep(context)));
+        if (prepared !== undefined) break;
+        await new Promise(resolve => setTimeout(resolve, 0));
+        requirePreparedContinuation(run, context, signal);
+        if (run.continuation !== continuation || continuation.preparedPlayer !== preparedPlayer) {
+          throw new Error("prepared source segment changed while completion was suspended");
+        }
+      }
       if (prepared === false) {
         semanticContexts.get(continuation.contextId).sourceRequirement = sourceExecutionRequirement(
           invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
@@ -1946,6 +1977,7 @@ json.dumps(source_execution_proof(__noon_source))
     const sceneOnly = proof.admitted;
     authoringLibrariesPristine &&= sceneOnly;
     run.sourceSceneOnly = sceneOnly;
+    globals.set("__noon_enable_prepared_source_yield", sceneOnly && run.preparedPlayback);
     if (sceneOnly) {
       // Admitted sources cannot carry factory handles between Runs. Their old
       // Rust contexts and handles retain the prior arena through their own Rc.
@@ -1962,7 +1994,12 @@ json.dumps(source_execution_proof(__noon_source))
         () => prepareAuthoringDependencies(pyodide, source));
     } else await prepareAuthoringDependencies(pyodide, source);
     if (run.diagnosticPreparationTiming) startPreparedSourceTurn(run);
-    return pyodide.runPythonAsync(diagnosedHostCode(`
+    try {
+      return await pyodide.runPythonAsync(diagnosedHostCode(`
+if __noon_enable_prepared_source_yield:
+    from _noon_errors import enable_prepared_source_yield
+    enable_prepared_source_yield()
+
 import json
 import _manim_updaters
 from _manim_scene import (
@@ -2040,6 +2077,11 @@ __noon_result_json = json.dumps(
     allow_nan=False,
 )
 `), { globals });
+    } finally {
+      if (run.sourceSceneOnly && run.preparedPlayback && !fatalAuthoringFailure) {
+        pyodide.runPython("import _noon_errors; _noon_errors.disable_prepared_source_yield()");
+      }
+    }
   });
 }
 

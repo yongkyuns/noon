@@ -15,7 +15,7 @@ except ImportError:
 from _noon_errors import (
     NoonError, NoonForeignHandleError, NoonOwnershipError, NoonPendingError, NoonCallbackError,
     NoonStaleHandleError, NoonStalePublicationError, NoonValueError, NoonUnsupportedError,
-    engine_await, engine_call,
+    _configure_prepared_source_yield, disable_prepared_source_yield, engine_await, engine_call,
 )
 
 
@@ -30,6 +30,58 @@ def codes(error):
         result.append(cause.code)
         cause = cause.cause
     return result
+
+
+class PreparedSourceYieldTests(unittest.TestCase):
+    def tearDown(self):
+        disable_prepared_source_yield()
+
+    def test_non_jspi_run_leaves_engine_call_unchanged(self):
+        events = []
+        self.assertFalse(_configure_prepared_source_yield(
+            lambda: events.append("yield"), lambda: False, lambda _: None, now=lambda: 0.0))
+        self.assertEqual(engine_call(lambda: events.append("operation") or 7), 7)
+        self.assertEqual(events, ["operation"])
+
+    def test_prepared_run_yields_at_successful_call_boundary_without_retry(self):
+        events, now, promise = [], [0.0], object()
+        self.assertTrue(_configure_prepared_source_yield(
+            lambda: events.append("yield") or promise, lambda: True,
+            lambda value: events.append(("run_sync", value)), now=lambda: now[0]))
+        self.assertEqual(engine_call(lambda: events.append("first") or 11), 11)
+        now[0] = 0.007
+        calls = []
+        def operate_once():
+            events.append("operation")
+            calls.append(1)
+            return 12
+        self.assertEqual(engine_call(operate_once), 12)
+        self.assertEqual(calls, [1])
+        self.assertEqual(events, ["first", "operation", "yield", ("run_sync", promise)])
+
+    def test_due_hook_can_decline_without_entering_run_sync(self):
+        now, calls = [0.0], []
+        self.assertTrue(_configure_prepared_source_yield(
+            lambda: False, lambda: True,
+            lambda _: self.fail("a declined yield is not an awaitable"), now=lambda: now[0]))
+        now[0] = 0.007
+        self.assertEqual(engine_call(lambda: calls.append(1) or 5), 5)
+        self.assertEqual(calls, [1])
+
+    def test_failed_engine_call_does_not_yield_or_retry(self):
+        events, now, error = [], [0.0], ValueError("source operation failed")
+        _configure_prepared_source_yield(
+            lambda: events.append("yield"), lambda: True, lambda _: None, now=lambda: now[0])
+        now[0] = 0.007
+        calls = []
+        def fail_once():
+            calls.append(1)
+            raise error
+        with self.assertRaises(ValueError) as caught:
+            engine_call(fail_once)
+        self.assertIs(caught.exception, error)
+        self.assertEqual(calls, [1])
+        self.assertEqual(events, [])
 
 
 def edit(context, kind, *members, bindings=()):
