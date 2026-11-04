@@ -28,6 +28,27 @@ export class AuthoringWorkerGeneration {
     return this.#activeClient;
   }
 
+  prepareReplacement(expectedActiveClient) {
+    if (this.#disposed || expectedActiveClient !== this.#activeClient ||
+        expectedActiveClient?.terminated === true || trustOf(expectedActiveClient) !== "tainted") {
+      return false;
+    }
+    let candidate;
+    try {
+      candidate = this.#ensureCandidate();
+    } catch {
+      return false;
+    }
+    if (!candidate.backgroundFailureObserved) {
+      candidate.backgroundFailureObserved = true;
+      void candidate.readyPromise.catch(() => {
+        if (candidate.waiters !== 0 || this.#candidate !== candidate) return;
+        try { this.#discardCandidate(candidate); } catch { /* A prewarm failure cannot affect the active run. */ }
+      });
+    }
+    return true;
+  }
+
   async clientForRun(token, { requirePristine = true } = {}) {
     if (typeof requirePristine !== "boolean") {
       throw new TypeError("requirePristine must be a boolean");
@@ -46,12 +67,15 @@ export class AuthoringWorkerGeneration {
     }
 
     const candidate = this.#ensureCandidate();
+    candidate.waiters += 1;
     try {
       await Promise.race([candidate.readyPromise, candidate.cancelledPromise]);
     } catch (error) {
       if (this.#candidate !== candidate || this.#disposed || !this.#isCurrentRun(token)) return null;
       this.#discardCandidate(candidate);
       throw error;
+    } finally {
+      candidate.waiters -= 1;
     }
 
     if (this.#disposed || !this.#isCurrentRun(token)) {
@@ -109,10 +133,12 @@ export class AuthoringWorkerGeneration {
     }
     let cancel;
     const cancelledPromise = new Promise((_, reject) => { cancel = reject; });
+    void cancelledPromise.catch(() => {});
     // A pending worker bootstrap must not keep a superseded Run alive forever.
     // The existing replacement watchdog calls retireCandidate at its normal
     // retirement point; this promise makes that termination observable here.
-    const candidate = { client, readyPromise: null, cancelledPromise, cancel };
+    const candidate = { client, readyPromise: null, cancelledPromise, cancel, waiters: 0,
+      backgroundFailureObserved: false };
     candidate.readyPromise = Promise.resolve().then(() => client.ready());
     this.#candidate = candidate;
     return candidate;

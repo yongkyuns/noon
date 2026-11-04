@@ -1258,6 +1258,9 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
             });
             earlyContinuation = { registration, attachedPlayer, result, client, runToken };
             activeSourceContinuation = earlyContinuation;
+            if (preparedPlayback && client.libraryTrust === "tainted") {
+              authoringWorkers.prepareReplacement(client);
+            }
             if (result.preparedPlayback === true || result.sourcePlaybackControllable === true) {
               // Only startup owns this busy ticket. Source demand can remain
               // suspended indefinitely while controls and gallery stay usable.

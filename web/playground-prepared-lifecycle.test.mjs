@@ -77,6 +77,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
   }
   const authoring = {
     terminated: false,
+    libraryTrust: "pristine",
     run(source, context, options) {
       const done = deferred();
       jobs.push({ source, context, options, ...done });
@@ -164,6 +165,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     const authoringWorkers = {
       activeClient: authoring,
       async clientForRun() { if (env.authoringGate) await env.authoringGate.promise; return authoring; },
+      prepareReplacement(client) { calls.push(["prewarm-authoring", client]); return true; },
       retire(client) { return client === authoring; },
       dispose() {},
     };
@@ -250,6 +252,30 @@ test("prepared startup releases only its UI busy ticket while the source remains
   assert.equal(f.env.gallerySearch.disabled, false);
   assert.equal(job.options.preparationLookaheadSeconds, 0.75);
   f.finish(); await promise;
+});
+
+test("default prepared continuation prewarms only after a tainted source attaches", async () => {
+  const f = fixture(); f.authoring.libraryTrust = "tainted";
+  const { promise, job } = await f.start();
+  assert.equal(f.count("prewarm-authoring"), 0);
+  await f.register(job);
+  assert.deepEqual(f.calls.filter(call => call[0] === "prewarm-authoring"), [
+    ["prewarm-authoring", f.authoring],
+  ]);
+  f.finish(job); await promise;
+});
+
+test("pristine and explicit observed source runs do not prewarm replacements", async () => {
+  for (const options of [
+    { preparedPlayback: true, preparationLookaheadSeconds: 0.75 },
+    { preparedPlayback: false, preparationLookaheadSeconds: 0.75 },
+  ]) {
+    const f = fixture(options);
+    f.authoring.libraryTrust = options.preparedPlayback ? "pristine" : "tainted";
+    const { promise, job } = await f.start();
+    await f.register(job); f.finish(job); await promise;
+    assert.equal(f.count("prewarm-authoring"), 0);
+  }
 });
 
 test("Run acceptance precedes interpreter readiness and source execution", async () => {

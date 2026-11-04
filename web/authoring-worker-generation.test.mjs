@@ -62,6 +62,74 @@ test("taint after an opaque failure still requires a pristine replacement", asyn
   f.owner.dispose();
 });
 
+test("a tainted source prewarms one candidate without adopting it before the next Run", async () => {
+  let currentToken = "run-1";
+  const old = client(1);
+  const gate = deferred();
+  const candidate = client(2, "pristine", gate.promise);
+  let created = 0;
+  const owner = new AuthoringWorkerGeneration({
+    createClient: () => (++created === 1 ? old : candidate),
+    isCurrentRun: token => token === currentToken,
+  });
+  await owner.clientForRun(currentToken);
+  old.setTrust("tainted");
+  assert.equal(owner.prepareReplacement(old), true);
+  assert.equal(owner.prepareReplacement(old), true, "repeated requests share the existing candidate");
+  await Promise.resolve();
+  assert.equal(created, 2);
+  assert.equal(owner.activeClient, old);
+  assert.equal(old.terminated, false);
+  gate.resolve();
+  await Promise.resolve();
+  currentToken = "run-2";
+  assert.equal(await owner.clientForRun(currentToken), candidate);
+  assert.equal(owner.activeClient, candidate);
+  assert.equal(old.terminated, true);
+  owner.dispose();
+});
+
+test("failed background prewarm discards only its candidate and the next Run retries", async () => {
+  let currentToken = "run-1";
+  const old = client(1);
+  const failure = deferred();
+  const broken = client(2, "unknown", failure.promise);
+  const retry = client(3);
+  const clients = [old, broken, retry];
+  const owner = new AuthoringWorkerGeneration({
+    createClient: () => clients.shift(),
+    isCurrentRun: token => token === currentToken,
+  });
+  await owner.clientForRun(currentToken);
+  old.setTrust("tainted");
+  assert.equal(owner.prepareReplacement(old), true);
+  failure.reject(new Error("prewarm bootstrap failed"));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(owner.activeClient, old);
+  assert.equal(old.terminated, false);
+  assert.equal(broken.terminated, true);
+  currentToken = "run-2";
+  assert.equal(await owner.clientForRun(currentToken), retry);
+  assert.equal(owner.activeClient, retry);
+  owner.dispose();
+});
+
+test("prewarm is restricted to the current tainted owner and disposal retires its candidate", async () => {
+  const f = fixture();
+  const active = await f.owner.clientForRun(f.token("run-1"));
+  assert.equal(f.owner.prepareReplacement(active), false, "pristine interpreters do not prewarm");
+  active.setTrust("tainted");
+  assert.equal(f.owner.prepareReplacement({}), false, "stale owners cannot prewarm");
+  assert.equal(f.owner.prepareReplacement(active), true);
+  await Promise.resolve();
+  const candidate = f.clients[1];
+  assert.equal(f.clients.length, 2, "at most one replacement candidate is created");
+  f.owner.dispose();
+  assert.equal(active.terminated, true);
+  assert.equal(candidate.terminated, true);
+  assert.equal(f.owner.prepareReplacement(active), false, "disposed owner cannot restart prewarm");
+});
+
 test("candidate initialization failure preserves the old active owner", async () => {
   let currentToken = "run-1";
   const failure = new Error("worker bootstrap failed");
