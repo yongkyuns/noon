@@ -104,7 +104,10 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
   const ready = structuredClone(contract);
   ready.status = "ready";
   ready.reference.actualAdapterIdentity = { backend: "BrowserWebGpu", vendor: 1, device: 2 };
-  ready.bounds = Object.fromEntries(Object.keys(ready.bounds).map(key => [key, 1]));
+  ready.bounds = Object.fromEntries(Object.keys(ready.bounds).map(key => [key, key === "firstUsefulMs"
+    ? Object.fromEntries(ready.sources.map(source => [source.id, Object.fromEntries(READINESS_STRATA.map(stratum =>
+      [stratum, { sourceRun: 1, historyReplay: 1 }]))]))
+    : 1]));
   ready.pendingCohorts = [];
   assert.deepEqual(validateReadinessContract(ready, { strict: true }), []);
   const pending = structuredClone(ready);
@@ -126,6 +129,36 @@ test("readiness draft binds showcase sources and the cumulative Product Gate anc
   const missingBounds = structuredClone(ready);
   missingBounds.bounds = {};
   assert.ok(validateReadinessContract(missingBounds, { strict: true }).some(error => /missing approved bound/.test(error)));
+  const missingStartupCell = structuredClone(ready);
+  delete missingStartupCell.bounds.firstUsefulMs[ready.sources[0].id][READINESS_STRATA[0]].historyReplay;
+  assert.ok(validateReadinessContract(missingStartupCell, { strict: true })
+    .some(error => /first-useful bounds are malformed/.test(error)));
+});
+
+test("first-useful bounds isolate source, stratum and source-run versus history-replay cohorts", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  const sourceId = contract.sources[0].id;
+  const warm = "fresh-process-warm-resource-cache", cold = "cold-network";
+  const bounded = structuredClone(contract);
+  bounded.bounds.firstUsefulMs[sourceId][warm] = { sourceRun: 10, historyReplay: 10 };
+  bounded.bounds.firstUsefulMs[sourceId][cold] = { sourceRun: 1000, historyReplay: 1000 };
+  const row = (arm, stratum, firstUsefulMs) => ({ sourceId, arm, stratum,
+    warmup: false, status: "observed", startup: { firstUsefulMs } });
+  const usefulError = (arm, stratum, phase, bound) =>
+    `${sourceId}/${arm}/${stratum}: first useful p95 20ms exceeds ${phase} bound ${bound}ms`;
+
+  const coldAllowanceDoesNotMaskWarmSourceRun = validateReadinessResults([
+    row("A", warm, 20), row("A", cold, 20),
+  ], bounded);
+  assert.ok(coldAllowanceDoesNotMaskWarmSourceRun.includes(usefulError("A", warm, "sourceRun", 10)));
+  assert.ok(!coldAllowanceDoesNotMaskWarmSourceRun.includes(usefulError("A", cold, "sourceRun", 1000)));
+
+  bounded.bounds.firstUsefulMs[sourceId][warm] = { sourceRun: 1000, historyReplay: 10 };
+  const sourceRunAllowanceDoesNotMaskHistoryReplay = validateReadinessResults([
+    row("A", warm, 20), row("B", warm, 20),
+  ], bounded);
+  assert.ok(!sourceRunAllowanceDoesNotMaskHistoryReplay.includes(usefulError("A", warm, "sourceRun", 1000)));
+  assert.ok(sourceRunAllowanceDoesNotMaskHistoryReplay.includes(usefulError("B", warm, "historyReplay", 10)));
 });
 
 test("readiness summaries keep failed and warmup starts out of timing samples", async () => {
@@ -145,6 +178,7 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   assert.equal(summary.observedStarts, 1);
   assert.equal(summary.failedStarts, 1);
   assert.equal(summary.startup.firstUsefulMs.n, 1);
+  assert.deepEqual(summary.startupBound, { firstUsefulMs: null, phase: "sourceRun" });
   assert.equal(Object.hasOwn(summary.startup, "runtimeAcceptanceMs"), false,
     "startup does not report an acceptance value without a startup command");
   assert.equal("p99" in summary.startup.firstUsefulMs, false,

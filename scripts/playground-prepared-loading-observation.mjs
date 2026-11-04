@@ -1,5 +1,6 @@
 export const READINESS_ARMS = ["A", "B", "C", "D"];
 export const READINESS_BASELINE_ARMS = ["C", "D"];
+const READINESS_STARTUP_PHASES = ["sourceRun", "historyReplay"];
 export const READINESS_STRATA = ["fresh-process-warm-resource-cache",
   "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"];
 export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceP95Ms",
@@ -321,6 +322,25 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
       source.durationSeconds <= 0 || source.window !== "full-authored-first-pass")) {
     errors.push("source identity or full-pass duration is malformed");
   }
+  const firstUsefulBounds = contract?.bounds?.firstUsefulMs;
+  const sourceIds = Array.isArray(contract?.sources) ? contract.sources.map(source => source?.id) : [];
+  if (JSON.stringify(Object.keys(firstUsefulBounds ?? {}).sort()) !== JSON.stringify(sourceIds.slice().sort())) {
+    errors.push("first-useful bounds must cover each source");
+  } else for (const sourceId of sourceIds) {
+    const strata = firstUsefulBounds[sourceId];
+    if (JSON.stringify(Object.keys(strata ?? {}).sort()) !== JSON.stringify([...READINESS_STRATA].sort())) {
+      errors.push(`first-useful bounds must cover each stratum for ${sourceId}`);
+      continue;
+    }
+    for (const stratum of READINESS_STRATA) {
+      const phases = strata[stratum];
+      if (JSON.stringify(Object.keys(phases ?? {}).sort()) !== JSON.stringify([...READINESS_STARTUP_PHASES].sort()) ||
+          Object.values(phases ?? {}).some(value => value !== null &&
+            (!Number.isFinite(value) || value <= 0))) {
+        errors.push(`first-useful bounds are malformed for ${sourceId}/${stratum}`);
+      }
+    }
+  }
   const sampling = contract?.sampling;
   if (!(Number.isSafeInteger(sampling?.warmupsPerArmPerStratum) && sampling.warmupsPerArmPerStratum >= 1 &&
         Number.isSafeInteger(sampling?.measuredStartsPerArmPerStratum) && sampling.measuredStartsPerArmPerStratum >= 20 &&
@@ -347,6 +367,17 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
     if (contract.status !== "ready") errors.push("readiness contract has not been reviewed and frozen");
     if (!contract.reference?.actualAdapterIdentity) errors.push("actual reference GPU adapter is not pinned");
     for (const name of READINESS_BOUND_KEYS) {
+      if (name === "firstUsefulMs") {
+        for (const sourceId of sourceIds) for (const stratum of READINESS_STRATA) {
+          for (const phase of READINESS_STARTUP_PHASES) {
+            const value = firstUsefulBounds?.[sourceId]?.[stratum]?.[phase];
+            if (!Number.isFinite(value) || value <= 0) {
+              errors.push(`missing approved bound: firstUsefulMs/${sourceId}/${stratum}/${phase}`);
+            }
+          }
+        }
+        continue;
+      }
       const value = contract.bounds?.[name];
       if (!Number.isFinite(value) || value <= 0) errors.push(`missing approved bound: ${name}`);
     }
@@ -419,6 +450,7 @@ export function summarizeReadiness(cases, contract) {
           ...(commandPhases[name] ? { phase: commandPhases[name] } : {}) }]));
       const cadence = observed.flatMap(row => row.activeCadenceWindows ?? []);
       const buffering = observed.flatMap(row => row.bufferingEpisodes ?? []);
+      const firstUsefulPhase = arm === "B" || arm === "D" ? "historyReplay" : "sourceRun";
       return {
         sourceId: source.id, arm, stratum,
         expectedStarts: contract.sampling.measuredStartsPerArmPerStratum,
@@ -429,6 +461,8 @@ export function summarizeReadiness(cases, contract) {
           "interpreterReadyObservedUpperMs", "firstControlsReadyObservedUpperMs", "sourceCompleteMs",
           "firstReaderAttachedObservedUpperMs", "firstSubmittedMs", "firstUsefulMs"].map(key =>
           [key, startupDistribution(observed.map(row => row.startup?.[key]))])),
+        startupBound: { firstUsefulMs: contract.bounds.firstUsefulMs?.[source.id]?.[stratum]?.[firstUsefulPhase] ?? null,
+          phase: firstUsefulPhase },
         commands: commandSummary,
         activeCadenceWindowP99Ms: distribution(cadence.map(window => window.p99Ms)),
         activeCadenceWindowCount: cadence.length,
@@ -528,10 +562,12 @@ export function validateReadinessResults(cases, contract) {
           errors.push(`${source.id}/${arm}/${stratum}: owner retirement exceeds its bound`);
         }
       }
+      const firstUsefulPhase = arm === "B" || arm === "D" ? "historyReplay" : "sourceRun";
+      const usefulBound = contract.bounds.firstUsefulMs?.[source.id]?.[stratum]?.[firstUsefulPhase];
       const useful = distribution(rows.filter(row => row.status === "observed")
         .map(row => row.startup?.firstUsefulMs));
-      if (Number.isFinite(contract.bounds.firstUsefulMs) && useful.p95 > contract.bounds.firstUsefulMs) {
-        errors.push(`${source.id}/${arm}/${stratum}: first useful p95 exceeds its bound`);
+      if (Number.isFinite(usefulBound) && useful.p95 > usefulBound) {
+        errors.push(`${source.id}/${arm}/${stratum}: first useful p95 ${useful.p95}ms exceeds ${firstUsefulPhase} bound ${usefulBound}ms`);
       }
       const cadence = distribution(rows.flatMap(row => row.activeCadenceWindows ?? []).map(window => window.p99Ms));
       if (Number.isFinite(contract.bounds.activeCadenceWindowP99Ms) && cadence.p99 > contract.bounds.activeCadenceWindowP99Ms) {

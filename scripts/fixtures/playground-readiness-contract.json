@@ -70,7 +70,20 @@
     "startupPopulationP99": false
   },
   "bounds": {
-    "firstUsefulMs": null,
+    "firstUsefulMs": {
+      "showcase-first-scene": {
+        "fresh-process-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
+        "reload-new-workers-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
+        "cold-network": { "sourceRun": null, "historyReplay": null },
+        "reused-healthy-interpreter": { "sourceRun": null, "historyReplay": null }
+      },
+      "showcase-dynamic-scene": {
+        "fresh-process-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
+        "reload-new-workers-warm-resource-cache": { "sourceRun": null, "historyReplay": null },
+        "cold-network": { "sourceRun": null, "historyReplay": null },
+        "reused-healthy-interpreter": { "sourceRun": null, "historyReplay": null }
+      }
+    },
     "commandFeedbackMs": null,
     "commandAcceptanceP95Ms": null,
     "commandPresentationP99Ms": null,
