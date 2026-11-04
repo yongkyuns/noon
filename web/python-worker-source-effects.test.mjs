@@ -6,16 +6,21 @@ const source = await readFile(new URL("./python-worker.source.js", import.meta.u
 const begin = source.indexOf("async function runAuthoringSource("), end = source.indexOf("async function runCanonicalCallbackPhase", begin);
 assert.ok(begin >= 0 && end > begin);
 function worker() {
-  const events = [], diagnostics = [];
-  const run = new Function("withAuthoringDiagnostics", "prepareAuthoringDependencies", "diagnosedHostCode", "isRecord", "post", `
+  const events = [], diagnostics = [], stores = [];
+  class WasmAuthoringStore {
+    constructor() { stores.push(this); }
+    free() { this.freed = true; }
+  }
+  const run = new Function("WasmAuthoringStore", "withAuthoringDiagnostics", "prepareAuthoringDependencies", "diagnosedHostCode", "isRecord", "post", `
     let activeAuthoringRun = null, authoringLibrariesPristine = true;
+    let authoringStore = new WasmAuthoringStore();
     ${source.slice(begin, end)}
     return async (pyodide, preparedPlayback) => {
       activeAuthoringRun = { preparedPlayback, sourceSceneOnly: false };
       await runAuthoringSource(pyodide, "source", {}, 1);
       return activeAuthoringRun.sourceSceneOnly;
     };
-  `)(async (_pyodide, _source, _context, _id, execute) => execute({}),
+  `)(WasmAuthoringStore, async (_pyodide, _source, _context, _id, execute) => execute({}),
     async () => { events.push("dependencies"); }, value => value,
     value => value !== null && typeof value === "object" && !Array.isArray(value),
     (type, value) => diagnostics.push({ type, ...value }));
@@ -26,7 +31,7 @@ function worker() {
     },
     async runPythonAsync() { events.push("source"); return "result"; },
   });
-  return { events, diagnostics, run: (proof, prepared = true) => run(pyodide(proof), prepared) };
+  return { events, diagnostics, stores, run: (proof, prepared = true) => run(pyodide(proof), prepared) };
 }
 
 test("source effects are checked before dependencies or source execute", async () => {
@@ -34,6 +39,8 @@ test("source effects are checked before dependencies or source execute", async (
   assert.equal(await h.run(true, false), true);
   assert.equal(await h.run(true), true);
   assert.deepEqual(h.events, ["proof", "dependencies", "source", "proof", "dependencies", "source"]);
+  assert.equal(h.stores.length, 3, "each admitted Run has an independent factory arena");
+  assert.deepEqual(h.stores.map(store => store.freed === true), [true, true, false]);
 });
 
 test("an opaque run permanently prevents proof against mutated library state", async () => {
@@ -43,6 +50,8 @@ test("an opaque run permanently prevents proof against mutated library state", a
     assert.equal(await h.run(true), false);
     assert.equal(h.events.filter(event => event === "proof").length, 1);
     assert.equal(h.events.filter(event => event === "source").length, 2, "no source retry or reconstruction");
+    assert.equal(h.stores.length, 1, "opaque Runs retain the reusable arena");
+    assert.notEqual(h.stores[0].freed, true);
     assert.deepEqual(h.diagnostics.map(event => event.libraryTrust), ["tainted", "tainted"]);
     assert.deepEqual(h.diagnostics.map(event => event.event.stage), ["source-proof", "interpreter-trust"]);
     assert.equal(h.diagnostics[1].event.reason.code, "interpreter_tainted");

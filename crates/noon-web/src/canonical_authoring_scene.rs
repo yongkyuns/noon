@@ -13151,6 +13151,7 @@ mod tests {
 
         // This Rc is the authoring-store wrapper's owner. Scene contexts and
         // typed handles retain their own shared store references after it drops.
+        let retired_arena = Rc::downgrade(&previous_store);
         drop(previous_store);
         previous_handle.shift(2.0, -1.0).unwrap();
         previous_context.scene.square(0.5).unwrap();
@@ -13159,6 +13160,9 @@ mod tests {
             previous_nodes + 1
         );
         assert_eq!(fresh_store.borrow().len(), 2);
+        drop(previous_handle);
+        drop(previous_context);
+        assert!(retired_arena.upgrade().is_none());
     }
 
     #[test]
