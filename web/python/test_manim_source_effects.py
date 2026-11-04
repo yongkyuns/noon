@@ -551,6 +551,29 @@ class Example(Scene):
             1,
         )
         self.assertFalse(source_execution_proof(nested_shadow)["admitted"])
+        effectful_callback = triangle.replace(
+            "def accumulate_ray_exposures(",
+            "RESOURCE_GROUP = VGroup()\n\n"
+            "def alloc(data):\n"
+            "    RESOURCE_GROUP.add(Circle())\n"
+            "    return data\n\n"
+            "def invoke(callback, data):\n"
+            "    return callback(data)\n\n"
+            "def accumulate_ray_exposures(",
+            1,
+        ).replace(
+            "    for count, (a, b) in enumerate(zip(points, points[1:]), 1):",
+            "    for count, (a, b) in enumerate(zip(points, points[1:]), 1):\n"
+            "        invoke(alloc, points)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(effectful_callback)["admitted"])
+        shadowed_callback = effectful_callback.replace(
+            "def invoke(callback, data):\n    return callback(data)",
+            "def invoke(len, data):\n    return len(data)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_callback)["admitted"])
         for unsafe in (
             triangle.replace("        if count in wanted:\n",
                              "        if count in wanted:\n            pass\n        else:\n", 1),
