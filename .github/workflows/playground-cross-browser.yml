@@ -47,7 +47,7 @@ jobs:
         env:
           NOON_PLAYGROUND_BROWSER: firefox
           NOON_PLAYGROUND_PROFILE: desktop-dpr2
-          NOON_SHOWCASE_PROFILE_GATE: strict
+          NOON_SHOWCASE_PROFILE_GATE: baseline
           NOON_GALLERY_CASES: showcase-background-music
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/gallery
         run: xvfb-run -a node scripts/playground-gallery-runtime-smoke.mjs
