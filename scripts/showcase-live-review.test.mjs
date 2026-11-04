@@ -194,8 +194,8 @@ function preparedAudioPage({ run, observations = [] } = {}) {
     async executionMetrics() {
       metricsCalls += 1;
       current.captureEvents?.push(`metrics-${metricsCalls}`);
-      if (current.wrapOnPostMetric && metricsCalls % 2 === 0) current.looped = true;
-      const sample = current.postPresentationSample && metricsCalls % 2 === 0
+      if (current.wrapOnFreshMetrics) current.looped = true;
+      const sample = current.postPresentationSample && metricsCalls === 1
         ? current.postPresentationSample
         : current.presentationSample ?? {
           session: current.session ?? 7, sequence: current.sequence ?? 5,
@@ -235,9 +235,12 @@ function preparedAudioPage({ run, observations = [] } = {}) {
         toBlob(callback) {
           const copiedDataUrl = current.canvasDataUrl ?? "data:image/png;base64,aGVsbG8=";
           current.captureEvents?.push("toBlob-copy");
+          if (current.wrapSynchronouslyDuringToBlob) {
+            current.captureEvents?.push("wrap-during-toBlob");
+            current.looped = true;
+          }
           setTimeout(() => {
             current.captureEvents?.push("toBlob-serialize");
-            if (current.wrapDuringBlobSerialization) current.looped = true;
             callback(new TestBlob(copiedDataUrl));
           }, 0);
         },
@@ -386,7 +389,7 @@ test("looping first pass accepts an earlier receipt only with matching Rust hold
   }
 });
 
-test("terminal hold bitmap and controls are captured before asynchronous PNG serialization", async () => {
+test("terminal snapshot remains valid when toBlob blocks across the loop wrap", async () => {
   const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
   const copiedDataUrl = "data:image/png;base64,cHJlLXdyYXA=";
   const captureEvents = [];
@@ -395,7 +398,7 @@ test("terminal hold bitmap and controls are captured before asynchronous PNG ser
       time: 0, playing: true, durationSeconds: 8 } },
     observations: [
       { elapsed: 7.5, publishedTime: 7.5, canvasDataUrl: copiedDataUrl, captureEvents,
-        controls: { playing: "true" }, wrapDuringBlobSerialization: true },
+        controls: { playing: "true" }, wrapSynchronouslyDuringToBlob: true },
       { elapsed: 0.1, publishedTime: 0.1, looped: true },
     ],
   });
@@ -409,8 +412,8 @@ test("terminal hold bitmap and controls are captured before asynchronous PNG ser
     session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
   });
   assert.deepEqual(captureEvents, [
-    "metrics-1", "requestAnimationFrame", "requestAnimationFrame", "toBlob-copy",
-    "metrics-2", "toBlob-serialize",
+    "requestAnimationFrame", "requestAnimationFrame", "metrics-1", "toBlob-copy",
+    "wrap-during-toBlob", "toBlob-serialize",
   ]);
 });
 
@@ -456,17 +459,22 @@ test("terminal capture rejects a renderer session that differs from the attached
   await assert.rejects(runOrdinaryGallery(page, 100, lesson), /wrapped before its terminal hold picture/);
 });
 
-test("terminal capture rejects a loop that occurs while the first metrics RPC is pending", async () => {
+test("fresh pre-copy metrics reject a wrapped or out-of-window frame", async () => {
   const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
-  const { page } = preparedAudioPage({
-    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
-      time: 0, playing: true, durationSeconds: 8 } },
-    observations: [
-      { elapsed: 7.5, publishedTime: 7.5, controls: { playing: "true" }, wrapOnPostMetric: true },
-      { elapsed: 0.1, publishedTime: 0.1, looped: true },
-    ],
-  });
-  await assert.rejects(runOrdinaryGallery(page, 100, lesson), /wrapped before its terminal hold picture/);
+  for (const invalid of [
+    { wrapOnFreshMetrics: true },
+    { postPresentationSample: { session: 7, sequence: 6, time: 8.01, presentedAtMs: 110 } },
+  ]) {
+    const { page } = preparedAudioPage({
+      run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+        time: 0, playing: true, durationSeconds: 8 } },
+      observations: [
+        { elapsed: 7.5, publishedTime: 7.5, controls: { playing: "true" }, ...invalid },
+        { elapsed: 0.1, publishedTime: 0.1, looped: true },
+      ],
+    });
+    await assert.rejects(runOrdinaryGallery(page, 100, lesson), /wrapped before its terminal hold picture/);
+  }
 });
 
 test("dense first-pass composition is checked against the captured hold, not the post-wrap frame", () => {

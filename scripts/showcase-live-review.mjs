@@ -136,87 +136,53 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
       runRequestId: diagnostics.runRequestId,
       context: diagnostics.context,
     };
+    const canvas = document.querySelector("#scene");
+    if (typeof canvas?.toBlob !== "function") return false;
+    // Let the transferred HTML canvas placeholder receive the current worker
+    // bitmap before validating the exact publication that toBlob will snapshot.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
     const report = await gallery.executionMetrics();
     const current = gallery.executionDiagnostics;
     const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
     const metrics = report?.metrics;
     const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
     const receipt = metrics?.latestPresentationSample;
+    const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
+    const captureElapsed = Number(captureControls.elapsedSeconds);
     const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
       receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
     const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
-    if (current?.interpreterGeneration === runIdentity.interpreterGeneration &&
-        current?.runRequestId === runIdentity.runRequestId &&
-        JSON.stringify(current.context) === JSON.stringify(runIdentity.context) &&
-        currentDisposition !== "looped" && attached?.publication &&
-        attached.publication.session === receipt?.session && Number.isSafeInteger(receipt?.sequence) &&
-        receipt.sequence >= attached.publication.sequence && Number.isFinite(receipt.time) &&
-        (naturalTerminalReceipt || heldPresentation !== null) &&
-        metrics.time === receipt.time && metrics.needsPresent === false && metrics.bufferedDeltas === 0 &&
-        Number.isSafeInteger(metrics.objectCount)) {
-      const canvas = document.querySelector("#scene");
-      if (typeof canvas?.toBlob === "function") {
-        // A transferred HTML canvas placeholder can lag the worker's present.
-        // Let two main-thread paint updates run, then toBlob synchronously copies
-        // the placeholder bitmap before asynchronous PNG serialization (HTML
-        // canvas toBlob: https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
-        const captureElapsed = Number(captureControls.elapsedSeconds);
-        if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
-            captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
-            captureElapsed < holdStart ||
-            captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration)) return false;
-        const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-        // Validate the exact run and renderer receipt before awaiting PNG encoding.
-        const afterReport = await gallery.executionMetrics();
-        const afterMetrics = afterReport?.metrics;
-        const afterReceipt = afterMetrics?.latestPresentationSample;
-        const afterHeldPresentation = heldPresentation === null ? null :
-          heldEvidence(afterReport, afterMetrics, afterReceipt);
-        const afterDiagnostics = gallery.executionDiagnostics;
-        const afterAttached = [...(afterDiagnostics?.events ?? [])].reverse()
-          .find((event) => event.stage === "attached");
-        const afterDisposition = afterDiagnostics?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
-        if (afterDiagnostics?.interpreterGeneration === runIdentity.interpreterGeneration &&
-            afterDiagnostics?.runRequestId === runIdentity.runRequestId &&
-            JSON.stringify(afterDiagnostics.context) === JSON.stringify(runIdentity.context) &&
-            afterDisposition !== "looped" &&
-            JSON.stringify(afterAttached?.publication) === JSON.stringify(attached.publication) &&
-            afterReceipt?.session === receipt.session && afterReceipt.sequence === receipt.sequence &&
-            afterReceipt.time === receipt.time && afterMetrics.time === receipt.time &&
-            afterMetrics.needsPresent === false && afterMetrics.bufferedDeltas === 0 &&
-            afterMetrics.objectCount === metrics.objectCount &&
-            (heldPresentation === null ? afterHeldPresentation === null :
-              afterHeldPresentation !== null &&
-              afterHeldPresentation.publication.session === heldPresentation.publication.session &&
-              afterHeldPresentation.publication.sequence === heldPresentation.publication.sequence &&
-              afterHeldPresentation.evaluatedTime === heldPresentation.evaluatedTime &&
-              afterHeldPresentation.validUntil === heldPresentation.validUntil)) {
-          const pngBlob = await pngBlobPromise;
-          if (!(pngBlob instanceof Blob)) return false;
-          const pngDataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
-            reader.readAsDataURL(pngBlob);
-          });
-          if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
-          window.__showcaseLiveReviewFirstPass = {
-            pngDataUrl,
-            metrics,
-            rendererReceipt: receipt,
-            heldPresentation,
-            controls: captureControls,
-            authoredDuration: duration,
-            holdStart,
-            ...runIdentity,
-            attached,
-          };
-        }
-      }
+    if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
+        captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
+        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
+        current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
+        current?.runRequestId !== runIdentity.runRequestId ||
+        JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
+        currentDisposition === "looped" || !attached?.publication ||
+        attached.publication.session !== receipt?.session || !Number.isSafeInteger(receipt?.sequence) ||
+        receipt.sequence < attached.publication.sequence || !Number.isFinite(receipt.time) ||
+        !(naturalTerminalReceipt || heldPresentation !== null) || metrics.time !== receipt.time ||
+        metrics.needsPresent !== false || metrics.bufferedDeltas !== 0 || !Number.isSafeInteger(metrics.objectCount)) {
+      return false;
     }
+
+    // toBlob copies the bitmap synchronously before serializing it in parallel.
+    // Keep the validated run, receipt, and controls as this snapshot's evidence;
+    // playback may advance while toBlob returns and the PNG is encoded.
+    const capture = { metrics, rendererReceipt: receipt, heldPresentation, controls: captureControls,
+      authoredDuration: duration, holdStart, ...runIdentity, attached };
+    const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const pngBlob = await pngBlobPromise;
+    if (!(pngBlob instanceof Blob)) return false;
+    const pngDataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
+      reader.readAsDataURL(pngBlob);
+    });
+    if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
+    window.__showcaseLiveReviewFirstPass = { pngDataUrl, ...capture };
   }
   return false;
 }
