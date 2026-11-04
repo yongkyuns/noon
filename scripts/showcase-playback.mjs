@@ -20,28 +20,66 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
   assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
   assert.ok(sampleTime === null || (Number.isFinite(sampleTime) && sampleTime >= 0 && sampleTime <= storyboardDuration),
     "requested checkpoint is outside the storyboard");
-  const waitReady = async (expectedTime = null, paused = false) => {
-    await page.waitForFunction(({ expectedTime, paused }) => {
-      const patch = document.querySelector("#patch-status");
-      const controls = document.querySelector(".playback-controls");
-      if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery execution failed");
-      if (!controls) return false;
-      if (controls.dataset.controllable === "false") {
-        throw new Error(controls.title || "Gallery replay is unavailable");
+  const waitReady = async (phase, expectedTime = null, paused = false) => {
+    try {
+      await page.waitForFunction(({ expectedTime, paused }) => {
+        const patch = document.querySelector("#patch-status");
+        const controls = document.querySelector(".playback-controls");
+        if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery execution failed");
+        if (!controls) return false;
+        if (controls.dataset.controllable === "false") {
+          throw new Error(controls.title || "Gallery replay is unavailable");
+        }
+        const toggle = controls.querySelector(".playback-toggle");
+        return controls.dataset.busy === "false" &&
+          (!paused || toggle?.getAttribute("aria-label") === "Play animation") &&
+          (expectedTime === null || Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7);
+      }, { expectedTime, paused });
+    } catch (error) {
+      let observed = null;
+      try {
+        observed = await page.evaluate(async () => {
+          const controls = document.querySelector(".playback-controls");
+          const patch = document.querySelector("#patch-status");
+          const toggle = controls?.querySelector(".playback-toggle");
+          const scrubber = controls?.querySelector(".playback-scrubber");
+          const gallery = window.__noonExampleGallery;
+          let metrics = null, metricsError = null;
+          try { metrics = await gallery?.executionMetrics(); } catch (cause) { metricsError = String(cause); }
+          return {
+            dom: {
+              controls: controls ? { ...controls.dataset, toggle: toggle?.getAttribute("aria-label") ?? null } : null,
+              scrubber: scrubber ? { value: scrubber.value, min: scrubber.min, max: scrubber.max } : null,
+              patch: patch ? { state: patch.dataset.state, value: patch.value } : null,
+              status: document.querySelector("#status") ? { ...document.querySelector("#status").dataset } : null,
+            },
+            playback: gallery ? {
+              executionMode: gallery.executionMode,
+              transportMode: gallery.transportMode,
+              runInFlight: gallery.runInFlight,
+              metrics,
+              metricsError,
+              presentationReceipt: metrics?.presentationReceipt ?? metrics?.metrics?.presentationReceipt ?? null,
+              executionDiagnostics: gallery.executionDiagnostics,
+              runPhaseMetrics: gallery.runPhaseMetrics,
+            } : null,
+            availableReceipts: window.__galleryControlReceipts ?? window.__triangleControlReceipts ?? null,
+          };
+        });
+      } catch (captureError) {
+        observed = { captureError: String(captureError) };
       }
-      const toggle = controls.querySelector(".playback-toggle");
-      return controls.dataset.busy === "false" &&
-        (!paused || toggle?.getAttribute("aria-label") === "Play animation") &&
-        (expectedTime === null || Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7);
-    }, { expectedTime, paused });
+      throw new Error(`Gallery seek phase "${phase}" did not settle; expected=${JSON.stringify({ expectedTime, paused })}; observed=${JSON.stringify(observed)}; cause=${String(error)}`, { cause: error });
+    }
   };
 
-  await waitReady();
+  await waitReady("controls-ready-before-pause");
   const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-  if (await pause.count()) await pause.click();
+  const pauseRequested = await pause.count() > 0;
+  if (pauseRequested) await pause.click();
   // Do not rely on seek to stop playback. Pause first so an advancing clock
   // cannot race the command-completion check or the screenshot.
-  await waitReady(null, true);
+  await waitReady(`pause-settled (requested=${pauseRequested})`, null, true);
   const scrubber = page.locator(".playback-scrubber");
   const authoredDuration = Number(await scrubber.getAttribute("max"));
   assert.ok(Number.isFinite(authoredDuration) && Math.abs(authoredDuration - storyboardDuration) < 1e-7,
@@ -58,7 +96,7 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
   assert.ok(Math.abs(requestedTime - targetTime) <= 8 * Number.EPSILON * Math.max(1, authoredDuration),
     "Browser slider quantized the requested checkpoint");
   // The slider remains enabled during a seek; data-busy is the command barrier.
-  await waitReady(targetTime, true);
+  await waitReady("seek-settled", targetTime, true);
   return targetTime;
 }
 

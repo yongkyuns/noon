@@ -10,92 +10,57 @@ permissions:
   actions: read
 
 jobs:
-  firefox-diagnostic:
-    name: Firefox audio and worker retirement diagnosis
-    runs-on: ubuntu-latest
+  webkit-gallery-diagnostic:
+    name: WebKit shrink-to-center phase diagnosis
+    runs-on: macos-latest
     timeout-minutes: 20
     env:
       DEBUG: pw:browser
     steps:
       - uses: actions/checkout@v7
-      - name: Apply only diagnostic harness changes to the tested source
+      - name: Apply only the diagnostic helper change to the tested source
         shell: bash
+        env:
+          SOURCE_REV: 32a7d3d19b97e5ca4e885920886e55680fe170d8
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
-          git diff --binary 50d0dbe79306764da6cdbc6ab173756bf7bea8a3 -- scripts > "$RUNNER_TEMP/noon-2421-firefox.patch"
-          git checkout --detach 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
-          git apply "$RUNNER_TEMP/noon-2421-firefox.patch"
-          mkdir -p browser-smoke-artifacts/firefox-diagnostic
-          cp "$RUNNER_TEMP/noon-2421-firefox.patch" browser-smoke-artifacts/firefox-diagnostic/harness.patch
-          sha256sum "$RUNNER_TEMP/noon-2421-firefox.patch" > browser-smoke-artifacts/firefox-diagnostic/harness.sha256
-          git rev-parse HEAD > browser-smoke-artifacts/firefox-diagnostic/source.txt
-          node --version > browser-smoke-artifacts/firefox-diagnostic/node-version.txt
-      - name: Reuse the exact hosted browser package
+          git fetch --no-tags --depth=1 origin "$SOURCE_REV"
+          git diff --binary "$SOURCE_REV" -- scripts/showcase-playback.mjs > "$RUNNER_TEMP/noon-2421-webkit.patch"
+          git checkout --detach "$SOURCE_REV"
+          git apply "$RUNNER_TEMP/noon-2421-webkit.patch"
+          mkdir -p browser-smoke-artifacts/playground-gallery-webkit-diagnostic
+          cp "$RUNNER_TEMP/noon-2421-webkit.patch" browser-smoke-artifacts/playground-gallery-webkit-diagnostic/harness.patch
+          shasum -a 256 "$RUNNER_TEMP/noon-2421-webkit.patch" > browser-smoke-artifacts/playground-gallery-webkit-diagnostic/harness.sha256
+          git rev-parse HEAD > browser-smoke-artifacts/playground-gallery-webkit-diagnostic/source.txt
+          node --version > browser-smoke-artifacts/playground-gallery-webkit-diagnostic/node-version.txt
+      - name: Download the exact tested browser runtime
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: 13301655134
-          run-id: 41784702322
+          artifact-ids: 13318854607
+          run-id: 41825281588
           github-token: ${{ github.token }}
           path: web
-      - name: Install existing pinned browser tools
+      - name: Install pinned WebKit browser tools
+        timeout-minutes: 15
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
-          npx playwright install --with-deps firefox
+          bash scripts/ci-install-playwright-browser.sh webkit
           node scripts/check-web-package.mjs
           git diff --exit-code -- web
-      - name: Record native audio baseline before backend setup
-        shell: bash
-        run: |
-          mkdir -p browser-smoke-artifacts/firefox-diagnostic/native
-          {
-            for noon_audio_tool in pulseaudio pactl aplay; do
-              command -v "$noon_audio_tool" || echo "$noon_audio_tool unavailable"
-            done
-            ps -eo comm= | sort -u | grep -Ei 'pulse|pipewire|alsa|jack' || true
-            if command -v pactl >/dev/null; then pactl info || true; fi
-            if command -v aplay >/dev/null; then aplay -l || true; fi
-          } > browser-smoke-artifacts/firefox-diagnostic/native/services-before.txt 2>&1
-      - name: Test native AudioContext before backend setup
+      - name: Rerun the exact failing gallery case with phase diagnostics
+        timeout-minutes: 10
         env:
-          NOON_FIREFOX_AUDIO_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/native-before
-        run: xvfb-run -a node scripts/firefox-native-audio-resume-diagnostic.mjs
-      - name: Install and configure temporary PulseAudio null sink
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends pulseaudio pulseaudio-utils
-          pulseaudio --start --exit-idle-time=-1
-          pactl info
-          pactl load-module module-null-sink sink_name=noon_ci rate=48000
-          pactl set-default-sink noon_ci
-          {
-            command -v pulseaudio
-            command -v pactl
-            pactl info
-            pactl get-default-sink
-            pactl list short sinks
-          } > browser-smoke-artifacts/firefox-diagnostic/native/backend-after-setup.txt 2>&1
-      - name: Test native AudioContext after backend setup
-        env:
-          NOON_FIREFOX_AUDIO_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/native-after
-        run: xvfb-run -a node scripts/firefox-native-audio-resume-diagnostic.mjs
-      - name: Diagnose immutable audio through the unchanged gallery gate
-        if: ${{ !cancelled() }}
-        id: gallery
-        env:
-          NOON_PLAYGROUND_BROWSER: firefox
-          NOON_PLAYGROUND_PROFILE: desktop-dpr2
-          NOON_SHOWCASE_PROFILE_GATE: baseline
-          NOON_GALLERY_CASES: showcase-background-music
-          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/firefox-diagnostic/gallery
-        run: xvfb-run -a node scripts/playground-gallery-runtime-smoke.mjs
-      - name: Preserve complete diagnostic evidence
+          NOON_PLAYGROUND_BROWSER: webkit
+          NOON_PLAYGROUND_PROFILE: mobile-dpr2
+          NOON_SHOWCASE_PROFILE_GATE: strict
+          NOON_GALLERY_CASES: manim-shrink-to-center-text
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery-webkit-diagnostic
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: noon-2421-firefox-diagnostic
-          path: browser-smoke-artifacts/firefox-diagnostic
+          name: noon-2421-webkit-gallery-phase-diagnostic
+          path: browser-smoke-artifacts/playground-gallery-webkit-diagnostic
           if-no-files-found: error
           retention-days: 3
