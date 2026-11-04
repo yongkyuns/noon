@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import playwright from 'playwright';
 import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
-import { createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
+import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { seekPausedGallery, waitForPublishedGalleryFrame } from './showcase-playback.mjs';
@@ -576,6 +576,7 @@ try {
         native.snapshots().at(-1)?.processes ?? []);
       result.failureDiagnostics.nativeCrashReports = await native.failure();
       result.failureDiagnostics.nativeProcessSnapshots = native.snapshots();
+      result.failureDiagnostics.attemptedPage = await captureAttemptedPage(page);
     } finally {
       clearTimeout(caseTimer);
       if (expectedProfile && !Object.hasOwn(result, 'executionDiagnostics')) {
