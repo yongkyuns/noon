@@ -10,7 +10,7 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   readinessTraceMatchesRun,
   readinessRunTimingOriginErrors,
   readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
-  readinessPreparedReaderLead, activeFrameGapEvidence, summarizeReaderLead,
+  readinessPreparedReaderLead, activeFrameGapEvidence, summarizeReaderLead, readinessBufferingEvidence,
   readinessPostTerminalReceiverSession,
   readinessFirstUsefulRegressionErrors,
   READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
@@ -205,7 +205,7 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
       intervalMs: distribution([16, 18]), missedVsyncs: 1, missedRefreshFraction: 1 / 3,
       longFrameRate: 0.5, coverageErrors: [] },
     readerLeadObservations: [{ leadSeconds: 0.2, observedTime: 1, frontier: 1.2, endClosed: false, buffering: false }],
-    bufferingEpisodes: [{ durationMs: 40 }],
+    bufferingEvidence: { capture: "captured", episodes: [{ durationMs: 40 }], count: 1, totalMs: 40, maxMs: 40 },
     memory: { peakSampledRssBytes: 100 }, ...overrides });
   const summary = summarizeReadiness([
     row("A", { commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12,
@@ -237,7 +237,9 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   assert.equal(summary.maxActiveFrameGapMs, 18);
   assert.equal(summary.readerLead.sampleCount, 1);
   assert.equal(summary.readerLead.openSamples, 1);
-  assert.equal(summary.buffering.episodes, 1);
+  assert.equal(summary.buffering.perRunEpisodes.n, 1);
+  assert.equal(summary.buffering.perRunTotalMs.median, 40);
+  assert.equal(summary.buffering.perRunMaxEpisodeMs.max, 40);
   assert.equal(summary.peakProcessRssBytes.n, 1);
 });
 
@@ -472,6 +474,92 @@ test("observed first-pass completion does not require an incremental loop counte
     .includes("trace has no expected disposition"));
 });
 
+test("prepared buffering episodes come from complete Rust state transitions", () => {
+  const trace = { droppedEvents: 0, events: [
+    { sequence: 0, stage: "attached", session: 7, bufferingCapture: {
+      session: 7, playing: true, buffering: false, waiting: false, observedAtEpochMs: 80 },
+      publication: { session: 7, sequence: 5 } },
+    { sequence: 1, stage: "buffering-transition", session: 7, waiting: true, playing: true, buffering: true,
+      boundary: "tick", reason: "open-history-frontier", mutationStartedAtEpochMs: 120, observedAtEpochMs: 130 },
+    { sequence: 2, stage: "buffering-transition", session: 7, waiting: false, playing: true, buffering: false,
+      boundary: "prefix-delivery", reason: "prefix-adopted", mutationStartedAtEpochMs: 190, observedAtEpochMs: 200 },
+    { sequence: 3, stage: "buffering-transition", session: 7, waiting: true, playing: true, buffering: true,
+      boundary: "tick", reason: "open-history-frontier", mutationStartedAtEpochMs: 220, observedAtEpochMs: 225 },
+    { sequence: 4, stage: "buffering-transition", session: 7, waiting: false, playing: false, buffering: true,
+      boundary: "pause", reason: "pause", mutationStartedAtEpochMs: 250, observedAtEpochMs: 260 },
+  ] };
+  const evidence = readinessBufferingEvidence(trace, { startEpochMs: 100, endEpochMs: 300, required: true, session: 7 });
+  assert.equal(evidence.capture, "captured");
+  assert.deepEqual(evidence.episodes.map(episode => episode.durationMs), [80, 40],
+    "waiting ends at the Rust pause transition even while its buffering flag stays set");
+  assert.deepEqual([evidence.count, evidence.totalMs, evidence.maxMs], [2, 120, 80]);
+  assert.deepEqual(readinessBufferingEvidence(trace, { startEpochMs: 100, endEpochMs: 300,
+    required: false }), { capture: "not-applicable", episodes: [], count: 0, totalMs: 0, maxMs: 0, errors: [] });
+  const zero = readinessBufferingEvidence({ droppedEvents: 0, events: [trace.events[0]] },
+    { startEpochMs: 100, endEpochMs: 300, required: true, session: 7 });
+  assert.deepEqual([zero.capture, zero.count, zero.totalMs, zero.maxMs], ["captured", 0, 0, 0]);
+  const open = structuredClone(trace);
+  open.events.pop();
+  assert.ok(readinessBufferingEvidence(open, { startEpochMs: 100, endEpochMs: 300, required: true, session: 7 })
+    .errors.some(error => /remained open/.test(error)));
+  const missing = { ...trace, events: trace.events.slice(1).map((event, sequence) => ({ ...event, sequence })) };
+  assert.ok(readinessBufferingEvidence(missing, { startEpochMs: 100, endEpochMs: 300, required: true, session: 7 })
+    .errors.some(error => /no attached buffering capture/.test(error)));
+  assert.ok(readinessBufferingEvidence({ ...trace, droppedEvents: 1 },
+    { startEpochMs: 100, endEpochMs: 300, required: true, session: 7 }).errors.some(error => /dropped events/.test(error)));
+  assert.ok(readinessBufferingEvidence(trace, { startEpochMs: 100, endEpochMs: 300, required: true, session: 8 })
+    .errors.some(error => /measured session/.test(error)), "another session's marker cannot prove a zero-wait run");
+  const censored = { droppedEvents: 0, events: [
+    { sequence: 0, stage: "attached", session: 7, bufferingCapture: {
+      session: 7, playing: true, buffering: true, waiting: true, observedAtEpochMs: 80 },
+      publication: { session: 7, sequence: 5 } },
+    { sequence: 1, stage: "buffering-transition", session: 7, waiting: true, playing: true, buffering: true,
+      leftCensored: true, boundary: "receiver-attached", reason: "open-history-frontier",
+      mutationStartedAtEpochMs: 80, observedAtEpochMs: 81 },
+    { sequence: 2, stage: "buffering-transition", session: 7, waiting: false, playing: true, buffering: false,
+      boundary: "prefix-delivery", reason: "prefix-adopted", mutationStartedAtEpochMs: 140, observedAtEpochMs: 150 },
+  ] };
+  assert.ok(readinessBufferingEvidence(censored, { startEpochMs: 100, endEpochMs: 200,
+    required: true, session: 7 }).errors.some(error => /left-censored/.test(error)),
+  "a pre-window wait cannot be laundered by clipping it to the measurement start");
+  const instantaneous = { droppedEvents: 0, events: [trace.events[0],
+    { ...trace.events[1], sequence: 1, mutationStartedAtEpochMs: 120, observedAtEpochMs: 120 },
+    { ...trace.events[2], sequence: 2, mutationStartedAtEpochMs: 120, observedAtEpochMs: 120 }] };
+  const zeroDuration = readinessBufferingEvidence(instantaneous, { startEpochMs: 100, endEpochMs: 200,
+    required: true, session: 7 });
+  assert.deepEqual([zeroDuration.count, zeroDuration.totalMs, zeroDuration.maxMs], [1, 0, 0]);
+  assert.ok(readinessBufferingEvidence(trace, { startEpochMs: 220, endEpochMs: 230, required: true, session: 7 })
+    .errors.some(error => /remained open/.test(error)), "a close after the replay wrap cannot close this window's episode");
+  const startsAtEnd = { droppedEvents: 0, events: [trace.events[0],
+    { ...trace.events[1], sequence: 1, mutationStartedAtEpochMs: 300, observedAtEpochMs: 300 }] };
+  assert.ok(readinessBufferingEvidence(startsAtEnd, { startEpochMs: 100, endEpochMs: 300,
+    required: true, session: 7 }).errors.some(error => /remained open/.test(error)),
+  "an enter transition at the exact measurement endpoint is retained as an open episode");
+});
+
+test("buffering limits apply per row to episode count and aggregate time", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  const sourceId = contract.sources[0].id, stratum = READINESS_STRATA[0];
+  contract.bounds.bufferingEpisodeCount = 1;
+  contract.bounds.bufferingTotalMs = 100;
+  const row = { sourceId, arm: "A", stratum, warmup: false, status: "failed", commands: [],
+    bufferingEvidence: { capture: "captured", episodes: [{ durationMs: 4 }, { durationMs: 5 }],
+      count: 2, totalMs: 9, maxMs: 5 } };
+  assert.ok(validateReadinessResults([row], contract).some(error => /buffering episode count exceeds/.test(error)));
+  row.bufferingEvidence.count = 1;
+  row.bufferingEvidence.totalMs = 101;
+  row.bufferingEvidence.episodes = [{ durationMs: 101 }];
+  row.bufferingEvidence.maxMs = 101;
+  assert.ok(validateReadinessResults([row], contract).some(error => /total buffering time exceeds/.test(error)));
+  contract.bounds.bufferingEpisodeCount = 0;
+  contract.bounds.bufferingTotalMs = 0;
+  assert.deepEqual(validateReadinessContract(contract), [], "zero is a valid no-buffering allowance");
+  const zeroBoundsStrictErrors = validateReadinessContract(contract, { strict: true });
+  assert.ok(!zeroBoundsStrictErrors.some(error => /missing approved bound: bufferingEpisodeCount|missing approved bound: bufferingTotalMs/.test(error)));
+  contract.bounds.bufferingEpisodeCount = 0.5;
+  assert.ok(validateReadinessContract(contract).some(error => /buffering bound is malformed: bufferingEpisodeCount/.test(error)));
+});
+
 test("strict readiness requires the first-submission bound and actual command receipts", async () => {
   const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
   const sourceId = contract.sources[0].id;
@@ -480,7 +568,8 @@ test("strict readiness requires the first-submission bound and actual command re
     startup: { firstUsefulMs: 10, firstSubmittedMs: 12, firstRenderSubmissionCompleteUpperMs: 12 },
     commands: [{ uiFeedbackMs: 2, commandCompletionUpperMs: 4, runtimeAcceptanceEpochMs: null,
       matchingPresentation: null }],
-    bufferingEpisodes: [], memory: { peakSampledRssBytes: 100 },
+    bufferingEvidence: { capture: "captured", episodes: [], count: 0, totalMs: 0, maxMs: 0 },
+    memory: { peakSampledRssBytes: 100 },
     activeFrameGap: { count: 0, samples: [], coverageErrors: [] } }];
   const errors = validateReadinessResults(cases, contract);
   assert.ok(!errors.some(error => /missing runtimeAcceptanceMs/.test(error)),
@@ -671,20 +760,39 @@ test("replay may reuse only a Rust-proven unchanged terminal-hold publication", 
     controls: { elapsedSeconds: String(elapsedSeconds), busy: "false", playing: String(elapsedSeconds === 0 ? false : true) },
     metrics: { performanceTimeOriginMs: 1000,
       latestPresentationSample: { session: 4, sequence, time, presentedAtMs: epochMs - 1000 } },
-    preparedPlayback: held ? { observedTime: held.time,
-      observation: { loopCount, heldPresentation: held } } : null });
+    preparedPlayback: { observedTime: held?.time ?? null,
+      observation: { loopCount, heldPresentation: held } } });
   const heldPublication = { publication: { session: 4, sequence: 20 },
     evaluatedTime: 5.9514, time: 7.85, validUntil: 8 };
   const observations = [sample(1005, 0, 0, 10), sample(1100, 0.1, 0.1, 11),
     sample(7850, 7.85, 5.9514, 20, { held: heldPublication }),
     sample(7900, 7.9, 5.9514, 20, { held: { ...heldPublication, time: 7.9 } }),
-    sample(9100, 0.1, 0.1, 21)];
-  const options = { restartPublication: { session: 4, sequence: 10 }, requestEpochMs: 1000,
+    sample(9100, 0.1, 0.1, 21, { loopCount: 1 })];
+  const options = { restartPublication: { session: 4, sequence: 10 }, restartLoopCount: 0, requestEpochMs: 1000,
     durationSeconds: 8, terminalHoldStartSeconds: 6.8, clockToleranceSeconds: 0.15,
     acceptsTerminalPublication: time => time === 6.8 };
   const evidence = readinessReplayCycleEvidence(observations, options);
   assert.equal(evidence?.terminalHold.publication.time, 5.9514,
     "an earlier displayed frame qualifies only while Rust proves it remains valid in the manifest hold");
+  const resumedAfterPriorWrap = observations.map(value => value.preparedPlayback
+    ? { ...value, preparedPlayback: { ...value.preparedPlayback,
+      observation: { ...value.preparedPlayback.observation,
+        loopCount: value.metrics.latestPresentationSample.sequence === 21 ? 2 : 1 } } } : value);
+  const afterPriorWrapEvidence = readinessReplayCycleEvidence(resumedAfterPriorWrap,
+    { ...options, restartLoopCount: 1 });
+  assert.equal(afterPriorWrapEvidence?.terminalHold.publication.time, 5.9514,
+    "held terminal proof uses the cumulative counter captured before restart");
+  assert.equal(readinessReplayCycleEvidence(resumedAfterPriorWrap,
+    { ...options, restartLoopCount: 2 }), null,
+  "settled restart and held terminal cannot silently advance the cumulative counter");
+  const skippedWrap = structuredClone(resumedAfterPriorWrap);
+  skippedWrap.at(-1).preparedPlayback.observation.loopCount = 3;
+  assert.equal(readinessReplayCycleEvidence(skippedWrap, { ...options, restartLoopCount: 1 }), null,
+    "a later wrap cannot stand in for the first postrestart cycle");
+  const missingWrapCount = structuredClone(resumedAfterPriorWrap);
+  missingWrapCount.at(-1).preparedPlayback.observation.loopCount = null;
+  assert.equal(readinessReplayCycleEvidence(missingWrapCount, { ...options, restartLoopCount: 1 }), null,
+    "a prepared replay without its Rust wrap counter cannot qualify");
   for (const invalid of [
     sample(7850, 7.85, 5.9514, 20, { held: { ...heldPublication, validUntil: 7.85 } }),
     sample(7850, 7.85, 5.9514, 20, { held: { ...heldPublication,

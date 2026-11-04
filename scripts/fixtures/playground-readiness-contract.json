@@ -62,6 +62,7 @@
     "commandAcceptance": "Elapsed time from the actual DOM request event to endpoint acceptedEpochMs sampled after the Rust mutation.",
     "commandPresentation": "Elapsed time from the actual DOM request event to a command-correlated Noon presentation receipt; it does not measure physical scanout.",
     "readerLead": "At each readiness observation, prepared reader lead is Rust frontier minus Rust observed reader time from one preparedPlayback state snapshot; it is not inferred from renderer time.",
+    "buffering": "Per-row prepared-reader waiting is reconstructed from Rust playing/buffering transitions at execution mutation boundaries; pauses are excluded. Episode duration is an observer-bound interval, and count, total and maximum are limited independently per row.",
     "activeFrameGaps": "Successful continuous renderer presentation intervals fully inside the accepted-Run-to-first-traversal or restart-to-first-replay-wrap observation window, deduplicated by renderer interval ordinal. Renderer call timing is not physical scanout.",
     "missedRefreshFraction": "Estimated missed nominal cadence opportunities divided by captured intervals plus estimated missed opportunities, using the declared refreshHz as a host cadence target; it is not a physical display refresh measurement."
   },
@@ -93,6 +94,8 @@
     "commandFeedbackMs": null,
     "commandAcceptanceP95Ms": null,
     "commandPresentationP99Ms": null,
+    "bufferingEpisodeCount": null,
+    "bufferingTotalMs": null,
     "bufferingEpisodeMs": null,
     "activeFrameGapP99Ms": null,
     "missedRefreshFraction": null,

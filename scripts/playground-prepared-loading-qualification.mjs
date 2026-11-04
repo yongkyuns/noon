@@ -22,7 +22,7 @@ import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
   readinessTraceMatchesRun,
   readinessRunTimingOriginErrors, readinessReplayCycleEvidence,
-  readinessRendererSamples, readinessWarmSeekTargets, readinessPreparedReaderLead,
+  readinessRendererSamples, readinessWarmSeekTargets, readinessPreparedReaderLead, readinessBufferingEvidence,
   summarizeReaderLead, activeFrameGapEvidence, readinessPostTerminalReceiverSession } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
@@ -511,23 +511,6 @@ async function wasmAccountingSnapshot(workers) {
     }).catch(error => ({ unavailable: String(error) })) })));
 }
 
-function bufferingEpisodes(uiEvents) {
-  const episodes = [];
-  let startedAtEpochMs = null;
-  for (const event of uiEvents) {
-    if (event.kind !== "state" || event.attribute !== "data-buffering") continue;
-    if (event.state?.buffering === "true" && startedAtEpochMs === null) startedAtEpochMs = event.epochMs;
-    else if (event.state?.buffering === "false" && startedAtEpochMs !== null) {
-      episodes.push({ startedAtEpochMs, endedAtEpochMs: event.epochMs,
-        durationMs: event.epochMs - startedAtEpochMs, observer: "playback-controls mutation" });
-      startedAtEpochMs = null;
-    }
-  }
-  if (startedAtEpochMs !== null) episodes.push({ startedAtEpochMs, endedAtEpochMs: null,
-    durationMs: null, open: true, observer: "playback-controls mutation" });
-  return episodes;
-}
-
 async function rawCadenceCapture(page, rendererWorkerOrdinal) {
   if (!Number.isSafeInteger(rendererWorkerOrdinal)) {
     return { error: "measured renderer worker identity is unavailable", samples: [], workers: [], generationChanges: [] };
@@ -900,8 +883,13 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       const events = diagnostic?.events ?? [];
       const disposition = events.findLast(event => event.stage === "disposition");
       const firstTraversalObserved = initialArm === "A"
-        ? Number.isSafeInteger(disposition?.loopCount) && disposition.loopCount >= 1
+        ? Number.isSafeInteger(disposition?.loopCount) && disposition.loopCount === 1
         : disposition?.disposition === "observed-complete";
+      if (targetRow === sourceRow && initialArm === "A" && sourceRow.firstTraversalEndObservedAtEpochMs === undefined &&
+          Number.isSafeInteger(disposition?.loopCount) && disposition.loopCount > 1 &&
+          !sourceRow.profileValidationErrors.includes("source missed its first prepared traversal wrap")) {
+        sourceRow.profileValidationErrors.push("source missed its first prepared traversal wrap");
+      }
       if (targetRow === sourceRow && sourceRow.firstTraversalEndObservedAtEpochMs === undefined &&
           readinessTraceMatchesRun(diagnostic, sample.run, source.id) && firstTraversalObserved) {
         sourceRow.firstTraversalEndObservedAtEpochMs = sample.epochMs;
@@ -1037,7 +1025,13 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     sourceRow.presentationSampleEnd = sourceRow.rendererSamples.length;
     delete sourceRow.cadenceObservations;
     sourceRow.uiEvents = await page.evaluate(() => globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []);
-    sourceRow.bufferingEpisodes = bufferingEpisodes(sourceRow.uiEvents);
+    sourceRow.bufferingEvidence = readinessBufferingEvidence(sourceRow.endTrace, {
+      startEpochMs: sourceRunAcceptedEpochMs,
+      endEpochMs: sourceRow.firstTraversalEndObservedAtEpochMs,
+      required: initialArm === "A",
+      session: sourceAttached?.session,
+    });
+    sourceRow.profileValidationErrors.push(...sourceRow.bufferingEvidence.errors);
     replayRow.presentationSampleStart = sourceRow.presentationSampleEnd;
     replayRow.uiEventStart = sourceRow.uiEvents.length;
     const expectedProfile = initialArm === "A" ? "incremental" : "observed";
@@ -1072,6 +1066,12 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     activeRow = replayRow;
     if (controls.controls.playing === "true") await readinessCommand(page, replayRow, false);
     const identityBeforeReplay = await observation(page);
+    const restartLoopCount = Number.isSafeInteger(identityBeforeReplay.preparedPlayback?.observation?.loopCount)
+      ? identityBeforeReplay.preparedPlayback.observation.loopCount : null;
+    replayRow.restartLoopCount = restartLoopCount;
+    if (replayArm === "B" && restartLoopCount === null) {
+      replayRow.profileValidationErrors.push("prepared replay has no cumulative Rust loop counter before restart");
+    }
     const beforeFrames = identityBeforeReplay.metrics?.presentedFrames;
     const restartIssued = await issueReadinessClick(page, page.locator(".playback-restart"), "playback-restart");
     const replayStartedAtEpochMs = restartIssued.requestEpochMs;
@@ -1087,6 +1087,10 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assert.ok(restartCompleted, "restart command completion transition was not observed");
     const restartEngineResult = await readinessCommandResult(page, restartIssued.commandResultIndex, "restart_playback");
     const restartPresented = await observation(page);
+    if (restartLoopCount !== null &&
+        restartPresented.preparedPlayback?.observation?.loopCount !== restartLoopCount) {
+      replayRow.profileValidationErrors.push("prepared restart advanced the cumulative loop counter before its settled frame");
+    }
     replayRow.cadenceObservations.push({ epochMs: restartPresented.epochMs,
       metrics: restartPresented.metrics, controls: restartPresented.controls,
       preparedPlayback: restartPresented.preparedPlayback });
@@ -1124,7 +1128,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     let replayCurrent = await read(replayRow);
     const clockToleranceSeconds = Math.max(0.001, 2 * observationPollIntervalMs / 1000);
     const replayCycle = () => readinessReplayCycleEvidence(replayRow.cadenceObservations, {
-      restartPublication, requestEpochMs: replayStartedAtEpochMs,
+      restartPublication, restartLoopCount, requestEpochMs: replayStartedAtEpochMs,
       durationSeconds: source.durationSeconds, terminalHoldStartSeconds: terminalStill[0],
       clockToleranceSeconds,
       acceptsTerminalPublication: time => {
@@ -1200,7 +1204,6 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     if (replayRow.previousWorkersRetirement && !replayRow.previousWorkersRetirement.allRetired) {
       replayRow.profileValidationErrors.push("previous page workers were not confirmed retired");
     }
-    replayRow.status = replayRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
     const stagedReplaySamples = await page.evaluate(start =>
       (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
     replayRow.rendererSamples = readinessRendererSamples(stagedReplaySamples, replayRow.cadenceObservations);
@@ -1221,7 +1224,14 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       : "no renderer publication was observed after the actual replay request";
     replayRow.uiEvents = await page.evaluate(start =>
       (globalThis.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(start), sourceRow.uiEventStart);
-    replayRow.bufferingEpisodes = bufferingEpisodes(replayRow.uiEvents);
+    replayRow.bufferingEvidence = readinessBufferingEvidence(replayTrace, {
+      startEpochMs: replayStartedAtEpochMs,
+      endEpochMs: replayCycleComplete.wrapped.observationEpochMs,
+      required: replayArm === "B",
+      session: restartPublication.session,
+    });
+    replayRow.profileValidationErrors.push(...replayRow.bufferingEvidence.errors);
+    replayRow.status = replayRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
     const submissionBoundLimitation = "upper bound from renderer.render() call completion; backend submission and the Noon presentation receipt occur no later than return, but exact queue-submit start, GPU completion and physical scanout are not measured";
     replayRow.startup.firstSubmittedMs = replayRow.startup.firstRenderSubmissionCompleteUpperMs;
     replayRow.startup.firstSubmittedLimitation = replayRow.startup.firstRenderSubmissionCompleteUpperMs === null

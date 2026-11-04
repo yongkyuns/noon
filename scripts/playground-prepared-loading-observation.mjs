@@ -6,7 +6,8 @@ const READINESS_STARTUP_PHASES = ["sourceRun", "historyReplay"];
 export const READINESS_STRATA = ["fresh-process-warm-resource-cache",
   "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"];
 export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceP95Ms",
-  "commandPresentationP99Ms", "bufferingEpisodeMs", "activeFrameGapP99Ms", "missedRefreshFraction",
+  "commandPresentationP99Ms", "bufferingEpisodeCount", "bufferingTotalMs", "bufferingEpisodeMs",
+  "activeFrameGapP99Ms", "missedRefreshFraction",
   "maxActiveFrameGapMs", "peakProcessRssBytes", "liveOwnerRetirementMs"];
 const READINESS_FIRST_USEFUL_PAIRS = [["A", "C"], ["B", "D"]];
 export const PRODUCT_GATE_THRESHOLD_ENVS = {
@@ -94,7 +95,7 @@ export function readinessRunTimingOriginErrors(startup) {
   return errors;
 }
 
-export function readinessReplayCycleEvidence(observations, { restartPublication, requestEpochMs,
+export function readinessReplayCycleEvidence(observations, { restartPublication, restartLoopCount = null, requestEpochMs,
   durationSeconds, terminalHoldStartSeconds, clockToleranceSeconds, acceptsTerminalPublication }) {
   if (!Array.isArray(observations) || !Number.isSafeInteger(restartPublication?.session) ||
       !Number.isSafeInteger(restartPublication?.sequence) || !Number.isFinite(requestEpochMs) ||
@@ -112,7 +113,8 @@ export function readinessReplayCycleEvidence(observations, { restartPublication,
     const observedTime = prepared?.observedTime;
     const heldPublicationMatches = held?.publication?.session === frame?.session &&
       held?.publication?.sequence === frame?.sequence;
-    const heldTerminalStill = heldPublicationMatches && prepared.observation.loopCount === 0 &&
+    const heldTerminalStill = heldPublicationMatches && Number.isSafeInteger(restartLoopCount) &&
+      prepared.observation.loopCount === restartLoopCount &&
       Number.isFinite(observedTime) && observedTime === held.time &&
       Number.isFinite(held.evaluatedTime) && observedTime >= held.evaluatedTime &&
       Number.isFinite(held.validUntil) && observedTime < held.validUntil &&
@@ -131,23 +133,30 @@ export function readinessReplayCycleEvidence(observations, { restartPublication,
         observedTime: heldTerminalStill ? observedTime : null } };
     if (reset === null) {
       if (controls.playing === "false" && frame.sequence === restartPublication.sequence &&
+          (restartLoopCount === null || prepared?.observation?.loopCount === restartLoopCount) &&
           clock <= clockToleranceSeconds && frame.time <= clockToleranceSeconds) reset = sample;
       continue;
     }
+    const loopCount = prepared?.observation?.loopCount;
+    if (restartLoopCount !== null && (!Number.isSafeInteger(loopCount) || loopCount < restartLoopCount ||
+        loopCount > restartLoopCount + 1)) return null;
     if (controls.playing !== "true") continue;
     if (clock > clockToleranceSeconds) advancedAfterReset = true;
     if (advancedAfterReset && nearEnd === null && clock <= clockToleranceSeconds &&
         frame.time <= clockToleranceSeconds) return null;
     if (terminalHold === null && clock >= terminalHoldStartSeconds - clockToleranceSeconds &&
         frame.sequence > restartPublication.sequence &&
+        (restartLoopCount === null || loopCount === restartLoopCount) &&
         (acceptsTerminalPublication(frame.time) || heldTerminalStill)) {
       terminalHold = sample;
     }
-    if (terminalHold !== null && nearEnd === null && clock >= durationSeconds - clockToleranceSeconds) {
+    if (terminalHold !== null && nearEnd === null && clock >= durationSeconds - clockToleranceSeconds &&
+        (restartLoopCount === null || loopCount === restartLoopCount)) {
       nearEnd = sample;
     }
     if (nearEnd !== null && observation.epochMs > nearEnd.observationEpochMs &&
         clock <= clockToleranceSeconds && frame.time <= clockToleranceSeconds &&
+        (restartLoopCount === null || loopCount === restartLoopCount + 1) &&
         frame.sequence > terminalHold.publication.sequence) {
       wrapped = sample;
       break;
@@ -499,6 +508,13 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
       Object.values(anchor?.thresholds ?? {}).some(value => !Number.isFinite(value))) {
     errors.push("Product Gate anchor metadata is malformed");
   }
+  for (const name of ["bufferingEpisodeCount", "bufferingTotalMs", "bufferingEpisodeMs"]) {
+    const value = contract?.bounds?.[name];
+    if (value !== null && (!Number.isFinite(value) || value < 0 ||
+        (name === "bufferingEpisodeCount" && !Number.isSafeInteger(value)))) {
+      errors.push(`buffering bound is malformed: ${name}`);
+    }
+  }
   if (strict) {
     if (contract.status !== "ready") errors.push("readiness contract has not been reviewed and frozen");
     if (!contract.reference?.actualAdapterIdentity) errors.push("actual reference GPU adapter is not pinned");
@@ -519,7 +535,9 @@ export function validateReadinessContract(contract, { strict = false } = {}) {
         continue;
       }
       const value = contract.bounds?.[name];
-      if (!Number.isFinite(value) || (name === "missedRefreshFraction" ? value < 0 || value > 1 : value <= 0)) {
+      const zeroAllowed = name === "bufferingEpisodeCount" || name === "bufferingTotalMs";
+      if (!Number.isFinite(value) || (name === "missedRefreshFraction" ? value < 0 || value > 1 :
+          zeroAllowed ? value < 0 : value <= 0)) {
         errors.push(`missing approved bound: ${name}`);
       }
     }
@@ -604,7 +622,7 @@ export function summarizeReadiness(cases, contract) {
       const readerLead = observed.flatMap(row => row.readerLeadObservations ?? []);
       const perRunMaxFrameGaps = observed.map(row => row.activeFrameGap?.intervalMs?.max)
         .filter(Number.isFinite);
-      const buffering = observed.flatMap(row => row.bufferingEpisodes ?? []);
+      const buffering = observed.map(row => row.bufferingEvidence ?? { count: null, totalMs: null, maxMs: null });
       const firstUsefulPhase = arm === "B" || arm === "D" ? "historyReplay" : "sourceRun";
       return {
         sourceId: source.id, arm, stratum,
@@ -631,13 +649,120 @@ export function summarizeReadiness(cases, contract) {
           openSamples: readerLead.filter(sample => !sample.endClosed).length,
           closedSamples: readerLead.filter(sample => sample.endClosed).length,
           bufferingSamples: readerLead.filter(sample => sample.buffering).length },
-        buffering: { episodes: buffering.length,
-          durationMs: distribution(buffering.map(episode => episode.durationMs)) },
+        buffering: { perRunEpisodes: distribution(buffering.map(value => value.count)),
+          perRunTotalMs: distribution(buffering.map(value => value.totalMs)),
+          perRunMaxEpisodeMs: distribution(buffering.map(value => value.maxMs)),
+          incompleteRuns: buffering.filter(value => !Number.isFinite(value.count) ||
+            !Number.isFinite(value.totalMs) || !Number.isFinite(value.maxMs)).length },
         ownerRetirementMs: distribution(observed.map(row => row.retirementMs)),
         processRssScope: "paired source and retained replay in one browser process",
         peakProcessRssBytes: distribution(observed.map(row => row.memory?.peakSampledRssBytes)),
       };
     })));
+}
+
+export function readinessBufferingEvidence(trace, { startEpochMs, endEpochMs, required, session }) {
+  if (!required) return { capture: "not-applicable", episodes: [], count: 0, totalMs: 0, maxMs: 0, errors: [] };
+  const errors = [];
+  if (trace?.droppedEvents !== 0 || !Array.isArray(trace.events)) {
+    return { capture: "incomplete", episodes: [], count: null, totalMs: null, maxMs: null,
+      errors: ["buffering trace is missing or dropped events"] };
+  }
+  const events = trace?.events ?? [];
+  if (events.some((event, index) => event.sequence !== index)) {
+    return { capture: "incomplete", episodes: [], count: null, totalMs: null, maxMs: null,
+      errors: ["buffering trace sequence is incomplete"] };
+  }
+  if (!Number.isSafeInteger(session)) return { capture: "missing-session", episodes: [], count: null,
+    totalMs: null, maxMs: null, errors: ["buffering measurement session is missing"] };
+  const markers = events.filter(event => ["attached", "receiver-attached"].includes(event.stage) &&
+    event.bufferingCapture !== undefined);
+  if (!Number.isFinite(startEpochMs) || !Number.isFinite(endEpochMs) || endEpochMs < startEpochMs) {
+    return { capture: "invalid-window", episodes: [], count: null, totalMs: null, maxMs: null,
+      errors: ["buffering trace window is missing or reversed"] };
+  }
+  if (markers.length === 0) return { capture: "missing", episodes: [], count: null, totalMs: null,
+    maxMs: null, errors: ["prepared reader has no attached buffering capture"] };
+  const matchingMarkers = markers.filter(event => event.session === session &&
+    event.bufferingCapture?.session === session && event.publication?.session === session &&
+    event.bufferingCapture.observedAtEpochMs <= endEpochMs);
+  if (matchingMarkers.length !== 1) return { capture: "invalid", episodes: [], count: null, totalMs: null,
+    maxMs: null, errors: ["prepared reader has no unique attached capture for the measured session"] };
+  const markerEvent = matchingMarkers[0];
+  const capture = markerEvent.bufferingCapture;
+  if (typeof capture.playing !== "boolean" || typeof capture.buffering !== "boolean" ||
+      typeof capture.waiting !== "boolean" || capture.waiting !== (capture.playing && capture.buffering) ||
+      !Number.isFinite(capture.observedAtEpochMs)) {
+    return { capture: "invalid", episodes: [], count: null, totalMs: null, maxMs: null,
+      errors: ["attached buffering capture is malformed"] };
+  }
+  const episodes = [];
+  let waiting = capture.waiting;
+  let opened = waiting ? { at: capture.observedAtEpochMs, leftCensored: true,
+    boundary: "receiver-attached", reason: null } : null;
+  let previousObservedAt = capture.observedAtEpochMs;
+  let previousSequence = markerEvent.sequence;
+  const transitions = events.filter(item => item.stage === "buffering-transition" && item.session === session &&
+    item.sequence > markerEvent.sequence);
+  for (const transition of transitions) {
+    const entered = transition.waiting === true;
+    if (!Number.isSafeInteger(transition.sequence) || transition.sequence <= previousSequence ||
+        typeof transition.playing !== "boolean" || typeof transition.buffering !== "boolean" ||
+        typeof transition.waiting !== "boolean" || transition.waiting !== (transition.playing && transition.buffering) ||
+        typeof transition.boundary !== "string" || transition.boundary.length === 0 ||
+        typeof transition.reason !== "string" || transition.reason.length === 0 ||
+        !Number.isFinite(transition.mutationStartedAtEpochMs) || !Number.isFinite(transition.observedAtEpochMs) ||
+        transition.observedAtEpochMs < transition.mutationStartedAtEpochMs ||
+        transition.mutationStartedAtEpochMs < previousObservedAt || transition.observedAtEpochMs < previousObservedAt) {
+      errors.push(`buffering transition is malformed or out of order in session ${session}`);
+      continue;
+    }
+    previousObservedAt = transition.observedAtEpochMs;
+    previousSequence = transition.sequence;
+    if (transition.observedAtEpochMs > endEpochMs) continue;
+    if (transition.leftCensored === true) {
+      if (waiting && entered && opened?.leftCensored === true) continue;
+      errors.push(`buffering transition is unexpectedly left-censored in session ${session}`);
+      continue;
+    }
+    if (entered === waiting) {
+      errors.push(`buffering transition did not change waiting state in session ${session}`);
+      continue;
+    }
+    if (entered) opened = { at: transition.mutationStartedAtEpochMs, leftCensored: false,
+      boundary: transition.boundary, reason: transition.reason };
+    else {
+      if (opened === null) {
+        errors.push(`buffering wait closed without an observed start in session ${session}`);
+        waiting = false;
+        continue;
+      }
+      const start = Math.max(opened.at, startEpochMs);
+      const end = Math.min(transition.observedAtEpochMs, endEpochMs);
+      if (opened.leftCensored && end >= start && transition.observedAtEpochMs >= startEpochMs) {
+        errors.push(`buffering wait is left-censored in measured session ${session}`);
+      }
+      if (end >= start && transition.observedAtEpochMs >= startEpochMs) episodes.push({ session, startedAtEpochMs: start,
+        endedAtEpochMs: end, durationMs: end - start, startBoundary: opened.boundary,
+        startReason: opened.reason, endBoundary: transition.boundary, endReason: transition.reason,
+        leftCensored: opened.leftCensored });
+      opened = null;
+    }
+    waiting = entered;
+  }
+  if (waiting && opened !== null && opened.at <= endEpochMs) {
+    const leftCensored = opened.leftCensored;
+    if (opened.leftCensored && endEpochMs >= startEpochMs) {
+      errors.push(`buffering wait is left-censored in measured session ${session}`);
+    }
+    episodes.push({ session, startedAtEpochMs: Math.max(opened.at, startEpochMs), endedAtEpochMs: null,
+      durationMs: null, leftCensored, open: true });
+    errors.push(`buffering wait remained open at the end of session ${session} window`);
+  }
+  if (errors.length) return { capture: "invalid", episodes, count: null, totalMs: null, maxMs: null, errors };
+  const totalMs = episodes.reduce((sum, episode) => sum + episode.durationMs, 0);
+  return { capture: "captured", episodes, count: episodes.length, totalMs,
+    maxMs: episodes.reduce((maximum, episode) => Math.max(maximum, episode.durationMs), 0), errors };
 }
 
 export function readinessFirstUsefulRegressionErrors(cases, contract) {
@@ -773,12 +898,33 @@ export function validateReadinessResults(cases, contract) {
             }
           }
         }
-        if ((row.bufferingEpisodes ?? []).some(episode => !Number.isFinite(episode.durationMs))) {
-          errors.push(`${source.id}/${arm}: incomplete buffering episode`);
-        }
-        if (Number.isFinite(contract.bounds.bufferingEpisodeMs) &&
-            (row.bufferingEpisodes ?? []).some(episode => episode.durationMs > contract.bounds.bufferingEpisodeMs)) {
-          errors.push(`${source.id}/${arm}/${stratum}: buffering episode exceeds its bound`);
+        const buffering = row.bufferingEvidence;
+        if (!buffering || !Array.isArray(buffering.episodes) ||
+            !Number.isSafeInteger(buffering.count) || !Number.isFinite(buffering.totalMs) ||
+            !Number.isFinite(buffering.maxMs) || buffering.capture !== (arm === "A" || arm === "B"
+              ? "captured" : "not-applicable")) {
+          errors.push(`${source.id}/${arm}: missing or malformed Rust buffering capture`);
+        } else {
+          if (buffering.episodes.some(episode => !Number.isFinite(episode.durationMs) || episode.durationMs < 0 ||
+              episode.open === true || episode.leftCensored === true)) {
+            errors.push(`${source.id}/${arm}: incomplete buffering episode`);
+          }
+          if (buffering.count !== buffering.episodes.length ||
+              buffering.totalMs !== buffering.episodes.reduce((sum, episode) => sum + episode.durationMs, 0) ||
+              buffering.maxMs !== buffering.episodes.reduce((maximum, episode) => Math.max(maximum, episode.durationMs), 0)) {
+            errors.push(`${source.id}/${arm}: buffering episode totals are inconsistent`);
+          }
+          if (Number.isFinite(contract.bounds.bufferingEpisodeCount) &&
+              buffering.count > contract.bounds.bufferingEpisodeCount) {
+            errors.push(`${source.id}/${arm}/${stratum}: buffering episode count exceeds its bound`);
+          }
+          if (Number.isFinite(contract.bounds.bufferingTotalMs) &&
+              buffering.totalMs > contract.bounds.bufferingTotalMs) {
+            errors.push(`${source.id}/${arm}/${stratum}: total buffering time exceeds its bound`);
+          }
+          if (Number.isFinite(contract.bounds.bufferingEpisodeMs) && buffering.maxMs > contract.bounds.bufferingEpisodeMs) {
+            errors.push(`${source.id}/${arm}/${stratum}: buffering episode exceeds its bound`);
+          }
         }
         if (Number.isFinite(contract.bounds.liveOwnerRetirementMs) &&
             (!Number.isFinite(row.retirementMs) || row.retirementMs > contract.bounds.liveOwnerRetirementMs)) {
