@@ -18,7 +18,8 @@ import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   activeCadenceWindows, summarizeColdNetworkObservations,
-  validateReusedHealthyInterpreter, readinessPresentationMatchesRun } from "./playground-prepared-loading-observation.mjs";
+  validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
+  readinessReplayCycleEvidence, readinessRendererSamples } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -247,6 +248,15 @@ async function observationDeadline(pending) {
       timer = setTimeout(() => reject(new Error("metrics observation exceeded 30 seconds")), 30_000);
     })]);
   } finally { clearTimeout(timer); }
+}
+
+async function waitForApplied(page, exampleId) {
+  await page.waitForFunction(expected => {
+    const gallery = globalThis.__noonExampleGallery;
+    const run = gallery?.runPhaseMetrics;
+    return gallery?.runInFlight === false && run?.exampleId === expected &&
+      Number.isFinite(run.sourceRunCompletedAtMs);
+  }, exampleId, { timeout: 180_000 });
 }
 
 async function installReadinessPresentationProbe(context, { profilePublicationStages }) {
@@ -521,6 +531,9 @@ async function readinessCommand(page, row, desiredPlaying) {
 
 async function measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, warmup, contextIdentity) {
   const startedAtEpochMs = Date.now();
+  const showcaseEntry = inventory.find(entry => entry.id === source.id);
+  const terminalStill = showcaseEntry?.still_intervals?.findLast(([, end]) => end === source.durationSeconds);
+  assert.ok(terminalStill, `${source.id}: manifest does not declare a terminal hold for replay validation`);
   const sourceRow = { sourceId: source.id, sourcePath: source.path, sourceSha256: source.sha256,
     durationSeconds: source.durationSeconds, arm: initialArm, pairedReplayArm: replayArm,
     stratum, trial, warmup, status: "running", startup: {}, commands: [],
@@ -563,7 +576,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       if (!Number.isFinite(navigation.run?.sourceRunStartedAtMs)) {
         startupStarted = performance.now();
         await page.locator("#replace-scene").click();
-        await waitForApplied(page);
+        await waitForApplied(page, source.id);
       }
       const seedDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
       const seedComplete = sample => {
@@ -607,7 +620,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
           gallery?.executionDiagnostics?.runRequestId !== seed.runRequestId;
       }, { runGeneration: navigation.run.runGeneration,
         runRequestId: navigation.executionDiagnostics.runRequestId }, { timeout: 30_000 });
-      await waitForApplied(page);
+      await waitForApplied(page, source.id);
       const measured = await observation(page);
       const measuredWorker = workers.filter(worker => /\/python-worker\.js(?:\?|$)/.test(worker.url())).at(-1);
       const measuredSource = await page.locator("#python-scene-source").inputValue();
@@ -640,7 +653,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     const read = async (targetRow = sourceRow) => {
       const sample = await observation(page);
       targetRow.lastObservation = sample;
-      targetRow.cadenceObservations.push({ epochMs: sample.epochMs, metrics: sample.metrics });
+      targetRow.cadenceObservations.push({ epochMs: sample.epochMs,
+        metrics: sample.metrics, controls: sample.controls });
       targetRow.preparedRetention = sample.preparedRetention ?? targetRow.preparedRetention ?? null;
       readinessTraceState(targetRow, sample);
       const diagnostic = sample.executionDiagnostics;
@@ -803,6 +817,14 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       ? await readinessPublicationSample(page, restartEngineResult?.commandPublication) : null;
     const restartRuntimeReceipt = readinessCommandReceipt(restartEngineResult, replayStartedAtEpochMs,
       restartPublicationSample ?? minimalReplaySample);
+    const restartPublication = restartRuntimeReceipt.commandPublication ??
+      (restartRuntimeReceipt.matchingPresentation ? {
+        session: restartRuntimeReceipt.matchingPresentation.session,
+        sequence: restartRuntimeReceipt.matchingPresentation.sequence,
+      } : null);
+    assert.ok(Number.isSafeInteger(restartPublication?.session) &&
+      Number.isSafeInteger(restartPublication?.sequence),
+    "restart command has no renderer publication identity for retained replay");
     replayRow.startup.restartCompletedUiEpochMs = restartCompleted.epochMs;
     replayRow.commands.push({ name: "restart", automationIssuedEpochMs: restartIssued.automationIssuedEpochMs,
       requestEpochMs: replayStartedAtEpochMs,
@@ -819,20 +841,39 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         ? "endpoint command result did not expose a validated matching publication receipt" : null });
     if (restartPresented.controls?.playing !== "true") await readinessCommand(page, replayRow, true);
     let replayCurrent = await read(replayRow);
-    let replayMaxTime = Number(replayCurrent.metrics?.time ?? -Infinity);
+    const clockToleranceSeconds = Math.max(0.001, 2 * observationPollIntervalMs / 1000);
+    const replayCycle = () => readinessReplayCycleEvidence(replayRow.cadenceObservations, {
+      restartPublication, requestEpochMs: replayStartedAtEpochMs,
+      durationSeconds: source.durationSeconds, terminalHoldStartSeconds: terminalStill[0],
+      clockToleranceSeconds,
+      acceptsTerminalPublication: time => {
+        try { assertNaturalFirstPassPublication(showcaseEntry, source.durationSeconds, time); return true; }
+        catch { return false; }
+      },
+    });
+    let replayCycleComplete = replayCycle();
     const replayDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
-    while (!(Number.isFinite(replayRow.startup.firstUsefulMs) && replayMaxTime >= source.durationSeconds - 0.1) &&
+    while (!(Number.isFinite(replayRow.startup.firstUsefulMs) && replayCycleComplete !== null) &&
            performance.now() < replayDeadline) {
       replayCurrent = await read(replayRow);
-      replayMaxTime = Math.max(replayMaxTime, Number(replayCurrent.metrics?.time ?? -Infinity));
+      replayCycleComplete = replayCycle();
       await page.waitForTimeout(observationPollIntervalMs);
     }
+    replayCycleComplete = replayCycle();
+    assert.ok(replayCycleComplete !== null,
+      `retained replay did not render its manifest terminal hold and complete a postrestart loop: ${JSON.stringify({
+        restartPublication, terminalStill, samples: replayRow.cadenceObservations.slice(-12).map(sample => ({
+          epochMs: sample.epochMs, elapsedSeconds: sample.controls?.elapsedSeconds,
+          playing: sample.controls?.playing, latestPresentationSample: sample.metrics?.latestPresentationSample,
+        })),
+      })}`);
     assert.ok(replayCurrent.metrics?.presentedFrames > beforeFrames,
       "retained replay produced no new presentation");
     assert.ok(Number.isFinite(replayRow.startup.firstUsefulMs), "retained replay produced no useful picture");
     replayRow.startup.replayRequestToRestartCompletionMs =
       replayRow.startup.restartCompletedUiEpochMs - replayStartedAtEpochMs;
-    replayRow.startup.replayToEndpointMs = replayCurrent.epochMs - replayStartedAtEpochMs;
+    replayRow.startup.replayToWrapMs = replayCycleComplete.wrapped.observationEpochMs - replayStartedAtEpochMs;
+    replayRow.replayCycleEvidence = replayCycleComplete;
     const replayTrace = replayCurrent.executionDiagnostics;
     replayRow.endTrace = replayTrace;
     const replayExpectedProfile = replayArm === "B" ? "incremental" : "observed";
@@ -852,8 +893,9 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       replayRow.profileValidationErrors.push("previous page workers were not confirmed retired");
     }
     replayRow.status = replayRow.profileValidationErrors.length === 0 ? "observed" : "profile-mismatch";
-    replayRow.rendererSamples = await page.evaluate(start =>
-      (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
+            const stagedReplaySamples = await page.evaluate(start =>
+              (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
+            replayRow.rendererSamples = readinessRendererSamples(stagedReplaySamples, replayRow.cadenceObservations);
     replayRow.activeCadenceWindows = activeCadenceWindows(replayRow.cadenceObservations);
     delete replayRow.cadenceObservations;
     const firstReplayRender = replayRow.rendererSamples.map(sample => ({ sample,

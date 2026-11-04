@@ -6,7 +6,8 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   validateReadinessContract, validateReadinessTrace, validateReadinessResults,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   activeCadenceWindows, summarizeColdNetworkObservations,
-  validateReusedHealthyInterpreter, readinessPresentationMatchesRun, READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
+  validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
+  readinessReplayCycleEvidence, readinessRendererSamples, READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 function canvas() {
@@ -270,6 +271,39 @@ test("first render and useful picture must belong to the measured run", () => {
   assert.equal(readinessPresentationMatchesRun(attached,
     { session: 9, sequence: 2, presentedAtMs: 120 }, 1000, null), false,
   "an unavailable run start cannot admit a stale presentation");
+});
+
+test("replay requires its own terminal hold, near-end clock and newer postwrap frame", () => {
+  const sample = (epochMs, elapsedSeconds, time, sequence) => ({ epochMs,
+    controls: { elapsedSeconds: String(elapsedSeconds), busy: "false", playing: "true" },
+    metrics: { performanceTimeOriginMs: 1000,
+      latestPresentationSample: { session: 4, sequence, time, presentedAtMs: epochMs - 1000 } } });
+  const observations = [sample(1005, 0.005, 0.005, 10), sample(7800, 6.85, 6.8, 20),
+    sample(8990, 7.9, 6.8, 20), sample(9100, 0.1, 0.1, 21)];
+  const options = { restartPublication: { session: 4, sequence: 10 }, requestEpochMs: 1000,
+    durationSeconds: 8, terminalHoldStartSeconds: 6.8, clockToleranceSeconds: 0.15,
+    acceptsTerminalPublication: time => time === 6.8 };
+  const evidence = readinessReplayCycleEvidence(observations, options);
+  assert.deepEqual(Object.keys(evidence), ["reset", "terminalHold", "nearEnd", "wrapped"]);
+  assert.equal(evidence.terminalHold.publication.time, 6.8);
+  assert.equal(evidence.wrapped.publication.sequence, 21);
+  assert.equal(readinessReplayCycleEvidence(observations.filter(sample => sample.controls.elapsedSeconds !== "7.9"), options), null,
+    "reaching a terminal still without an observed prewrap clock cannot qualify");
+  assert.equal(readinessReplayCycleEvidence(observations.map(value => ({ ...value,
+    metrics: { ...value.metrics, latestPresentationSample: { ...value.metrics.latestPresentationSample, sequence: 10 } } })), options), null,
+  "the original restart frame cannot stand in for a replayed terminal or wrap frame");
+});
+
+test("minimal timing preserves current renderer samples for first-submission bounds", () => {
+  const staged = [{ session: 2, sequence: 4, time: 1, presentedAtMs: 40, clockOriginMs: 1000, renderMs: 2 }];
+  const observations = [{ metrics: { performanceTimeOriginMs: 1000,
+    latestPresentationSample: { session: 2, sequence: 4, time: 1, presentedAtMs: 40 } } },
+  { metrics: { performanceTimeOriginMs: 1000,
+    latestPresentationSample: { session: 2, sequence: 5, time: 1.1, presentedAtMs: 50 } } }];
+  const samples = readinessRendererSamples(staged, observations);
+  assert.deepEqual(samples.map(sample => [sample.session, sample.sequence]), [[2, 4], [2, 5]]);
+  assert.equal(samples[0].renderMs, 2, "detailed samples retain the original render-call observation");
+  assert.equal(samples[1].clockOriginMs, 1000, "minimal metrics samples retain their renderer clock origin");
 });
 
 test("readiness command receipts use endpoint timing and matching publication metadata", async () => {

@@ -59,6 +59,67 @@ export function readinessPresentationMatchesRun(attachedPublication, latestPrese
     Number.isFinite(runStartEpochMs) && originMs + latestPresentation.presentedAtMs >= runStartEpochMs;
 }
 
+export function readinessReplayCycleEvidence(observations, { restartPublication, requestEpochMs,
+  durationSeconds, terminalHoldStartSeconds, clockToleranceSeconds, acceptsTerminalPublication }) {
+  if (!Array.isArray(observations) || !Number.isSafeInteger(restartPublication?.session) ||
+      !Number.isSafeInteger(restartPublication?.sequence) || !Number.isFinite(requestEpochMs) ||
+      !Number.isFinite(durationSeconds) || !Number.isFinite(terminalHoldStartSeconds) ||
+      !Number.isFinite(clockToleranceSeconds) || typeof acceptsTerminalPublication !== "function") return null;
+  let reset = null, terminalHold = null, nearEnd = null, wrapped = null;
+  for (const observation of observations) {
+    const controls = observation.controls;
+    const clock = Number(controls?.elapsedSeconds);
+    const frame = observation.metrics?.latestPresentationSample;
+    const origin = observation.metrics?.performanceTimeOriginMs;
+    if (!Number.isFinite(observation.epochMs) || observation.epochMs < requestEpochMs ||
+        !Number.isFinite(clock) || controls?.busy !== "false" || controls?.playing !== "true" ||
+        frame?.session !== restartPublication.session || !Number.isSafeInteger(frame?.sequence) ||
+        frame.sequence < restartPublication.sequence || !Number.isFinite(frame.time) ||
+        !Number.isFinite(origin) || !Number.isFinite(frame.presentedAtMs) ||
+        origin + frame.presentedAtMs < requestEpochMs) continue;
+    const sample = { observationEpochMs: observation.epochMs, controlTime: clock,
+      publication: { session: frame.session, sequence: frame.sequence, time: frame.time,
+        presentedAtEpochMs: origin + frame.presentedAtMs } };
+    if (reset === null) {
+      if (clock <= clockToleranceSeconds && frame.time <= clockToleranceSeconds) reset = sample;
+      continue;
+    }
+    if (terminalHold === null && clock >= terminalHoldStartSeconds - clockToleranceSeconds &&
+        frame.sequence > restartPublication.sequence && acceptsTerminalPublication(frame.time)) {
+      terminalHold = sample;
+    }
+    if (terminalHold !== null && nearEnd === null && clock >= durationSeconds - clockToleranceSeconds) {
+      nearEnd = sample;
+    }
+    if (nearEnd !== null && observation.epochMs > nearEnd.observationEpochMs &&
+        clock <= clockToleranceSeconds && frame.time <= clockToleranceSeconds &&
+        frame.sequence > terminalHold.publication.sequence) {
+      wrapped = sample;
+      break;
+    }
+  }
+  return reset && terminalHold && nearEnd && wrapped ? { reset, terminalHold, nearEnd, wrapped } : null;
+}
+
+export function readinessRendererSamples(stagedSamples, observations) {
+  const samples = new Map();
+  for (const sample of stagedSamples ?? []) {
+    if (!Number.isSafeInteger(sample?.session) || !Number.isSafeInteger(sample?.sequence) ||
+        !Number.isFinite(sample?.presentedAtMs) || !Number.isFinite(sample?.clockOriginMs)) continue;
+    samples.set(`${sample.clockOriginMs}:${sample.session}:${sample.sequence}`, sample);
+  }
+  for (const observation of observations ?? []) {
+    const metrics = observation.metrics ?? {};
+    const sample = metrics.latestPresentationSample;
+    if (!Number.isSafeInteger(sample?.session) || !Number.isSafeInteger(sample?.sequence) ||
+        !Number.isFinite(sample?.presentedAtMs) || !Number.isFinite(metrics.performanceTimeOriginMs)) continue;
+    const key = `${metrics.performanceTimeOriginMs}:${sample.session}:${sample.sequence}`;
+    if (!samples.has(key)) samples.set(key, { ...sample, clockOriginMs: metrics.performanceTimeOriginMs });
+  }
+  return [...samples.values()].sort((left, right) =>
+    left.clockOriginMs + left.presentedAtMs - right.clockOriginMs - right.presentedAtMs);
+}
+
 export function readinessCommandReceipt(result, requestEpochMs, rendererSample = null) {
   const timing = result?.commandTiming;
   const acceptedEpochMs = Number.isFinite(timing?.acceptedEpochMs) ? timing.acceptedEpochMs : null;
