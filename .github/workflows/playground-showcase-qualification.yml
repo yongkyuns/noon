@@ -2,7 +2,7 @@ name: Showcase capture timing diagnostic
 
 on:
   push:
-    branches: [codex/2421-showcase-diagnostic]
+    branches: [codex/2421-showcase-diagnostic-disabled]
 
 permissions:
   contents: read
