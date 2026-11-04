@@ -20,6 +20,7 @@ import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
+  readinessTraceMatchesRun,
   readinessRunTimingOriginErrors, readinessReplayCycleEvidence,
   readinessRendererSamples, readinessWarmSeekTargets, readinessPreparedReaderLead,
   summarizeReaderLead, activeFrameGapEvidence } from "./playground-prepared-loading-observation.mjs";
@@ -897,7 +898,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         ? Number.isSafeInteger(disposition?.loopCount) && disposition.loopCount >= 1
         : disposition?.disposition === "observed-complete";
       if (targetRow === sourceRow && sourceRow.firstTraversalEndObservedAtEpochMs === undefined &&
-          firstTraversalObserved) {
+          readinessTraceMatchesRun(diagnostic, sample.run, source.id) && firstTraversalObserved) {
         sourceRow.firstTraversalEndObservedAtEpochMs = sample.epochMs;
       }
       const attachedPublication = events.find(event => event.stage === "attached")?.publication;

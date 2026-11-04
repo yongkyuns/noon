@@ -7,6 +7,7 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
+  readinessTraceMatchesRun,
   readinessRunTimingOriginErrors,
   readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
   readinessPreparedReaderLead, activeFrameGapEvidence, summarizeReaderLead,
@@ -499,6 +500,16 @@ test("first render and useful picture must belong to the measured run", () => {
     "the original source attachment cannot identify a replacement replay receiver");
   assert.equal(readinessPresentationMatchesRun(restart, replayFrame, 1000, 1110), true,
     "the restart receipt identifies the replay receiver's first-useful picture");
+});
+
+test("source traversal boundaries ignore a stale trace from a prior run", () => {
+  const run = { exampleId: "showcase-first-scene", runGeneration: 8 };
+  const trace = { runRequestId: 14, context: { exampleId: run.exampleId, runGeneration: 8 } };
+  assert.equal(readinessTraceMatchesRun(trace, run, run.exampleId), true);
+  assert.equal(readinessTraceMatchesRun({ ...trace,
+    context: { ...trace.context, runGeneration: 7 } }, run, run.exampleId), false);
+  assert.equal(readinessTraceMatchesRun({ ...trace, runRequestId: null }, run, run.exampleId), false);
+  assert.equal(readinessTraceMatchesRun(trace, run, "showcase-dynamic-scene"), false);
 });
 
 test("Run startup origins are required and ordered independently from source start", () => {

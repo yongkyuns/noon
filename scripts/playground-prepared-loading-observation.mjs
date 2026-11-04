@@ -63,6 +63,12 @@ export function readinessPresentationMatchesRun(attachedPublication, latestPrese
     Number.isFinite(runStartEpochMs) && originMs + latestPresentation.presentedAtMs >= runStartEpochMs;
 }
 
+export function readinessTraceMatchesRun(trace, run, sourceId) {
+  return Number.isSafeInteger(trace?.runRequestId) && trace.runRequestId >= 0 &&
+    trace.context?.exampleId === sourceId && Number.isSafeInteger(run?.runGeneration) &&
+    trace.context?.runGeneration === run.runGeneration;
+}
+
 export function readinessRunTimingOriginErrors(startup) {
   const errors = [];
   const accepted = startup?.runAcceptedAtEpochMs;
