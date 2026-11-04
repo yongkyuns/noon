@@ -77,6 +77,16 @@ impl ExecutionSession {
         self.runtime.seal_replay()
     }
 
+    /// Seal only when the viewer may safely take over the still-live owner.
+    /// Explicit callers may seal a snapshot with declared input routes; later
+    /// input is then rejected by the sealed history scope as usual.
+    pub fn seal_replay_for_viewer(&mut self) -> Result<(), ReplayError> {
+        if self.reactive_projection.has_native_input_routes() {
+            return Err(ReplayError::UnrecordedInput);
+        }
+        self.seal_replay()
+    }
+
     // Inspect the original session before any ownership/snapshot operation:
     // cloning intentionally retires pending continuation tokens. Runtime history
     // validity and its budget are still checked by runtime.seal_replay().
@@ -89,12 +99,6 @@ impl ExecutionSession {
             || self.translation_drag_active()
         {
             return Err(ReplayError::Incomplete);
-        }
-        if self.reactive_projection.has_native_input_routes() {
-            // These sampled sources remain live after authored source completion.
-            // No occurrence journal exists in replay history, so sealing here
-            // would strand the observed owner behind an immutable reader guard.
-            return Err(ReplayError::UnrecordedInput);
         }
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()

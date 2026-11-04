@@ -6090,6 +6090,16 @@ impl SemanticExecutionPlayer {
     /// A failed capability leaves the final coherent frame and semantic scene intact.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplay))]
     pub fn seal_replay(&mut self) -> Result<(), String> {
+        self.seal_replay_with_policy(false)
+    }
+
+    /// Automatic viewer completion cannot take ownership from live native input.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplayForViewer))]
+    pub fn seal_replay_for_viewer(&mut self) -> Result<(), String> {
+        self.seal_replay_with_policy(true)
+    }
+
+    fn seal_replay_with_policy(&mut self, viewer_completion: bool) -> Result<(), String> {
         if self.session.replay_scope_active() {
             // A wait has no animation completion barrier in the runtime, but its
             // live receipt still owns an unfinished authored interval.
@@ -6097,9 +6107,12 @@ impl SemanticExecutionPlayer {
             if self.has_pending_live_segment() {
                 return Err(noon_runtime::ReplayError::Incomplete.to_string());
             }
-            self.session
-                .seal_replay()
-                .map_err(|error| error.to_string())?;
+            if viewer_completion {
+                self.session.seal_replay_for_viewer()
+            } else {
+                self.session.seal_replay()
+            }
+            .map_err(|error| error.to_string())?;
             #[cfg(any(target_arch = "wasm32", test))]
             {
                 self.live_segment = None;

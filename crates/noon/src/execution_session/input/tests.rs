@@ -119,7 +119,7 @@ fn position(x: f32, y: f32) -> NativePointerPosition {
 }
 
 #[test]
-fn unrecorded_native_routes_keep_observed_source_open_after_completion() {
+fn viewer_completion_keeps_unrecorded_native_routes_live() {
     let fixture = Fixture::new();
     let mut session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
     session
@@ -128,7 +128,7 @@ fn unrecorded_native_routes_keep_observed_source_open_after_completion() {
     let before_seal = session.frame().clone();
 
     assert_eq!(
-        session.seal_replay(),
+        session.seal_replay_for_viewer(),
         Err(noon_runtime::ReplayError::UnrecordedInput)
     );
     assert!(session.replay_scope_active());

@@ -1642,8 +1642,8 @@ export async function attachSemanticEngine(
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
     sections = JSON.parse(player.sectionsJson());
     if ((continuation === null || sourceFinished) && prepared === null && !completedStaticSource) {
-      if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
-      try { player.sealReplay(); }
+      if (typeof player.sealReplayForViewer !== "function") throw new Error("semantic execution requires viewer replay admission support");
+      try { player.sealReplayForViewer(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
     }
     if (continuation !== null && !sourceFinished && pacing === SEMANTIC_PACING_REALTIME && !initiallyPaused) player.resume();
@@ -1933,7 +1933,7 @@ export async function attachSemanticEngine(
       player = context.completeSourcePlayback();
       sourceFinished = true;
       sections = JSON.parse(player.sectionsJson());
-      try { player.sealReplay(); }
+      try { player.sealReplayForViewer(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
       if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
       applyPointerInvalidation();

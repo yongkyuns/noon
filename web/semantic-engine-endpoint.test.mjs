@@ -54,7 +54,7 @@ function fixture(
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 28, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     sectionsJson: () => "[]",
-    sealReplay: () => {},
+    sealReplayForViewer: () => {},
     freshFiniteSourceDuration: () => null,
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
     debugFrameJson: () => JSON.stringify({ time, source: "active" }),
@@ -2254,7 +2254,7 @@ for (const stage of ["initial", "intermediate", "endpoint"]) {
 for (const mode of ["shared", "transferable"]) {
   test(`completed static input stays at authored zero without replay or source controls (${mode})`, async () => {
     const f = fixture(mode, null, null, { completedStaticSource: true });
-    f.player.sealReplay = () => assert.fail("input owner cannot become immutable history");
+    f.player.sealReplayForViewer = () => assert.fail("input owner cannot become immutable history");
     f.player.freshFiniteSourceDuration = () => assert.fail("no invented source duration");
     let endpoint;
     try {
@@ -2285,7 +2285,7 @@ test("completed source attachment publishes once without starting its old callba
     onComplete: () => assert.fail("source is already complete"), onError: (_generation, error) => { throw error; },
   });
   f.player.initialCallbackPhaseJson = () => assert.fail("completed source cannot bootstrap another callback phase");
-  f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
+  f.player.sealReplayForViewer = () => { throw new Error("UnsupportedDomain"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2312,7 +2312,7 @@ for (const replaySupported of [true, false]) test(`source result waits for final
   const f = fixture("transferable", null, {
     generation: 27, onComplete: finishSegment, onError: (_generation, error) => { throw error; },
   }, {}, { onExecutionDiagnostic: event => diagnostics.push(event) });
-  if (!replaySupported) f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
+  if (!replaySupported) f.player.sealReplayForViewer = () => { throw new Error("UnsupportedDomain"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2620,7 +2620,7 @@ test("rejected continuation pointer input preserves its existing wake", { timeou
 
 test("unavailable replay preserves final presentation and rejects transport commands", async () => {
   const f = fixture();
-  f.player.sealReplay = () => { throw new Error("RetentionLimit"); };
+  f.player.sealReplayForViewer = () => { throw new Error("RetentionLimit"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2639,7 +2639,7 @@ test("unavailable replay preserves final presentation and rejects transport comm
 
 test("source continuation never seals a still-growing execution plan", async () => {
   const f = fixture("transferable", null, { generation: 901, onComplete() {}, onError() {} });
-  f.player.sealReplay = () => { throw new Error("must not seal source-owned playback"); };
+  f.player.sealReplayForViewer = () => { throw new Error("must not seal source-owned playback"); };
   let endpoint;
   try { const ready = next(f.control.port2); endpoint = await f.attach(); await ready;
     assert.equal((await request(f.control.port2, "state", 903)).durationSeconds, null);
@@ -2657,7 +2657,7 @@ for (const [sealError, reason] of [
 ]) {
   test(`replay rejection (${sealError}) preserves the normalized reason and paused forward observation`, async () => {
     const f = fixture();
-    f.player.sealReplay = () => { throw new Error(sealError); };
+    f.player.sealReplayForViewer = () => { throw new Error(sealError); };
     let seeks = 0;
     f.player.seekDeltaJson = () => { seeks += 1; throw new Error("forward controls must not seek"); };
     let ticks = 0;
@@ -2710,7 +2710,7 @@ test("non-replayable callback observation still waits for matching renderer evid
     callbacks += 1;
     return JSON.stringify({ token: phase.token, writes: [] });
   });
-  f.player.sealReplay = () => { throw new Error("Incomplete"); };
+  f.player.sealReplayForViewer = () => { throw new Error("Incomplete"); };
   let endpoint;
   try {
     const prepared = await prepareRendererObservationFixture(f, [
@@ -3124,7 +3124,7 @@ test("worker inspection errors retain their cause without admitting or resuming 
 
 test("non-replayable paused scenes drive native interaction wakes and settle", { timeout: 3000 }, async () => {
   const f = fixture();
-  f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
+  f.player.sealReplayForViewer = () => { throw new Error("UnsupportedDomain"); };
   let active = false, ticks = 0;
   f.player.executionWake = () => ({ presentNow: false, cadence: active ? "animation_frame" : "idle" });
   f.player.submitBrowserPointerInputJson = () => { active = true; return true; };
@@ -3196,7 +3196,7 @@ for (const replaySupported of [true, false]) test(`finite audio diagnostics wait
   let time = 0, endpoint;
   Object.assign(f.player, { hasAudio: () => true, finiteAudioDuration: () => 2,
     audioResourceBundleBytes: () => new Uint8Array([2]), time: () => time, playbackTimeAt: () => time,
-    sealReplay() { if (!replaySupported) throw new Error("replay unavailable"); } });
+    sealReplayForViewer() { if (!replaySupported) throw new Error("replay unavailable"); } });
   try {
     const ready = next(f.control.port2);
     endpoint = await f.attach();
