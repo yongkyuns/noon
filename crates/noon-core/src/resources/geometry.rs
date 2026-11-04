@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     mem::size_of_val,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -98,19 +99,37 @@ pub struct GeometryResourceStats {
 /// `GeometryId` encodes a physical slot plus its generation. This lets the arena
 /// reuse storage at the live-working-set high-water mark without allowing a stale
 /// bare ID to alias a later occupant of the same slot.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct GeometryResourceArena {
     namespace: u64,
+    staging_identity: Arc<()>,
+    allocation_revision: u64,
     entries: Vec<ResourceEntry>,
     free_slots: Vec<u32>,
     live_resources: usize,
     retained_bytes: usize,
 }
 
+impl Clone for GeometryResourceArena {
+    fn clone(&self) -> Self {
+        Self {
+            namespace: self.namespace,
+            staging_identity: Arc::new(()),
+            allocation_revision: self.allocation_revision,
+            entries: self.entries.clone(),
+            free_slots: self.free_slots.clone(),
+            live_resources: self.live_resources,
+            retained_bytes: self.retained_bytes,
+        }
+    }
+}
+
 impl Default for GeometryResourceArena {
     fn default() -> Self {
         Self {
             namespace: next_geometry_arena(),
+            staging_identity: Arc::new(()),
+            allocation_revision: 0,
             entries: Vec::new(),
             free_slots: Vec::new(),
             live_resources: 0,
@@ -129,6 +148,22 @@ impl GeometryResourceArena {
         Self::default()
     }
 
+    /// Begin a bounded insertion transaction whose handles can be used to
+    /// validate a candidate before the resources become visible in this arena.
+    pub fn stage_insertions(&self) -> GeometryResourceInsertionStaging {
+        GeometryResourceInsertionStaging {
+            staging_identity: Arc::clone(&self.staging_identity),
+            namespace: self.namespace,
+            allocation_revision: self.allocation_revision,
+            entry_len: self.entries.len(),
+            free_slot_len: self.free_slots.len(),
+            reused_slots: 0,
+            retained_bytes: 0,
+            entries: Vec::new(),
+            handle_indices: HashMap::new(),
+        }
+    }
+
     pub fn insert_path(&mut self, path: impl Into<Arc<VectorPath>>) -> GeometryResourceHandle {
         self.insert(GeometryResource::VectorPath(path.into()))
     }
@@ -138,6 +173,7 @@ impl GeometryResourceArena {
     }
 
     pub fn insert(&mut self, resource: GeometryResource) -> GeometryResourceHandle {
+        self.advance_allocation_revision();
         let resource_bytes = resource.retained_bytes();
         let handle = if let Some(slot) = self.free_slots.pop() {
             let index = slot as usize;
@@ -262,20 +298,28 @@ impl GeometryResourceArena {
 
     pub fn remove(&mut self, id: GeometryId) -> Result<GeometryResource, GeometryResourceError> {
         let index = geometry_resource_slot(id);
-        let entry = self
-            .entries
-            .get_mut(index)
-            .filter(|entry| geometry_resource_id(index, entry.generation) == id)
-            .ok_or(GeometryResourceError::UnknownResource(id))?;
-        let previous = entry
-            .value
-            .as_ref()
-            .ok_or(GeometryResourceError::UnknownResource(id))?;
-        let next_version = entry
-            .version
+        let (next_version, previous_retained_bytes) = {
+            let entry = self
+                .entries
+                .get(index)
+                .filter(|entry| geometry_resource_id(index, entry.generation) == id)
+                .ok_or(GeometryResourceError::UnknownResource(id))?;
+            let previous = entry
+                .value
+                .as_ref()
+                .ok_or(GeometryResourceError::UnknownResource(id))?;
+            let next_version = entry
+                .version
+                .checked_add(1)
+                .ok_or(GeometryResourceError::VersionExhausted(id))?;
+            (next_version, previous.retained_bytes())
+        };
+        let next_revision = self
+            .allocation_revision
             .checked_add(1)
-            .ok_or(GeometryResourceError::VersionExhausted(id))?;
-        let previous_retained_bytes = previous.retained_bytes();
+            .ok_or(GeometryResourceError::RevisionExhausted)?;
+        self.allocation_revision = next_revision;
+        let entry = &mut self.entries[index];
         let resource = entry
             .value
             .take()
@@ -323,6 +367,182 @@ impl GeometryResourceArena {
     pub fn is_empty(&self) -> bool {
         self.live_resources == 0
     }
+
+    /// Reserve for staged entries before a larger candidate is published.
+    /// This may change vector capacity, but never changes handles or live data.
+    pub fn reserve_insertions(
+        &mut self,
+        staged: &GeometryResourceInsertionStaging,
+    ) -> Result<(), GeometryResourceError> {
+        let (_, _, appended, _) = self.staged_insertion_totals(staged)?;
+        self.entries
+            .try_reserve(appended)
+            .map_err(|_| GeometryResourceError::AllocationFailed)
+    }
+
+    /// Publish all staged insertions after checking that their planned slots
+    /// still belong to this unchanged arena. Validation and reservation finish
+    /// before any entry, free-list, or accounting mutation.
+    pub fn commit_insertions(
+        &mut self,
+        staged: GeometryResourceInsertionStaging,
+    ) -> Result<(), GeometryResourceError> {
+        let (live_resources, retained_bytes, appended, next_revision) =
+            self.staged_insertion_totals(&staged)?;
+        if staged.entries.is_empty() {
+            return Ok(());
+        }
+        self.entries
+            .try_reserve(appended)
+            .map_err(|_| GeometryResourceError::AllocationFailed)?;
+        for (handle, resource) in staged.entries {
+            let slot = geometry_resource_slot(handle.id);
+            if slot < staged.entry_len {
+                let free_slot = self.free_slots.pop();
+                debug_assert_eq!(free_slot, Some(slot as u32));
+                let entry = &mut self.entries[slot];
+                debug_assert!(entry.value.is_none());
+                debug_assert_eq!(entry.generation, (handle.id.get() >> 32) as u32);
+                entry.version = 0;
+                entry.value = Some(resource);
+            } else {
+                debug_assert_eq!(slot, self.entries.len());
+                self.entries.push(ResourceEntry {
+                    generation: 0,
+                    version: 0,
+                    value: Some(resource),
+                });
+            }
+        }
+        self.live_resources = live_resources;
+        self.retained_bytes = retained_bytes;
+        self.allocation_revision = next_revision;
+        Ok(())
+    }
+
+    fn staged_insertion_totals(
+        &self,
+        staged: &GeometryResourceInsertionStaging,
+    ) -> Result<(usize, usize, usize, u64), GeometryResourceError> {
+        staged.validate_base(self)?;
+        let live_resources = self
+            .live_resources
+            .checked_add(staged.entries.len())
+            .ok_or(GeometryResourceError::ResourceCountOverflow)?;
+        let retained_bytes = self
+            .retained_bytes
+            .checked_add(staged.retained_bytes)
+            .ok_or(GeometryResourceError::RetainedBytesOverflow)?;
+        let appended = staged.entries.len() - staged.reused_slots;
+        let revision = if staged.entries.is_empty() {
+            self.allocation_revision
+        } else {
+            self.allocation_revision
+                .checked_add(1)
+                .ok_or(GeometryResourceError::RevisionExhausted)?
+        };
+        Ok((live_resources, retained_bytes, appended, revision))
+    }
+
+    fn advance_allocation_revision(&mut self) {
+        self.allocation_revision = self
+            .allocation_revision
+            .checked_add(1)
+            .expect("geometry resource arena revision exhausted");
+    }
+}
+
+/// Unpublished geometry insertions with handles derived from one arena's next
+/// allocation state. The staging value owns only its added resources.
+#[derive(Debug)]
+pub struct GeometryResourceInsertionStaging {
+    staging_identity: Arc<()>,
+    namespace: u64,
+    allocation_revision: u64,
+    entry_len: usize,
+    free_slot_len: usize,
+    reused_slots: usize,
+    retained_bytes: usize,
+    entries: Vec<(GeometryResourceHandle, GeometryResource)>,
+    handle_indices: HashMap<GeometryResourceHandle, usize>,
+}
+
+impl GeometryResourceInsertionStaging {
+    /// Stage one resource and return the exact handle it will receive on commit.
+    pub fn insert(
+        &mut self,
+        arena: &GeometryResourceArena,
+        resource: GeometryResource,
+    ) -> Result<GeometryResourceHandle, GeometryResourceError> {
+        self.validate_base(arena)?;
+        let total_bytes = self
+            .retained_bytes
+            .checked_add(resource.retained_bytes())
+            .ok_or(GeometryResourceError::RetainedBytesOverflow)?;
+        let reuses_slot = self.reused_slots < self.free_slot_len;
+        let (slot, generation) = if reuses_slot {
+            let free_index = self.free_slot_len - self.reused_slots - 1;
+            let slot = *arena
+                .free_slots
+                .get(free_index)
+                .ok_or(GeometryResourceError::StaleStaging)?;
+            let generation = arena
+                .entries
+                .get(slot as usize)
+                .filter(|entry| entry.value.is_none())
+                .map(|entry| entry.generation)
+                .ok_or(GeometryResourceError::StaleStaging)?;
+            (slot as usize, generation)
+        } else {
+            let slot = self
+                .entry_len
+                .checked_add(self.entries.len() - self.reused_slots)
+                .ok_or(GeometryResourceError::ResourceSlotExhausted)?;
+            (slot, 0)
+        };
+        u32::try_from(slot).map_err(|_| GeometryResourceError::ResourceSlotExhausted)?;
+        let id = geometry_resource_id(slot, generation);
+        let handle = GeometryResourceHandle {
+            arena: self.namespace,
+            id,
+            version: 0,
+        };
+        let index = self.entries.len();
+        self.entries
+            .try_reserve(1)
+            .map_err(|_| GeometryResourceError::AllocationFailed)?;
+        self.handle_indices
+            .try_reserve(1)
+            .map_err(|_| GeometryResourceError::AllocationFailed)?;
+        self.entries.push((handle, resource));
+        self.handle_indices.insert(handle, index);
+        self.reused_slots += usize::from(reuses_slot);
+        self.retained_bytes = total_bytes;
+        Ok(handle)
+    }
+
+    /// Read a resource staged by this transaction, without publishing it.
+    pub fn get(&self, handle: GeometryResourceHandle) -> Option<&GeometryResource> {
+        self.handle_indices
+            .get(&handle)
+            .and_then(|index| self.entries.get(*index))
+            .map(|(_, resource)| resource)
+    }
+
+    fn validate_base(&self, arena: &GeometryResourceArena) -> Result<(), GeometryResourceError> {
+        if !Arc::ptr_eq(&self.staging_identity, &arena.staging_identity)
+            || self.namespace != arena.namespace
+        {
+            return Err(GeometryResourceError::ForeignStaging);
+        }
+        if self.allocation_revision != arena.allocation_revision
+            || self.entry_len != arena.entries.len()
+            || self.free_slot_len != arena.free_slots.len()
+        {
+            return Err(GeometryResourceError::StaleStaging);
+        }
+        Ok(())
+    }
 }
 
 fn geometry_resource_id(slot: usize, generation: u32) -> GeometryId {
@@ -340,6 +560,13 @@ pub enum GeometryResourceError {
     NonFinitePath,
     UnknownResource(GeometryId),
     VersionExhausted(GeometryId),
+    RevisionExhausted,
+    ForeignStaging,
+    StaleStaging,
+    ResourceSlotExhausted,
+    ResourceCountOverflow,
+    RetainedBytesOverflow,
+    AllocationFailed,
 }
 
 impl std::fmt::Display for GeometryResourceError {
@@ -356,6 +583,19 @@ impl std::fmt::Display for GeometryResourceError {
                     id.get()
                 )
             }
+            Self::RevisionExhausted => {
+                formatter.write_str("geometry resource arena revision exhausted")
+            }
+            Self::ForeignStaging => formatter.write_str("geometry insertion staging is foreign"),
+            Self::StaleStaging => formatter.write_str("geometry insertion staging is stale"),
+            Self::ResourceSlotExhausted => {
+                formatter.write_str("geometry resource slot space exhausted")
+            }
+            Self::ResourceCountOverflow => formatter.write_str("geometry resource count overflow"),
+            Self::RetainedBytesOverflow => {
+                formatter.write_str("geometry resource retained byte count overflow")
+            }
+            Self::AllocationFailed => formatter.write_str("geometry resource allocation failed"),
         }
     }
 }
@@ -373,6 +613,113 @@ mod tests {
             path = path.line_to(Vec2::new(index as f32 * 0.01, (index % 7) as f32));
         }
         path
+    }
+
+    fn mesh_resource(offset: f32) -> GeometryResource {
+        GeometryResource::Mesh(Arc::new(
+            MeshResource::new(
+                vec![
+                    crate::SemanticVec3::new(f64::from(offset), 0.0, 0.0),
+                    crate::SemanticVec3::new(f64::from(offset + 1.0), 0.0, 0.0),
+                    crate::SemanticVec3::new(f64::from(offset), 1.0, 0.0),
+                ],
+                None,
+                vec![0, 1, 2],
+            )
+            .unwrap(),
+        ))
+    }
+
+    #[test]
+    fn staged_mesh_insertions_resolve_before_commit_and_reuse_planned_free_slots() {
+        let mut arena = GeometryResourceArena::new();
+        let first = arena.insert(mesh_resource(0.0));
+        let second = arena.insert(mesh_resource(2.0));
+        arena.remove(first.id).unwrap();
+        arena.remove(second.id).unwrap();
+        let capacity = arena.slot_capacity();
+
+        let mut staged = arena.stage_insertions();
+        let next_resource = mesh_resource(4.0);
+        let GeometryResource::Mesh(shared) = &next_resource else {
+            unreachable!();
+        };
+        let shared = Arc::clone(shared);
+        let next = staged.insert(&arena, next_resource).unwrap();
+        let last = staged.insert(&arena, mesh_resource(6.0)).unwrap();
+        assert_ne!(next.id, last.id);
+        let before_reservation = arena.stats();
+        arena.reserve_insertions(&staged).unwrap();
+        assert_eq!(arena.stats(), before_reservation);
+        assert!(arena.get(next).is_none());
+        assert!(arena.get(last).is_none());
+        assert!(matches!(staged.get(next), Some(GeometryResource::Mesh(_))));
+        assert!(matches!(staged.get(last), Some(GeometryResource::Mesh(_))));
+        let Some(GeometryResource::Mesh(staged_mesh)) = staged.get(next) else {
+            unreachable!();
+        };
+        assert!(Arc::ptr_eq(&shared, staged_mesh));
+
+        arena.commit_insertions(staged).unwrap();
+        assert_eq!(arena.slot_capacity(), capacity);
+        assert!(arena.get(next).is_some());
+        assert!(arena.get(last).is_some());
+        let Some(GeometryResource::Mesh(committed_mesh)) = arena.get(next) else {
+            unreachable!();
+        };
+        assert!(Arc::ptr_eq(&shared, committed_mesh));
+        assert_eq!(arena.current_handle(first.id), None);
+        assert_eq!(arena.current_handle(second.id), None);
+    }
+
+    #[test]
+    fn staged_mesh_insertions_append_after_any_available_free_slots() {
+        for free_slot in [false, true] {
+            let mut arena = GeometryResourceArena::new();
+            if free_slot {
+                let removed = arena.insert(mesh_resource(0.0));
+                arena.remove(removed.id).unwrap();
+            }
+            let mut staged = arena.stage_insertions();
+            let first = staged.insert(&arena, mesh_resource(2.0)).unwrap();
+            let second = staged.insert(&arena, mesh_resource(4.0)).unwrap();
+            assert_ne!(first.id, second.id);
+            arena.reserve_insertions(&staged).unwrap();
+            arena.commit_insertions(staged).unwrap();
+            assert!(arena.get(first).is_some());
+            assert!(arena.get(second).is_some());
+            assert_eq!(arena.len(), 2);
+            assert_eq!(arena.slot_capacity(), 2);
+        }
+    }
+
+    #[test]
+    fn foreign_and_stale_staged_insertions_reject_without_commit_mutation() {
+        let arena = GeometryResourceArena::new();
+        let mut foreign = arena.stage_insertions();
+        let foreign_handle = foreign.insert(&arena, mesh_resource(0.0)).unwrap();
+        let mut clone = arena.clone();
+        let clone_before = clone.stats();
+        assert_eq!(
+            clone.commit_insertions(foreign),
+            Err(GeometryResourceError::ForeignStaging)
+        );
+        assert_eq!(clone.stats(), clone_before);
+        assert!(clone.get(foreign_handle).is_none());
+
+        let mut stale_arena = GeometryResourceArena::new();
+        let mut staged = stale_arena.stage_insertions();
+        let staged_handle = staged.insert(&stale_arena, mesh_resource(4.0)).unwrap();
+        let intervening = stale_arena.insert(mesh_resource(2.0));
+        stale_arena.remove(intervening.id).unwrap();
+        let before_commit = stale_arena.stats();
+
+        assert_eq!(
+            stale_arena.commit_insertions(staged),
+            Err(GeometryResourceError::StaleStaging)
+        );
+        assert_eq!(stale_arena.stats(), before_commit);
+        assert_eq!(stale_arena.current_handle(staged_handle.id), None);
     }
 
     #[test]

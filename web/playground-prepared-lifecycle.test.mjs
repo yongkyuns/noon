@@ -12,6 +12,7 @@ function section(begin, end) {
   return source.slice(from, to);
 }
 const lifecycle = [
+  section("function updateDraftStatus(", "function setRunPatchStatus("),
   section("function isPreparedPlayback(", "function showError("),
   section("function updatePlaybackControls(", "async function ensureExecutionReady("),
   section("async function ensureExecutionReady(", "async function runPlaygroundTestHook("),
@@ -40,7 +41,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
   const env = {
     initialCanvas, document, calls, errors,
     generations: new PlaygroundGeneration(),
-    status: dom(), patchStatus: dom(), sceneButton: dom(), sceneSourceEditor: dom(),
+    status: dom(), patchStatus: dom(), draftStatus: dom(), sceneButton: dom(), sceneSourceEditor: dom(),
     recoverButton: Object.assign(new EventTarget(), dom()),
     resetButton: dom(), gallerySearch: dom(), categorySelect: dom(), paritySelect: dom(),
     previousGalleryPage: dom(), nextGalleryPage: dom(), metricObjects: dom(), metricTime: dom(),
@@ -50,7 +51,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     diagnosticPanel: { beginRun() {}, invalidate() {}, clear() { calls.push(["clear-diagnostic"]); } },
     example: { id: "test", title: "Test", parityStatus: "candidate", inspectionZoom: true },
     hooks: { authoringRunOptions: () => options },
-    preparationGate: null, stateGate: null, initialPrepared: true,
+    preparationGate: null, authoringGate: null, stateGate: null, initialPrepared: true,
     setupGate: null, observedExecution: false,
   };
   class Controls {
@@ -76,6 +77,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
   }
   const authoring = {
     terminated: false,
+    libraryTrust: "pristine",
     run(source, context, options) {
       const done = deferred();
       jobs.push({ source, context, options, ...done });
@@ -97,7 +99,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
         calls.push(["attach", descriptor]); this.options = options;
         this.status = descriptor.preparedPlayback ? {
           preparedPlayback: env.initialPrepared, time: 0.25, playing: false,
-          preparedFrontier: 1, durationSeconds: null, buffering: false,
+          preparedFrontier: 1, durationSeconds: null, buffering: false, completed: false,
           canUndoTranslationDrag: false, replaySupported: true,
         } : { time: 0, playing: true, replaySupported: true };
         if (env.observedExecution) this.status = {
@@ -123,7 +125,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
         assert.notEqual(this.status?.preparedPlayback, true, "cannot reconcile an unretired prepared reader");
         this.status = descriptor.preparedPlayback ? {
           preparedPlayback: env.initialPrepared, time: 0.25, playing: false,
-          preparedFrontier: 1, durationSeconds: null, buffering: false,
+          preparedFrontier: 1, durationSeconds: null, buffering: false, completed: false,
           canUndoTranslationDrag: false, replaySupported: true,
         } : { time: 0, playing: true, replaySupported: true };
         return { ...this.status };
@@ -149,13 +151,24 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     players.push(runtime); return runtime;
   }
   const api = new Function("env", "authoring", "createRuntimeClient", "PlaygroundPlaybackControls", `
-    const { calls, errors, document, generations, status, patchStatus, sceneButton, sceneSourceEditor,
+    const { calls, errors, document, generations, status, patchStatus, draftStatus, sceneButton, sceneSourceEditor,
       resetButton, gallerySearch, categorySelect, paritySelect, previousGalleryPage, nextGalleryPage,
       galleryGrid, previousPreview, diagnosticPanel, metricObjects, metricTime, recoverButton } = env;
     const globalThis = { __NOON_PLAYGROUND_TEST_HOOKS__: env.hooks };
+    const SCENE_EXAMPLES = [env.example];
     const console = { warn() {}, debug() {}, error() {} };
     let canvas = env.initialCanvas, player = null, preparedPlaybackPlayer = null, playbackControls = null;
-    let selectedExampleId = "test", canonicalSource = "", authoringClient = authoring;
+    let selectedExampleId = "test", canonicalSource = "", activeRunIdentity = null;
+    const setRunPatchStatus = (_token, message, state) => {
+      patchStatus.value = message; patchStatus.dataset.state = state;
+    };
+    const authoringWorkers = {
+      activeClient: authoring,
+      async clientForRun() { if (env.authoringGate) await env.authoringGate.promise; return authoring; },
+      prepareReplacement(client) { calls.push(["prewarm-authoring", client]); return true; },
+      retire(client) { return client === authoring; },
+      dispose() {},
+    };
     let sceneRunPromise = null, latestRunPhaseMetrics = null, activeSourceContinuation = null;
     let activeRunRequest = null, runtimeStartPromise = null, runtimePreparation = null;
     let playerNeedsRestart = false, busyDepth = 0, galleryPage = 0, playbackDurationSeconds = 4;
@@ -168,7 +181,6 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     const showSceneError = error => errors.push(error);
     const showError = showSceneError, showPlaybackError = showSceneError;
     const authoringSourceDocument = value => value;
-    const ensureAuthoringClient = () => authoringClient ??= authoring;
     const adoptRuntimeCanvas = candidate => { calls.push(["adopt-canvas", candidate]); canvas = candidate.canvas; };
     const startMetricsPolling = () => calls.push(["poll"]);
     const stopMetricsPolling = () => { metricsEpoch++; calls.push(["stop-poll"]); };
@@ -181,7 +193,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     };
     const recordStale = (token, stage) => { generations.recordStale(token, stage); return { stale: true, stage }; };
     ${lifecycle}
-    return { runScene, stopForSourceEdit, playbackPresentation, updateWorkerMetrics, ensureExecutionReady,
+    return { runScene, retireActiveRunForReplacement, playbackPresentation, updateWorkerMetrics, ensureExecutionReady,
       supersedeActiveSourceContinuation,
       markFailed: () => { playerNeedsRestart = true; runtimeFailureRevision++; updatePreviewRecoveryControl(); },
       inspect: () => ({ player, preparedPlaybackPlayer, playbackControls, busyDepth, activeSourceContinuation,
@@ -242,6 +254,52 @@ test("prepared startup releases only its UI busy ticket while the source remains
   f.finish(); await promise;
 });
 
+test("default prepared continuation prewarms only after a tainted source attaches", async () => {
+  const f = fixture(); f.authoring.libraryTrust = "tainted";
+  const { promise, job } = await f.start();
+  assert.equal(f.count("prewarm-authoring"), 0);
+  await f.register(job);
+  assert.deepEqual(f.calls.filter(call => call[0] === "prewarm-authoring"), [
+    ["prewarm-authoring", f.authoring],
+  ]);
+  f.finish(job); await promise;
+});
+
+test("pristine and explicit observed source runs do not prewarm replacements", async () => {
+  for (const options of [
+    { preparedPlayback: true, preparationLookaheadSeconds: 0.75 },
+    { preparedPlayback: false, preparationLookaheadSeconds: 0.75 },
+  ]) {
+    const f = fixture(options);
+    f.authoring.libraryTrust = options.preparedPlayback ? "pristine" : "tainted";
+    const { promise, job } = await f.start();
+    await f.register(job); f.finish(job); await promise;
+    assert.equal(f.count("prewarm-authoring"), 0);
+  }
+});
+
+test("Run acceptance precedes interpreter readiness and source execution", async () => {
+  const f = fixture(); f.env.authoringGate = deferred();
+  const promise = f.runScene();
+  await until(() => f.players.length === 1);
+  const accepted = f.inspect().latestRunPhaseMetrics.runAcceptedAtMs;
+  assert.ok(Number.isFinite(accepted));
+  assert.equal(f.inspect().latestRunPhaseMetrics.sourceRunStartedAtMs, null);
+  assert.equal(f.jobs.length, 0);
+  f.env.authoringGate.resolve();
+  await until(() => f.jobs.length === 1);
+  assert.equal(f.inspect().latestRunPhaseMetrics.runAcceptedAtMs, accepted);
+  assert.ok(f.inspect().latestRunPhaseMetrics.sourceRunStartedAtMs >= accepted);
+  await f.register(); f.finish(); await promise;
+});
+
+test("preparation diagnostics reach the prepared source through the ordinary Run path", async () => {
+  const f = fixture({ preparedPlayback: true, diagnosticPreparationTiming: true });
+  const { promise, job } = await f.start();
+  assert.equal(job.options.diagnosticPreparationTiming, true);
+  await f.register(); f.finish(); await promise;
+});
+
 test("preview recovery joins one receiver replacement and preserves open readiness without another source Run", async () => {
   const f = fixture(), { promise } = await f.start(); await f.register();
   f.env.allowRecovery = true; f.env.recoveryGate = deferred(); f.markFailed();
@@ -281,11 +339,11 @@ test("a new runtime failure during recovery cannot be cleared by stale readiness
 });
 
 for (const rejected of [false, true]) {
-  test(`source edit supersedes preview recovery ${rejected ? "failure" : "readiness"}`, async () => {
+  test(`explicit Run supersedes preview recovery ${rejected ? "failure" : "readiness"}`, async () => {
     const f = fixture(), { promise } = await f.start(); await f.register();
     f.env.allowRecovery = true; f.env.recoveryGate = deferred(); f.markFailed();
     const recovering = assert.rejects(f.ensureExecutionReady(), { name: "AbortError" });
-    await f.stopForSourceEdit(); await promise;
+    await f.retireActiveRunForReplacement(); await promise;
     const adoptions = f.count("adopt-canvas"), status = f.env.patchStatus.value;
     if (rejected) f.env.recoveryGate.reject(new Error("obsolete receiver failed"));
     else f.env.recoveryGate.resolve();
@@ -375,6 +433,7 @@ test("ordinary source errors retain open history and the next Run uses the same 
   const owner = f.inspect().player, error = new Error("source exploded");
   job.reject(error); const failed = await promise;
   assert.equal(failed.retainedPreparedHistory, true); assert.equal(failed.error, error);
+  assert.match(f.env.draftStatus.value, /Test draft matches the failed Run/);
   assert.equal(f.inspect().player, owner); assert.equal(f.inspect().playbackControls.busy, false);
   assert.equal(f.inspect().playbackControls.state.durationSeconds, null);
   assert.equal(f.inspect().playbackControls.controllable, true);
@@ -412,17 +471,17 @@ test("a genuine rerun retires completed prepared history instead of attempting r
   assert.equal(f.count("reconcile"), 0); assert.equal(f.count("restart"), 0);
 });
 
-test("editing completed prepared history pauses its preview and keeps the renderer and warm interpreter", async () => {
+test("explicit Run replacement pauses completed prepared history and keeps the renderer and warm interpreter", async () => {
   const f = fixture(), first = await f.start(); await f.register(); f.finish(); await first.promise;
   const owner = f.inspect().player;
-  await f.stopForSourceEdit();
+  await f.retireActiveRunForReplacement();
   assert.equal(f.inspect().player, owner); assert.equal(owner.status.playing, false);
   assert.equal(f.count("terminate-authoring"), 0); assert.equal(f.count("terminate-runtime"), 0);
 });
 
-test("editing a demand-paused source cancels its original context and suppresses stale source errors", async () => {
+test("explicit Run replacement cancels a demand-paused source and suppresses stale errors", async () => {
   const f = fixture(), { promise, job } = await f.start(); await f.register();
-  await f.stopForSourceEdit(); const cancelled = await promise;
+  await f.retireActiveRunForReplacement(); const cancelled = await promise;
   assert.equal(cancelled.stale, true); assert.deepEqual(f.errors, []);
   assert.deepEqual(f.calls.find(call => call[0] === "cancel").slice(1),
     [job.descriptor.contextId, job.descriptor.continuationGeneration]);
@@ -482,6 +541,7 @@ test("a viewer Run without qualification hooks unlocks incremental playback befo
   const { promise, job } = await f.start(); await f.register();
   assert.equal(job.options.preparedPlayback, true);
   assert.equal(job.options.preparationLookaheadSeconds, 1);
+  assert.equal(job.options.diagnosticPreparationTiming, false);
   assert.equal(f.inspect().runInFlight, true); assert.equal(f.inspect().busyDepth, 0);
   assert.equal(f.inspect().playbackControls.controllable, true);
   assert.equal(f.inspect().playbackControls.state.durationSeconds, null);
@@ -495,7 +555,8 @@ test("observed pause beyond the initial segment does not claim the unfinished so
 });
 
 for (const options of [{ preparedPlayback: "yes" }, { preparationLookaheadSeconds: 0 },
-  { preparationLookaheadSeconds: NaN }]) {
+  { preparationLookaheadSeconds: NaN }, { diagnosticPreparationTiming: "yes" },
+  { preparedPlayback: false, diagnosticPreparationTiming: true }]) {
   test(`invalid qualification options reject before authoring (${JSON.stringify(options)})`, async () => {
     const f = fixture(options); const failed = await f.runScene();
     assert.match(failed.error.message, /invalid prepared source run options/);
@@ -503,7 +564,7 @@ for (const options of [{ preparedPlayback: "yes" }, { preparationLookaheadSecond
   });
 }
 
-test("prepared status follows buffering, user pause and exact terminal time, not source liveness", async () => {
+test("prepared status follows Rust completion, buffering and user pause", async () => {
   const f = fixture(), { promise } = await f.start(); await f.register();
   const runtime = f.inspect().player;
   assert.equal(f.env.status.dataset.playbackPhase, "paused");
@@ -511,8 +572,9 @@ test("prepared status follows buffering, user pause and exact terminal time, not
     [{ time: 0.5, playing: true, buffering: false }, "playing"],
     [{ playing: true, buffering: true }, "buffering"],
     [{ playing: false, buffering: true }, "paused"],
-    [{ time: 3.9999, durationSeconds: 4, preparedFrontier: 4, playing: true, buffering: false }, "playing"],
-    [{ time: 4 }, "finished"],
+    [{ time: 4, durationSeconds: 4, preparedFrontier: 4, playing: true, buffering: false, completed: false }, "playing"],
+    [{ playing: false, completed: false }, "paused"],
+    [{ completed: true, playing: false }, "finished"],
   ]) {
     Object.assign(runtime.status, updates); await f.updateWorkerMetrics();
     assert.equal(f.env.status.dataset.playbackPhase, phase);

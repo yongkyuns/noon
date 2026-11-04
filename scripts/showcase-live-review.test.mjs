@@ -169,7 +169,7 @@ test("unexpected denial stays fatal and expected nonreplayable reruns have separ
 test("ordinary Run helper applies the same deadline and state snapshot to each execution", async () => {
   let calls = 0;
   const page = { evaluate: async () => { calls += 1; } };
-  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.ok(Number.isFinite((await runOrdinaryGallery(page, 100)).wallMs));
   await assert.rejects(runOrdinaryGallery({ evaluate: () => new Promise(() => {}) }, 5), /review deadline/);
   assert.equal(calls, 1);
 
@@ -182,6 +182,7 @@ test("ordinary Run helper applies the same deadline and state snapshot to each e
 function preparedAudioPage({ run, observations = [] } = {}) {
   const calls = [], ready = [];
   let observationIndex = 0;
+  let metricsCalls = 0;
   let current = {};
   const gallery = {
     selectedExampleId: "showcase-example",
@@ -190,8 +191,39 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       return run ?? { stale: false, result: { hasAudio: true, time: 0, playing: false, durationSeconds: 8 } };
     },
     get runInFlight() { return current.runInFlight ?? false; },
-    async executionMetrics() { return { metrics: { time: current.publishedTime, objectCount: 55 } }; },
+    async executionMetrics() {
+      metricsCalls += 1;
+      current.captureEvents?.push(`metrics-${metricsCalls}`);
+      if (current.wrapOnPostMetric && metricsCalls % 2 === 0) current.looped = true;
+      const sample = current.postPresentationSample && metricsCalls % 2 === 0
+        ? current.postPresentationSample
+        : current.presentationSample ?? {
+          session: current.session ?? 7, sequence: current.sequence ?? 5,
+          time: current.publishedTime, presentedAtMs: 100,
+        };
+      return { metrics: { time: sample.time, objectCount: current.objectCount ?? 55,
+        needsPresent: current.needsPresent ?? false, bufferedDeltas: current.bufferedDeltas ?? 0,
+        latestPresentationSample: sample },
+      ...(current.preparedPlayback ? { engineMetrics: { preparedPlayback: current.preparedPlayback } } : {}) };
+    },
+    get executionDiagnostics() {
+      const base = current.diagnostics ?? {
+        schemaVersion: 1, interpreterGeneration: 3, runRequestId: 17,
+        context: { exampleId: "showcase-example", selectionGeneration: 2, runGeneration: 9 },
+        events: [{ stage: "attached", publication: current.attachedPublication ?? {
+          session: current.session ?? 7, sequence: 4 } }],
+      };
+      return current.looped ? { ...base, events: [...base.events,
+        { stage: "disposition", disposition: "looped", loopCount: 1 }] } : base;
+    },
   };
+  class TestBlob { constructor(dataUrl) { this.dataUrl = dataUrl; } }
+  class TestFileReader {
+    readAsDataURL(blob) {
+      this.result = blob.dataUrl;
+      setTimeout(() => this.onload?.(), 0);
+    }
+  }
   const browser = {
     window: { __noonExampleGallery: gallery },
     document: { querySelector(selector) {
@@ -199,6 +231,17 @@ function preparedAudioPage({ run, observations = [] } = {}) {
         dataset: { state: current.patchState ?? "applied" }, value: current.patchError,
       };
       if (selector === "#status") return { dataset: { rendererBackend: "WebGL2" } };
+      if (selector === "#scene") return {
+        toBlob(callback) {
+          const copiedDataUrl = current.canvasDataUrl ?? "data:image/png;base64,aGVsbG8=";
+          current.captureEvents?.push("toBlob-copy");
+          setTimeout(() => {
+            current.captureEvents?.push("toBlob-serialize");
+            if (current.wrapDuringBlobSerialization) current.looped = true;
+            callback(new TestBlob(copiedDataUrl));
+          }, 0);
+        },
+      };
       if ([".playback-toggle", ".playback-restart", ".playback-scrubber"].includes(selector)) {
         return { disabled: false };
       }
@@ -213,7 +256,18 @@ function preparedAudioPage({ run, observations = [] } = {}) {
       if (observationIndex === 0) calls.push("published endpoint");
       current = observations[observationIndex++] ?? {};
     }
-    const value = await runInNewContext(`(${fn.toString()})(argument)`, { ...browser, argument });
+    const value = await runInNewContext(`(${fn.toString()})(argument)`, {
+      ...browser,
+      argument,
+      Blob: TestBlob,
+      FileReader: TestFileReader,
+      requestAnimationFrame(callback) {
+        current.captureEvents?.push("requestAnimationFrame");
+        callback(0);
+        return 1;
+      },
+      setTimeout,
+    });
     if (argument !== undefined) ready.push(value);
     return value;
   };
@@ -247,7 +301,7 @@ test("finite audio first pass uses trusted Play and waits for the unseeked publi
     { elapsed: 8 },
     { elapsed: 8, publishedTime: 8 },
   ] });
-  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.ok(Number.isFinite((await runOrdinaryGallery(page, 100)).wallMs));
   assert.deepEqual(calls, ["run", "trusted Play", "published endpoint"]);
   assert.deepEqual(ready, [false, false, false, false, false, false, true, true, true]);
 });
@@ -264,12 +318,167 @@ test("natural finite playback accepts a declared terminal hold and retains its r
       { elapsed: 30, publishedTime: publication },
     ],
   });
-  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100, lesson)));
+  assert.ok(Number.isFinite((await runOrdinaryGallery(page, 100, lesson)).wallMs));
   assert.deepEqual(calls, ["run", "trusted Play", "published endpoint"]);
   assert.deepEqual(ready, [false, true, true, true]);
   const observed = await readLiveState(page);
   assert.equal(observed.controls.elapsedSeconds, "30");
   assert.equal(observed.publishedTime, publication);
+});
+
+test("looping first pass captures one unseeked terminal hold before wrap with its run identity", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 7.5, controls: { playing: "true" } },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true },
+    ],
+  });
+  const result = await runOrdinaryGallery(page, 100, lesson);
+  assert.deepEqual(result.firstPassCompletion, {
+    disposition: "looped", loopCount: 1, interpreterGeneration: 3, runRequestId: 17,
+    context: { exampleId: "showcase-example", selectionGeneration: 2, runGeneration: 9 },
+  });
+  assert.equal(result.firstPassCapture.runRequestId, 17);
+  assert.equal(result.firstPassCapture.interpreterGeneration, 3);
+  assert.deepEqual(result.firstPassCapture.attached.publication, { session: 7, sequence: 4 });
+  assert.equal(result.firstPassCapture.metrics.time, 7.5);
+  assert.deepEqual(result.firstPassCapture.rendererReceipt, {
+    session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
+  });
+  assert.match(result.firstPassCapture.pngDataUrl, /^data:image\/png;base64,/);
+});
+
+test("looping first pass accepts an earlier receipt only with matching Rust hold evidence", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[6, 8]] };
+  const held = { publication: { session: 7, sequence: 5 }, evaluatedTime: 5.9514,
+    time: 7.5, validUntil: 8 };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, preparedPlayback: {
+        observation: { loopCount: 0, heldPresentation: held }, observedTime: 7.5 } },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true },
+    ],
+  });
+  const result = await runOrdinaryGallery(page, 100, lesson);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.firstPassCapture.heldPresentation)),
+    { ...held, observedTime: 7.5 });
+  assert.equal(result.firstPassCapture.rendererReceipt.time, 5.9514,
+    "capture retains the real renderer receipt rather than relabeling its time");
+  for (const invalid of [
+    { ...held, publication: { session: 7, sequence: 4 } },
+    { ...held, validUntil: 7.5 },
+  ]) {
+    const failed = preparedAudioPage({
+      run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+        time: 0, playing: true, durationSeconds: 8 } },
+      observations: [
+        { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, preparedPlayback: {
+          observation: { loopCount: 0, heldPresentation: invalid }, observedTime: 7.5 } },
+        { elapsed: 0.1, publishedTime: 0.1, looped: true },
+      ],
+    });
+    await assert.rejects(runOrdinaryGallery(failed.page, 100, lesson), /wrapped before its terminal hold picture/);
+  }
+});
+
+test("terminal hold bitmap and controls are captured before asynchronous PNG serialization", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const copiedDataUrl = "data:image/png;base64,cHJlLXdyYXA=";
+  const captureEvents = [];
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 7.5, canvasDataUrl: copiedDataUrl, captureEvents,
+        controls: { playing: "true" }, wrapDuringBlobSerialization: true },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true },
+    ],
+  });
+  const result = await runOrdinaryGallery(page, 100, lesson);
+  assert.equal(result.firstPassCapture.pngDataUrl, copiedDataUrl);
+  assert.deepEqual({ ...result.firstPassCapture.controls }, {
+    controllable: "true", busy: "false", playing: "true", durationKnown: "true",
+    buffering: "false", elapsedSeconds: "7.5",
+  });
+  assert.deepEqual(result.firstPassCapture.rendererReceipt, {
+    session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
+  });
+  assert.deepEqual(captureEvents, [
+    "metrics-1", "requestAnimationFrame", "requestAnimationFrame", "toBlob-copy",
+    "metrics-2", "toBlob-serialize",
+  ]);
+});
+
+test("loop wrap without a pre-wrap picture cannot use a post-wrap frame as first-pass evidence", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [{ elapsed: 0.1, publishedTime: 0.1, looped: true }],
+  });
+  await assert.rejects(runOrdinaryGallery(page, 100, lesson), /wrapped before its terminal hold picture/);
+});
+
+test("terminal capture rejects a later source run even when its loop evidence is valid", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 7.5, controls: { playing: "true" } },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true, diagnostics: {
+        schemaVersion: 1, interpreterGeneration: 3, runRequestId: 18,
+        context: { exampleId: "showcase-example", selectionGeneration: 2, runGeneration: 10 },
+        events: [{ stage: "attached", publication: { session: 8, sequence: 1 } },
+          { stage: "disposition", disposition: "looped", loopCount: 1 }],
+      } },
+    ],
+  });
+  await assert.rejects(runOrdinaryGallery(page, 100, lesson), /different source run/);
+});
+
+test("terminal capture rejects a renderer session that differs from the attached publication", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 7.5, controls: { playing: "true" }, session: 8,
+        attachedPublication: { session: 7, sequence: 4 } },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true, session: 8 },
+    ],
+  });
+  await assert.rejects(runOrdinaryGallery(page, 100, lesson), /wrapped before its terminal hold picture/);
+});
+
+test("terminal capture rejects a loop that occurs while the first metrics RPC is pending", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 7.5, controls: { playing: "true" }, wrapOnPostMetric: true },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true },
+    ],
+  });
+  await assert.rejects(runOrdinaryGallery(page, 100, lesson), /wrapped before its terminal hold picture/);
+});
+
+test("dense first-pass composition is checked against the captured hold, not the post-wrap frame", () => {
+  const dense = { ...entry, performance: true, still_intervals: [[7, 8]] };
+  const postWrap = { ...observed(), objectCount: 0,
+    controls: { ...observed().controls, elapsedSeconds: "0.1" } };
+  const capture = { authoredDuration: 8, holdStart: 7,
+    controls: { elapsedSeconds: "7.5" }, metrics: { time: 7.5, objectCount: 627 } };
+  assertFirstPass(dense, postWrap, "WebGPU", capture);
+  assert.throws(() => assertFirstPass(dense, postWrap, "WebGPU", {
+    ...capture, metrics: { ...capture.metrics, objectCount: 55 },
+  }), /geometry workload/);
 });
 
 test("natural first-pass publication rejects stale-before-hold and future frames", () => {
@@ -297,7 +506,7 @@ test("ordinary Scene.construct completion does not add Play or change its first 
   const { page, calls } = preparedAudioPage({
     run: { stale: false, result: { hasAudio: false, time: 8, playing: false } },
   });
-  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.ok(Number.isFinite((await runOrdinaryGallery(page, 100)).wallMs));
   assert.deepEqual(calls, ["run"]);
 });
 
@@ -314,7 +523,7 @@ test("prepared non-audio completion waits for natural playback without another P
       { elapsed: 8, publishedTime: 8, controls: { playing: "true" } },
     ],
   });
-  assert.ok(Number.isFinite(await runOrdinaryGallery(page, 100)));
+  assert.ok(Number.isFinite((await runOrdinaryGallery(page, 100)).wallMs));
   assert.deepEqual(calls, ["run", "published endpoint"]);
   assert.deepEqual(ready, [false, false, false, true, true]);
 });

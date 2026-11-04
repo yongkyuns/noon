@@ -88,6 +88,110 @@ fn receive(mirror: &mut InstalledRetainedExecutionMirror, json: &str) {
     assert_ne!(outcome, RetainedTransportApplyOutcome::DroppedStale);
 }
 
+fn playback_state(player: &PreparedExecutionPlayer) -> serde_json::Value {
+    serde_json::from_str(&player.prepared_playback_state_json(0.0).unwrap()).unwrap()
+}
+
+fn static_loop_player(session: u32) -> (PreparedExecutionPlayer, PreparedPresentationIdentity) {
+    let mut fixture = Fixture::new(session);
+    ready(&mut fixture.player);
+    let terminal = fixture.next(true);
+    fixture.deliver(terminal);
+    let selected = decode(&fixture.player.seek_delta_json(1.5).unwrap().unwrap());
+    fixture
+        .player
+        .set_prepared_loop_duration(Some(2.0))
+        .unwrap();
+    fixture.player.set_prepared_playing(true);
+    fixture.player.execution_wake(1_000.0).unwrap();
+    (
+        fixture.player,
+        PreparedPresentationIdentity {
+            session: selected.retained.session,
+            sequence: selected.retained.sequence,
+        },
+    )
+}
+
+#[test]
+fn prepared_state_proves_only_a_current_unexpired_static_loop_hold() {
+    let (mut player, publication) = static_loop_player(311);
+
+    let state: serde_json::Value =
+        serde_json::from_str(&player.prepared_playback_state_json(1_250.0).unwrap()).unwrap();
+    assert_eq!(state["loopCount"], 0);
+    assert_eq!(
+        state["heldPresentation"]["publication"]["session"],
+        publication.session
+    );
+    assert_eq!(
+        state["heldPresentation"]["publication"]["sequence"],
+        publication.sequence
+    );
+    assert_eq!(state["heldPresentation"]["evaluatedTime"], 1.5);
+    assert_eq!(state["heldPresentation"]["time"], 1.75);
+    assert_eq!(state["heldPresentation"]["validUntil"], 2.0);
+
+    let expired: serde_json::Value =
+        serde_json::from_str(&player.prepared_playback_state_json(1_500.0).unwrap()).unwrap();
+    assert!(
+        expired.get("heldPresentation").is_none(),
+        "raw clock at the loop boundary cannot reuse the pre-wrap hold"
+    );
+
+    player.set_prepared_playing(false);
+    let paused: serde_json::Value =
+        serde_json::from_str(&player.prepared_playback_state_json(2_100.0).unwrap()).unwrap();
+    assert!(
+        paused.get("heldPresentation").is_none(),
+        "paused readers do not advertise a live hold"
+    );
+}
+
+#[test]
+fn held_presentation_rejects_stale_publication_and_dirty_interactive_state() {
+    let (mut stale, _) = static_loop_player(312);
+    stale.encoder = RetainedFamilyExecutionDeltaEncoder::new(313);
+    let stale_state: serde_json::Value =
+        serde_json::from_str(&stale.prepared_playback_state_json(1_500.0).unwrap()).unwrap();
+    assert!(
+        stale_state.get("heldPresentation").is_none(),
+        "a publication from an older receiver session cannot certify a hold"
+    );
+
+    let mut fixture = Fixture::new(314);
+    let (_mirror, receipt) = ready(&mut fixture.player);
+    fixture.player.set_prepared_playing(true);
+    fixture.player.execution_wake(1_000.0).unwrap();
+    assert!(input(&mut fixture.player, "press", receipt, 1));
+    assert!(input(&mut fixture.player, "release", receipt, 1));
+    assert!(fixture.player.playback.reader.interactions_active());
+    fixture
+        .player
+        .playback
+        .reader
+        .advance_interactions(1.1)
+        .unwrap();
+    fixture
+        .player
+        .playback
+        .reader
+        .advance_interactions(1.2)
+        .unwrap();
+    assert!(fixture.player.playback.reader.wake_state().frame_pending());
+    let dirty: serde_json::Value = serde_json::from_str(
+        &fixture
+            .player
+            .prepared_playback_state_json(1_100.0)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        dirty.get("heldPresentation").is_none(),
+        "pending interaction work cannot reuse an earlier picture"
+    );
+}
+
 fn ready(
     player: &mut PreparedExecutionPlayer,
 ) -> (InstalledRetainedExecutionMirror, WorkerPointerReceipt) {
@@ -136,6 +240,188 @@ fn prepared_worker_snapshot_uses_existing_receiver_and_clean_frames_send_nothing
     }
     assert!(f.player.needs_preparation(1.0).unwrap());
     assert!(f.player.needs_preparation(f64::NAN).is_err());
+}
+
+#[test]
+fn prepared_audio_uses_reader_resources_and_never_reports_frontier_as_duration() {
+    let mut scene = Scene::new();
+    let resource =
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.125; 8_000], 32_000).unwrap();
+    scene
+        .audio(resource, noon_core::AudioClipOptions::default())
+        .unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.wait_segment(0.25).unwrap();
+    source.advance_to(segment.end_time()).unwrap();
+    let (mut publisher, reader) = source.create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 951);
+    player.set_prepared_playing(false);
+
+    assert!(player.has_audio());
+    assert_eq!(player.finite_audio_duration(), None);
+    let initial_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(0.0, 10.0)
+            .expect("open prefix audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(initial_anchor["time"], 0.0);
+    assert_eq!(initial_anchor["playing"], false);
+    assert_eq!(initial_anchor["buffering"], false);
+    assert_eq!(initial_anchor["authorizedUntil"], 0.25);
+    assert_eq!(initial_anchor["sampledEpochMs"], 10.0);
+    player.set_prepared_playing(true);
+    player.execution_wake(1_000.0).unwrap();
+    player.tick_delta_json(1_250.0).unwrap();
+    assert!(player.prepared_buffering());
+    let buffered_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(1_250.0, 15.0)
+            .expect("buffered audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(buffered_anchor["playing"], true);
+    assert_eq!(buffered_anchor["buffering"], true);
+    let resources = crate::worker_audio::WorkerAudioResources::decode(
+        &player.audio_resource_bundle_bytes().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(resources.session(), 951);
+    assert_eq!(resources.at_time(0.125).unwrap()[0].source_offset, 0.125);
+
+    let next = source.wait_segment(0.5).unwrap();
+    source.advance_to(next.end_time()).unwrap();
+    let batch = source
+        .publish_prepared_prefix(next, &mut publisher)
+        .unwrap();
+    player.preflight_append(&batch).unwrap();
+    player.append(batch).unwrap();
+    let resumed_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(1_250.0, 20.0)
+            .expect("resumed audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(resumed_anchor["buffering"], false);
+    player.set_prepared_playing(false);
+    let extended_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(0.0, 20.0)
+            .expect("extended open prefix audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(extended_anchor["time"], 0.0);
+    assert_eq!(extended_anchor["playing"], false);
+    assert_eq!(extended_anchor["authorizedUntil"], 0.75);
+    assert_eq!(player.finite_audio_duration(), None);
+
+    let original = source.audio_playback_at(0.125).unwrap().collect::<Vec<_>>();
+    let mirrored = resources.at_time(0.125).unwrap();
+    assert_eq!(original.len(), 1);
+    assert_eq!(mirrored.len(), 1);
+    assert_eq!(original[0].resource, mirrored[0].resource);
+    assert_eq!(original[0].pcm, mirrored[0].pcm);
+    assert_eq!(original[0].source_offset, mirrored[0].source_offset);
+}
+
+#[test]
+fn prepared_sections_share_reader_admission_and_terminal_endpoint_rules() {
+    let mut f = Fixture::new(721);
+    let mut scene = Scene::new();
+    for (name, time) in [
+        ("Start", 0.0),
+        ("Interior", 0.5),
+        ("Open frontier", 1.0),
+        ("Later", 2.0),
+        ("Terminal", 3.0),
+    ] {
+        scene
+            .next_section_at(name, noon::SectionType::Normal, time)
+            .unwrap();
+    }
+    f.player.set_section_navigation(scene.section_navigation());
+    let _ = ready(&mut f.player);
+
+    let sections: serde_json::Value = serde_json::from_str(&f.player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().len(), 2);
+    assert_eq!(sections[1]["index"], 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&f.player.section_state_json(0.5).unwrap())
+            .unwrap(),
+        serde_json::json!({"current":1,"previous":0,"next":null}),
+        "a cue at the open frontier is not a selectable next target",
+    );
+    assert!(f
+        .player
+        .seek_section_delta_json(false, 0.5)
+        .unwrap()
+        .is_none());
+
+    f.player.set_prepared_playing(false);
+    let displayed_time = f.player.prepared_time();
+    let interior_batch = f.next(false);
+    f.deliver(interior_batch);
+    assert_eq!(
+        f.player.prepared_time(),
+        displayed_time,
+        "append does not seek a paused reader"
+    );
+    assert!(
+        !f.player.prepared_playing(),
+        "append preserves pause intent"
+    );
+    let sections: serde_json::Value = serde_json::from_str(&f.player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().len(), 3);
+    assert_eq!(sections[2]["index"], 2);
+    let delta = f
+        .player
+        .seek_section_delta_json(false, 0.5)
+        .unwrap()
+        .unwrap();
+    assert!(!delta.is_empty());
+    assert_eq!(f.player.prepared_time(), 1.0);
+
+    let terminal_batch = f.next(true);
+    f.deliver(terminal_batch);
+    let sections: serde_json::Value = serde_json::from_str(&f.player.sections_json()).unwrap();
+    assert_eq!(sections.as_array().unwrap().last().unwrap()["index"], 4);
+    assert_eq!(sections.as_array().unwrap().last().unwrap()["time"], 3.0);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&f.player.section_state_json(3.0).unwrap())
+            .unwrap()["current"],
+        4,
+        "terminal endpoint cue becomes current only after terminal adoption",
+    );
+}
+
+#[test]
+fn no_target_section_navigation_refreshes_the_current_no_change_receipt() {
+    let mut f = Fixture::new(722);
+    let (_, displayed) = ready(&mut f.player);
+    f.player.no_change_presentation = Some(PreparedNoChangePresentation {
+        session: displayed.session,
+        sequence: displayed.sequence,
+        time: 99.0,
+        publication_context: f.player.playback.reader.publication_context(),
+    });
+
+    assert!(f
+        .player
+        .seek_section_delta_json(false, f.player.prepared_time())
+        .unwrap()
+        .is_none());
+    let proof: serde_json::Value = serde_json::from_str(
+        &f.player
+            .take_prepared_no_change_presentation_json()
+            .expect("no-target command refreshes the Rust receipt"),
+    )
+    .unwrap();
+    assert_eq!(proof["session"], displayed.session);
+    assert_eq!(proof["sequence"], displayed.sequence);
+    assert_eq!(proof["time"], f.player.prepared_time());
 }
 
 #[test]
@@ -223,6 +509,51 @@ fn prepared_worker_terminal_adoption_and_source_drop_do_not_replace_display() {
     receive(&mut mirror, &json);
     assert_eq!(mirror.frame().unwrap(), &baseline);
     assert!(!input(&mut player, "press", receipt, 2));
+}
+
+#[test]
+fn prepared_idle_no_change_proof_joins_the_last_wire_and_is_consumed_once() {
+    let mut f = Fixture::new(78);
+    ready(&mut f.player);
+
+    assert!(f.player.drain_delta_json().unwrap().is_none());
+    let proof: serde_json::Value = serde_json::from_str(
+        &f.player
+            .take_prepared_no_change_presentation_json()
+            .expect("unchanged drain has a retained publication to prove against"),
+    )
+    .unwrap();
+    assert_eq!(proof["session"], 78);
+    assert_eq!(proof["sequence"], 0);
+    assert_eq!(proof["time"], 0.5);
+    assert_eq!(
+        proof["publicationContext"]["frame_epoch"],
+        f.player
+            .playback
+            .reader
+            .publication_context()
+            .frame_epoch()
+            .get()
+    );
+    assert!(f
+        .player
+        .take_prepared_no_change_presentation_json()
+        .is_none());
+    assert!(f.player.drain_delta_json().unwrap().is_none());
+    assert!(f
+        .player
+        .take_prepared_no_change_presentation_json()
+        .is_some());
+    assert!(f.player.seek_delta_json(1.0).is_err());
+    assert!(f
+        .player
+        .take_prepared_no_change_presentation_json()
+        .is_none());
+    assert!(f.player.seek_delta_json(0.75).unwrap().is_some());
+    assert!(f
+        .player
+        .take_prepared_no_change_presentation_json()
+        .is_none());
 }
 
 #[test]
@@ -629,6 +960,61 @@ fn prepared_worker_static_observation_stops_at_next_revision_before_terminal_tim
     assert_eq!(f.player.prepared_time(), 2.0);
     assert_eq!(f.player.prepared_end_time(), Some(2.0));
     assert!(!f.player.prepared_buffering());
+}
+
+#[test]
+fn prepared_worker_loop_reanchors_the_existing_wall_clock_at_each_wrap() {
+    let mut f = Fixture::new(851);
+    let terminal = f.next(true);
+    f.deliver(terminal);
+    ready(&mut f.player);
+    assert_eq!(playback_state(&f.player)["completed"], false);
+    f.player.set_prepared_loop_duration(Some(2.0)).unwrap();
+    f.player.set_prepared_playing(true);
+    f.player.tick_delta_json(1_000.0).unwrap();
+    f.player.tick_delta_json(3_500.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.0);
+    assert_eq!(playback_state(&f.player)["loopCount"], 1);
+    assert_eq!(playback_state(&f.player)["completed"], false);
+    assert!(f.player.prepared_playing());
+    assert_eq!(f.player.prepared_playback_time_at(4_000.0).unwrap(), 1.5);
+    f.player.tick_delta_json(5_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(playback_state(&f.player)["loopCount"], 2);
+    assert_eq!(f.player.prepared_playback_time_at(5_250.0).unwrap(), 0.75);
+    f.player.set_prepared_playing(false);
+    f.player.set_prepared_playing(true);
+    f.player.tick_delta_json(6_000.0).unwrap();
+    f.player.tick_delta_json(6_500.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.0);
+    f.player.tick_delta_json(11_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 1.5);
+    assert_eq!(playback_state(&f.player)["loopCount"], 4);
+    f.player.set_prepared_playing(false);
+    f.player.set_prepared_playing(true);
+    f.player.tick_delta_json(12_000.0).unwrap();
+    f.player.tick_delta_json(13_000.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(playback_state(&f.player)["loopCount"], 5);
+}
+
+#[test]
+fn prepared_worker_pause_before_tick_commits_elapsed_loop_wrap() {
+    let mut f = Fixture::new(852);
+    let terminal = f.next(true);
+    f.deliver(terminal);
+    f.player.set_prepared_loop_duration(Some(2.0)).unwrap();
+    let expected_frame = f.player.playback.reader.frame().clone();
+    f.player.seek_delta_json(2.0).unwrap();
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(1_000.0).unwrap();
+
+    assert_eq!(f.player.prepared_playback_time_at(1_500.0).unwrap(), 0.5);
+    f.player.pause_prepared_at(1_500.0).unwrap();
+    assert_eq!(f.player.prepared_time(), 0.5);
+    assert_eq!(f.player.playback.reader.frame(), &expected_frame);
+    assert_eq!(playback_state(&f.player)["loopCount"], 1);
+    assert!(!f.player.prepared_playing());
 }
 
 #[test]

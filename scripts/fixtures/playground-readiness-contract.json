@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "status": "baseline-pending",
+  "reference": {
+    "host": "Apple M6, 24 GB RAM, 12 GPU cores",
+    "os": "macOS 27.0.1",
+    "browser": "Chromium 151.0.7922.34",
+    "refreshHz": 60,
+    "viewport": { "width": 1280, "height": 900 },
+    "deviceScaleFactor": 1,
+    "backend": "WebGPU",
+    "gpuMode": "hardware",
+    "actualAdapterIdentity": null
+  },
+  "sources": [
+    {
+      "id": "showcase-first-scene",
+      "path": "python/examples/showcase_first_scene.py",
+      "sha256": "1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8",
+      "durationSeconds": 8,
+      "window": "full-authored-first-pass"
+    },
+    {
+      "id": "showcase-dynamic-scene",
+      "path": "python/examples/showcase_dynamic_scene.py",
+      "sha256": "bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca",
+      "durationSeconds": 19,
+      "window": "full-authored-first-pass"
+    }
+  ],
+  "arms": {
+    "A": "default-incremental-first-pass",
+    "B": "default-completed-history-replay",
+    "C": "explicit-observed-first-pass",
+    "D": "observed-completed-history-replay"
+  },
+  "baselineArms": ["C", "D"],
+  "strata": {
+    "fresh-process-warm-resource-cache": "new browser process and workers; browser resource cache may already be primed",
+    "reload-new-workers-warm-resource-cache": "same browser process, reloaded page and new workers; resource cache remains warm",
+    "cold-network": "fresh Chromium process/context; context-wide no-cache routing bypasses browser and job-local Pyodide cache interception; CDN edge may already have the object",
+    "reused-healthy-interpreter": "same page and Python worker; a second Run uses the same pristine interpreter generation after a completed eligible source execution"
+  },
+  "pendingCohorts": [
+    {
+      "id": "cold-network",
+      "protocol": "fresh process and context with job resource cache interception absent, service workers blocked, and routed no-cache requests; record actual request/response cache metadata and do not claim CDN-edge coldness"
+    },
+    {
+      "id": "reused-healthy-interpreter",
+      "protocol": "seed an eligible source run, then issue a new Run in the same page; require the same Python worker and interpreter generation, pristine trust, and a distinct runRequestId; not completed-history replay"
+    }
+  ],
+  "measurementDefinitions": {
+    "runAcceptedAt": "Page epoch timestamp when the current Run is accepted, before clientForRun/interpreter preparation; time queued before page acceptance, including click/dispatch delay, is excluded. sourceRunStartedAt remains the later source-invocation origin used to join causal publications.",
+    "firstUsefulMs": "Elapsed from accepted Run to completion of the first canvas screenshot containing at least 128 scene-ink pixels.",
+    "firstSubmittedMs": "Elapsed from accepted Run to the first renderer.render() call completion. This is an upper bound on earlier backend frame submission and the Noon presentation receipt; it is not exact queue-submit start, GPU completion, or physical scanout.",
+    "firstControlsReady": "Elapsed from accepted Run to an enabled playback toggle observed with a matching current-run presentation.",
+    "commandAcceptance": "Elapsed time from the actual DOM request event to endpoint acceptedEpochMs sampled after the Rust mutation.",
+    "commandPresentation": "Elapsed time from the actual DOM request event to a command-correlated Noon presentation receipt; it does not measure physical scanout."
+  },
+  "sampling": {
+    "warmupsPerArmPerStratum": 1,
+    "measuredStartsPerArmPerStratum": 20,
+    "minimumCommandObservationsPerSourceArm": 100,
+    "startupPercentiles": ["median", "p90", "p95"],
+    "commandPercentiles": ["median", "p95", "p99"],
+    "activeCadenceWindowPercentiles": ["median", "p95", "p99"],
+    "tailMethod": "nearest-rank",
+    "startupPopulationP99": false
+  },
+  "bounds": {
+    "firstUsefulMs": null,
+    "commandFeedbackMs": null,
+    "commandAcceptanceP95Ms": null,
+    "commandPresentationP99Ms": null,
+    "bufferingEpisodeMs": null,
+    "activeCadenceWindowP99Ms": null,
+    "peakProcessRssBytes": null,
+    "liveOwnerRetirementMs": null
+  },
+  "failurePolicy": "retain every attempt; missing identities, traces, samples or required arm results fail strict qualification",
+  "productGateAnchor": {
+    "sourceRevision": "58135c4069a6f8d700dcaaee677d7c8c7a48d6c5",
+    "manifestSha256": "1e56fbc77b7d845bcb183f2dee47cacbfb81e429dc8f6ea578046e5616393849",
+    "dependencyLockSha256": "d2945ca9867fff1ef9656739912db19e2a84eebfdeb8131d1d56251b8f1535c5",
+    "workloads": [
+      "parity-square-and-circle",
+      "showcase-camera-follows-path",
+      "showcase-first-scene",
+      "showcase-raster-images",
+      "showcase-bezier-paths"
+    ],
+    "runnerSha256": "20e394a847da9241283a90b323fa476b80819a692baa464add04248fa3405c62",
+    "workloadSha256": "5137eef8aa71b8d70df845ad769278d934fd8eca53f585ca09c4f8d5e3ddbe96",
+    "comparisonSha256": "94cf8fd9ecec1d4c7d4f7fe4af123595e7d0b7f788ed422187e650bda64125a0",
+    "thresholds": {
+      "maxLatencyRatio": 1.25,
+      "latencySlackMs": 350,
+      "minFpsRatio": 0.8,
+      "maxVisualDiffRatio": 0.015
+    },
+    "preserveOriginalWorkloadAndThresholds": true
+  }
+}

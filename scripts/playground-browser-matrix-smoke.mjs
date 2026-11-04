@@ -4,16 +4,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
-import { collectWebKitCrashReports, playgroundLaunchOptions } from "./playground-browser-support.mjs";
+import { collectWebKitCrashReports, playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from "./playground-browser-failure-evidence.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS, validateShowcaseDiagnostics } from "./playground-profile-expectations.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 const showcaseManifest = JSON.parse(await readFile(path.join(repoRoot, "web/python/examples/noon_showcase_manifest.json"), "utf8"));
 const denseShowcase = showcaseManifest.entries.find(entry => entry.id === "showcase-dynamic-scene");
+const firstShowcase = showcaseManifest.entries.find(entry => entry.id === "showcase-first-scene");
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? "chromium";
 const profileName = process.env.NOON_PLAYGROUND_PROFILE ?? "desktop-dpr1";
 const port = Number(process.env.NOON_PLAYGROUND_MATRIX_PORT ?? "4175");
@@ -248,7 +250,8 @@ async function chooseDifferentExample(page) {
   return targetId;
 }
 
-async function runShowcaseFromPublicUi(page, exampleId) {
+async function runShowcaseFromPublicUi(page, entry) {
+  const exampleId = entry.id;
   trace.setPhase("showcase-navigation", { exampleId });
   await page.goto(`${baseUrl}/web/index.html?catalog=showcase&example=${exampleId}`, { waitUntil: "load" });
   await native.observe("showcase-page-loaded");
@@ -274,19 +277,38 @@ async function runShowcaseFromPublicUi(page, exampleId) {
   });
   assert.ok(visibility.fpsTop >= visibility.canvasBottom && visibility.fpsBottom <= visibility.previewBottom,
     `FPS must be visible below the canvas: ${JSON.stringify(visibility)}`);
-  await page.screenshot({ path: path.join(artifactDir, "fps-running.png"), fullPage: true });
+  await page.screenshot({ path: path.join(artifactDir, `${exampleId}-fps-running.png`), fullPage: true });
   await waitForAppliedScene(page, exampleId, 180_000);
-  await page.waitForFunction(duration => {
+  const terminalHold = entry.still_intervals.find(([, end]) => end === entry.duration);
+  assert.ok(terminalHold, `${exampleId}: first-pass oracle needs its declared terminal hold`);
+  await waitForBrowserObservation(page, async ({ duration, holdStart }) => {
     const controls = document.querySelector(".playback-controls")?.dataset;
-    return controls?.busy === "false" &&
-      Math.abs(Number(controls.elapsedSeconds) - duration) < 1e-7;
-  }, denseShowcase.duration, { timeout: 180_000 });
-  const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
-  const authoredTime = Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"));
-  return { runtime: await runtimeSnapshot(page), metrics, sourceFps, authoredTime };
+    const gallery = window.__noonExampleGallery;
+    const diagnostics = gallery.executionDiagnostics;
+    const looped = diagnostics?.events?.some(event => event.stage === "disposition" && event.disposition === "looped");
+    // Capture the natural terminal picture before the first wrap. A looping
+    // clock need not expose its exact endpoint to a DOM polling task.
+    if (!looped && !window.__matrixFirstPass && controls?.busy === "false" &&
+        controls.durationKnown === "true" && Number(controls.elapsedSeconds) >= holdStart) {
+      const metrics = await gallery.executionMetrics();
+      if (metrics?.metrics?.time >= holdStart && metrics.metrics.time <= duration &&
+          metrics.metrics.needsPresent === false && metrics.metrics.bufferedDeltas === 0) {
+        window.__matrixFirstPass = { metrics, authoredTime: Number(document.querySelector(".playback-scrubber").max) };
+      }
+    }
+    return looped;
+  }, { duration: entry.duration, holdStart: terminalHold[0] }, { timeout: 180_000 });
+  const { firstPass, diagnostics } = await page.evaluate(() => {
+    const firstPass = window.__matrixFirstPass;
+    delete window.__matrixFirstPass;
+    return { firstPass, diagnostics: window.__noonExampleGallery.executionDiagnostics };
+  });
+  assert.ok(firstPass, "first traversal never presented its terminal hold before wrapping");
+  validateShowcaseDiagnostics(SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId), diagnostics);
+  return { runtime: await runtimeSnapshot(page), ...firstPass, diagnostics, sourceFps };
 }
 
-async function completeShowcasePlayback(page, replayLoops) {
+async function completeShowcasePlayback(page, replayLoops, entry) {
   // Test-only, bounded observations preserve real UI clicks and commands. The
   // browser context owns the wrappers and discards them when this case closes.
   await page.evaluate(async () => {
@@ -382,8 +404,8 @@ async function completeShowcasePlayback(page, replayLoops) {
     return samples;
   });
   assert.ok(fps.some(sample => sample.fps > 0), "replay must expose live renderer FPS");
-  const endpoint = await seekPausedGallery(page, denseShowcase.duration);
-  await waitForPublishedGalleryFrame(page, endpoint, denseShowcase.duration);
+  const endpoint = await seekPausedGallery(page, entry.duration);
+  await waitForPublishedGalleryFrame(page, endpoint, entry.duration);
   await page.waitForFunction(() => document.querySelector("#metric-fps")?.value === "—");
   return page.evaluate(async (fps) => ({
     controls: { ...document.querySelector(".playback-controls").dataset },
@@ -633,16 +655,20 @@ try {
     finalRuntime = await runtimeSnapshot(page);
     lastCompletedRuntime = { phase: "public-edit-rerun", exampleId: selectedExampleId, runtime: finalRuntime };
     console.log(`→ ${browserName}/${profileName}: public workflow passed; running full showcase`);
-    const showcaseSourcePass = await runShowcaseFromPublicUi(page, denseShowcase.id);
+    const firstSourcePass = await runShowcaseFromPublicUi(page, firstShowcase);
+    assertNaturalFirstPassPublication(firstShowcase, firstSourcePass.authoredTime,
+      Number(firstSourcePass.metrics?.metrics?.time));
+    const firstPlayback = await completeShowcasePlayback(page, 3, firstShowcase);
+    const showcaseSourcePass = await runShowcaseFromPublicUi(page, denseShowcase);
     trace.setPhase("showcase-completed", { exampleId: denseShowcase.id });
     lastCompletedRuntime = { phase: "showcase-completed", exampleId: denseShowcase.id, runtime: showcaseSourcePass.runtime };
     assert.equal(showcaseSourcePass.runtime.patchState, "applied", "showcase source pass failed");
     assertNaturalFirstPassPublication(denseShowcase, showcaseSourcePass.authoredTime,
       Number(showcaseSourcePass.metrics?.metrics?.time));
     console.log(`→ ${browserName}/${profileName}: showcase source completed; checking replay`);
-    const replayLoops = browserName === "webkit" ? 3 : 1;
+    const replayLoops = 3;
     trace.setPhase("showcase-replay", { exampleId: denseShowcase.id });
-    const showcasePlayback = await completeShowcasePlayback(page, replayLoops);
+    const showcasePlayback = await completeShowcasePlayback(page, replayLoops, denseShowcase);
     const showcaseMetrics = showcasePlayback.execution?.metrics ?? {};
     assert.ok(Math.abs(Number(showcasePlayback.duration) - denseShowcase.duration) < 1e-7,
       `showcase authored duration changed: ${showcasePlayback.duration}`);
@@ -674,6 +700,11 @@ ${consoleErrors.join("\n")}`,
       selectedHost,
       capabilities,
       runtime: finalRuntime,
+      firstShowcase: {
+        exampleId: firstShowcase.id, replayLoops: 3,
+        firstPassDiagnostics: firstSourcePass.diagnostics,
+        playback: firstPlayback,
+      },
       showcase: {
         exampleId: denseShowcase.id,
         sourcePassState: showcaseSourcePass.runtime.patchState,

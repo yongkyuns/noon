@@ -35,14 +35,50 @@ fn interpreter_host_effect_admission_retains_a_quiet_original_source_at_its_actu
     let player = context.active_live_player().unwrap();
     let before = player.debug_frame_json();
     let identity = player.ownership_identity();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
     let player = context.take_execution_player(1.0, 0).unwrap();
     assert_eq!(player.ownership_identity(), identity);
     assert_eq!(player.debug_frame_json(), before);
     assert_eq!(player.time(), 0.0);
     assert!(player.has_pending_live_segment());
+}
+
+#[test]
+fn opaque_source_reason_refines_only_after_a_callback_is_registered() {
+    let (mut context, target) = fixture();
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
+    assert_eq!(
+        context.observed_source_execution_requirement().unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
+
+    let player = context.active_live_player().unwrap();
+    player.live_advance_segment_to(1.0).unwrap();
+    player.live_complete_segment().unwrap();
+    context
+        .add_updater(&target, HostCallbackId::new(92), 1.0, None)
+        .unwrap();
+    assert_eq!(
+        context.observed_source_execution_requirement().unwrap(),
+        Some(noon::SourceExecutionRequirement::HostCallbacks)
+    );
+    context.begin_ordinary_wait(1.0).unwrap();
+    assert_eq!(context.active_live_player().unwrap().time(), 1.0);
+    assert!(context
+        .active_live_player()
+        .unwrap()
+        .has_pending_live_segment());
 }
 
 #[test]
@@ -55,9 +91,12 @@ fn completed_observed_source_keeps_original_history_for_replay() {
     context.begin_ordinary_wait(0.5).unwrap();
     let initial = context.active_live_player().unwrap().debug_frame_json();
     let identity = context.active_live_player().unwrap().ownership_identity();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
     let mut player = context.take_execution_player(1.0, 0).unwrap();
     player.live_advance_segment_to(0.5).unwrap();
     player.live_complete_segment().unwrap();
@@ -100,9 +139,12 @@ fn completed_observed_source_keeps_original_history_for_replay() {
 fn completed_observed_zero_wait_keeps_exact_zero_during_replay() {
     let (mut context, _) = fixture();
     context.begin_ordinary_wait(0.0).unwrap();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::Opaque)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostEffects)
+    );
     let mut player = context.take_execution_player(4.0, 0).unwrap();
     player.live_advance_segment_to(0.0).unwrap();
     player.live_complete_segment().unwrap();
@@ -266,9 +308,12 @@ fn interpreter_prefix_callback_rejection_does_not_advance_or_complete_source() {
     assert!(context.create_prepared_prefix().is_err());
 
     let identity = context.active_live_player().unwrap().ownership_identity();
-    assert!(context
-        .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
-        .unwrap());
+    assert_eq!(
+        context
+            .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
+            .unwrap(),
+        Some(noon::SourceExecutionRequirement::HostCallbacks)
+    );
     assert_eq!(
         context.active_live_player().unwrap().debug_frame_json(),
         before

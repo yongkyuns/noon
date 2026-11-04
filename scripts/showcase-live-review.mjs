@@ -17,18 +17,38 @@ const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 
 // First execution and replay are distinct engine capabilities. Keep both results,
 // but do not count a successful first pass as a replacement for failed replay.
-export function assertFirstPass(entry, observed, expectedBackend) {
+export function assertFirstPass(entry, observed, expectedBackend, naturalCapture = null) {
   assert.equal(observed.selectedExampleId, entry.id, "wrong first-pass lesson");
   assert.equal(observed.patchState, "applied", "first-pass source did not finish successfully");
   assert.equal(observed.runInFlight, false, "first-pass source is still running");
   assert.equal(observed.backend, expectedBackend, "wrong first-pass backend");
-  assert.ok(Number.isSafeInteger(observed.objectCount) && observed.objectCount > 0,
+  const objectCount = naturalCapture?.metrics?.objectCount ?? observed.objectCount;
+  assert.ok(Number.isSafeInteger(objectCount) && objectCount > 0,
     "first-pass lesson has no resolved composition");
-  if (entry.performance) assert.ok(observed.objectCount >= 600, "dense scene lost its geometry workload");
-  const elapsed = Number(observed.controls?.elapsedSeconds);
-  const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration);
-  assert.ok(Number.isFinite(elapsed) && Math.abs(elapsed - entry.duration) <= roundoff,
-    "first-pass source did not reach its authored endpoint");
+  if (entry.performance) assert.ok(objectCount >= 600, "dense scene lost its geometry workload");
+  if (naturalCapture !== null) {
+    if (naturalCapture.heldPresentation) {
+      const held = naturalCapture.heldPresentation;
+      assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, held.observedTime);
+      assert.equal(held.publication?.session, naturalCapture.rendererReceipt?.session,
+        "held terminal proof belongs to a different renderer session");
+      assert.equal(held.publication?.sequence, naturalCapture.rendererReceipt?.sequence,
+        "held terminal proof belongs to a different renderer publication");
+      assert.ok(held.observedTime >= held.evaluatedTime && held.observedTime < held.validUntil,
+        "held terminal proof is outside its Rust-owned validity interval");
+    } else {
+      assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, naturalCapture.metrics?.time);
+    }
+    const elapsed = Number(naturalCapture.controls?.elapsedSeconds);
+    assert.ok(Number.isFinite(elapsed) && elapsed >= naturalCapture.holdStart &&
+      elapsed <= naturalCapture.authoredDuration + 8 * Number.EPSILON * Math.max(1, entry.duration),
+    "first-pass picture was not captured in the declared terminal hold");
+  } else {
+    const elapsed = Number(observed.controls?.elapsedSeconds);
+    const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration);
+    assert.ok(Number.isFinite(elapsed) && Math.abs(elapsed - entry.duration) <= roundoff,
+      "first-pass source did not reach its authored endpoint");
+  }
 }
 
 export function assertReplayAvailable(observed) {
@@ -37,10 +57,10 @@ export function assertReplayAvailable(observed) {
     observed.replayReason || "completed source did not admit retained replay");
 }
 
-export function assertNonreplayableShowcase(entry, observed, expectedBackend) {
+export function assertNonreplayableShowcase(entry, observed, expectedBackend, naturalCapture = null) {
   assert.ok(NONREPLAYABLE_SHOWCASE_CAPABILITIES.includes(entry.playbackCapability), "wrong declared nonreplayable capability");
   assert.ok(entry.playbackLimitation?.trim(), "nonreplayable capability lacks its user-facing explanation");
-  assertFirstPass(entry, observed, expectedBackend);
+  assertFirstPass(entry, observed, expectedBackend, naturalCapture);
   assert.ok(["Replay unavailable: UnsupportedDomain",
     "Replay unavailable: source execution is not retained for replay"].includes(observed.replayReason),
   "nonreplayable lesson did not report a supported replay denial");
@@ -77,9 +97,135 @@ export function assertNaturalFirstPassPublication(entry, authoredDuration, publi
   }
 }
 
+async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
+  const gallery = window.__noonExampleGallery;
+  const patch = document.querySelector("#patch-status");
+  if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
+  if (gallery?.selectedExampleId !== exampleId) throw new Error("gallery selection changed during the first pass");
+  const diagnostics = gallery?.executionDiagnostics;
+  const events = diagnostics?.events ?? [];
+  const disposition = events.find((event) => event.stage === "disposition")?.disposition ?? null;
+  if (disposition === "looped" || disposition === "finite-complete") return true;
+  const heldEvidence = (report, metrics, receipt) => {
+    const playback = report?.engineMetrics?.preparedPlayback;
+    const observation = playback?.observation;
+    const held = observation?.heldPresentation;
+    if (!held || observation.loopCount !== 0 || held.publication?.session !== receipt?.session ||
+        held.publication?.sequence !== receipt?.sequence || !Number.isFinite(playback.observedTime) ||
+        playback.observedTime !== held.time || !Number.isFinite(held.evaluatedTime) ||
+        playback.observedTime < held.evaluatedTime || !Number.isFinite(held.validUntil) ||
+        playback.observedTime >= held.validUntil || metrics?.needsPresent !== false ||
+        metrics?.bufferedDeltas !== 0 || metrics?.time !== receipt?.time ||
+        playback.observedTime < holdStart || playback.observedTime >= duration) return null;
+    return { ...held, observedTime: playback.observedTime };
+  };
+
+  const controls = document.querySelector(".playback-controls")?.dataset;
+  const elapsed = Number(controls?.elapsedSeconds);
+  const alreadyCaptured = window.__showcaseLiveReviewFirstPass;
+  if (!alreadyCaptured && diagnostics?.context?.exampleId === exampleId &&
+      Number.isSafeInteger(diagnostics.runRequestId) &&
+      Number.isSafeInteger(diagnostics.interpreterGeneration) &&
+      events.some((event) => event.stage === "attached" && event.publication) &&
+      diagnostics.context?.runGeneration !== null &&
+      controls?.busy === "false" && controls.durationKnown === "true" &&
+      controls.playing === "true" && Number.isFinite(elapsed) &&
+      elapsed >= holdStart && elapsed <= duration + 8 * Number.EPSILON * Math.max(1, duration)) {
+    const runIdentity = {
+      interpreterGeneration: diagnostics.interpreterGeneration,
+      runRequestId: diagnostics.runRequestId,
+      context: diagnostics.context,
+    };
+    const report = await gallery.executionMetrics();
+    const current = gallery.executionDiagnostics;
+    const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
+    const metrics = report?.metrics;
+    const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
+    const receipt = metrics?.latestPresentationSample;
+    const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
+      receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
+    const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
+    if (current?.interpreterGeneration === runIdentity.interpreterGeneration &&
+        current?.runRequestId === runIdentity.runRequestId &&
+        JSON.stringify(current.context) === JSON.stringify(runIdentity.context) &&
+        currentDisposition !== "looped" && attached?.publication &&
+        attached.publication.session === receipt?.session && Number.isSafeInteger(receipt?.sequence) &&
+        receipt.sequence >= attached.publication.sequence && Number.isFinite(receipt.time) &&
+        (naturalTerminalReceipt || heldPresentation !== null) &&
+        metrics.time === receipt.time && metrics.needsPresent === false && metrics.bufferedDeltas === 0 &&
+        Number.isSafeInteger(metrics.objectCount)) {
+      const canvas = document.querySelector("#scene");
+      if (typeof canvas?.toBlob === "function") {
+        // A transferred HTML canvas placeholder can lag the worker's present.
+        // Let two main-thread paint updates run, then toBlob synchronously copies
+        // the placeholder bitmap before asynchronous PNG serialization (HTML
+        // canvas toBlob: https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const captureControls = { ...document.querySelector(".playback-controls")?.dataset };
+        const captureElapsed = Number(captureControls.elapsedSeconds);
+        if (captureControls.busy !== "false" || captureControls.durationKnown !== "true" ||
+            captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
+            captureElapsed < holdStart ||
+            captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration)) return false;
+        const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        // Validate the exact run and renderer receipt before awaiting PNG encoding.
+        const afterReport = await gallery.executionMetrics();
+        const afterMetrics = afterReport?.metrics;
+        const afterReceipt = afterMetrics?.latestPresentationSample;
+        const afterHeldPresentation = heldPresentation === null ? null :
+          heldEvidence(afterReport, afterMetrics, afterReceipt);
+        const afterDiagnostics = gallery.executionDiagnostics;
+        const afterAttached = [...(afterDiagnostics?.events ?? [])].reverse()
+          .find((event) => event.stage === "attached");
+        const afterDisposition = afterDiagnostics?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
+        if (afterDiagnostics?.interpreterGeneration === runIdentity.interpreterGeneration &&
+            afterDiagnostics?.runRequestId === runIdentity.runRequestId &&
+            JSON.stringify(afterDiagnostics.context) === JSON.stringify(runIdentity.context) &&
+            afterDisposition !== "looped" &&
+            JSON.stringify(afterAttached?.publication) === JSON.stringify(attached.publication) &&
+            afterReceipt?.session === receipt.session && afterReceipt.sequence === receipt.sequence &&
+            afterReceipt.time === receipt.time && afterMetrics.time === receipt.time &&
+            afterMetrics.needsPresent === false && afterMetrics.bufferedDeltas === 0 &&
+            afterMetrics.objectCount === metrics.objectCount &&
+            (heldPresentation === null ? afterHeldPresentation === null :
+              afterHeldPresentation !== null &&
+              afterHeldPresentation.publication.session === heldPresentation.publication.session &&
+              afterHeldPresentation.publication.sequence === heldPresentation.publication.sequence &&
+              afterHeldPresentation.evaluatedTime === heldPresentation.evaluatedTime &&
+              afterHeldPresentation.validUntil === heldPresentation.validUntil)) {
+          const pngBlob = await pngBlobPromise;
+          if (!(pngBlob instanceof Blob)) return false;
+          const pngDataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(reader.error ?? new Error("terminal canvas PNG read failed"));
+            reader.readAsDataURL(pngBlob);
+          });
+          if (typeof pngDataUrl !== "string" || !pngDataUrl.startsWith("data:image/png;base64,")) return false;
+          window.__showcaseLiveReviewFirstPass = {
+            pngDataUrl,
+            metrics,
+            rendererReceipt: receipt,
+            heldPresentation,
+            controls: captureControls,
+            authoredDuration: duration,
+            holdStart,
+            ...runIdentity,
+            attached,
+          };
+        }
+      }
+    }
+  }
+  return false;
+}
+
 export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null) {
   const started = performance.now();
   let timer;
+  let firstPassCapture = null;
+  let firstPassCompletion = null;
   try {
     await Promise.race([
       (async () => {
@@ -103,6 +249,55 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
         // Preparation completion can precede the natural playback endpoint.
         // Non-audio prepared Runs already autoplay; preserve that first pass.
         if (audio) await page.getByRole("button", { name: "Play animation", exact: true }).click();
+        const roundoff = 8 * Number.EPSILON * Math.max(1, duration);
+        const terminalHold = entry?.still_intervals?.find(([, end]) => Math.abs(end - duration) <= roundoff);
+        if (!audio && run.result.preparedPlayback === true && terminalHold !== undefined) {
+          await waitForBrowserObservation(page, observeNaturalFirstPassWrap, {
+            duration,
+            holdStart: terminalHold[0],
+            exampleId: entry.id,
+          }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
+          const observed = await page.evaluate(() => {
+            const capture = window.__showcaseLiveReviewFirstPass ?? null;
+            delete window.__showcaseLiveReviewFirstPass;
+            return { capture, diagnostics: window.__noonExampleGallery.executionDiagnostics,
+              selectedExampleId: window.__noonExampleGallery.selectedExampleId };
+          });
+          const disposition = observed.diagnostics?.events?.find((event) => event.stage === "disposition")?.disposition;
+          if (disposition === "looped") {
+            const capture = observed.capture;
+            assert.ok(capture, "first traversal wrapped before its terminal hold picture was captured");
+            assert.equal(observed.selectedExampleId, entry.id, "terminal capture belongs to a different gallery selection");
+            assert.equal(capture.interpreterGeneration, observed.diagnostics.interpreterGeneration,
+              "terminal capture belongs to a different interpreter generation");
+            assert.equal(capture.runRequestId, observed.diagnostics.runRequestId,
+              "terminal capture belongs to a different source run");
+            assert.deepEqual(capture.context, observed.diagnostics.context,
+              "terminal capture belongs to a different gallery run context");
+            assert.ok(observed.diagnostics.events.some((event) =>
+              event.stage === "disposition" && event.disposition === "looped" && event.loopCount >= 1),
+            "ordinary first traversal did not complete before the first wrap");
+            assert.ok(capture.attached?.publication, "terminal capture has no attached publication identity");
+            assert.equal(capture.rendererReceipt?.session, capture.attached.publication.session,
+              "terminal picture receipt belongs to a different renderer session than attachment");
+            assert.ok(capture.rendererReceipt.sequence >= capture.attached.publication.sequence,
+              "terminal picture predates the attached source publication");
+            assertNaturalFirstPassPublication(entry, duration,
+              capture.heldPresentation?.observedTime ?? capture.metrics.time);
+            firstPassCapture = capture;
+            firstPassCompletion = {
+              disposition: "looped",
+              loopCount: observed.diagnostics.events.find((event) =>
+                event.stage === "disposition" && event.disposition === "looped")?.loopCount,
+              interpreterGeneration: observed.diagnostics.interpreterGeneration,
+              runRequestId: observed.diagnostics.runRequestId,
+              context: observed.diagnostics.context,
+            };
+            return;
+          }
+          // Some explicitly finite prepared hosts complete instead of looping.
+          // Retain their existing stopped-endpoint path below.
+        }
         while (true) {
           if (performance.now() - started >= deadlineMs) {
             throw new Error("ordinary gallery Run exceeded its review deadline");
@@ -140,7 +335,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
   } finally {
     clearTimeout(timer);
   }
-  return performance.now() - started;
+  return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion };
 }
 
 export async function readLiveState(page) {
@@ -161,6 +356,7 @@ export async function readLiveState(page) {
       },
       objectCount: metrics?.metrics?.objectCount,
       publishedTime: metrics?.metrics?.time,
+      latestPresentationSample: metrics?.metrics?.latestPresentationSample,
     };
   });
 }
@@ -305,36 +501,70 @@ async function main() {
         result.stage = "ordinary first pass";
         result.firstPassOutcome = "fail";
         // Closing the page in finally retires its workers on timeout; no stuck run survives.
-        result.firstPassWallMsIncludingAuthoring = await runOrdinaryGallery(page, 360000, entry);
+        const firstPassRun = await runOrdinaryGallery(page, 360000, entry);
+        result.firstPassWallMsIncludingAuthoring = firstPassRun.wallMs;
         // Check execution before viewport convergence so a runtime panic is not
         // obscured by the renderer's consequently unchanged backing dimensions.
         result.firstPass = await readLiveState(page);
-        assertFirstPass(entry, result.firstPass, expectedBackend);
+        assertFirstPass(entry, result.firstPass, expectedBackend, firstPassRun.firstPassCapture);
+        if (firstPassRun.firstPassCapture !== null) {
+          result.firstPassPostWrap = {
+            objectCount: result.firstPass.objectCount,
+            publishedTime: result.firstPass.publishedTime,
+            elapsedSeconds: result.firstPass.controls.elapsedSeconds,
+            latestPresentationSample: result.firstPass.latestPresentationSample,
+          };
+        }
+        if (firstPassRun.firstPassCompletion !== null) {
+          result.firstPassCompletion = firstPassRun.firstPassCompletion;
+        }
         assert.deepEqual(result.pageErrors, [], "ordinary source execution raised browser errors");
         assert.deepEqual(result.consoleErrors, [], "ordinary source execution raised console errors");
         await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
         // Preserve first-pass evidence; the manifest below distinguishes expected denial from replay failure.
-        const firstPass = PNG.sync.read(await canvas.screenshot({
-          path: path.join(output, `${entry.id}-first-pass.png`),
-        }));
+        const firstPassPath = path.join(output, `${entry.id}-first-pass.png`);
+        let firstPassBytes;
+        if (firstPassRun.firstPassCapture !== null) {
+          firstPassBytes = Buffer.from(firstPassRun.firstPassCapture.pngDataUrl.slice("data:image/png;base64,".length), "base64");
+          await writeFile(firstPassPath, firstPassBytes);
+          result.firstPassCapture = {
+            method: "unseeked terminal hold before first loop wrap",
+            metrics: firstPassRun.firstPassCapture.metrics,
+            controls: firstPassRun.firstPassCapture.controls,
+            interpreterGeneration: firstPassRun.firstPassCapture.interpreterGeneration,
+            runRequestId: firstPassRun.firstPassCapture.runRequestId,
+            context: firstPassRun.firstPassCapture.context,
+            attachedPublication: firstPassRun.firstPassCapture.attached.publication,
+            rendererReceipt: firstPassRun.firstPassCapture.rendererReceipt,
+            heldPresentation: firstPassRun.firstPassCapture.heldPresentation,
+            rendererReceiptScope: "renderer publication sample; does not prove physical scanout",
+          };
+        } else {
+          firstPassBytes = await canvas.screenshot({ path: firstPassPath });
+        }
+        const firstPass = PNG.sync.read(firstPassBytes);
         result.firstPassPixelSha256 = hash(firstPass.data);
         result.firstPassOutcome = "pass";
         if (entry.playbackCapability !== "deterministic-retained-replay") {
           result.stage = "expected nonreplayable capability";
           result.replayOutcome = "fail";
-          assertNonreplayableShowcase(entry, result.firstPass, expectedBackend);
+          assertNonreplayableShowcase(entry, result.firstPass, expectedBackend, firstPassRun.firstPassCapture);
           result.replayOutcome = "expected-denial";
           result.intermediateReplayOutcome = "not-applicable";
           result.stage = "fresh Run after expected replay denial";
           result.nonreplayableRerunOutcome = "fail";
           await layoutReplayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
-          result.nonreplayableRerunWallMsIncludingAuthoring = await runOrdinaryGallery(page, 360000, entry);
+          const rerun = await runOrdinaryGallery(page, 360000, entry);
+          result.nonreplayableRerunWallMsIncludingAuthoring = rerun.wallMs;
           await replayViewport(canvas, REVIEW_CANVAS_VIEWPORT);
           const rerunState = await readLiveState(page);
-          assertNonreplayableShowcase(entry, rerunState, expectedBackend);
-          const rerunImage = PNG.sync.read(await canvas.screenshot({
-            path: path.join(output, `${entry.id}-nonreplayable-rerun.png`),
-          }));
+          assertNonreplayableShowcase(entry, rerunState, expectedBackend, rerun.firstPassCapture);
+          const rerunPath = path.join(output, `${entry.id}-nonreplayable-rerun.png`);
+          const rerunBytes = rerun.firstPassCapture === null
+            ? await canvas.screenshot({ path: rerunPath })
+            : Buffer.from(rerun.firstPassCapture.pngDataUrl.slice("data:image/png;base64,".length), "base64");
+          if (rerun.firstPassCapture !== null) await writeFile(rerunPath, rerunBytes);
+          const rerunImage = PNG.sync.read(rerunBytes);
           result.nonreplayableRerunPixelSha256 = hash(rerunImage.data);
           assertLivePixels(firstPass, rerunImage);
           assert.deepEqual(result.pageErrors, []);

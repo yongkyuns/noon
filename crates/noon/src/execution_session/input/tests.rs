@@ -118,6 +118,42 @@ fn position(x: f32, y: f32) -> NativePointerPosition {
     NativePointerPosition::new(Vec2::new(x, y), Vec2::new(x + 100.0, 100.0 - y)).unwrap()
 }
 
+#[test]
+fn viewer_completion_keeps_unrecorded_native_routes_live() {
+    let fixture = Fixture::new();
+    let mut session = ExecutionSession::from_semantic_root(&fixture.store, fixture.root).unwrap();
+    session
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
+    let before_seal = session.frame().clone();
+
+    assert_eq!(
+        session.seal_replay_for_viewer(),
+        Err(noon_runtime::ReplayError::UnrecordedInput)
+    );
+    assert!(session.replay_scope_active());
+    assert!(!session.replay_is_sealed());
+    assert!(session.runtime.replay_retention_valid());
+    assert_eq!(session.frame(), &before_seal);
+
+    session
+        .set_native_state_input(
+            NativeStateSource::PointerButton { button: 0 },
+            NativeInputValue::Bool(true),
+        )
+        .expect("observed native input remains live after source completion");
+    assert_eq!(
+        session.effective_signal_value(fixture.primary),
+        Some(&ReactiveValue::Bool(true))
+    );
+    assert!(!session.runtime.replay_retention_valid());
+    assert_eq!(
+        session.runtime.replay_stats().revisions_retained,
+        0,
+        "unrecorded native input retires the replay history"
+    );
+}
+
 fn record(
     token: &NativePointerInputToken,
     sequence: u64,

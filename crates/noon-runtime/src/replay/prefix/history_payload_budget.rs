@@ -1,4 +1,5 @@
-//! Saved revision-vector and inline-geometry admission. This is accounting, not a history owner.
+//! Saved revision vectors and logical geometry/effect/composed payload admission.
+//! This is accounting, not a history owner or total-memory bound.
 use super::{PrefixError, ReplayError};
 use noon_compile::CompiledReplayRevision;
 
@@ -15,6 +16,10 @@ impl HistoryPayloadBudget {
 
     pub(super) fn bytes(self) -> usize {
         self.bytes
+    }
+
+    pub(super) fn limit(self) -> usize {
+        self.limit
     }
 
     /// Pure admission; only publication/adoption commits the returned charge.

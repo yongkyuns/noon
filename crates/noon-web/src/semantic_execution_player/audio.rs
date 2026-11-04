@@ -34,7 +34,8 @@ impl SemanticExecutionPlayer {
         }
         Ok(serde_json::json!({
             "session": self.encoder.session(), "time": self.session.frame().time,
-            "playing": self.clock.is_playing(), "sampledEpochMs": sampled_epoch_ms,
+            "playing": self.clock.is_playing(), "buffering": false,
+            "sampledEpochMs": sampled_epoch_ms,
         })
         .to_string())
     }

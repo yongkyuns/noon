@@ -3,9 +3,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
+import { AuthoringWorkerGeneration } from "./authoring-worker-generation.js";
 
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
-const runStart = main.indexOf("async function runScene()");
+const runStart = main.indexOf("async function runScene(");
 const runEnd = main.indexOf("const runRequestRouter =", runStart);
 const discardStart = main.indexOf("function discardEarlyContinuationRuntime(");
 const discardEnd = main.indexOf("async function supersedeActiveSourceContinuation()", discardStart);
@@ -49,18 +50,26 @@ function fixture({ retire = () => Promise.resolve(), started = true, prepared = 
       this.canvas = { style: {} };
     },
   };
-  const client = { terminated: false, run(source, metadata, options) {
+  const client = { terminated: false, interpreterGeneration: 1, libraryTrust: "pristine",
+    async ready() {}, terminate() { this.terminated = true; }, run(source, metadata, options) {
     assert.equal(activeAttachment, null, "new source must not mutate the arena before input retirement");
     events.push("author"); authorCalls += 1;
     authorRequests.push({ source, metadata, options });
     return Promise.reject(failure);
   } };
   const context = {
+    SCENE_EXAMPLES: [{ id: "one", title: "One", parityStatus: "candidate" }],
+    activeRunIdentity: null,
+    updateDraftStatus() {},
+    setRunPatchStatus(_token, message, state) {
+      context.patchStatus.value = message;
+      context.patchStatus.dataset.state = state;
+    },
     performance, canvas: oldCanvas, player: started ? oldPlayer : null, playerNeedsRestart: false,
     preparedPlaybackPlayer: started && prepared ? oldPlayer : null,
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,
     selectedExampleId: "one", sceneSourceEditor: { value: "same source with a run-dependent failure" },
-    status: { dataset: {} }, patchStatus: { dataset: {} }, authoringClient: client,
+    status: { dataset: {} }, patchStatus: { dataset: {} }, authoringWorkers: null,
     currentExample: () => ({ id: "one", title: "One" }),
     generations: { beginRun: () => ({ selectionGeneration: 1, runGeneration: 2 }) },
     isCurrentRun: () => current, recordStale: (_, stage) => ({ stale: true, stage }),
@@ -69,11 +78,14 @@ function fixture({ retire = () => Promise.resolve(), started = true, prepared = 
     authoringSourceDocument, diagnosticPanel: { beginRun() {} },
     previousPreview: { hold() { events.push("hold"); } },
     playbackControls: { setControllable(value) { controllable = value; }, destroy() { controllable = false; } },
-    ensureAuthoringClient: () => client,
     ensureRuntimePreparation() { events.push("prepare"); return {}; },
     adoptRuntimeCanvas(owner) { context.canvas = owner.canvas; },
     showSceneError(error) { errors.push(error); }, showError(error) { errors.push(error); },
   };
+  context.authoringWorkers = new AuthoringWorkerGeneration({
+    createClient: () => client,
+    isCurrentRun: token => token === context.activeRunRequest?.token,
+  });
   if (authoringRunOptions !== undefined) {
     context.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions };
   }

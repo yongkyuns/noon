@@ -5,14 +5,69 @@ use super::PreparedExecutionPlayer;
 use crate::canonical_authoring_scene::CanonicalAuthoringScene;
 use noon::{PrefixBatch, PrefixPublisher};
 
+pub(crate) fn source_execution_requirement_json(
+    requirement: Option<noon::SourceExecutionRequirement>,
+) -> String {
+    let Some(requirement) = requirement else {
+        return "null".into();
+    };
+    let (code, detail) = match requirement {
+        noon::SourceExecutionRequirement::HostEffects => ("host_effects", None),
+        noon::SourceExecutionRequirement::HostCallbacks => ("host_callbacks", None),
+        noon::SourceExecutionRequirement::EffectiveDisplay => ("effective_display", None),
+        noon::SourceExecutionRequirement::NativeInput => ("native_input", None),
+        noon::SourceExecutionRequirement::Signals => ("signals", None),
+        noon::SourceExecutionRequirement::ReplayUnavailable(error) => {
+            ("replay_unavailable", Some(error.to_string()))
+        }
+        noon::SourceExecutionRequirement::ExternalResources => ("external_resources", None),
+    };
+    let mut value = serde_json::json!({"code": code});
+    if let Some(detail) = detail {
+        value["detail"] = serde_json::Value::String(detail);
+    }
+    value.to_string()
+}
+
 pub(super) struct SourceDelivery {
     publisher: PrefixPublisher,
     pending: Option<PrefixBatch>,
+    staged_navigation: Option<noon::SceneSectionNavigation>,
     required: Option<noon::SourceExecutionRequirement>,
     finished: bool,
 }
 
 impl PreparedExecutionPlayer {
+    /// Existing logical prefix charges, not additive allocation or total-memory
+    /// measurements. Source history, scalar schedules, interpreter/JS heaps, WASM
+    /// capacity and renderer/GPU ownership require separate observations.
+    pub(super) fn retention_metrics_json(&self) -> String {
+        let reader = &self.playback.reader;
+        let stats = reader.replay_stats();
+        let source = self.source.as_ref();
+        let pending = source.and_then(|source| source.pending.as_ref());
+        serde_json::json!({
+            "reader": {
+                "historyPayloadBytes": reader.retained_history_payload_bytes(),
+                "historyPayloadBudgetBytes": reader.history_payload_budget_bytes(),
+                "resourceBytes": reader.retained_resource_bytes(),
+                "resourceBudgetBytes": reader.resource_budget_bytes(),
+                "revisions": stats.revisions_retained,
+                "payloads": stats.payloads_retained,
+            },
+            "extracted": source.map(|source| serde_json::json!({
+                "historyPayloadBytes": source.publisher.extracted_history_payload_bytes(),
+                "resourceBytes": source.publisher.extracted_resource_bytes(),
+            })),
+            "pending": {
+                "batches": usize::from(pending.is_some()),
+                "historyPayloadBytes": pending.map_or(0, PrefixBatch::history_payload_bytes),
+                "resourceBytes": pending.map_or(0, PrefixBatch::resource_bytes),
+            },
+        })
+        .to_string()
+    }
+
     /// Bootstrap only after the interpreter's actual first segment is complete.
     /// The canonical source keeps its existing live player and semantic store.
     pub fn from_completed_source(
@@ -23,9 +78,11 @@ impl PreparedExecutionPlayer {
             .create_prepared_prefix()
             .map_err(|e| e.to_string())?;
         let mut player = Self::from_reader(reader, transport_session);
+        player.set_section_navigation(context.section_navigation_snapshot());
         player.source = Some(SourceDelivery {
             publisher,
             pending: None,
+            staged_navigation: None,
             required: None,
             finished: false,
         });
@@ -82,6 +139,7 @@ impl PreparedExecutionPlayer {
         } else if endpoint != source.publisher.frontier() {
             return Err("prepared source moved behind its publication frontier".into());
         }
+        source.staged_navigation = Some(context.section_navigation_snapshot());
         // A zero-duration segment may complete without a new readable interval.
         // Its same-time edits remain in ordinary source history for a later suffix.
         self.source = Some(source);
@@ -127,6 +185,7 @@ impl PreparedExecutionPlayer {
             .prefix_source_requirement(&source.publisher, true)
             .map_err(|e| e.to_string())?;
         source.finished = true;
+        source.staged_navigation = Some(context.section_navigation_snapshot());
         if source.required.is_some() {
             return Ok(false);
         }
@@ -144,6 +203,11 @@ impl PreparedExecutionPlayer {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl PreparedExecutionPlayer {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = sourceExecutionRequirementJson))]
+    pub fn source_execution_requirement_json(&self) -> String {
+        source_execution_requirement_json(self.source.as_ref().and_then(|source| source.required))
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sourceExecutionReady))]
     pub fn source_execution_ready(&self) -> bool {
         self.source
@@ -192,11 +256,20 @@ impl PreparedExecutionPlayer {
             .take()
             .expect("validated pending batch");
         let terminal = batch.is_terminal();
+        let navigation = self
+            .source
+            .as_mut()
+            .expect("validated source")
+            .staged_navigation
+            .take();
         if let Err(error) = self.append(batch) {
             // The same-owner preflight above admits all fallible validation. Do
             // not permit source retries if that internal invariant ever changes.
             self.source = None;
             return Err(error.to_string());
+        }
+        if let Some(navigation) = navigation {
+            self.set_section_navigation(navigation);
         }
         if terminal {
             self.source = None;
@@ -243,6 +316,7 @@ mod wasm {
                 return Ok(None);
             };
             let mut player = PreparedExecutionPlayer::from_reader(reader, transport_session);
+            player.set_section_navigation(self.inner.section_navigation_snapshot());
             player.set_prepared_playing(false);
             Ok(Some(player))
         }

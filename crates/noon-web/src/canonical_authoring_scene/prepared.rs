@@ -4,6 +4,14 @@ use super::{AuthoringFailure, CanonicalAuthoringScene};
 use noon::{PrefixBatch, PrefixPublisher, PrefixReader};
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn observed_source_execution_requirement(
+        &mut self,
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        Ok(self
+            .active_live_player()?
+            .observed_source_execution_requirement())
+    }
+
     pub(crate) fn prefix_source_requirement(
         &mut self,
         publisher: &PrefixPublisher,
@@ -28,7 +36,7 @@ impl CanonicalAuthoringScene {
     pub fn begin_observed_prepared_source(
         &mut self,
         effects: noon::ContinuationEffects,
-    ) -> Result<bool, AuthoringFailure> {
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
         self.active_live_player()?
             .begin_observed_prepared_source(effects)
     }

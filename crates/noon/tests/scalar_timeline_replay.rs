@@ -71,7 +71,10 @@ fn predeclared_curve_playback_stays_sparse_and_replay_matches_authored_evaluatio
         assert_eq!(session.runtime_identity(), identity);
         assert_eq!(store.scene_revision(), authored);
     }
-    assert_eq!(session.replay_stats().payloads_retained, 0);
+    assert_eq!(session.replay_stats().revisions_retained, 0);
+    // The two immutable authored tracks are charged once, without sampled
+    // revisions or additional payloads from forward evaluation and seeking.
+    assert_eq!(session.replay_stats().payloads_retained, 2);
 }
 
 #[test]

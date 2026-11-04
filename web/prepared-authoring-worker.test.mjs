@@ -29,9 +29,10 @@ async function microtasks() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false, staticAdmission = true } = {}) {
+function host({ demand = false, attachGate = null, completeError = null, trapAt = null, initialIntervals = [true], observed = false, late = false, terminalNative = false, staticNative = false, staticAdmission = true, opaque = false, lateCallbacks = false } = {}) {
   const events = [], tasks = new Map(), posts = [], errors = [];
   let taskId = 0, api, execute;
+  let callbackSchedule = observed && !lateCallbacks;
   const counters = { initial: 0, segments: 0, terminal: 0, adopted: 0, reserved: 0, stopped: 0, freed: 0, delivered: 0 };
   let pending, freed = false;
   const alive = () => assert.equal(freed, false, "retired WASM handle must never be reused");
@@ -39,6 +40,9 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const player = {
     resetReceiver(session) { alive(); assert.ok(session > 3); events.push("reset-receiver"); },
     preparedPlaying: () => false,
+    preparedPlaybackStateJson: () => JSON.stringify({ time: 1, frontier: 1 }),
+    get sourceExecutionRequirementJson() { return JSON.stringify({ code: "native_input" }); },
+    setPreparedLoopDuration(value) { alive(); events.push(["loop", value]); },
     prepareSourceSegment(value) {
       if (late) { events.push("require-source"); return false; }
       alive(); trap("segment"); assert.equal(value, context); counters.segments++; pending = 4; events.push("segment");
@@ -56,7 +60,16 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   };
   const context = {
     prepareFinishedSource() { events.push("finished-admission"); return staticAdmission; },
-    beginObservedPreparedSource() { return observed; },
+    beginObservedPreparedSource() {
+      if (opaque || lateCallbacks) {
+        observed = true;
+        return JSON.stringify({ code: "host_effects" });
+      }
+      return JSON.stringify(observed ? { code: "host_callbacks" } : null);
+    },
+    observedSourceExecutionRequirementJson() {
+      return JSON.stringify(callbackSchedule ? { code: "host_callbacks" } : { code: "host_effects" });
+    },
     prepareExecutionRun() {}, liveHandoffDuration: () => 1,
     createFinishedPreparedExecutionPlayer(session) {
       assert.equal(session, 3); events.push("static-reader");
@@ -70,7 +83,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   let endpoint;
   const attachSemanticEngine = async (_context, _request, onStop, ...args) => {
     assert.equal(_context, context);
-    const prepared = args[5] !== undefined;
+    const prepared = args[5] != null;
     if (staticNative && observed) {
       assert.equal(_request.completedStaticSource, true);
       assert.equal(args[1], null, "completed static source has no live continuation protocol");
@@ -106,13 +119,14 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
       else endpoint.stop();
       throw error;
     }
+    args[6]?.({ stage: "attached", capabilities: { commands: [], replay: prepared, audio: false, sections: false } });
     return endpoint;
   };
   api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
-    const AUTHORING_CHANNEL = "noon.authoring", AUTHORING_PROTOCOL_VERSION = 7;
+    const AUTHORING_CHANNEL = "noon.authoring", AUTHORING_PROTOCOL_VERSION = 8;
     const pyodidePromise = Promise.resolve({}), semanticContexts = new Map();
     let nextSemanticContext = 0, nextContinuationGeneration = 1, activeAuthoringRun = null;
-    let fatalAuthoringFailure = false;
+    let fatalAuthoringFailure = false, authoringLibrariesPristine = true;
     let requestQueue = Promise.resolve();
     const post = (type, value) => { if (!fatalAuthoringFailure) posts.push({ type, ...value }); };
     const postError = (requestId, error) => {
@@ -126,12 +140,13 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     return { registerSemanticExecution, failAuthoringWorker, awaitSemanticContinuation, handleRequest, handleContinuationControl,
       completeContinuation, requestContinuationCallback, completeContinuationCallback,
       failContinuation, contexts: semanticContexts, run: () => activeAuthoringRun,
+      startSourceTurn: () => startPreparedSourceTurn(activeAuthoringRun),
       fatal: () => fatalAuthoringFailure };
   `)(options => createPreparedInterpreterDriver({ ...options,
     setTimeout(callback) { const id = ++taskId; tasks.set(id, callback); return id; },
     clearTimeout(id) { tasks.delete(id); },
   }), () => execute(api), attachSemanticEngine, posts, errors);
-  const envelope = (type, fields) => ({ channel: "noon.authoring", protocolVersion: 7, type, ...fields });
+  const envelope = (type, fields) => ({ channel: "noon.authoring", protocolVersion: 8, type, ...fields });
   const continuationRequest = (type, fields = {}) => {
     const registration = posts.findLast(post => post.type === "semantic_continuation_registered");
     return envelope(type, { requestId: 2, contextId: registration.semanticExecution.context_id,
@@ -153,10 +168,10 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
         }));
       } finally { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); }
     },
-    start(sourceBody, requestId = 1) {
+    start(sourceBody, requestId = 1, diagnosticPreparationTiming = false) {
       execute = sourceBody;
       return api.handleRequest(envelope("run", { requestId, source: "test source", context: {},
-        preparedPlayback: true, preparationLookaheadSeconds: 0.75 }));
+        preparedPlayback: true, preparationLookaheadSeconds: 0.75, diagnosticPreparationTiming }));
     },
     async attach(extra = {}) {
       const control = new MessageChannel(), render = new MessageChannel();
@@ -196,10 +211,11 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
           continuation_generation: api.run().continuation.generation, callback_session_id: null } });
     },
     endpoint: () => endpoint,
+    registerCallback() { callbackSchedule = true; },
   };
 }
 
-test("production source completes each barrier once, sleeps on Rust demand and seals after cleanup", async () => {
+for (const loopDurationSeconds of [null, 1]) test(`production source completes each barrier once and seals after cleanup (loop=${loopDurationSeconds})`, async () => {
   const h = host(); let statements = 0;
   const done = h.start(async api => {
     await api.awaitSemanticContinuation(h.context); statements++;
@@ -209,8 +225,10 @@ test("production source completes each barrier once, sleeps on Rust demand and s
   await microtasks();
   assert.equal(h.posts[0].semanticExecution.prepared_playback, true);
   const initial = h.tick();
-  await h.attach(); await initial;
+  await h.attach({ loopDurationSeconds }); await initial;
   assert.equal(h.counters.initial, 1);
+  assert.equal(h.events.some(event => Array.isArray(event) && event[0] === "loop"), false,
+    "the first barrier does not establish the loop period");
   assert.equal(statements, 0);
   assert.equal(h.tasks.size, 0);
   h.demand(false); assert.equal(h.tasks.size, 0);
@@ -226,10 +244,49 @@ test("production source completes each barrier once, sleeps on Rust demand and s
   assert.equal(h.counters.terminal, 1);
   assert.equal(h.counters.adopted, 2);
   assert.ok(h.events.indexOf("cleanup") < h.events.indexOf("terminal"));
+  assert.deepEqual(h.events.find(event => Array.isArray(event) && event[0] === "loop"), ["loop", loopDurationSeconds === null ? undefined : 2],
+    "gallery looping uses the completed authored duration, not the bootstrap duration");
   assert.equal(h.errors.length, 0);
+  assert.equal(h.posts.some(post => post.event?.stage === "preparation-timing"), false,
+    "timing spans are disabled unless the run explicitly requests them");
   const result = h.posts.find(post => post.type === "result");
   assert.equal(JSON.parse(result.resultJson).semantic_execution.prepared_playback, true);
   h.endpoint().stop();
+});
+
+test("opt-in preparation timings distinguish source turns from Rust preparation and reader delivery", async () => {
+  const h = host();
+  const done = h.start(async api => {
+    api.startSourceTurn();
+    await api.awaitSemanticContinuation(h.context);
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  }, 1, true);
+  await microtasks();
+  const initial = h.tick();
+  await h.attach(); await initial;
+  h.demand(true); await h.tick(); await microtasks(); await h.tick(); await done;
+
+  const events = h.posts.filter(post => post.type === "execution_diagnostic" &&
+    post.event.stage === "preparation-timing").map(post => post.event);
+  const owners = events.map(event => event.owner);
+  assert.equal(owners.filter(owner => owner === "source-turn").length, 3);
+  for (const owner of ["segment-initial", "segment-prepare", "reader-reserve", "reader-deliver", "segment-finish"]) {
+    assert.ok(owners.includes(owner), `missing ${owner} timing`);
+  }
+  assert.deepEqual(events.map(event => event.ordinal), events.map((_, index) => index));
+  for (const event of events) {
+    assert.equal(event.runRequestId, 1);
+    assert.equal(event.contextId, "semantic-0");
+    assert.equal(event.measurement, "wall-clock");
+    assert.ok(Number.isFinite(event.startedAtEpochMs));
+    assert.ok(Number.isFinite(event.completedAtEpochMs));
+    assert.ok(Number.isFinite(event.durationMs) && event.durationMs >= 0);
+    assert.ok(event.startedAtEpochMs <= event.completedAtEpochMs);
+  }
+  assert.equal(events.filter(event => event.owner === "source-turn")[0].boundary, "barrier");
+  assert.deepEqual(events.filter(event => event.owner === "source-turn").map(event => event.boundary),
+    ["barrier", "barrier", "source-settled"]);
 });
 
 test("receiver replacement retains the original source before and after completion", async () => {
@@ -247,6 +304,12 @@ test("receiver replacement retains the original source before and after completi
   assert.equal(invocations, 1); assert.equal(completed, 1);
   assert.equal(h.counters.initial, 1); assert.equal(h.counters.terminal, 1);
   assert.equal(h.events.filter(event => event === "reset-receiver").length, 2);
+  const attachments = h.posts.filter(post => post.type === "execution_diagnostic" &&
+    ["attached", "receiver-attached", "profile-change"].includes(post.event.stage));
+  assert.deepEqual(attachments.map(post => post.event.stage), ["attached", "receiver-attached", "receiver-attached"]);
+  assert.ok(attachments.every(post => post.requestId === 1 && post.event.profile === "incremental" &&
+    post.event.contextId === attachments[0].event.contextId && post.event.continuationGeneration === attachments[0].event.continuationGeneration));
+  assert.deepEqual(attachments.map(post => post.event.session), [3, 4, 5]);
   assert.deepEqual(h.errors, []);
   h.endpoint().stop(); assert.equal(h.counters.freed, 1); assert.equal(h.contexts.size, 0);
 });
@@ -331,7 +394,7 @@ test("endpoint stop retires its source token after an earlier active-source rele
   const done = h.start(async api => { await api.awaitSemanticContinuation(h.context); return h.result(); });
   await microtasks(); const initial = h.tick(); await h.attach(); await initial;
   const contextId = h.run().continuation.contextId;
-  await h.handleContinuationControl({ channel: "noon.authoring", protocolVersion: 7,
+  await h.handleContinuationControl({ channel: "noon.authoring", protocolVersion: 8,
     type: "release_semantic_execution", requestId: 9, contextId });
   assert.match(String(h.errors[0].error), /cannot release an active/);
   assert.equal(h.contexts.has(contextId), true);
@@ -486,7 +549,65 @@ test("initial observed admission relays callbacks to the original stack without 
   assert.equal(h.counters.initial, 0); assert.equal(h.counters.segments, 0);
   assert.equal(h.counters.terminal, 0); assert.equal(h.counters.adopted, 0);
   assert.deepEqual(h.events, ["observe-segment", "final-publication"]);
+  const attached = h.posts.find(post => post.type === "execution_diagnostic" && post.event.stage === "attached");
+  assert.equal(attached.event.profile, "observed", "requesting preparation does not prove its attachment");
+  assert.equal(attached.event.reason.code, "host_callbacks");
+  assert.ok(h.posts.some(post => post.type === "execution_diagnostic" && post.event.stage === "source-complete" &&
+    post.event.contextId === attached.event.contextId));
   assert.equal(h.tasks.size, 0);
+});
+
+test("opaque external source without a callback keeps its host-effects reason", async () => {
+  const h = host({ opaque: true });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  });
+  await microtasks();
+  const initial = h.tick();
+  await h.attach({ initiallyPaused: false });
+  const continuation = h.run().continuation;
+  h.completeContinuation(continuation, continuation.generation);
+  await initial;
+  await microtasks();
+  const second = h.tick();
+  h.completeContinuation(continuation, continuation.generation);
+  await second; await done;
+
+  const diagnostics = h.posts.filter(post => post.type === "execution_diagnostic").map(post => post.event);
+  assert.equal(diagnostics.find(event => event.stage === "attached").reason.code, "host_effects");
+  assert.equal(diagnostics.some(event => event.stage === "source-requirement"), false);
+  assert.deepEqual(h.errors, []);
+});
+
+test("a later Rust callback schedule refines an opaque source reason at its next barrier", async () => {
+  const h = host({ lateCallbacks: true });
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    h.registerCallback();
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  });
+  await microtasks();
+  const initial = h.tick();
+  await h.attach({ initiallyPaused: false });
+  const continuation = h.run().continuation;
+  h.completeContinuation(continuation, continuation.generation);
+  await initial;
+  await microtasks();
+
+  const diagnostics = h.posts.filter(post => post.type === "execution_diagnostic").map(post => post.event);
+  assert.equal(diagnostics.find(event => event.stage === "attached").reason.code, "host_effects");
+  const requirement = diagnostics.find(event => event.stage === "source-requirement");
+  assert.equal(requirement.reason.code, "host_callbacks");
+  assert.equal(requirement.profile, "observed");
+  assert.equal(requirement.continuationGeneration, continuation.generation);
+
+  const second = h.tick();
+  h.completeContinuation(continuation, continuation.generation);
+  await second; await done;
+  assert.deepEqual(h.errors, []);
 });
 
 test("observed preparation forwards the original resource-start handshake", async () => {
@@ -595,6 +716,8 @@ for (const duration of [0, 30]) test(`completed declarations use Rust's original
   await h.attachFinished();
   assert.deepEqual(h.errors, []);
   assert.equal(h.events.includes("static-reader"), false);
+  const attached = h.posts.find(post => post.type === "execution_diagnostic" && post.event.stage === "attached");
+  assert.equal(attached.event.profile, "immutable", "a completed declaration is not a live continuation");
   assert.equal(h.counters.initial + h.counters.segments + h.counters.terminal, 0);
   await h.releaseFinished();
   assert.equal(h.contexts.size, 0);

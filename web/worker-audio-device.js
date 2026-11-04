@@ -16,6 +16,10 @@ export class WorkerAudioDevice {
   #context = null;
   #generation = 0;
   #started = false;
+  #buffering = false;
+  #session = null;
+  #authorizedUntil = null;
+  #sampledEpochMs = null;
   #volume = 1;
   #muted = false;
   #onInterrupted;
@@ -57,7 +61,8 @@ export class WorkerAudioDevice {
 
   applyAnchor(anchor, session) {
     if (this.#output === null || anchor === undefined) return;
-    if (!anchor || anchor.session !== session || typeof anchor.playing !== "boolean") {
+    if (!anchor || anchor.session !== session || typeof anchor.playing !== "boolean" ||
+        typeof anchor.buffering !== "boolean") {
       throw new Error("worker audio anchor belongs to a different playback session");
     }
     if (!anchor.playing) {
@@ -65,18 +70,87 @@ export class WorkerAudioDevice {
       return;
     }
     if (!this.ready) throw new Error("Play with sound to enable audio output");
-    this.#output.start(session, anchor.time, anchor.sampledEpochMs,
-      performance.timeOrigin + performance.now());
+    if (anchor.buffering) {
+      if (!Number.isFinite(anchor.time) || !Number.isFinite(anchor.sampledEpochMs) ||
+          (anchor.authorizedUntil !== undefined &&
+           (!Number.isFinite(anchor.authorizedUntil) || anchor.authorizedUntil < anchor.time))) {
+        throw new Error("buffered worker audio anchor is invalid");
+      }
+      this.#output.pause();
+      this.#session = session;
+      this.#sampledEpochMs = anchor.sampledEpochMs;
+      this.#authorizedUntil = anchor.authorizedUntil ?? null;
+      this.#started = false;
+      this.#buffering = true;
+      return;
+    }
+    if (anchor.authorizedUntil === undefined) {
+      this.#output.start(session, anchor.time, anchor.sampledEpochMs,
+        performance.timeOrigin + performance.now());
+      this.#authorizedUntil = null;
+    } else {
+      if (!Number.isFinite(anchor.authorizedUntil) || anchor.authorizedUntil < anchor.time) {
+        throw new Error("worker audio anchor has an invalid Rust authorization boundary");
+      }
+      this.#output.startUntil(session, anchor.time, anchor.authorizedUntil,
+        anchor.sampledEpochMs, performance.timeOrigin + performance.now());
+      this.#authorizedUntil = anchor.authorizedUntil;
+    }
+    this.#session = session;
+    this.#sampledEpochMs = anchor.sampledEpochMs;
     this.#started = true;
+    this.#buffering = false;
+  }
+
+  extendAnchor(anchor, session) {
+    if (this.#output === null || (!this.#started && !this.#buffering)) return false;
+    if (!anchor || session !== this.#session || anchor.session !== session ||
+        anchor.playing !== true || !Number.isFinite(anchor.time) ||
+        typeof anchor.buffering !== "boolean" ||
+        !Number.isFinite(anchor.authorizedUntil) ||
+        !Number.isFinite(anchor.sampledEpochMs)) {
+      throw new Error("worker audio extension belongs to a different or invalid playback scope");
+    }
+    // Port delivery may race a newer resume or a pause in this same session.
+    // Such an old extension carries no authority and must be a quiet no-op.
+    if (anchor.sampledEpochMs <= this.#sampledEpochMs ||
+        (this.#authorizedUntil !== null && anchor.authorizedUntil < this.#authorizedUntil) ||
+        (!anchor.buffering && !this.#buffering && this.#authorizedUntil !== null &&
+         anchor.authorizedUntil <= this.#authorizedUntil)) return false;
+    if (!this.ready) throw new Error("audio device was interrupted");
+    if (anchor.buffering) {
+      if (this.#started) this.#output.pause();
+      this.#started = false;
+      this.#buffering = true;
+    } else if (this.#buffering) {
+      this.#output.startUntil(session, anchor.time, anchor.authorizedUntil,
+        anchor.sampledEpochMs, performance.timeOrigin + performance.now());
+      this.#started = true;
+      this.#buffering = false;
+    } else {
+      this.#output.extendUntil(session, anchor.time, anchor.authorizedUntil,
+        anchor.sampledEpochMs, performance.timeOrigin + performance.now());
+    }
+    this.#authorizedUntil = anchor.authorizedUntil;
+    this.#sampledEpochMs = anchor.sampledEpochMs;
+    return true;
   }
 
   pause() {
     this.#started = false;
+    this.#buffering = false;
+    this.#session = null;
+    this.#authorizedUntil = null;
+    this.#sampledEpochMs = null;
     this.#output?.pause();
   }
 
   stop() {
     this.#started = false;
+    this.#buffering = false;
+    this.#session = null;
+    this.#authorizedUntil = null;
+    this.#sampledEpochMs = null;
     this.#output?.stop();
   }
 
@@ -104,7 +178,7 @@ export class WorkerAudioDevice {
   }
 
   #stateChanged = () => {
-    if (this.#started && !this.ready) {
+    if ((this.#started || this.#buffering) && !this.ready) {
       this.stop();
       this.#onInterrupted();
     }

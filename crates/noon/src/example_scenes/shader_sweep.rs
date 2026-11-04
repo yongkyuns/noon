@@ -79,6 +79,7 @@ fn material(coordinates: ShaderCoordinates) -> Result<WgslEffectProgram, String>
 }
 
 impl LiveContinuation for ShaderSweep {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
         let segment = match self.stage {
@@ -302,3 +303,6 @@ pub fn authored_time_session() -> Result<crate::SceneExecution, String> {
         .map_err(message)?;
     scene.into_execution_with_session(session).map_err(message)
 }
+
+#[cfg(all(test, feature = "prepared-prefix", feature = "wgsl-effects"))]
+mod prepared_prefix_tests;

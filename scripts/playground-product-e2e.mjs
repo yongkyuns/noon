@@ -11,6 +11,7 @@ import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRe
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const { chromium } = playwright;
 const { PNG } = pngjs;
@@ -23,13 +24,71 @@ const artifactDir = path.resolve(
   process.env.NOON_PRODUCT_ARTIFACT_DIR ?? path.join(repoRoot, "browser-smoke-artifacts/product-e2e"),
 );
 const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
+assert.ok(["baseline", "candidate"].includes(label), "product measurement role must be baseline or candidate");
+const allowLegacyBaseline = label === "baseline";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
+const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
+const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
+  disposition: profileExpectation?.disposition ?? "looped" };
 const showcaseEntry = JSON.parse(await readFile(path.join(repoRoot,
   "web/python/examples/noon_showcase_manifest.json"), "utf8")).entries.find(entry => entry.id === exampleId) ?? null;
 if (showcaseEntry !== null) {
   assert.equal(showcaseEntry.path, measurement.sourcePath, "product source differs from its declared lesson");
   assert.equal(showcaseEntry.duration, measurement.sourceEndSeconds, "product endpoint differs from its declared lesson");
+}
+
+function authoredPassLifecycleReady({ runInFlight, run, diagnostics, controls }) {
+  if (diagnostics == null) return allowLegacyBaseline && runInFlight === false && run?.exampleId === exampleId &&
+    Number.isFinite(run.sourceRunCompletedAtMs) && controls?.busy === "false" &&
+    Number(controls.elapsedSeconds) >= measurement.sourceEndSeconds - 1e-7;
+  const context = diagnostics?.context;
+  if (runInFlight !== false || run?.exampleId !== exampleId ||
+      context?.exampleId !== exampleId || context.runGeneration !== run.runGeneration ||
+      context.selectionGeneration !== run.selectionGeneration ||
+      !Number.isFinite(run.sourceRunCompletedAtMs) || !Number.isSafeInteger(diagnostics.runRequestId) ||
+      diagnostics.droppedEvents !== 0 || !Array.isArray(diagnostics.events)) return false;
+  const events = diagnostics.events;
+  const attached = events.find(event => event.stage === "attached");
+  const sourceComplete = events.find(event => event.stage === "source-complete");
+  const terminal = events.find(event => event.stage === "terminal-adopted");
+  const final = events.findLast(event => event.stage === "disposition");
+  if (attached?.profile !== completionExpectation.attachedProfile ||
+      events.some(event => event.stage === "profile-change") || !sourceComplete || !terminal ||
+      !Number.isSafeInteger(sourceComplete.sequence) || !Number.isSafeInteger(terminal.sequence) ||
+      !Number.isSafeInteger(final?.sequence) ||
+      final.sequence <= Math.max(sourceComplete.sequence, terminal.sequence)) return false;
+  if (completionExpectation.disposition === "looped") return final.disposition === "looped" &&
+    Number.isSafeInteger(final.loopCount) && final.loopCount >= 1 &&
+    Number.isSafeInteger(final.publication?.session) && final.publication.session >= 0 &&
+    Number.isSafeInteger(final.publication?.sequence) && final.publication.sequence >= 0;
+  const tolerance = 8 * Number.EPSILON * Math.max(1, measurement.sourceEndSeconds);
+  return ["observed-complete", "finite-complete"].includes(completionExpectation.disposition) &&
+    final.disposition === completionExpectation.disposition && Number.isFinite(final.time) &&
+    Math.abs(final.time - measurement.sourceEndSeconds) <= tolerance;
+}
+
+function firstPassEndpointSample(samples, fps, runGeneration) {
+  if (!Array.isArray(samples)) return null;
+  let previousTime = -Infinity;
+  for (const sample of samples) {
+    if (sample.session !== fps.session || sample.exampleId !== exampleId ||
+        sample.runGeneration !== runGeneration || !Number.isFinite(sample.time)) continue;
+    if (sample.time + 0.001 < previousTime) break;
+    previousTime = sample.time;
+    if (sample.ready !== true || sample.needsPresent !== false || sample.bufferedDeltas !== 0 ||
+        !Number.isSafeInteger(sample.frames) || sample.frames < 1 || sample.time < 0 ||
+        sample.time > measurement.sourceEndSeconds || !Number.isFinite(sample.rendererAt)) continue;
+    if (showcaseEntry !== null) {
+      try {
+        assertNaturalFirstPassPublication(showcaseEntry, measurement.sourceEndSeconds, sample.time);
+      } catch {
+        continue;
+      }
+    } else if (sample.time < measurement.windowEndSeconds - 1e-7) continue;
+    return sample;
+  }
+  return null;
 }
 const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
 const startedAtMs = Date.now();
@@ -134,6 +193,8 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
           ...probe.latest,
           now: performance.now(),
           runInFlight: gallery?.runInFlight ?? false,
+          exampleId: gallery?.runPhaseMetrics?.exampleId ?? null,
+          runGeneration: gallery?.runPhaseMetrics?.runGeneration ?? null,
           playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
         };
       });
@@ -146,23 +207,66 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
     const state = await waitForApplied(page);
-    // Incremental preparation may finish before presentation. Complete the
-    // same authored pass in every arm before ending this run or its samples.
-    await page.waitForFunction(end => {
+    // Elapsed time wraps at the configured loop, so it is not a durable
+    // completion signal. Wait for the same run's source cleanup and final
+    // profile disposition, including one actual loop before accepting a
+    // replayable pass.
+    await page.waitForFunction(({ exampleId, expectedProfile, expectedDisposition, durationSeconds,
+      allowLegacyBaseline }) => {
+      const gallery = window.__noonExampleGallery;
+      const run = gallery?.runPhaseMetrics;
+      const diagnostics = gallery?.executionDiagnostics;
       const controls = document.querySelector(".playback-controls")?.dataset;
-      return controls?.busy === "false" &&
-        Number(controls.elapsedSeconds) >= end - 1e-7;
-    }, measurement.sourceEndSeconds, { timeout: 30_000 });
+      if (gallery?.runInFlight !== false || run?.exampleId !== exampleId ||
+          !Number.isFinite(run.sourceRunCompletedAtMs)) return false;
+      if (diagnostics == null) return allowLegacyBaseline && controls?.busy === "false" &&
+        Number(controls.elapsedSeconds) >= durationSeconds - 1e-7;
+      const events = diagnostics.events ?? [];
+      const attached = events.find(event => event.stage === "attached");
+      const sourceComplete = events.find(event => event.stage === "source-complete");
+      const terminal = events.find(event => event.stage === "terminal-adopted");
+      const final = events.findLast(event => event.stage === "disposition");
+      const ordered = Number.isSafeInteger(sourceComplete?.sequence) &&
+        Number.isSafeInteger(terminal?.sequence) && Number.isSafeInteger(final?.sequence) &&
+        final.sequence > Math.max(sourceComplete.sequence, terminal.sequence);
+      const dispositionReady = expectedDisposition === "looped"
+        ? final?.disposition === "looped" && Number.isSafeInteger(final.loopCount) && final.loopCount >= 1
+        : final?.disposition === expectedDisposition && Number.isFinite(final.time) &&
+          Math.abs(final.time - durationSeconds) <= 8 * Number.EPSILON * Math.max(1, durationSeconds);
+      return diagnostics.droppedEvents === 0 && attached?.profile === expectedProfile && ordered &&
+        !events.some(event => event.stage === "profile-change") && dispositionReady;
+    }, { exampleId, expectedProfile: completionExpectation.attachedProfile,
+      expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds,
+      allowLegacyBaseline },
+    { timeout: 30_000 });
+    const lifecycle = await page.evaluate(() => {
+      const gallery = window.__noonExampleGallery;
+      return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
+        diagnostics: gallery.executionDiagnostics,
+        controls: document.querySelector(".playback-controls")?.dataset ?? null };
+    });
+    assert.ok(authoredPassLifecycleReady(lifecycle),
+      `authored source did not complete its expected lifecycle: ${JSON.stringify({
+      disposition: lifecycle.diagnostics?.events?.findLast(event => event.stage === "disposition"),
+      context: lifecycle.diagnostics?.context, run: lifecycle.run, controls: lifecycle.controls,
+    })}`);
+    const disposition = lifecycle.diagnostics?.events.findLast(event => event.stage === "disposition") ?? null;
+    evidence.completion = { runGeneration: lifecycle.run.runGeneration,
+      runRequestId: lifecycle.diagnostics?.runRequestId ?? null, attachedProfile: disposition?.profile ?? null,
+      disposition: disposition?.disposition ?? "legacy-natural-endpoint",
+      loopCount: disposition?.loopCount ?? null,
+      sourceRunCompletedAtMs: lifecycle.run.sourceRunCompletedAtMs };
     const milliseconds = performance.now() - started;
     if (captureFrames) {
-      // This is the final observation for this exact run, after its renderer
-      // has presented the authored endpoint and before any warm/edit rerun.
+      // This current observation is separate from the natural terminal sample
+      // retained in this run's 50 ms renderer observations.
       const endpoint = { phase: "endpoint", ...await sampleRendererObservation(page) };
       frameSamples.push(endpoint);
     }
     const presentationSamples = await page.evaluate(() => window.__noonProductRenderProbe.presentationSamples);
     evidence.presentationSamples = presentationSamples;
-    return { milliseconds, state, frameSamples, presentationSamples };
+    return { milliseconds, state, frameSamples, presentationSamples,
+      completion: evidence.completion, runGeneration: lifecycle.run.runGeneration };
   } finally {
     sampling = false;
     try {
@@ -182,7 +286,9 @@ async function sampleRendererObservation(page) {
   });
   await page.waitForFunction(previous => window.__noonProductRenderProbe.metricsReplies > previous,
     previousReplies, { timeout: 10_000 });
-  return page.evaluate(() => ({ ...window.__noonProductRenderProbe.latest, now: performance.now() }));
+  return page.evaluate(() => ({ ...window.__noonProductRenderProbe.latest, now: performance.now(),
+    exampleId: window.__noonExampleGallery?.runPhaseMetrics?.exampleId ?? null,
+    runGeneration: window.__noonExampleGallery?.runPhaseMetrics?.runGeneration ?? null }));
 }
 
 function changedPixelStats(buffer) {
@@ -389,7 +495,7 @@ try {
       writable: true,
       value: ObservedWorker,
     });
-  }, measurement.gapClock !== null);
+  }, true);
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
@@ -437,6 +543,12 @@ try {
     warmupSeconds: measurement.windowStartSeconds,
     maxEndDelaySeconds: measurement.maxEndDelaySeconds,
   });
+  const firstPassEndpoint = firstPassEndpointSample(warm.frameSamples, fps, warm.runGeneration);
+  assert.ok(firstPassEndpoint !== null,
+    `no natural first-pass terminal hold was sampled in the scored renderer epoch: ${JSON.stringify({
+      runGeneration: warm.runGeneration, session: fps.session, samples: warm.frameSamples.slice(-8),
+    })}`);
+  warm.firstPassEndpoint = firstPassEndpoint;
   const presentationGaps = measurement.gapClock === null ? null
     : samplePresentationGaps(warm.presentationSamples, fps);
 
@@ -524,8 +636,12 @@ try {
     shellReadyMs,
     shell,
     coldRunMs: cold.milliseconds,
+    coldPassLifecycle: cold.completion,
     warmRunMs: warm.milliseconds,
+    warmPassLifecycle: warm.completion,
+    warmFirstPassEndpoint: warm.firstPassEndpoint,
     editRunMs: edited.milliseconds,
+    editPassLifecycle: edited.completion,
     fps,
     // Preserve the actual observations so a short-window regression can be
     // diagnosed without reconstructing telemetry from an aggregate FPS value.

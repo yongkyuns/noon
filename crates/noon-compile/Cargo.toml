@@ -11,6 +11,9 @@ noon-core = { path = "../noon-core" }
 noon-geometry = { path = "../noon-geometry" }
 serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+noon-core = { path = "../noon-core", features = ["wgsl-effects"] }
+
 [features]
 # Experimental #2211; not enabled by default.
 prepared-prefix = []

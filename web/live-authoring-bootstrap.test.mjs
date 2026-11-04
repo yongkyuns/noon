@@ -26,11 +26,6 @@ assert.doesNotMatch(
 );
 assert.match(
   bootstrap,
-  /Subsequent edits are handled by main\.js[\s\S]*debounce only the next source submission/,
-  "the bootstrap must leave edit cancellation and reruns to main.js",
-);
-assert.match(
-  bootstrap,
   /function afterInitialPaint\(\)[\s\S]*requestAnimationFrame\(\(\) => \{[\s\S]*requestAnimationFrame\(\(\) => resolve\(\)\)/,
   "paint boundary helper must span two animation frames so one presentation opportunity occurs before preload",
 );

@@ -2,7 +2,9 @@ import { validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
 import { parseAuthoringDiagnostic } from "./authoring-diagnostic.js";
 
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 7;
+export const AUTHORING_PROTOCOL_VERSION = 8;
+export const MAX_EXECUTION_DIAGNOSTICS = 128;
+let nextInterpreterGeneration = 0;
 
 export class PythonAuthoringClient {
   #worker;
@@ -15,6 +17,9 @@ export class PythonAuthoringClient {
   #ready = false;
   #terminated = false;
   #staleResponses = 0;
+  #interpreterGeneration = nextInterpreterGeneration++;
+  #libraryTrust = "unknown";
+  #executionDiagnostics = null;
 
   constructor(worker = createAuthoringWorker()) {
     this.#worker = worker;
@@ -37,12 +42,22 @@ export class PythonAuthoringClient {
     return this.#terminated;
   }
 
+  get interpreterGeneration() { return this.#interpreterGeneration; }
+  get libraryTrust() { return this.#libraryTrust; }
+  get executionDiagnostics() {
+    return this.#executionDiagnostics === null ? null : structuredClone({
+      ...this.#executionDiagnostics, libraryTrust: this.#libraryTrust,
+    });
+  }
+
   get diagnostics() {
     return Object.freeze({
       nextRequestId: this.#nextRequestId,
       pendingRequests: this.#pending.size,
       staleResponses: this.#staleResponses,
       terminated: this.#terminated,
+      interpreterGeneration: this.#interpreterGeneration,
+      libraryTrust: this.#libraryTrust,
     });
   }
 
@@ -53,7 +68,8 @@ export class PythonAuthoringClient {
   async run(
     source,
     context = {},
-    { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1 } = {},
+    { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1,
+      diagnosticPreparationTiming = false } = {},
   ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
@@ -65,6 +81,12 @@ export class PythonAuthoringClient {
       throw new TypeError("onSemanticContinuation must be a function");
     }
     if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
+    if (typeof diagnosticPreparationTiming !== "boolean") {
+      throw new TypeError("diagnosticPreparationTiming must be a boolean");
+    }
+    if (diagnosticPreparationTiming && !preparedPlayback) {
+      throw new Error("preparation timing diagnostics require prepared playback");
+    }
     if (!Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0) {
       throw new TypeError("preparationLookaheadSeconds must be positive and finite");
     }
@@ -73,6 +95,15 @@ export class PythonAuthoringClient {
     }
     await this.ready();
     const requestId = this.#beginRequest();
+    const playground = context.playground ?? {};
+    this.#executionDiagnostics = {
+      schemaVersion: 1, interpreterGeneration: this.#interpreterGeneration, runRequestId: requestId,
+      context: { exampleId: playground.example_id ?? null,
+        selectionGeneration: playground.selection_generation ?? null,
+        runGeneration: playground.run_generation ?? null },
+      requestedProfile: preparedPlayback ? "incremental" : "observed",
+      events: [], droppedEvents: 0,
+    };
     const result = this.#resultFor(requestId, { onSemanticContinuation, preparedPlayback });
     this.#worker.postMessage(
       envelope("run", {
@@ -80,6 +111,7 @@ export class PythonAuthoringClient {
         source,
         context,
         ...(preparedPlayback ? { preparedPlayback, preparationLookaheadSeconds } : {}),
+        ...(diagnosticPreparationTiming ? { diagnosticPreparationTiming } : {}),
       }),
     );
     return result;
@@ -267,6 +299,31 @@ export class PythonAuthoringClient {
         return;
       }
 
+      if (message.type === "execution_diagnostic") {
+        // A completed run can still publish terminal/loop observations. Only
+        // this client's latest run owns the bounded diagnostic record.
+        if (!Number.isSafeInteger(message.requestId) || message.requestId < 0 || message.requestId >= this.#nextRequestId) {
+          throw new Error("execution diagnostic has an unissued run identity");
+        }
+        // Trust belongs to the interpreter, even if a newer submitted run owns
+        // the trace. An older opaque run still taints this same worker.
+        if (!this.#terminated && message.libraryTrust === "tainted") this.#observeLibraryTrust("tainted");
+        if (this.#terminated || message.requestId !== this.#executionDiagnostics?.runRequestId) {
+          this.#staleResponses += 1;
+          return;
+        }
+        const { event, libraryTrust } = message;
+        if (!isRecord(event) || typeof event.stage !== "string" || event.stage.length > 64 ||
+            JSON.stringify(event, (_, value) => typeof value === "bigint" ? String(value) : value).length > 4096) {
+          throw new Error("invalid execution diagnostic event");
+        }
+        if (libraryTrust !== undefined) this.#observeLibraryTrust(libraryTrust);
+        const trace = this.#executionDiagnostics;
+        if (trace.events.length >= MAX_EXECUTION_DIAGNOSTICS) trace.droppedEvents += 1;
+        else trace.events.push({ ...structuredClone(event), sequence: trace.events.length });
+        return;
+      }
+
       if (message.type === "error") {
         const details = [
           message.message,
@@ -446,11 +503,20 @@ export class PythonAuthoringClient {
       // canonical verifier to validate and freeze the received observation.
       const identity = await validateRuntimeBuildIdentity(message.buildIdentity);
       if (this.#terminated || this.#ready) return;
+      if (message.libraryTrust !== undefined) this.#observeLibraryTrust(message.libraryTrust);
       this.#ready = true;
       this.#resolveReady(identity);
     } catch (error) {
       this.#fail(error);
     }
+  }
+
+  #observeLibraryTrust(trust) {
+    if (!["pristine", "tainted"].includes(trust) ||
+        (this.#libraryTrust === "tainted" && trust !== "tainted")) {
+      throw new Error("interpreter trust cannot be restored within a worker generation");
+    }
+    this.#libraryTrust = trust;
   }
 
   #fail(error) {

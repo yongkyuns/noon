@@ -7,9 +7,11 @@ import {
   galleryCaseQueue,
   galleryEntriesFromManifests,
   galleryManifestPaths,
+  galleryPoolForProfileGate,
   galleryShardFromEnvironment,
   shardGalleryEntries,
 } from "./gallery-shards.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const manifests = await Promise.all(galleryManifestPaths.map(async path =>
   JSON.parse(await readFile(new URL("../web/" + path, import.meta.url), "utf8"))
@@ -48,6 +50,27 @@ test("every current gallery entry and no-JSPI control is covered exactly once pe
         browser + ": portable control mismatch for " + id);
     }
   }
+});
+
+test("strict showcase coverage adds all 33 catalog entries to the existing shard pool exactly once", () => {
+  const strictEntries = galleryPoolForProfileGate(entries, manifests[3].entries, "strict");
+  const showcaseIds = new Set(SHOWCASE_PROFILE_EXPECTATIONS.map(row => row.id));
+  for (const browser of ["chromium", "firefox", "webkit"]) {
+    const shards = Array.from({ length: shardCount }, (_, index) =>
+      shardGalleryEntries(strictEntries, index, shardCount));
+    const actual = shards.flatMap(shard => shard.filter(entry => showcaseIds.has(entry.id)))
+      .map(entry => entry.id).sort();
+    assert.deepEqual(actual, [...showcaseIds].sort(), browser + ": strict showcase coverage omitted or duplicated an entry");
+  }
+  assert.equal(strictEntries.filter(entry => showcaseIds.has(entry.id)).length, 33);
+});
+
+test("profile-gate pool preserves disabled runs and allows an explicitly focused baseline", () => {
+  assert.deepEqual(galleryPoolForProfileGate(entries, manifests[3].entries, "disabled"), entries);
+  const focused = galleryPoolForProfileGate(entries, manifests[3].entries, "baseline", ["showcase-first-scene"]);
+  assert.deepEqual(focused.map(entry => entry.id), ["showcase-first-scene"]);
+  assert.throws(() => galleryPoolForProfileGate(entries, manifests[3].entries, "strict", ["showcase-first-scene"]),
+    /complete unfiltered/);
 });
 
 test("shard assignment is stable regardless of manifest order", () => {

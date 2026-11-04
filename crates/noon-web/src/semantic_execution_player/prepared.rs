@@ -8,6 +8,13 @@ fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
 }
 
 impl SemanticExecutionPlayer {
+    pub(crate) fn observed_source_execution_requirement(
+        &self,
+    ) -> Option<noon::SourceExecutionRequirement> {
+        self.session
+            .continuation_execution_requirement(noon::ContinuationEffects::Opaque)
+    }
+
     pub(crate) fn prefix_source_requirement(
         &self,
         publisher: &PrefixPublisher,
@@ -51,14 +58,13 @@ impl SemanticExecutionPlayer {
     pub(crate) fn begin_observed_prepared_source(
         &mut self,
         effects: noon::ContinuationEffects,
-    ) -> Result<bool, AuthoringFailure> {
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
         self.live_segment()?;
         // An interpreter invocation may perform arbitrary host work after this
         // await. Scene replay metadata is not a source-purity proof. Keep its
         // original stack behind the ordinary observed completion protocol.
         self.session
             .begin_observed_prepared_source(effects)
-            .map(|requirement| requirement.is_some())
             .map_err(prefix_error)
     }
 

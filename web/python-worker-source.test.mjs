@@ -717,7 +717,7 @@ test("a trapped host never publishes late success or request errors", () => {
   const posted = [];
   const dispatch = new Function("self", `
     const AUTHORING_CHANNEL = "noon.authoring";
-    const AUTHORING_PROTOCOL_VERSION = 7;
+    const AUTHORING_PROTOCOL_VERSION = 8;
     let fatalAuthoringFailure = false;
     ${source.slice(source.indexOf('function post(type,'), source.indexOf('function isRecord(value)'))}
     return { post, fail: () => { fatalAuthoringFailure = true; } };
@@ -752,7 +752,8 @@ test("source compilation never replays module effects or changes fixtures", asyn
 });
 
 test("explicit endpoint reconnect returns the existing runtime lease before reattaching", async () => {
-  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const attachSource = source.slice(source.indexOf("function observeSemanticExecution"), source.indexOf("function registerContinuationContext")) +
+    source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
   const contexts = new Map();
   const entry = { context: {}, endpoints: new Set(), released: false };
   contexts.set("scene", entry);
@@ -781,7 +782,8 @@ test("explicit endpoint reconnect returns the existing runtime lease before reat
 });
 
 test("a first callback added after attachment uses the suspended source handler and retires its session", async () => {
-  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const attachSource = source.slice(source.indexOf("function observeSemanticExecution"), source.indexOf("function registerContinuationContext")) +
+    source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
   const context = {};
   const entry = { context, endpoints: new Set(), released: false };
   const contexts = new Map([["scene", entry]]);

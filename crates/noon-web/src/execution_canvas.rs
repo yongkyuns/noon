@@ -778,6 +778,14 @@ mod wasm {
             }
         }
 
+        #[cfg(feature = "prepared-prefix")]
+        fn take_prepared_clock_reanchor(&mut self) -> bool {
+            match &mut self.authority {
+                DirectSourceAuthority::Prepared(playback) => playback.take_clock_reanchor(),
+                DirectSourceAuthority::Session { .. } | DirectSourceAuthority::Program(_) => false,
+            }
+        }
+
         fn drive_from_clock(&mut self, requested_time: f64) -> Result<(), JsValue> {
             if self.stale_prepared_clock_sample(requested_time) {
                 return Ok(());
@@ -1442,6 +1450,15 @@ mod wasm {
             self.source.frame().time
         }
 
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = preparedPlaybackStateJson)]
+        pub fn prepared_playback_state_json(&self) -> Result<String, JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            serde_json::to_string(&playback.observation()).map_err(js_error)
+        }
+
         /// Pause authored prepared playback without stopping temporary effects.
         #[cfg(feature = "prepared-prefix")]
         #[wasm_bindgen(js_name = setPreparedPlaying)]
@@ -1456,6 +1473,19 @@ mod wasm {
             Ok(())
         }
 
+        /// Configure the existing gallery loop policy for a prepared reader.
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = setPreparedLoopDuration)]
+        pub fn set_prepared_loop_duration(&mut self, duration: Option<f64>) -> Result<(), JsValue> {
+            let DirectSourceAuthority::Prepared(playback) = &mut self.source.authority else {
+                return Err(js_message("canvas does not own a prepared reader"));
+            };
+            playback.set_loop_duration(duration).map_err(js_message)?;
+            self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            self.sampled_scene_target = None;
+            Ok(())
+        }
+
         /// Explicit test/debug observation, not a scene transport or clock authority.
         #[cfg(all(
             feature = "prepared-prefix",
@@ -1466,13 +1496,7 @@ mod wasm {
             let DirectSourceAuthority::Prepared(playback) = &self.source.authority else {
                 return Err(js_message("canvas does not own a prepared reader"));
             };
-            Ok(serde_json::json!({
-                "time": playback.reader.frame().time,
-                "frontier": playback.reader.frontier(), "end": playback.reader.end_time(),
-                "buffering": playback.buffering(), "playing": playback.playing(),
-                "interactions": playback.reader.interactions_active(),
-            })
-            .to_string())
+            serde_json::to_string(&playback.observation()).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = sectionCount)]
@@ -1817,19 +1841,29 @@ mod wasm {
             let wall_sample_target = self.bound_transport_target(target_time);
             let target_time =
                 self.bound_transport_target(self.source.bounded_realtime_target(target_time));
-            let (pending, camera) = {
+            let (pending, camera, wrapped, presented_time) = {
                 let direct = &mut self.source;
                 if !direct.stale_prepared_clock_sample(target_time) {
                     direct.drive_to(target_time)?;
                 }
+                let wrapped = direct.take_prepared_clock_reanchor();
                 direct.advance_interactions(wall_time_ms / 1_000.0)?;
                 let camera = direct.inspection_camera().map_err(js_error)?;
-                (direct.frame_pending(), camera)
+                (direct.frame_pending(), camera, wrapped, direct.frame().time)
             };
             // Callback commits and ordinary source handoffs are elapsed wall
             // time, not explicit pauses. Preserve the same active epoch.
             self.sync_camera(camera)?;
-            self.sampled_scene_target = Some(wall_sample_target);
+            if wrapped {
+                self.direct_wake_clock
+                    .reanchor(wall_time_ms, presented_time)
+                    .ok_or_else(|| js_message("prepared loop could not re-anchor its clock"))?;
+            }
+            self.sampled_scene_target = Some(if wrapped {
+                presented_time
+            } else {
+                wall_sample_target
+            });
             let (next_plan, next_scene_time) = self.direct_wake_observation();
             self.direct_wake_clock
                 .directive_for_source(
