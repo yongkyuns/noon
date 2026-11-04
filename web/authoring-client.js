@@ -44,7 +44,11 @@ export class PythonAuthoringClient {
 
   get interpreterGeneration() { return this.#interpreterGeneration; }
   get libraryTrust() { return this.#libraryTrust; }
-  get executionDiagnostics() { return structuredClone(this.#executionDiagnostics); }
+  get executionDiagnostics() {
+    return this.#executionDiagnostics === null ? null : structuredClone({
+      ...this.#executionDiagnostics, libraryTrust: this.#libraryTrust,
+    });
+  }
 
   get diagnostics() {
     return Object.freeze({

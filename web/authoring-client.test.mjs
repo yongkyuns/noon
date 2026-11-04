@@ -75,10 +75,12 @@ function deferred() {
 test("diagnostics distinguish the requested profile from actual attachment and return detached snapshots", async () => {
   const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
+  assert.equal(client.executionDiagnostics, null, "an unused interpreter has no run trace");
   const run = client.run("pass", { playground: { example_id: "lesson", run_generation: 3 } },
     { preparedPlayback: true, onSemanticContinuation() {} });
   await Promise.resolve();
   assert.equal(client.executionDiagnostics.requestedProfile, "incremental");
+  assert.equal(client.executionDiagnostics.libraryTrust, "pristine");
   assert.deepEqual(client.executionDiagnostics.events, [], "requesting a profile cannot claim attachment");
   worker.emit("message", workerMessage("execution_diagnostic", { requestId: 0,
     event: { stage: "attached", profile: "immutable", capabilities: { commands: ["play"] } } }));
@@ -99,9 +101,12 @@ test("stale decisions cannot alter a new run trace, but old opaque work still ta
   const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
   const first = client.run("first"), second = client.run("second"); await Promise.resolve();
+  const before = client.executionDiagnostics;
   worker.emit("message", workerMessage("execution_diagnostic", { requestId: 0, libraryTrust: "tainted",
     event: { stage: "attached", profile: "observed" } }));
   assert.equal(client.libraryTrust, "tainted");
+  assert.equal(client.executionDiagnostics.libraryTrust, "tainted");
+  assert.equal(before.libraryTrust, "pristine", "a detached trace retains its sampled trust");
   assert.equal(client.executionDiagnostics.runRequestId, 1);
   assert.deepEqual(client.executionDiagnostics.events, []);
   for (const requestId of [0, 1]) worker.emit("message", workerMessage("result", {
