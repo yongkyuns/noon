@@ -632,9 +632,9 @@ try {
       await caseBrowser?.close();
     }
   }
-  // Keep WebKit's cold WASM compilation and GPU contexts sequential on CI.
-  // Cold startup itself is covered by the public playground workflow.
-  const concurrency = browserName === 'webkit' ? 1 : 2;
+  // Headed Firefox cases share one display; each DOM interaction needs its own
+  // foreground window. WebKit also keeps cold WASM/GPU contexts sequential.
+  const concurrency = browserName === 'chromium' ? 2 : 1;
   const liveMathCases = [];
   await Promise.all(Array.from({ length: concurrency }, async () => {
     while (next < queue.length) {
