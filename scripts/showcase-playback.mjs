@@ -34,55 +34,6 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
         toggle?.getAttribute("aria-label") === "Play animation")) &&
       (expectedTime === null || Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7);
   };
-  const diagnoseAnimationFramePolling = async () => {
-    if (process.env.NOON_PLAYGROUND_RAF_DIAGNOSTIC !== "1") return;
-    const setup = await page.evaluate(() => {
-      const gallery = window.__noonExampleGallery;
-      const controls = document.querySelector(".playback-controls");
-      if (gallery?.selectedExampleId !== "manim-shrink-to-center-text" ||
-          controls?.dataset.busy !== "false") return null;
-      window.__noonRafDiagnosticOriginalRequestAnimationFrame = window.requestAnimationFrame;
-      window.requestAnimationFrame = () => 0;
-      return { selectedExampleId: gallery.selectedExampleId, initialBusy: controls.dataset.busy,
-        visibilityState: document.visibilityState };
-    });
-    if (setup === null) return;
-    const probeReady = () => document.documentElement.dataset.noonRafProbeReady === "true";
-    const makePendingThenReady = async () => page.evaluate(() => {
-      document.documentElement.dataset.noonRafProbeReady = "false";
-      setTimeout(() => { document.documentElement.dataset.noonRafProbeReady = "true"; }, 120);
-    });
-    let defaultPolling;
-    let intervalPolling;
-    try {
-      try {
-        await makePendingThenReady();
-        await page.waitForFunction(probeReady, null, { timeout: 500 });
-        defaultPolling = "resolved";
-      } catch (error) {
-        if (error.name !== "TimeoutError") throw error;
-        defaultPolling = "timed-out";
-      }
-      await makePendingThenReady();
-      await page.waitForFunction(probeReady, null, { polling: 50, timeout: 500 });
-      intervalPolling = "resolved";
-    } catch (error) {
-      intervalPolling = `failed: ${String(error)}`;
-    } finally {
-      await page.evaluate(() => {
-        if (window.__noonRafDiagnosticOriginalRequestAnimationFrame) {
-          window.requestAnimationFrame = window.__noonRafDiagnosticOriginalRequestAnimationFrame;
-          delete window.__noonRafDiagnosticOriginalRequestAnimationFrame;
-        }
-        delete document.documentElement.dataset.noonRafProbeReady;
-      });
-    }
-    const result = { ...setup, probe: "isolated DOM readiness; controls unchanged", defaultPolling, intervalPolling,
-      overrideAffectedWaitRealm: defaultPolling === "timed-out" };
-    console.log("Playwright RAF polling negative control:", JSON.stringify(result));
-    assert.equal(defaultPolling, "timed-out", `RAF suppression did not exercise the default wait: ${JSON.stringify(result)}`);
-    assert.equal(intervalPolling, "resolved", `RAF negative control interval polling failed: ${JSON.stringify(result)}`);
-  };
   const waitReady = async (phase, expectedTime = null, paused = false) => {
     try {
       await page.waitForFunction(isReady, { expectedTime, paused }, { polling: 50 });
@@ -124,7 +75,6 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
     }
   };
 
-  await diagnoseAnimationFramePolling();
   await waitReady("controls-ready-before-pause");
   const pause = page.getByRole("button", { name: "Pause animation", exact: true });
   const pauseRequested = await pause.count() > 0;
