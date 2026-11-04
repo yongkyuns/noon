@@ -38,16 +38,17 @@
   "strata": {
     "fresh-process-warm-resource-cache": "new browser process and workers; browser resource cache may already be primed",
     "reload-new-workers-warm-resource-cache": "same browser process, reloaded page and new workers; resource cache remains warm",
-    "cold-network": "not measured; requires a separately identified run with network cache disabled"
+    "cold-network": "fresh Chromium process/context; context-wide no-cache routing bypasses browser and job-local Pyodide cache interception; CDN edge may already have the object",
+    "reused-healthy-interpreter": "same page and Python worker; a second Run uses the same pristine interpreter generation after a completed eligible source execution"
   },
   "pendingCohorts": [
     {
       "id": "cold-network",
-      "protocol": "separate run with browser and Pyodide resource caches disabled; not part of the warm-cache baseline"
+      "protocol": "fresh process and context with job resource cache interception absent, service workers blocked, and routed no-cache requests; record actual request/response cache metadata and do not claim CDN-edge coldness"
     },
     {
       "id": "reused-healthy-interpreter",
-      "protocol": "separate run reusing a verified pristine interpreter after a prior eligible execution; not completed-history replay"
+      "protocol": "seed an eligible source run, then issue a new Run in the same page; require the same Python worker and interpreter generation, pristine trust, and a distinct runRequestId; not completed-history replay"
     }
   ],
   "measurementDefinitions": {

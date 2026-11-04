@@ -1,6 +1,7 @@
 export const READINESS_ARMS = ["A", "B", "C", "D"];
 export const READINESS_BASELINE_ARMS = ["C", "D"];
-export const READINESS_STRATA = ["fresh-process-warm-resource-cache", "reload-new-workers-warm-resource-cache"];
+export const READINESS_STRATA = ["fresh-process-warm-resource-cache",
+  "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"];
 export const READINESS_BOUND_KEYS = ["firstUsefulMs", "commandFeedbackMs", "commandAcceptanceP95Ms",
   "commandPresentationP99Ms", "bufferingEpisodeMs", "activeCadenceWindowP99Ms", "peakProcessRssBytes", "liveOwnerRetirementMs"];
 export const PRODUCT_GATE_THRESHOLD_ENVS = {
@@ -16,6 +17,46 @@ export function readinessInstrumentationPlan(mode) {
   if (mode === "bounded-diagnostics") return { observationPollIntervalMs: 25,
     usefulCaptureIntervalMs: 0, profilePublicationStages: true };
   return null;
+}
+
+export function summarizeColdNetworkObservations(requests, pyodideBaseUrl) {
+  const external = requests.filter(request => request.external === true);
+  const pyodide = external.filter(request => request.url.startsWith(pyodideBaseUrl));
+  return {
+    externalRequestCount: external.length,
+    pyodideRequestCount: pyodide.length,
+    pyodideResponseStatuses: pyodide.map(request => request.status),
+    serviceWorkerResponses: external.filter(request => request.fromServiceWorker === true).length,
+    cacheHeaders: external.map(({ url, age, cacheControl, cdnCacheStatus, via }) =>
+      ({ url, age, cacheControl, cdnCacheStatus, via })),
+    routeFailureCount: requests.filter(request => request.failure !== undefined).length,
+  };
+}
+
+export function validateReusedHealthyInterpreter(seed, measured, sameWorker) {
+  const errors = [];
+  const before = seed?.executionDiagnostics, after = measured?.executionDiagnostics;
+  if (sameWorker !== true) errors.push("healthy-interpreter run replaced its Python worker");
+  if (before?.libraryTrust !== "pristine" || after?.libraryTrust !== "pristine") {
+    errors.push("healthy-interpreter run did not retain pristine library trust");
+  }
+  if (!Number.isSafeInteger(before?.interpreterGeneration) ||
+      after?.interpreterGeneration !== before.interpreterGeneration) {
+    errors.push("healthy-interpreter run changed interpreter generation");
+  }
+  if (!Number.isSafeInteger(before?.runRequestId) || !Number.isSafeInteger(after?.runRequestId) ||
+      after.runRequestId === before.runRequestId) {
+    errors.push("healthy-interpreter run did not issue a distinct source request");
+  }
+  return errors;
+}
+
+export function readinessPresentationMatchesRun(attachedPublication, latestPresentation, originMs, runStartEpochMs) {
+  return Number.isSafeInteger(attachedPublication?.session) && Number.isSafeInteger(attachedPublication?.sequence) &&
+    latestPresentation?.session === attachedPublication.session &&
+    Number.isSafeInteger(latestPresentation?.sequence) && latestPresentation.sequence >= attachedPublication.sequence &&
+    Number.isFinite(originMs) && Number.isFinite(latestPresentation?.presentedAtMs) &&
+    Number.isFinite(runStartEpochMs) && originMs + latestPresentation.presentedAtMs >= runStartEpochMs;
 }
 
 export function readinessCommandReceipt(result, requestEpochMs, rendererSample = null) {

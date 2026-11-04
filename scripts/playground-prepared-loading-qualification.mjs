@@ -1,7 +1,7 @@
 // Measure default and observed profiles in one package over ordinary streamed
-// HTTP. Each source runs once, then replays its retained history.
+// HTTP. Healthy-interpreter strata add an unmeasured seed Run before measurement.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, writeFile, mkdir, readdir, symlink, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
@@ -17,7 +17,8 @@ import { browserArgs, classifyRendererGpuIdentity } from "./manim-raster-support
 import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   validateReadinessResults, validateReadinessTrace, READINESS_STRATA,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
-  activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
+  activeCadenceWindows, summarizeColdNetworkObservations,
+  validateReusedHealthyInterpreter, readinessPresentationMatchesRun } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -92,7 +93,7 @@ for (const source of readinessContract.sources) {
 }
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 const report = { status: "running", readinessMode,
-  scope: "W7/W8 same-package profile measurements; source pass plus retained replay; warm-resource-cache strata only; not cold-network, physical-scanout or total-memory qualification",
+  scope: "W7/W8 same-package profile measurements; source pass plus retained replay; cold-client, warm-cache and reused-healthy-interpreter strata; not CDN-edge-cold, physical-scanout or total-memory qualification",
   instrumentationMode,
   wasmAccounting: wasmAccounting ? "invasive-diagnostic" : "off",
   instrumentationLimitations: [
@@ -102,6 +103,7 @@ const report = { status: "running", readinessMode,
     ...(instrumentationMode === "minimal-timing"
       ? ["minimal timing still polls renderer metrics and samples canvas pixels; it is not zero-overhead"]
       : ["bounded publication-stage and 25ms probes can perturb timings; treat this report as diagnostic"]),
+    "cold-network routing disables browser HTTP cache for the isolated stratum and adds no-cache request headers; this route changes that stratum's network timing and does not imply a cold CDN edge",
     ...(wasmAccounting ? ["WASM accounting rewrites worker entrypoints and changes cache/timing behavior; exclude these runs from readiness timing comparisons"] : []),
   ],
   harnessRevision: revision, runtimeSourceTrees: runtimeTrees(revision), harnessSha256: digest(await readFile(fileURLToPath(import.meta.url))),
@@ -170,6 +172,49 @@ async function packageHost(arm, folder) {
   const server = await serveRepository(host, 0, { crossOriginIsolated: true });
   report.packages[arm] = { identity, wasmBytes: (await stat(path.join(folder, "pkg/noon_web_bg.wasm"))).size };
   return server;
+}
+
+async function installColdNetworkObservation(context) {
+  const records = [];
+  const pending = new Map();
+  let overflow = false;
+  await context.route("**/*", async route => {
+    const request = route.request();
+    if (request.method() !== "GET") return route.continue();
+    const url = request.url();
+    let external = false;
+    try { external = new URL(url).protocol === "https:"; } catch {}
+    let record = null;
+    if (external) {
+      if (records.length >= 4096) overflow = true;
+      else {
+        record = { external, url, requestEpochMs: Date.now(), status: null,
+          requestCacheControl: "no-cache", requestPragma: "no-cache",
+          fromServiceWorker: null, age: null, cacheControl: null, cdnCacheStatus: null, via: null };
+        records.push(record);
+        const queue = pending.get(url) ?? [];
+        queue.push(record); pending.set(url, queue);
+      }
+    }
+    const headers = { ...request.headers(), "cache-control": "no-cache", pragma: "no-cache" };
+    try { await route.continue({ headers }); }
+    catch (error) { if (record) record.failure = String(error?.message ?? error); }
+  });
+  context.on("response", response => {
+    const queue = pending.get(response.url());
+    const record = queue?.shift();
+    if (!record) return;
+    const headers = response.headers();
+    Object.assign(record, { status: response.status(), fromServiceWorker: response.fromServiceWorker(),
+      age: headers.age ?? null, cacheControl: headers["cache-control"] ?? null,
+      cdnCacheStatus: headers["cf-cache-status"] ?? headers["x-cache"] ?? null, via: headers.via ?? null });
+  });
+  context.on("requestfailed", request => {
+    const queue = pending.get(request.url());
+    const record = queue?.shift();
+    if (record) record.failure = request.failure()?.errorText ?? "network request failed";
+  });
+  return { records, overflow: () => overflow };
 }
 
 async function observation(page) {
@@ -311,6 +356,7 @@ function readinessTraceState(row, sample) {
   if (!diagnostics || !Array.isArray(diagnostics.events)) return;
   row.diagnosticIdentity = {
     schemaVersion: diagnostics.schemaVersion ?? null,
+    libraryTrust: diagnostics.libraryTrust ?? null,
     interpreterGeneration: diagnostics.interpreterGeneration ?? null,
     runRequestId: diagnostics.runRequestId ?? null,
     context: diagnostics.context ?? null,
@@ -473,11 +519,13 @@ async function readinessCommand(page, row, desiredPlaying) {
   return after;
 }
 
-async function measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, warmup) {
+async function measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, warmup, contextIdentity) {
   const startedAtEpochMs = Date.now();
   const sourceRow = { sourceId: source.id, sourcePath: source.path, sourceSha256: source.sha256,
     durationSeconds: source.durationSeconds, arm: initialArm, pairedReplayArm: replayArm,
     stratum, trial, warmup, status: "running", startup: {}, commands: [],
+    browserProcessId: browserServer.process().pid, clientContextId: contextIdentity.id,
+    clientContextCreatedAtEpochMs: contextIdentity.createdAtEpochMs,
     rendererSamples: [], cadenceObservations: [], pageErrors: [], consoleErrors: [],
     sourceInvocationIds: [], profileValidationErrors: [], limitation: [] };
   const replayRow = { ...sourceRow, arm: replayArm, pairedInitialArm: initialArm, startup: {},
@@ -507,10 +555,84 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         sourceRow.profileValidationErrors.push("previous page workers were not confirmed retired");
       }
     }
-    sourceRow.startup.shellReadyObservedUpperMs = performance.now() - sourceStarted;
     replayRow.startup.shellReadyLimitation = "retained replay reuses the loaded page and interpreter";
     replayRow.startup.firstReaderLimitation = "retained replay reuses the original source reader";
-    const navigation = await observation(page);
+    let startupStarted = sourceStarted;
+    let navigation = await observation(page);
+    if (stratum === "reused-healthy-interpreter") {
+      if (!Number.isFinite(navigation.run?.sourceRunStartedAtMs)) {
+        startupStarted = performance.now();
+        await page.locator("#replace-scene").click();
+        await waitForApplied(page);
+      }
+      const seedDeadline = performance.now() + Math.max(180_000, source.durationSeconds * 10_000);
+      const seedComplete = sample => {
+        const events = sample.executionDiagnostics?.events ?? [];
+        const disposition = events.findLast(event => event.stage === "disposition");
+        return sample.run?.exampleId === source.id && Number.isFinite(sample.run?.sourceRunCompletedAtMs) &&
+          sample.inFlight === false && events.some(event => event.stage === "source-complete") &&
+          events.some(event => event.stage === "terminal-adopted") && disposition?.disposition === "looped" &&
+          Number.isSafeInteger(disposition.loopCount) && disposition.loopCount >= 1;
+      };
+      while (!seedComplete(navigation) && performance.now() < seedDeadline) {
+        navigation = await observation(page);
+        await page.waitForTimeout(observationPollIntervalMs);
+      }
+      assert.ok(seedComplete(navigation), "healthy-interpreter seed source did not complete and loop");
+      const seedErrors = validateReadinessTrace(navigation.executionDiagnostics, {
+        sourceId: source.id, requestedProfile: initialArm === "A" ? "incremental" : "observed",
+        attachedProfile: initialArm === "A" ? "incremental" : "observed", disposition: "looped",
+      });
+      assert.deepEqual(seedErrors, [], "healthy-interpreter seed did not use the expected eligible profile");
+      const seedWorker = workers.filter(worker => /\/python-worker\.js(?:\?|$)/.test(worker.url())).at(-1);
+      assert.ok(seedWorker, "healthy-interpreter seed did not create a Python worker");
+      await seedWorker.evaluate(() => true);
+      const seedSource = await page.locator("#python-scene-source").inputValue();
+      sourceRow.interpreterReuseSeed = { runRequestId: navigation.executionDiagnostics.runRequestId,
+        interpreterGeneration: navigation.executionDiagnostics.interpreterGeneration,
+        libraryTrust: navigation.executionDiagnostics.libraryTrust,
+        sourceRunStartedAtMs: navigation.run.sourceRunStartedAtMs,
+        sourceRunCompletedAtMs: navigation.run.sourceRunCompletedAtMs,
+        completedAtEpochMs: navigation.epochMs };
+      await page.evaluate(() => {
+        const probe = globalThis.__noonReadinessPresentationProbe;
+        probe.samples = []; probe.keys.clear(); probe.uiEvents = []; probe.commandResults = [];
+        probe.droppedUiEvents = 0; probe.error = null;
+      });
+      startupStarted = performance.now();
+      await page.locator("#replace-scene").click();
+      await page.waitForFunction(seed => {
+        const gallery = globalThis.__noonExampleGallery;
+        return gallery?.runPhaseMetrics?.runGeneration !== seed.runGeneration &&
+          gallery?.executionDiagnostics?.runRequestId !== seed.runRequestId;
+      }, { runGeneration: navigation.run.runGeneration,
+        runRequestId: navigation.executionDiagnostics.runRequestId }, { timeout: 30_000 });
+      await waitForApplied(page);
+      const measured = await observation(page);
+      const measuredWorker = workers.filter(worker => /\/python-worker\.js(?:\?|$)/.test(worker.url())).at(-1);
+      const measuredSource = await page.locator("#python-scene-source").inputValue();
+      const reuseErrors = validateReusedHealthyInterpreter(navigation, measured,
+        measuredWorker === seedWorker);
+      if (digest(seedSource) !== source.sha256) reuseErrors.push("healthy-interpreter seed source differs from inventory bytes");
+      if (measuredSource !== seedSource) reuseErrors.push("healthy-interpreter rerun changed authored source bytes");
+      sourceRow.interpreterReuse = { ...sourceRow.interpreterReuseSeed,
+        measuredRunRequestId: measured.executionDiagnostics?.runRequestId ?? null,
+        measuredInterpreterGeneration: measured.executionDiagnostics?.interpreterGeneration ?? null,
+        measuredLibraryTrust: measured.executionDiagnostics?.libraryTrust ?? null,
+        sourceSha256: digest(seedSource),
+        workerUrl: seedWorker.url(), sameWorker: measuredWorker === seedWorker,
+        validationErrors: reuseErrors };
+      sourceRow.profileValidationErrors.push(...reuseErrors);
+      assert.deepEqual(reuseErrors, [], "second source Run did not reuse the verified healthy interpreter");
+      navigation = measured;
+      sourceRow.startup.shellReadyObservedUpperMs = 0;
+      sourceRow.startup.shellReadyBasis = "gallery shell was already present before the measured Run";
+      sourceRow.startup.interpreterReadyObservedUpperMs = 0;
+      sourceRow.startup.interpreterReadyBasis = "same live pristine Python worker was verified before the measured Run";
+    }
+    if (sourceRow.startup.shellReadyObservedUpperMs === undefined) {
+      sourceRow.startup.shellReadyObservedUpperMs = performance.now() - startupStarted;
+    }
     let sourceRunStart = Number.isFinite(navigation.run?.sourceRunStartedAtMs)
       ? navigation.originMs + navigation.run.sourceRunStartedAtMs : null;
     let lastCaptureKey = null;
@@ -530,6 +652,12 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
         sourceRunStart = sample.originMs + sample.run.sourceRunStartedAtMs;
       }
       const events = diagnostic?.events ?? [];
+      const attachedPublication = events.find(event => event.stage === "attached")?.publication;
+      const latestPresentation = sample.metrics?.latestPresentationSample;
+      const targetRunStart = targetRow === sourceRow ? sourceRunStart : targetRow.replayStartedAtEpochMs;
+      const firstSessionPresentationEpochMs = Number.isFinite(sample.metrics?.performanceTimeOriginMs) &&
+        Number.isFinite(sample.metrics?.firstPresentedSessionAtMs)
+        ? sample.metrics.performanceTimeOriginMs + sample.metrics.firstPresentedSessionAtMs : null;
       if (targetRow === sourceRow && targetRow.startup.interpreterReadyObservedUpperMs === undefined &&
           Number.isSafeInteger(diagnostic?.interpreterGeneration) &&
           sourceRunStart !== null) {
@@ -541,11 +669,14 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
           sourceRunStart !== null) {
         targetRow.startup.firstReaderAttachedObservedUpperMs = sample.epochMs - sourceRunStart;
       }
-      if (targetRow === sourceRow && Number.isFinite(sample.metrics?.firstPresentedSessionAtMs) &&
-          targetRow.startup.firstRenderSubmissionCompleteUpperMs === undefined &&
-          sourceRunStart !== null) {
-        targetRow.startup.firstRenderSubmissionCompleteUpperMs = sample.metrics.performanceTimeOriginMs +
-          sample.metrics.firstPresentedSessionAtMs - sourceRunStart;
+      const hasCurrentRunPresentation = readinessPresentationMatchesRun(attachedPublication,
+        latestPresentation, sample.metrics?.performanceTimeOriginMs, targetRunStart);
+      if (targetRow === sourceRow && hasCurrentRunPresentation &&
+          sourceRunStart !== null &&
+          firstSessionPresentationEpochMs !== null && firstSessionPresentationEpochMs >= sourceRunStart &&
+          Number.isSafeInteger(attachedPublication?.session) &&
+          targetRow.startup.firstRenderSubmissionCompleteUpperMs === undefined) {
+        targetRow.startup.firstRenderSubmissionCompleteUpperMs = firstSessionPresentationEpochMs - sourceRunStart;
       }
       const metric = sample.metrics;
       targetRow.rendererGpuIdentity = metric?.rendererGpuIdentity ?? targetRow.rendererGpuIdentity ?? null;
@@ -555,7 +686,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       if (metric?.backend !== undefined && metric.backend !== (backend === "webgpu" ? "WebGPU" : "WebGL2")) {
         targetRow.profileValidationErrors.push(`actual backend ${metric.backend} differs from ${backend}`);
       }
-      if (targetRow.startup.firstUsefulMs === undefined && metric?.ready && metric.objectCount > 0) {
+      if (targetRow.startup.firstUsefulMs === undefined && metric?.ready && metric.objectCount > 0 &&
+          hasCurrentRunPresentation) {
         const key = `${metric.presentedSession}:${metric.presentedFrames}:${metric.time}`;
         const captureDue = instrumentationMode === "bounded-diagnostics" ||
           sample.epochMs - (lastUsefulCaptureAt.get(targetRow) ?? -Infinity) >= usefulCaptureIntervalMs;
@@ -792,7 +924,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
 try {
   overlay = await mkdtemp(path.join(os.tmpdir(), "noon-playback-loading-host-"));
   servers.runtime = await packageHost("runtime", env.NOON_PLAYBACK_LOADING_RUNTIME_ROOT);
-  const strata = READINESS_STRATA;
+  const stratumGroups = [READINESS_STRATA.slice(0, 2), ["cold-network"], ["reused-healthy-interpreter"]];
   for (const source of readinessContract.sources) {
       const entry = inventory.find(item => item.id === source.id);
       assert.ok(entry && entry.path === source.path && entry.duration === source.durationSeconds,
@@ -804,83 +936,120 @@ try {
         const pairs = readinessMode === "baseline" ? [["C", "D"]] :
           (trial % 2 === 0 ? [["A", "B"], ["C", "D"]] : [["C", "D"], ["A", "B"]]);
         for (const [initialArm, replayArm] of pairs) {
-          browserServer = await playwright.chromium.launchServer({ headless: false,
-            ...(env.NOON_PLAYBACK_LOADING_EXECUTABLE ? { executablePath: env.NOON_PLAYBACK_LOADING_EXECUTABLE } : { channel: "chromium" }),
-            args: browserArgs(backend, { gpuMode: "hardware" }) });
-          try {
-            browser = await playwright.chromium.connect(browserServer.wsEndpoint());
-            report.browserVersion = browser.version();
-            const context = await browser.newContext({
-              viewport: readinessContract.reference.viewport,
-              deviceScaleFactor: readinessContract.reference.deviceScaleFactor,
-            });
-            await cache.install(context);
-            await installReadinessPresentationProbe(context, {
-              profilePublicationStages,
-            });
-            if (initialArm === "C") await context.addInitScript(() => {
-              globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
-                authoringRunOptions: () => ({ preparedPlayback: false }),
-              };
-            });
-            const page = await context.newPage(); page.setDefaultTimeout(180_000);
-            assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""),
-              "readiness browser version differs from the pinned reference");
-            const workers = []; page.on("worker", worker => workers.push(worker));
-            if (wasmAccounting) await installWasmAccounting(page);
-            for (const stratum of strata) {
-              await measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, trial < 0);
-              assert.equal(await fileHash(sourceFile), sourceHash, "source changed during measurement");
-            }
-            const pairRows = report.cases.filter(row => row.sourceId === source.id && row.trial === trial &&
-              (row.arm === initialArm || row.arm === replayArm));
-            const identity = await page.evaluate(async () =>
-              (await __noonExampleGallery.executionMetrics({ includeGpuIdentity: true })).metrics.rendererGpuIdentity).catch(() => null);
-            report.observedReference ??= { browserVersion: browser.version(), rendererGpuIdentity: identity,
-              gpuClassification: identity ? classifyRendererGpuIdentity(identity, backend) : null,
-              hostCpu: report.host.cpu, macOSVersion: report.host.macOSVersion };
-            assert.ok(identity, "readiness requires the actual renderer adapter identity");
-            assert.equal(classifyRendererGpuIdentity(identity, backend), "hardware-like-unverified",
-              "readiness rejects unknown or software GPU adapters");
-            const referenceMachine = readinessContract.reference.host.split(",", 1)[0];
-            assert.ok(report.host.cpu?.includes(referenceMachine), "readiness host differs from the pinned machine");
-            assert.equal(report.host.macOSVersion, readinessContract.reference.os.replace(/^macOS /, ""),
-              "readiness host differs from the pinned macOS version");
-            if (readinessMode === "strict") {
-              assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""));
-              assert.deepEqual(identity, readinessContract.reference.actualAdapterIdentity,
-                "actual GPU adapter identity differs from the pinned reference");
-            }
-            const retirementStartedAt = performance.now();
-            const retirementSampler = createProcessTreeRssSampler(browserServer.process().pid);
-            retirementSampler.start();
-            await context.close();
-            const workerRetirement = await Promise.all(workers.map(worker => retiredWorkerObservation(worker)));
-            await new Promise(resolve => setTimeout(resolve, 750));
-            const postRetirementMemory = await retirementSampler.stop();
-            const allWorkersRetired = workerRetirement.length > 0 && workerRetirement.every(item => item.retired === true);
-            const retirement = { contextCloseMs: performance.now() - retirementStartedAt,
-              ownerRetirementMs: allWorkersRetired
-                ? performance.now() - retirementStartedAt : null,
-              workers: workerRetirement, allWorkersRetired,
-              postRetirementMemory };
-            for (const row of pairRows) {
-              row.retirement = retirement;
-              row.retirementMs = retirement.ownerRetirementMs;
-              row.postRetirementMemory = postRetirementMemory;
-              if (!retirement.allWorkersRetired && row.status === "observed") {
-                row.status = "profile-mismatch";
-                row.profileValidationErrors.push("context teardown did not confirm worker retirement");
+          for (const strata of stratumGroups) {
+            browserServer = await playwright.chromium.launchServer({ headless: false,
+              ...(env.NOON_PLAYBACK_LOADING_EXECUTABLE ? { executablePath: env.NOON_PLAYBACK_LOADING_EXECUTABLE } : { channel: "chromium" }),
+              args: browserArgs(backend, { gpuMode: "hardware" }) });
+            try {
+              browser = await playwright.chromium.connect(browserServer.wsEndpoint());
+              report.browserVersion = browser.version();
+              const contextIdentity = { id: randomUUID(), createdAtEpochMs: Date.now() };
+              const context = await browser.newContext({
+                viewport: readinessContract.reference.viewport,
+                deviceScaleFactor: readinessContract.reference.deviceScaleFactor,
+                serviceWorkers: "block",
+              });
+              await installReadinessPresentationProbe(context, {
+                profilePublicationStages,
+              });
+              if (initialArm === "C") await context.addInitScript(() => {
+                globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+                  authoringRunOptions: () => ({ preparedPlayback: false }),
+                };
+              });
+              const page = await context.newPage(); page.setDefaultTimeout(180_000);
+              assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""),
+                "readiness browser version differs from the pinned reference");
+              const workers = []; page.on("worker", worker => workers.push(worker));
+              if (wasmAccounting) await installWasmAccounting(page);
+              let resourceCacheInstalled = false;
+              for (const stratum of strata) {
+                const coldNetwork = stratum === "cold-network"
+                  ? await installColdNetworkObservation(context) : null;
+                const jobCacheBefore = coldNetwork === null ? null : cache.stats();
+                if (coldNetwork === null && !resourceCacheInstalled) {
+                  await cache.install(context);
+                  resourceCacheInstalled = true;
+                }
+                await measureReadinessPair(page, workers, source, initialArm, replayArm, stratum,
+                  trial, trial < 0, contextIdentity);
+                if (coldNetwork !== null) {
+                  const evidence = summarizeColdNetworkObservations(coldNetwork.records, cache.stats().baseUrl);
+                  const jobCacheAfter = cache.stats();
+                  assert.equal(coldNetwork.overflow(), false, "cold-network request log exceeded its bound");
+                  assert.ok(evidence.pyodideRequestCount > 0 && evidence.pyodideResponseStatuses.every(status => status >= 200 && status < 400),
+                    "cold-network stratum did not observe successful Pyodide network responses");
+                  assert.equal(evidence.serviceWorkerResponses, 0, "cold-network response came from a service worker");
+                  assert.equal(evidence.routeFailureCount, 0, "cold-network request routing failed");
+                  const cacheCounters = ({ requests, hits, upstreamRequests, retainedBytes }) =>
+                    ({ requests, hits, upstreamRequests, retainedBytes });
+                  assert.deepEqual(cacheCounters(jobCacheAfter), cacheCounters(jobCacheBefore),
+                    "cold-network stratum accessed the job-local Pyodide cache");
+                  const rows = report.cases.filter(row => row.sourceId === source.id && row.trial === trial &&
+                    row.stratum === stratum && (row.arm === initialArm || row.arm === replayArm));
+                  for (const row of rows) row.networkCacheObservation = {
+                    mode: "bypass-browser-and-job-local-client-caches", browserHttpCache: "disabled-by-context-routing",
+                    jobResourceCache: "not installed during this stratum",
+                    jobCacheCountersBefore: cacheCounters(jobCacheBefore), jobCacheCountersAfter: cacheCounters(jobCacheAfter),
+                    requestHeaders: "Cache-Control: no-cache, Pragma: no-cache",
+                    serviceWorkers: "blocked", cdnEdgeCold: false, routeOverhead: "present",
+                    browserProcessId: row.browserProcessId, clientContextId: row.clientContextId,
+                    ...evidence, responses: coldNetwork.records,
+                  };
+                  await context.unroute("**/*");
+                }
+                assert.equal(await fileHash(sourceFile), sourceHash, "source changed during measurement");
               }
+              const pairRows = report.cases.filter(row => row.sourceId === source.id && row.trial === trial &&
+                strata.includes(row.stratum) && (row.arm === initialArm || row.arm === replayArm));
+              const identity = await page.evaluate(async () =>
+                (await __noonExampleGallery.executionMetrics({ includeGpuIdentity: true })).metrics.rendererGpuIdentity).catch(() => null);
+              report.observedReference ??= { browserVersion: browser.version(), rendererGpuIdentity: identity,
+                gpuClassification: identity ? classifyRendererGpuIdentity(identity, backend) : null,
+                hostCpu: report.host.cpu, macOSVersion: report.host.macOSVersion };
+              assert.ok(identity, "readiness requires the actual renderer adapter identity");
+              assert.equal(classifyRendererGpuIdentity(identity, backend), "hardware-like-unverified",
+                "readiness rejects unknown or software GPU adapters");
+              const referenceMachine = readinessContract.reference.host.split(",", 1)[0];
+              assert.ok(report.host.cpu?.includes(referenceMachine), "readiness host differs from the pinned machine");
+              assert.equal(report.host.macOSVersion, readinessContract.reference.os.replace(/^macOS /, ""),
+                "readiness host differs from the pinned macOS version");
+              if (readinessMode === "strict") {
+                assert.equal(browser.version(), readinessContract.reference.browser.replace(/^Chromium /, ""));
+                assert.deepEqual(identity, readinessContract.reference.actualAdapterIdentity,
+                  "actual GPU adapter identity differs from the pinned reference");
+              }
+              const retirementStartedAt = performance.now();
+              const retirementSampler = createProcessTreeRssSampler(browserServer.process().pid);
+              retirementSampler.start();
+              await context.close();
+              const workerRetirement = await Promise.all(workers.map(worker => retiredWorkerObservation(worker)));
+              await new Promise(resolve => setTimeout(resolve, 750));
+              const postRetirementMemory = await retirementSampler.stop();
+              const allWorkersRetired = workerRetirement.length > 0 && workerRetirement.every(item => item.retired === true);
+              const retirement = { contextCloseMs: performance.now() - retirementStartedAt,
+                ownerRetirementMs: allWorkersRetired
+                  ? performance.now() - retirementStartedAt : null,
+                workers: workerRetirement, allWorkersRetired,
+                postRetirementMemory };
+              for (const row of pairRows) {
+                row.retirement = retirement;
+                row.retirementMs = retirement.ownerRetirementMs;
+                row.postRetirementMemory = postRetirementMemory;
+                if (!retirement.allWorkersRetired && row.status === "observed") {
+                  row.status = "profile-mismatch";
+                  row.profileValidationErrors.push("context teardown did not confirm worker retirement");
+                }
+              }
+              for (const row of pairRows) {
+                row.rendererGpuIdentity ??= identity;
+                if (row.rendererGpuIdentity !== null) row.gpuClassification = classifyRendererGpuIdentity(row.rendererGpuIdentity, backend);
+                row.browserVersion = browser.version();
+              }
+            } finally {
+              try { await browser?.close(); }
+              finally { await browserServer.close(); browser = null; browserServer = null; }
             }
-            for (const row of pairRows) {
-              row.rendererGpuIdentity ??= identity;
-              if (row.rendererGpuIdentity !== null) row.gpuClassification = classifyRendererGpuIdentity(row.rendererGpuIdentity, backend);
-              row.browserVersion = browser.version();
-            }
-          } finally {
-            try { await browser?.close(); }
-            finally { await browserServer.close(); browser = null; browserServer = null; }
           }
         }
       }

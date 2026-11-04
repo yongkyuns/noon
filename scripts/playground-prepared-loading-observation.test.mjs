@@ -5,7 +5,8 @@ import { createHash } from "node:crypto";
 import { sceneInkPixels, distribution, summarizeReadiness,
   validateReadinessContract, validateReadinessTrace, validateReadinessResults,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
-  activeCadenceWindows } from "./playground-prepared-loading-observation.mjs";
+  activeCadenceWindows, summarizeColdNetworkObservations,
+  validateReusedHealthyInterpreter, readinessPresentationMatchesRun, READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 function canvas() {
@@ -68,6 +69,8 @@ test("active cadence summaries exclude static holds and split reset sessions", (
 test("readiness draft binds showcase sources and the cumulative Product Gate anchor", async () => {
   const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
   assert.deepEqual(validateReadinessContract(contract), []);
+  assert.deepEqual(READINESS_STRATA, ["fresh-process-warm-resource-cache",
+    "reload-new-workers-warm-resource-cache", "cold-network", "reused-healthy-interpreter"]);
   assert.ok(validateReadinessContract(contract, { strict: true }).some(error => /not been reviewed and frozen/.test(error)));
   const manifest = JSON.parse(await readFile(new URL("../web/python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
   assert.deepEqual(contract.sources.map(source => source.id), ["showcase-first-scene", "showcase-dynamic-scene"]);
@@ -220,6 +223,55 @@ test("strict readiness requires the first-submission bound and actual command re
     .some(error => /does not match the command publication/.test(error)));
 });
 
+test("cold-network evidence records actual external responses and job-cache bypass", () => {
+  const summary = summarizeColdNetworkObservations([
+    { external: true, url: "https://cdn.test/pyodide/full/pyodide.mjs", status: 200,
+      fromServiceWorker: false, age: "12", cacheControl: "public", cdnCacheStatus: "HIT", via: null },
+    { external: true, url: "https://cdn.test/pyodide/full/pyodide.asm.wasm", status: 200,
+      fromServiceWorker: false, age: null, cacheControl: "max-age=31536000", cdnCacheStatus: "MISS", via: null },
+    { external: true, url: "https://esm.test/editor.js", status: 200,
+      fromServiceWorker: false, age: null, cacheControl: "no-store", cdnCacheStatus: null, via: null },
+    { external: false, url: "http://127.0.0.1/index.html", status: 200 },
+  ], "https://cdn.test/pyodide/full/");
+  assert.deepEqual(summary, { externalRequestCount: 3, pyodideRequestCount: 2,
+    pyodideResponseStatuses: [200, 200], serviceWorkerResponses: 0,
+    cacheHeaders: [
+      { url: "https://cdn.test/pyodide/full/pyodide.mjs", age: "12", cacheControl: "public", cdnCacheStatus: "HIT", via: null },
+      { url: "https://cdn.test/pyodide/full/pyodide.asm.wasm", age: null, cacheControl: "max-age=31536000", cdnCacheStatus: "MISS", via: null },
+      { url: "https://esm.test/editor.js", age: null, cacheControl: "no-store", cdnCacheStatus: null, via: null },
+    ], routeFailureCount: 0 });
+});
+
+test("healthy interpreter reuse requires a new run on the same pristine worker generation", () => {
+  const seed = { executionDiagnostics: { libraryTrust: "pristine", interpreterGeneration: 3, runRequestId: 7 } };
+  const measured = { executionDiagnostics: { libraryTrust: "pristine", interpreterGeneration: 3, runRequestId: 8 } };
+  assert.deepEqual(validateReusedHealthyInterpreter(seed, measured, true), []);
+  for (const [replacement, sameWorker] of [
+    [measured, false],
+    [{ executionDiagnostics: { ...measured.executionDiagnostics, libraryTrust: "tainted" } }, true],
+    [{ executionDiagnostics: { ...measured.executionDiagnostics, interpreterGeneration: 4 } }, true],
+    [{ executionDiagnostics: { ...measured.executionDiagnostics, runRequestId: 7 } }, true],
+  ]) assert.notDeepEqual(validateReusedHealthyInterpreter(seed, replacement, sameWorker), []);
+});
+
+test("first render and useful picture must belong to the measured run", () => {
+  const attached = { session: 9, sequence: 1 };
+  assert.equal(readinessPresentationMatchesRun(attached,
+    { session: 9, sequence: 1, presentedAtMs: 120 }, 1000, 1110), true);
+  assert.equal(readinessPresentationMatchesRun(attached,
+    { session: 8, sequence: 99, presentedAtMs: 120 }, 1000, 1110), false,
+  "a seed run from another renderer session cannot satisfy the measured run");
+  assert.equal(readinessPresentationMatchesRun(attached,
+    { session: 9, sequence: 0, presentedAtMs: 120 }, 1000, 1110), false,
+  "a prior publication in the same session cannot precede the attached source publication");
+  assert.equal(readinessPresentationMatchesRun(attached,
+    { session: 9, sequence: 2, presentedAtMs: 99 }, 1000, 1110), false,
+  "a cached seed frame from before the measured request cannot satisfy it");
+  assert.equal(readinessPresentationMatchesRun(attached,
+    { session: 9, sequence: 2, presentedAtMs: 120 }, 1000, null), false,
+  "an unavailable run start cannot admit a stale presentation");
+});
+
 test("readiness command receipts use endpoint timing and matching publication metadata", async () => {
   const measured = readinessCommandReceipt({
     commandTiming: { acceptedEpochMs: 1012, presentationSettledEpochMs: 1018 },
@@ -260,4 +312,10 @@ test("readiness command receipts use endpoint timing and matching publication me
   assert.match(source, /readinessCommandReceipt\(engineResult, requestEpochMs, publicationSample\)/);
   assert.doesNotMatch(source, /Math\.abs\(displayedTime - receiptTime\)/);
   assert.match(source, /value\.epochMs >= replayStartedAtEpochMs/);
+  assert.ok(source.includes('context.route("**/*"'));
+  assert.match(source, /"cache-control": "no-cache", pragma: "no-cache"/);
+  assert.match(source, /response\.fromServiceWorker\(\)/);
+  assert.match(source, /validateReusedHealthyInterpreter\(navigation, measured/);
+  assert.match(source, /await page\.locator\("#replace-scene"\)\.click\(\)/);
+  assert.match(source, /sameWorker: measuredWorker === seedWorker/);
 });
