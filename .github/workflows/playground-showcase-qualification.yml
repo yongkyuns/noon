@@ -2,7 +2,8 @@ name: Showcase capture timing diagnostic
 
 on:
   push:
-    branches: [codex/2421-showcase-diagnostic-disabled]
+    branches: [codex/2421-showcase-diagnostic]
+    paths: [.github/workflows/playground-showcase-qualification.yml]
 
 permissions:
   contents: read
@@ -10,84 +11,86 @@ permissions:
 
 jobs:
   capture-diagnostic:
-    name: Diagnose first-pass capture (${{ matrix.backend }})
+    name: Diagnose first-pass capture (WebGL)
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [webgpu, webgl]
     steps:
       - uses: actions/checkout@v7
-      - name: Apply early-observer diagnostic patch to the exact tested source
+      - name: Preserve diagnostic patch and check out exact CI source
         shell: bash
         env:
-          SOURCE_REVISION: 32a7d3d19b97e5ca4e885920886e55680fe170d8
+          SOURCE_REVISION: d28af55345aa07b3cf9ce03bd7ce9a5993f74014
         run: |
           set -euo pipefail
           cp scripts/showcase-live-review-diagnostic.patch "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
+          sha256sum "$RUNNER_TEMP/showcase-capture-diagnostic.patch" > "$RUNNER_TEMP/showcase-capture-diagnostic.patch.sha256"
           git fetch --no-tags --depth=1 origin "$SOURCE_REVISION"
           git checkout --detach "$SOURCE_REVISION"
           git apply --check "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
           git apply "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
-          mkdir -p "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}"
-          cp "$RUNNER_TEMP/showcase-capture-diagnostic.patch" "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/harness.patch"
-          sha256sum "$RUNNER_TEMP/showcase-capture-diagnostic.patch" > "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/harness.sha256"
-          git rev-parse HEAD > "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/source.txt"
-          node --version > "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/node-version.txt"
-      - name: Reuse exact runtime and original capture evidence
+          mkdir -p browser-smoke-artifacts/showcase-diagnostic/webgl
+          cp "$RUNNER_TEMP/showcase-capture-diagnostic.patch.sha256" browser-smoke-artifacts/showcase-diagnostic/webgl/harness.sha256
+          git rev-parse HEAD > browser-smoke-artifacts/showcase-diagnostic/webgl/source.txt
+          sha256sum scripts/showcase-live-review.mjs > browser-smoke-artifacts/showcase-diagnostic/webgl/script.sha256
+          node --version > browser-smoke-artifacts/showcase-diagnostic/webgl/node-version.txt
+      - name: Download exact CI runtime
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: 13318414975
-          run-id: 41825281871
+          artifact-ids: 13353893838
+          run-id: 41890852960
           github-token: ${{ github.token }}
           path: web
-      - name: Reuse original backend capture oracle and preserve prior live results
+      - name: Download original capture report and oracle
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: ${{ matrix.backend == 'webgpu' && '13324680634' || '13324560375' }}
-          run-id: 41825281871
+          artifact-ids: 13356829442
+          run-id: 41890852960
           github-token: ${{ github.token }}
-          path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
-      - name: Verify source, runtime, oracle identity, and pinned browser tools
+          path: browser-smoke-artifacts/showcase/webgl
+      - name: Verify source, runtime, original capture report, and pinned browser
         env:
-          EXPECTED_SOURCE: 32a7d3d19b97e5ca4e885920886e55680fe170d8
-          BACKEND: ${{ matrix.backend }}
+          EXPECTED_SOURCE: d28af55345aa07b3cf9ce03bd7ce9a5993f74014
         run: |
           set -euo pipefail
-          test "$(cat browser-smoke-artifacts/showcase-diagnostic/$BACKEND/source.txt)" = "$EXPECTED_SOURCE"
-          node -e 'const i=require("./web/runtime-build-identity.json"); if(i.sourceRevision!==process.env.EXPECTED_SOURCE) throw Error(`runtime source mismatch: ${i.sourceRevision}`)'
-          mkdir -p "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original"
-          mv "browser-smoke-artifacts/showcase/$BACKEND/live" "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/live"
-          cp "browser-smoke-artifacts/showcase/$BACKEND/report.json" "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/capture-report.json"
-          sha256sum "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/capture-report.json" > "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/capture-report.sha256"
-          cp web/runtime-build-identity.json "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/runtime-build-identity.json"
+          test "$(cat browser-smoke-artifacts/showcase-diagnostic/webgl/source.txt)" = "$EXPECTED_SOURCE"
+          node .github/ci/wasm-build.mjs verify
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const identity = JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8"));
+            const report = JSON.parse(fs.readFileSync("browser-smoke-artifacts/showcase/webgl/report.json", "utf8"));
+            if (identity.sourceRevision !== process.env.EXPECTED_SOURCE ||
+                report.checkoutRevision !== process.env.EXPECTED_SOURCE ||
+                JSON.stringify(report.servedBuildIdentity) !== JSON.stringify(identity) ||
+                report.backendRequested !== "webgl" || report.browserVersion !== "Chromium") {
+              throw new Error("runtime or original capture report identity mismatch");
+            }
+            if (!report.results.some(result => result.id === "showcase-bloom-emission" && result.outcome === "pass"))
+              throw new Error("original bloom capture/oracle is absent or failed");
+          '
+          cp web/runtime-build-identity.json browser-smoke-artifacts/showcase-diagnostic/webgl/runtime-build-identity.json
+          cp browser-smoke-artifacts/showcase/webgl/report.json browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.json
+          sha256sum browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.json > browser-smoke-artifacts/showcase-diagnostic/webgl/original-capture-report.sha256
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
-          node scripts/check-web-package.mjs
-          git diff --exit-code -- web
-      - name: Observe unchanged first-pass and replay checks for the two failures
+      - name: Observe unchanged bloom first-pass and replay checks
         id: diagnostic
         env:
-          NOON_SHOWCASE_BACKEND: ${{ matrix.backend }}
-          NOON_SHOWCASE_CASES: showcase-bloom-emission,showcase-glass-lens
+          NOON_SHOWCASE_BACKEND: webgl
+          NOON_SHOWCASE_CASES: showcase-bloom-emission
+          NOON_SHOWCASE_DIAGNOSTIC_OUTPUT: browser-smoke-artifacts/showcase-diagnostic/webgl/live
         run: node scripts/showcase-live-review.mjs
-      - name: Retain diagnostic result and report
+      - name: Preserve diagnostic outcome and logs
         if: always()
         env:
           DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
-          BACKEND: ${{ matrix.backend }}
         run: |
-          echo "$DIAGNOSTIC_OUTCOME" > "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/diagnostic-outcome.txt"
-          if [[ -d "browser-smoke-artifacts/showcase/$BACKEND/live" ]]; then
-            mv "browser-smoke-artifacts/showcase/$BACKEND/live" \
-              "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/live"
-          fi
-      - name: Preserve diagnostic evidence
+          echo "$DIAGNOSTIC_OUTCOME" > browser-smoke-artifacts/showcase-diagnostic/webgl/diagnostic-outcome.txt
+          sha256sum web/python-worker.js web/pkg/noon_web.js web/pkg/noon_web_bg.wasm web/runtime-build-identity.json > browser-smoke-artifacts/showcase-diagnostic/webgl/runtime-files.sha256
+      - name: Upload diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: noon-2421-showcase-capture-diagnostic-${{ matrix.backend }}
-          path: browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}
+          name: noon-2421-showcase-capture-diagnostic-webgl
+          path: browser-smoke-artifacts/showcase-diagnostic/webgl
           if-no-files-found: error
           retention-days: 3
