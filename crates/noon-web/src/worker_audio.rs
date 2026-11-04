@@ -11,7 +11,7 @@ use noon::ExecutionSession;
 use noon::PrefixReader;
 use noon_core::{
     AudioClipDefinition, AudioClipOptions, AudioResource, AudioResourceHandle, AudioResourceId,
-    DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET, SemanticNodeId,
+    SemanticNodeId, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
 };
 use noon_runtime::AudioPlaybackClip;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,9 @@ const VERSION: u32 = 1;
 const MAX_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_CLIPS: usize = 4096;
 
+// Context clocks can round a received timestamp below the producer's sample.
+// Delivery cannot have negative duration; the authored anchor stays unchanged.
+#[cfg(any(target_arch = "wasm32", test))]
 fn nonnegative_delivery_delay_seconds(
     sampled_epoch_ms: f64,
     received_epoch_ms: f64,
