@@ -53,10 +53,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$(cat browser-smoke-artifacts/showcase-diagnostic/webgl/source.txt)" = "$EXPECTED_SOURCE"
-          node .github/ci/wasm-build.mjs verify
           node --input-type=module -e '
             import fs from "node:fs";
+            import { createHash } from "node:crypto";
             const identity = JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8"));
+            if (identity.sourceRevision !== process.env.EXPECTED_SOURCE) throw new Error("runtime source mismatch");
+            for (const entry of Object.values(identity.files)) {
+              const actual = createHash("sha256").update(fs.readFileSync("web/" + entry.path.replace(/^\.\//, ""))).digest("hex");
+              if (actual !== entry.sha256) throw new Error("runtime file hash mismatch: " + entry.path);
+            }
             const report = JSON.parse(fs.readFileSync("browser-smoke-artifacts/showcase/webgl/report.json", "utf8"));
             if (identity.sourceRevision !== process.env.EXPECTED_SOURCE ||
                 report.checkoutRevision !== process.env.EXPECTED_SOURCE ||
