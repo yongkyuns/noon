@@ -32,12 +32,18 @@ index 1fb3f5e2d..f1d8bd5ff 100644
 +      return state;
 +    };
 +    const state = await sampleState();
+     if (runState.stop) return false;
+     const current = gallery.executionDiagnostics;
+     const currentDisposition = current?.events?.find((event) => event.stage === "disposition")?.disposition ?? null;
 @@ -209,7 +233,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, run
      pngBlobPromise.catch(() => {});
      // Bracket the copy with Rust observations. A delayed main-thread callback
      // cannot turn an old first-loop observation into a post-wrap capture.
 -    const afterCopy = await gallery.executionState();
 +    const afterCopy = await sampleState();
+     if (afterCopy?.preparedPlayback !== true || afterCopy.loopCount !== 0 ||
+         afterCopy.playing !== true || afterCopy.buffering !== false ||
+         !Number.isFinite(afterCopy.time) || afterCopy.time < holdStart || afterCopy.time >= duration ||
 @@ -565,7 +589,9 @@ async function main() {
    const backend = process.env.NOON_SHOWCASE_BACKEND ?? "webgl";
    assert.ok(["webgl", "webgpu"].includes(backend));
@@ -46,6 +52,9 @@ index 1fb3f5e2d..f1d8bd5ff 100644
 +  const output = process.env.NOON_SHOWCASE_DIAGNOSTIC_OUTPUT
 +    ? path.resolve(process.env.NOON_SHOWCASE_DIAGNOSTIC_OUTPUT)
 +    : path.join(root, "browser-smoke-artifacts/showcase", backend, "live");
+   const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+   const json = (value) => JSON.stringify(value, (_, item) => typeof item === "bigint" ? String(item) : item, 2);
+   const report = {
 @@ -828,6 +854,22 @@ async function main() {
          result.error = String(error.stack ?? error);
          result.unexpectedReplayDenial = entry.playbackCapability === "deterministic-retained-replay" &&
@@ -66,3 +75,6 @@ index 1fb3f5e2d..f1d8bd5ff 100644
 +            executionStateNullReceiptCount: run?.executionStateNullReceiptCount ?? 0,
 +            executionStateHistory: run?.executionStateHistory ?? [], readback, metricsError };
 +        }).catch((cause) => ({ error: String(cause?.message ?? cause) }));
+         result.failureState = await page.evaluate(() => ({
+           patch: document.querySelector("#patch-status")?.value,
+           status: document.querySelector("#status-text")?.textContent,
