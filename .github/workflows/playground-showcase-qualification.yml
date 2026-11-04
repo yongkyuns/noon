@@ -1,4 +1,4 @@
-name: Showcase qualification
+name: Showcase capture timing diagnostic
 
 on:
   push:
@@ -10,60 +10,84 @@ permissions:
 
 jobs:
   capture-diagnostic:
-    name: Diagnose first-pass capture on the tested WebGL package
+    name: Diagnose first-pass capture (${{ matrix.backend }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [webgpu, webgl]
     steps:
       - uses: actions/checkout@v7
-      - name: Apply only diagnostic harness changes to the tested source
+      - name: Apply telemetry-only patch to the exact tested source
         shell: bash
+        env:
+          SOURCE_REVISION: 32a7d3d19b97e5ca4e885920886e55680fe170d8
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
-          git diff --binary 50d0dbe79306764da6cdbc6ab173756bf7bea8a3 -- scripts > "$RUNNER_TEMP/noon-2421-showcase.patch"
-          git checkout --detach 50d0dbe79306764da6cdbc6ab173756bf7bea8a3
-          git apply "$RUNNER_TEMP/noon-2421-showcase.patch"
-          mkdir -p browser-smoke-artifacts/showcase-diagnostic
-          cp "$RUNNER_TEMP/noon-2421-showcase.patch" browser-smoke-artifacts/showcase-diagnostic/harness.patch
-          sha256sum "$RUNNER_TEMP/noon-2421-showcase.patch" > browser-smoke-artifacts/showcase-diagnostic/harness.sha256
-          git rev-parse HEAD > browser-smoke-artifacts/showcase-diagnostic/source.txt
-          node --version > browser-smoke-artifacts/showcase-diagnostic/node-version.txt
-      - name: Reuse the exact hosted showcase package
+          cp scripts/showcase-live-review-diagnostic.patch "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
+          git fetch --no-tags --depth=1 origin "$SOURCE_REVISION"
+          git checkout --detach "$SOURCE_REVISION"
+          git apply --check "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
+          git apply "$RUNNER_TEMP/showcase-capture-diagnostic.patch"
+          mkdir -p "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}"
+          cp "$RUNNER_TEMP/showcase-capture-diagnostic.patch" "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/harness.patch"
+          sha256sum "$RUNNER_TEMP/showcase-capture-diagnostic.patch" > "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/harness.sha256"
+          git rev-parse HEAD > "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/source.txt"
+          node --version > "browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}/node-version.txt"
+      - name: Reuse exact runtime and original capture evidence
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: 13300981317
-          run-id: 41784702227
+          artifact-ids: 13318414975
+          run-id: 41825281871
           github-token: ${{ github.token }}
           path: web
-      - name: Reuse the original independent source captures
+      - name: Reuse original backend capture oracle and preserve prior live results
         uses: actions/download-artifact@v8
         with:
-          artifact-ids: 13302960477
-          run-id: 41784702227
+          artifact-ids: ${{ matrix.backend == 'webgpu' && '13324680634' || '13324560375' }}
+          run-id: 41825281871
           github-token: ${{ github.token }}
-          path: browser-smoke-artifacts/showcase/webgl
-      - name: Preserve original reports and install existing pinned tools
+          path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
+      - name: Verify source, runtime, oracle identity, and pinned browser tools
+        env:
+          EXPECTED_SOURCE: 32a7d3d19b97e5ca4e885920886e55680fe170d8
+          BACKEND: ${{ matrix.backend }}
         run: |
-          set -eu
-          mv browser-smoke-artifacts/showcase/webgl/live "$RUNNER_TEMP/noon-2421-original-live"
-          sha256sum browser-smoke-artifacts/showcase/webgl/report.json > browser-smoke-artifacts/showcase-diagnostic/oracle.sha256
-          cp web/runtime-build-identity.json browser-smoke-artifacts/showcase-diagnostic/runtime-build-identity.json
+          set -euo pipefail
+          test "$(cat browser-smoke-artifacts/showcase-diagnostic/$BACKEND/source.txt)" = "$EXPECTED_SOURCE"
+          node -e 'const i=require("./web/runtime-build-identity.json"); if(i.sourceRevision!==process.env.EXPECTED_SOURCE) throw Error(`runtime source mismatch: ${i.sourceRevision}`)'
+          mkdir -p "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original"
+          mv "browser-smoke-artifacts/showcase/$BACKEND/live" "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/live"
+          cp "browser-smoke-artifacts/showcase/$BACKEND/report.json" "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/capture-report.json"
+          sha256sum "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/capture-report.json" > "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/original/capture-report.sha256"
+          cp web/runtime-build-identity.json "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/runtime-build-identity.json"
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install --with-deps chromium
           node scripts/check-web-package.mjs
           git diff --exit-code -- web
-      - name: Observe unchanged ordinary first-pass and replay checks
+      - name: Observe unchanged first-pass and replay checks for the two failures
+        id: diagnostic
         env:
-          NOON_SHOWCASE_BACKEND: webgl
-          NOON_SHOWCASE_CASES: showcase-gpu-glow,showcase-pointer-selection,showcase-shader-material,showcase-wave-interference
+          NOON_SHOWCASE_BACKEND: ${{ matrix.backend }}
+          NOON_SHOWCASE_CASES: showcase-bloom-emission,showcase-glass-lens
         run: node scripts/showcase-live-review.mjs
+      - name: Retain diagnostic result and report
+        if: always()
+        env:
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          echo "$DIAGNOSTIC_OUTCOME" > "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/diagnostic-outcome.txt"
+          if [[ -d "browser-smoke-artifacts/showcase/$BACKEND/live" ]]; then
+            mv "browser-smoke-artifacts/showcase/$BACKEND/live" \
+              "browser-smoke-artifacts/showcase-diagnostic/$BACKEND/live"
+          fi
       - name: Preserve diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: noon-2421-showcase-diagnostic
-          path: |
-            browser-smoke-artifacts/showcase-diagnostic
-            browser-smoke-artifacts/showcase/webgl/live
+          name: noon-2421-showcase-capture-diagnostic-${{ matrix.backend }}
+          path: browser-smoke-artifacts/showcase-diagnostic/${{ matrix.backend }}
           if-no-files-found: error
           retention-days: 3
