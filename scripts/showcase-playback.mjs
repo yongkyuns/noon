@@ -38,8 +38,60 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
   };
 
   await waitReady();
+  await page.evaluate(async () => {
+    const diagnostics = window.__pauseDiag ??= { events: [], engineMessages: [] };
+    const snapshot = () => {
+      const controls = document.querySelector('.playback-controls');
+      const button = controls?.querySelector('.playback-toggle');
+      return { atMs: performance.now(), busy: controls?.dataset.busy ?? null,
+        playing: controls?.dataset.playing ?? null, elapsedSeconds: controls?.dataset.elapsedSeconds ?? null,
+        ariaLabel: button?.getAttribute('aria-label') ?? null, disabled: button?.disabled ?? null,
+        text: button?.textContent ?? null };
+    };
+    const record = (kind, extra = {}) => {
+      window.__pauseDiagPush?.('events', { kind, ...snapshot(), ...extra });
+    };
+    record('before-button-count');
+    document.addEventListener('click', event => {
+      if (event.target?.closest?.('.playback-controls .playback-toggle')) {
+        record('button-click-capture');
+        queueMicrotask(() => record('after-click-dispatch'));
+      }
+    }, true);
+    const { ExecutionWorkerClient } = await import('./execution-worker-client.js');
+    const originalPause = ExecutionWorkerClient.prototype.pause;
+    ExecutionWorkerClient.prototype.pause = async function (...args) {
+      record('pause-call-start');
+      try {
+        const result = await originalPause.apply(this, args);
+        record('pause-call-resolved', { result: { time: result?.time ?? null,
+          playing: result?.playing ?? null, session: result?.presentationReceipt?.session ?? result?.session ?? null,
+          presentationReceipt: result?.presentationReceipt ?? null } });
+        return result;
+      } catch (error) {
+        record('pause-call-rejected', { error: String(error), name: error?.name ?? null });
+        throw error;
+      }
+    };
+    const timer = setInterval(() => record('controls-sample'), 50);
+    diagnostics.timer = timer;
+  });
   const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-  if (await pause.count()) await pause.click();
+  const pauseCount = await pause.count();
+  await page.evaluate(count => {
+    window.__pauseDiag.buttonCount = count;
+    window.__pauseDiagPush?.('events', { kind: 'before-button-click', buttonCount: count,
+      atMs: performance.now(), busy: document.querySelector('.playback-controls')?.dataset.busy ?? null,
+      playing: document.querySelector('.playback-controls')?.dataset.playing ?? null,
+      ariaLabel: document.querySelector('.playback-toggle')?.getAttribute('aria-label') ?? null,
+      disabled: document.querySelector('.playback-toggle')?.disabled ?? null });
+  }, pauseCount);
+  if (pauseCount) await pause.click();
+  await page.evaluate(() => window.__pauseDiagPush?.('events', { kind: 'button-click-return',
+    atMs: performance.now(), busy: document.querySelector('.playback-controls')?.dataset.busy ?? null,
+    playing: document.querySelector('.playback-controls')?.dataset.playing ?? null,
+    ariaLabel: document.querySelector('.playback-toggle')?.getAttribute('aria-label') ?? null,
+    disabled: document.querySelector('.playback-toggle')?.disabled ?? null }));
   // Do not rely on seek to stop playback. Pause first so an advancing clock
   // cannot race the command-completion check or the screenshot.
   await waitReady(null, true);
