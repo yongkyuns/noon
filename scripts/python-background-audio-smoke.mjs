@@ -534,7 +534,18 @@ try {
   assert.ok(identity.ok(), "capture requires the actually served build identity");
   report.runtimeBuildIdentity = await identity.json();
   if (report.runtimeBuildIdentity.sourceRevision !== null) {
-    assert.equal(report.runtimeBuildIdentity.sourceRevision, report.revision);
+    report.runtimeSourceRevision = report.runtimeBuildIdentity.sourceRevision;
+    if (report.runtimeSourceRevision !== report.revision) {
+      const harnessChanges = execFileSync("git", ["diff", "--name-only",
+        `${report.runtimeSourceRevision}..${report.revision}`], { cwd: root, encoding: "utf8" })
+        .trim().split("\n").filter(Boolean);
+      assert.equal(report.sourceDirty, false, "harness/runtime revision difference requires a clean checkout");
+      assert.deepEqual(harnessChanges, ["scripts/python-background-audio-smoke.mjs"],
+        "runtime identity may differ from the harness revision only by this qualification script");
+      report.harnessOnlyChanges = harnessChanges;
+    } else {
+      report.harnessOnlyChanges = [];
+    }
   } else assert.equal(report.sourceDirty, true, "an unattested source revision must be reported as dirty");
   const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
   report.renderHost = metrics.renderHost;
