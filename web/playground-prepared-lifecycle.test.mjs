@@ -51,7 +51,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     diagnosticPanel: { beginRun() {}, invalidate() {}, clear() { calls.push(["clear-diagnostic"]); } },
     example: { id: "test", title: "Test", parityStatus: "candidate", inspectionZoom: true },
     hooks: { authoringRunOptions: () => options },
-    preparationGate: null, stateGate: null, initialPrepared: true,
+    preparationGate: null, authoringGate: null, stateGate: null, initialPrepared: true,
     setupGate: null, observedExecution: false,
   };
   class Controls {
@@ -163,7 +163,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     };
     const authoringWorkers = {
       activeClient: authoring,
-      async clientForRun() { return authoring; },
+      async clientForRun() { if (env.authoringGate) await env.authoringGate.promise; return authoring; },
       retire(client) { return client === authoring; },
       dispose() {},
     };
@@ -250,6 +250,28 @@ test("prepared startup releases only its UI busy ticket while the source remains
   assert.equal(f.env.gallerySearch.disabled, false);
   assert.equal(job.options.preparationLookaheadSeconds, 0.75);
   f.finish(); await promise;
+});
+
+test("Run acceptance precedes interpreter readiness and source execution", async () => {
+  const f = fixture(); f.env.authoringGate = deferred();
+  const promise = f.runScene();
+  await until(() => f.players.length === 1);
+  const accepted = f.inspect().latestRunPhaseMetrics.runAcceptedAtMs;
+  assert.ok(Number.isFinite(accepted));
+  assert.equal(f.inspect().latestRunPhaseMetrics.sourceRunStartedAtMs, null);
+  assert.equal(f.jobs.length, 0);
+  f.env.authoringGate.resolve();
+  await until(() => f.jobs.length === 1);
+  assert.equal(f.inspect().latestRunPhaseMetrics.runAcceptedAtMs, accepted);
+  assert.ok(f.inspect().latestRunPhaseMetrics.sourceRunStartedAtMs >= accepted);
+  await f.register(); f.finish(); await promise;
+});
+
+test("preparation diagnostics reach the prepared source through the ordinary Run path", async () => {
+  const f = fixture({ preparedPlayback: true, diagnosticPreparationTiming: true });
+  const { promise, job } = await f.start();
+  assert.equal(job.options.diagnosticPreparationTiming, true);
+  await f.register(); f.finish(); await promise;
 });
 
 test("preview recovery joins one receiver replacement and preserves open readiness without another source Run", async () => {
@@ -493,6 +515,7 @@ test("a viewer Run without qualification hooks unlocks incremental playback befo
   const { promise, job } = await f.start(); await f.register();
   assert.equal(job.options.preparedPlayback, true);
   assert.equal(job.options.preparationLookaheadSeconds, 1);
+  assert.equal(job.options.diagnosticPreparationTiming, false);
   assert.equal(f.inspect().runInFlight, true); assert.equal(f.inspect().busyDepth, 0);
   assert.equal(f.inspect().playbackControls.controllable, true);
   assert.equal(f.inspect().playbackControls.state.durationSeconds, null);
@@ -506,7 +529,8 @@ test("observed pause beyond the initial segment does not claim the unfinished so
 });
 
 for (const options of [{ preparedPlayback: "yes" }, { preparationLookaheadSeconds: 0 },
-  { preparationLookaheadSeconds: NaN }]) {
+  { preparationLookaheadSeconds: NaN }, { diagnosticPreparationTiming: "yes" },
+  { preparedPlayback: false, diagnosticPreparationTiming: true }]) {
   test(`invalid qualification options reject before authoring (${JSON.stringify(options)})`, async () => {
     const f = fixture(options); const failed = await f.runScene();
     assert.match(failed.error.message, /invalid prepared source run options/);

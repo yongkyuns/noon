@@ -1107,6 +1107,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
     exampleId: example.id,
     selectionGeneration: runToken.selectionGeneration,
     runGeneration: runToken.runGeneration,
+    runAcceptedAtMs: performance.now(),
     sourceRunStartedAtMs: null,
     sourceRunCompletedAtMs: null,
     pythonWorkerRunTiming: null,
@@ -1145,13 +1146,14 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
       } }), source);
       // Rust admits incremental playback or preserves the original source path.
       // The hook keeps live/prepared comparisons on this same viewer lifecycle.
-      const { preparedPlayback = true, preparationLookaheadSeconds = 1 } =
+      const { preparedPlayback = true, preparationLookaheadSeconds = 1, diagnosticPreparationTiming = false } =
         await runPlaygroundTestHook("authoringRunOptions", {
           exampleId: example.id, runGeneration: runToken.runGeneration,
         }) ?? {};
       if (!isCurrentRun(runToken)) return recordStale(runToken, "before-authoring-options");
       if (typeof preparedPlayback !== "boolean" ||
-          !Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0) {
+          !Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0 ||
+          typeof diagnosticPreparationTiming !== "boolean" || (diagnosticPreparationTiming && !preparedPlayback)) {
         throw new TypeError("invalid prepared source run options");
       }
       previousPreview.hold(canvas, "Building edited source");
@@ -1203,6 +1205,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
         }, {
           preparedPlayback,
           preparationLookaheadSeconds,
+          diagnosticPreparationTiming,
           async onSemanticContinuation(registration) {
             if (earlyContinuation !== null) {
               throw new Error("Python source registered more than one semantic continuation");
