@@ -10,6 +10,7 @@ import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { captureAttemptedPage, createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 import { assertNonreplayableShowcase, readLiveState } from "./showcase-live-review.mjs";
+import { seekPausedGallery } from "./showcase-playback.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
 import { serveRepository } from "./browser-test-server.mjs";
 
@@ -245,23 +246,13 @@ try {
     "none",
     "source-declared click actions must not require manifest interaction policy",
   );
-  const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-  if (await pause.count()) await pause.click();
   const authoredPlayback = await readLiveState(page);
   report.authoredPlaybackBeforeSeek = authoredPlayback;
   if (authoredPlayback.controls.controllable === "true") {
-    const scrubber = page.locator(".playback-scrubber");
-    const endpoint = Number(await scrubber.getAttribute("max"));
-    await scrubber.evaluate((input, time) => {
-      input.value = String(time);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }, endpoint);
-    await page.waitForFunction((time) => {
-      const controls = document.querySelector(".playback-controls");
-      return controls?.dataset.busy === "false" &&
-        controls.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation" &&
-        Math.abs(Number(controls.dataset.elapsedSeconds) - time) < 1e-7;
-    }, endpoint);
+    const manifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
+    const lesson = manifest.entries.find(entry => entry.id === "showcase-pointer-selection");
+    assert.ok(lesson);
+    const endpoint = await seekPausedGallery(page, lesson.duration);
     // Nonaudio seek acknowledgement can precede presentation. Baseline the
     // actual endpoint, not an earlier Create frame that the click will replace.
     await waitForBrowserObservation(page, async time => {
