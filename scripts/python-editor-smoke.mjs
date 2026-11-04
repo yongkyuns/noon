@@ -313,6 +313,8 @@ try {
   await fallbackPage.locator("#python-scene-source").fill(
     "from noon import *\n\nclass FallbackScene(Scene):\n    def construct(self):\n        self.add(Square())\n        self.add(Circle().shift(RIGHT * 2))\n",
   );
+  // Observe beyond the former 500 ms edit debounce before requesting Run.
+  await fallbackPage.waitForTimeout(750);
   assert.equal(await fallbackPage.evaluate(() => window.__noonExampleGallery.generationDiagnostics.runGeneration),
     fallbackGeneration, "textarea edits must preserve the active Run");
   assert.equal(await fallbackPage.locator("#draft-status").getAttribute("data-state"), "unapplied");
