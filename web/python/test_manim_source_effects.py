@@ -8,6 +8,142 @@ from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_regex_match_reads_require_canonical_iterator_results(self):
+        source = '''import re
+
+def tokens(value):
+    spans = []
+    for match in re.finditer(r"[A-Za-z]+", value):
+        token = match.group()
+        if token.isdigit():
+            spans.append((match.start(), match.end()))
+    return spans
+'''
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        for unsafe in (
+            source.replace("import re\n", "import re\nre = context.get('module')\n", 1),
+            source.replace('for match in re.finditer(r"[A-Za-z]+", value):',
+                           "for match in context.get('matches'):", 1),
+            source.replace("token = match.group()", "group = match.group\n        token = group()", 1),
+        ):
+            self.assertFalse(source_execution_proof(unsafe)["admitted"])
+
+    def test_typed_local_grouping_and_scene_owned_forwarding(self):
+        source = Path(__file__).with_name("examples").joinpath("cuda_transpose_banks.py").read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        unsafe = (
+            source.replace("banks = [{} for _ in range(32)]", "banks = [external for _ in range(32)]", 1),
+            source.replace("banks[word % 32].setdefault(word, [])", "other[word % 32].setdefault(word, [])", 1),
+            source.replace("for bank in banks", "for bank in external", 1),
+            source.replace("await self.play(*animations, run_time=seconds / SPEED)",
+                           "saved = animations\n        await self.play(*saved, run_time=seconds / SPEED)", 1),
+            source.replace("selected.append([tx, c, word, c * 32 + tx, tile[word]])",
+                           "selected.append([tx, c, word, c * 32 + tx, context.get('value')])", 1),
+            source.replace('        stride, reads = trace["stride"], trace["reads"]\n',
+                           '        stride, reads = trace["stride"], trace["reads"]\n        reads = None\n', 1),
+            source.replace('        stride, reads = trace["stride"], trace["reads"]\n',
+                           '        stride, reads = trace["stride"], trace["reads"]\n        if True:\n            reads = None\n', 1),
+            source.replace('    for lane, _, word, _, _ in reads:\n',
+                           '    for lane, _, word, _, _ in reads:\n        word = None\n', 1),
+            source.replace('    for lane, _, word, _, _ in reads:\n',
+                           '    banks[0] = None\n    for lane, _, word, _, _ in reads:\n', 1),
+            source.replace('def service_batches(reads):\n',
+                           'def service_batches(reads):\n    reads = None\n', 1),
+            source.replace('getattr(self, "_cuda_probe", None)',
+                           'getattr(self, "_owner", None)', 1),
+        )
+        for candidate in unsafe:
+            with self.subTest(candidate="modified typed source provenance"):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+        smaller = source.replace("banks = [{} for _ in range(32)]",
+                                 "banks = [{} for _ in range(16)]", 1).replace(
+                                     "banks[word % 32]", "banks[word % 16]", 1)
+        self.assertTrue(source_execution_proof(smaller)["admitted"])
+        self.assertFalse(source_execution_proof(smaller.replace(
+            "banks[word % 16]", "banks[word % 32]", 1))["admitted"])
+
+        wrappers = "\n".join((
+            "from noon import *", "class Example(Scene):",
+            "    async def dispatch(self, *animations):",
+            "        await self.play(*animations)",
+            "    def construct(self):", "        self.play(FadeIn(Square()))", ""))
+        self.assertTrue(source_execution_proof(wrappers)["admitted"])
+        self.assertFalse(source_execution_proof(wrappers.replace(
+            "await self.play(*animations)", "saved = animations\n        await self.play(*saved)"))["admitted"])
+
+        optional = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        listener = getattr(self, '_listener', None)",
+            "        if listener is not None:", "            listener.notify(self)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertTrue(source_execution_proof(optional)["admitted"])
+        collision = optional.replace("    def inspect(self):\n",
+                                     "    def inspect(self):\n        self._listener = None\n", 1)
+        self.assertFalse(source_execution_proof(collision)["admitted"])
+        class_collision = optional.replace("class Example(Scene):\n",
+                                           "class Example(Scene):\n    _listener = None\n", 1)
+        self.assertFalse(source_execution_proof(class_collision)["admitted"])
+        for field in ("__class__", "__dict__", "__doc__"):
+            with self.subTest(field=field):
+                source = optional.replace("class Example(Scene):\n",
+                                          "class Example(Scene):\n    '''present class documentation'''\n", 1)
+                self.assertFalse(source_is_scene_only(source.replace("'_listener'", repr(field))))
+        for field in ("time", "declare_wait"):
+            with self.subTest(field=field):
+                self.assertFalse(source_is_scene_only(optional.replace("'_listener'", repr(field))))
+        wrapped = optional.replace(
+            "listener = getattr(self, '_listener', None)",
+            "listener = (getattr(self, '_listener', None),)")
+        self.assertFalse(source_is_scene_only(wrapped))
+        wrapped = optional.replace(
+            "listener = getattr(self, '_listener', None)",
+            "listener = getattr(self, '_listener', None) or True")
+        self.assertFalse(source_is_scene_only(wrapped))
+        nested_shadow = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        listener = getattr(self, '_listener', None)",
+            "        def nested(listener):", "            if listener is not None:",
+            "                self.wait(1)", "        nested(1)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_is_scene_only(nested_shadow))
+        parameter_shadow = "\n".join((
+            "from noon import *", "class Example(Scene):",
+            "    def inspect(self, optional=1):", "        if optional is not None:",
+            "            print('observable effect')",
+            "        optional = getattr(self, '_absent', None)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_is_scene_only(parameter_shadow))
+        late_getter = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        if optional is not None:", "            self.wait(1)",
+            "        optional = getattr(self, '_absent', None)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_is_scene_only(late_getter))
+        dynamic_lookup = optional.replace(
+            "    def inspect(self):",
+            "    def __getattr__(self, name):\n        return object()\n    def inspect(self):", 1)
+        self.assertFalse(source_is_scene_only(dynamic_lookup))
+        storage_write = optional.replace(
+            "        listener = getattr(self, '_listener', None)",
+            "        self.__dict__['_listener'] = object()\n        listener = getattr(self, '_listener', None)")
+        self.assertFalse(source_is_scene_only(storage_write))
+
+    def test_optional_scene_storage_is_not_proven_absent(self):
+        source = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        storage = getattr(self, '__dict__', None)",
+            "        if storage is not None:", "            storage['_listener'] = None",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_execution_proof(source)["admitted"])
+        replacement = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        self.__dict__ = {'_absent': 1}",
+            "        optional = getattr(self, '_absent', None)",
+            "        if optional is not None:", "            print('observable effect')",
+            "        self.wait(1)", "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_execution_proof(replacement)["admitted"])
+
     def test_canonical_numpy_import_replaces_the_optional_wildcard_namespace(self):
         import noon
         source = Path(__file__).parents[2].joinpath("scripts/fixtures/noon_fourier_epicycles.py").read_text()

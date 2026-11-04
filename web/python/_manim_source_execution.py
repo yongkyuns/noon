@@ -64,23 +64,23 @@ PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GRAY GOLD TEAL MAROON
 UP DOWN LEFT RIGHT IN OUT ORIGIN UL UR DL DR PI TAU DEGREES
 """.split())
 _SOURCE_BUILTINS = frozenset("""
-abs all any bool bytes bytearray complex dict divmod enumerate filter float frozenset int
+abs all any bool bytes bytearray complex dict divmod enumerate filter float format frozenset int
 isinstance len list map max min next range reversed round set slice sorted str
-sum tuple zip ValueError RuntimeError
+sum tuple type zip ValueError RuntimeError
 """.split())
 _SOURCE_MEMBERS = frozenset("""
 add remove clear play wait audio on_click set_drag_targets next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect
-add_effect remove_effect get_center get_x get_y get_width get_height get_value
+add_effect remove_effect get_center get_x get_y get_width get_height get_value get_left get_right
 set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
 plot plot_samples
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
 set_points set_object_opacity family_members_with_points get_subpaths get_arc_length
 point_from_proportion from_string
 animate id width height radius append extend insert pop count index get keys values
-items update union intersection difference join split strip lower upper replace bit_length
+items update union intersection difference join split strip lstrip rstrip lower upper replace bit_length
 startswith endswith encode decode hex fromhex tobytes reverse sort small_discovery
 """.split())
 _SOURCE_SPATIAL_MEMBERS = frozenset("""
@@ -88,6 +88,10 @@ set_camera_orientation move_camera point_light add_world_mobjects
 add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
 """.split())
 _SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
+_CANONICAL_SCENE_FIELDS = frozenset("""
+_owner _binding_handles _object_keys _object_key_ids _next_object_id
+_register_top_level _edit_membership _bind_camera_frame
+""".split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
 _SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
@@ -1071,6 +1075,13 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_resource_preparation_loads = set()
         self.admitted_controlled_text_loads = set()
         self.resource_preparation_scopes = []
+        self.admitted_regex_attributes = []
+        self.admitted_local_group_attributes = []
+        self.admitted_optional_scene_getters = set()
+        self.unreachable_scene_nodes = set()
+        self.scene_helper_names = set()
+        self.admitted_scene_owned_attributes = set()
+        self.admitted_scene_helper_attributes = set()
         self.numpy_module_functions = {
             name for name, function in self.module_functions.items()
             if bindings.binding_counts.get(name) == 1 and bindings.locations.get(name) is function
@@ -1115,6 +1126,16 @@ class _SceneOnlySource(ast.NodeVisitor):
             and bindings.binding_counts.get(node.targets[0].id) == 1
             and _static_numpy_literal(node.value)
         }
+        self.module_integer_literals = {
+            node.targets[0].id: node.value for node in tree.body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and bindings.binding_counts.get(node.targets[0].id) == 1
+            and isinstance(node.value, ast.Constant) and type(node.value.value) is int
+        }
+        self.integer_record_schemas = self._integer_record_list_schemas()
+        self.integer_row_parameters, self.integer_row_widths = self._integer_row_parameter_types()
+        self.function_context = []
         self.numpy_integer_parameters = {name: set() for name in self.numpy_functions}
         integer_names_by_call = {}
 
@@ -1728,6 +1749,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                 and node.id in (_SOURCE_SPATIAL_CONSTRUCTORS | _SOURCE_COLOR_CONSTANTS | {"Color"})
                 and self._spatial_symbol_shadowed(node.id)):
             raise _OpaqueSource(node, "unproven_shadowed_spatial_constructor")
+        if isinstance(node.ctx, ast.Load) and node.id == "getattr" and id(node) in self.admitted_optional_scene_getters:
+            return
         if isinstance(node.ctx, ast.Load) and not any(node.id in scope for scope in self.scopes):
             raise _OpaqueSource(node, "unknown_name")
 
@@ -1746,6 +1769,11 @@ class _SceneOnlySource(ast.NodeVisitor):
             self._assign_shader_value(target, value)
 
     def visit_If(self, node):
+        if id(node) in self.unreachable_scene_nodes:
+            self.visit(node.test)
+            for statement in node.orelse:
+                self.visit(statement)
+            return
         self.visit(node.test)
         self.shader_control_depth += 1
         try:
@@ -3356,6 +3384,19 @@ class _SceneOnlySource(ast.NodeVisitor):
         )
 
     def visit_Attribute(self, node):
+        if self.admitted_regex_attributes and id(node) in self.admitted_regex_attributes[-1]:
+            self.visit(node.value)
+            return
+        if id(node) in self.admitted_scene_helper_attributes:
+            self.visit(node.value)
+            return
+        if id(node) in self.admitted_scene_owned_attributes:
+            self.visit(node.value)
+            return
+        if (self.admitted_local_group_attributes
+                and id(node) in self.admitted_local_group_attributes[-1]):
+            self.visit(node.value)
+            return
         if id(node) in self.admitted_shader_attributes:
             self.visit(node.value)
             return
@@ -3529,6 +3570,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             integer_names.update(name for name in self.numpy_integer_parameters.get(nested.name, ())
                                  if name not in bindings.names and name not in self.module_bindings)
         self.numpy_integer_names.append(integer_names)
+        local_group_attributes = self._closed_local_group_attributes(body, bindings, parameters)
+        regex_attributes = self._closed_regex_attributes(body, bindings, parameters)
         image_pixel_sources = self._image_pixel_source_names(body, bindings, parameters)
         self.scopes.append(bindings.names | parameters)
         self.shader_values.append({})
@@ -3537,6 +3580,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         # Every lexical binding must have a fresh origin; a parameter, alias,
         # conditional rebind or loop target cannot inherit another value's proof.
         self.owned_containers.append(bindings.container_names - bindings.other_names - parameters)
+        self.admitted_local_group_attributes.append(local_group_attributes)
+        self.admitted_regex_attributes.append(regex_attributes)
         preparation_awaits = {
             id(node.value)
             for node in body
@@ -3603,6 +3648,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                     preparation_scope["ready"] = True
         finally:
             self.resource_preparation_scopes.pop()
+            self.admitted_local_group_attributes.pop()
+            self.admitted_regex_attributes.pop()
             self.image_pixel_sources.pop()
             self.image_pixel_numeric_values.pop()
             self.shader_values.pop()
@@ -3618,22 +3665,619 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.scopes.pop()
             self.owned_containers.pop()
 
+    def _integer_record_list_schemas(self):
+        """Summarize closed helpers that return a mapping containing integer rows."""
+        parents = {child: parent for parent in ast.walk(self.tree) for child in ast.iter_child_nodes(parent)}
+        schemas = {}
+        for name, function in self.module_functions.items():
+            if (self.module_binding_counts.get(name) != 1 or not isinstance(function, ast.FunctionDef)
+                    or self.module_binding_counts.get("dict", 0)
+                    or function.decorator_list or function.args.posonlyargs or function.args.kwonlyargs
+                    or function.args.vararg or function.args.kwarg
+                    or any(value is not None and (not isinstance(value, ast.Constant)
+                           or type(value.value) is not int) for value in function.args.defaults)):
+                continue
+            bindings = _SourceBindings()
+            for statement in function.body:
+                bindings.visit(statement)
+            if "dict" in bindings.names | {arg.arg for arg in function.args.args}:
+                continue
+            integer_names = _integer_names_in_body(
+                function.body, {arg.arg for arg in function.args.args}, self.module_integer_literals)
+            dict_names = set()
+            for statement in _walk_scope(function.body):
+                if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+                    continue
+                targets, values = statement.targets[0], statement.value
+                pairs = zip(targets.elts, values.elts) if (
+                    isinstance(targets, (ast.Tuple, ast.List)) and isinstance(values, (ast.Tuple, ast.List))
+                    and len(targets.elts) == len(values.elts)) else [(targets, values)]
+                for target, value in pairs:
+                    if (isinstance(target, ast.Name) and isinstance(value, ast.Dict)
+                            and not value.keys and bindings.binding_counts.get(target.id) == 1):
+                        dict_names.add(target.id)
+            empty_lists = set()
+            for statement in _walk_scope(function.body):
+                if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+                    continue
+                target, value = statement.targets[0], statement.value
+                pairs = zip(target.elts, value.elts) if (
+                    isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List))
+                    and len(target.elts) == len(value.elts)) else [(target, value)]
+                empty_lists.update(item.id for item, origin in pairs
+                                   if isinstance(item, ast.Name) and isinstance(origin, ast.List)
+                                   and not origin.elts and bindings.binding_counts.get(item.id) == 1)
+
+            safe_dicts = set()
+            for dict_name in dict_names:
+                writes = [node for node in ast.walk(function) if isinstance(node, ast.Subscript)
+                          and isinstance(node.ctx, ast.Store) and isinstance(node.value, ast.Name)
+                          and node.value.id == dict_name]
+                loads = [node for node in ast.walk(function) if isinstance(node, ast.Name)
+                         and node.id == dict_name and isinstance(node.ctx, ast.Load)]
+                if (writes and all(_integer_expression(node.slice, integer_names, self.module_integer_literals)
+                                   for node in writes)
+                        and all(isinstance(parents.get(node), ast.Assign)
+                                and _integer_expression(parents[node].value, integer_names,
+                                                        self.module_integer_literals)
+                                for node in writes)
+                        and all(isinstance(parents.get(node), ast.Subscript)
+                                and parents[node].value is node for node in loads)
+                        and not any(isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                                    and isinstance(child.func.value, ast.Name)
+                                    and child.func.value.id == dict_name for child in ast.walk(function))):
+                    safe_dicts.add(dict_name)
+
+            def integer_value(expr):
+                if _integer_expression(expr, integer_names, self.module_integer_literals):
+                    return True
+                return (isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name)
+                        and expr.value.id in safe_dicts
+                        and _integer_expression(expr.slice, integer_names, self.module_integer_literals))
+
+            returned = [statement.value for statement in function.body if isinstance(statement, ast.Return)]
+            if (len(returned) != 1 or not isinstance(returned[0], ast.Call)
+                    or not isinstance(returned[0].func, ast.Name) or returned[0].func.id != "dict"
+                    or returned[0].args or any(keyword.arg is None for keyword in returned[0].keywords)):
+                continue
+            fields = {}
+            for keyword in returned[0].keywords:
+                if isinstance(keyword.value, ast.Name):
+                    candidate = keyword.value.id
+                    if (bindings.binding_counts.get(candidate) == 1
+                            and candidate in empty_lists):
+                        appends = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+                                   and isinstance(node.func, ast.Attribute) and node.func.attr == "append"
+                                   and isinstance(node.func.value, ast.Name) and node.func.value.id == candidate]
+                        loops = [ancestor for ancestor in self._ancestors(appends[0], parents)
+                                 if isinstance(ancestor, (ast.For, ast.While))] if appends else []
+                        bounded = bool(appends) and all(
+                            isinstance(loop, ast.For) and isinstance(loop.iter, ast.Call)
+                            and isinstance(loop.iter.func, ast.Name) and loop.iter.func.id == "range"
+                            and len(loop.iter.args) == 1 and isinstance(loop.iter.args[0], ast.Constant)
+                            and type(loop.iter.args[0].value) is int
+                            and 0 < loop.iter.args[0].value <= 4096 and not loop.iter.keywords
+                            or isinstance(loop, ast.For) and isinstance(loop.iter, (ast.Tuple, ast.List))
+                            for loop in loops)
+                        total = 1
+                        for loop in loops:
+                            if isinstance(loop.iter, ast.Call):
+                                total *= loop.iter.args[0].value
+                            else:
+                                total *= len(loop.iter.elts)
+                        if (len(appends) == 1 and bounded and total <= 65_536
+                                and len(appends[0].args) == 1
+                                and isinstance(appends[0].args[0], (ast.List, ast.Tuple))):
+                            row = appends[0].args[0]
+                            if all(integer_value(item) for item in row.elts):
+                                other_uses = [item for item in ast.walk(function)
+                                              if isinstance(item, ast.Name) and item.id == candidate
+                                              and isinstance(item.ctx, ast.Load)
+                                              and not (isinstance(parents.get(item), ast.Attribute)
+                                                       and parents[item].attr == "append"
+                                                       or item is keyword.value)]
+                                mutated = any(
+                                    isinstance(item, ast.Subscript) and isinstance(item.ctx, (ast.Store, ast.Del))
+                                    and isinstance(item.value, ast.Name) and item.value.id == candidate
+                                    or isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute)
+                                    and isinstance(item.func.value, ast.Name) and item.func.value.id == candidate
+                                    and item.func.attr != "append"
+                                    for item in ast.walk(function))
+                                if not other_uses and not mutated:
+                                    fields[keyword.arg] = ("integer_rows", len(row.elts))
+                                    continue
+                fields[keyword.arg] = "integer" if integer_value(keyword.value) else "opaque"
+            if not any(isinstance(value, tuple) and value[0] == "integer_rows" for value in fields.values()):
+                continue
+            call_sites = []
+            aliases = False
+            for node in ast.walk(self.tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name:
+                    caller = parents.get(node)
+                    while caller is not None and not isinstance(caller, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        caller = parents.get(caller)
+                    if caller is None or len(node.args) < len(function.args.args) - len(function.args.defaults) \
+                            or len(node.args) > len(function.args.args) or node.keywords:
+                        aliases = True
+                        break
+                    names = _integer_names_at_node(caller.body, node, set(), self.module_integer_literals)
+                    if not all(_integer_expression(arg, names, self.module_integer_literals) for arg in node.args):
+                        aliases = True
+                        break
+                    call_sites.append(node)
+                elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load):
+                    parent = parents.get(node)
+                    if not (isinstance(parent, ast.Call) and parent.func is node):
+                        aliases = True
+            if call_sites and not aliases:
+                schemas[name] = fields
+        return schemas
+
+    def _integer_row_parameter_types(self):
+        """Propagate closed record rows through local scene data and helper calls."""
+        row_fields = {name: {key: value for key, value in schema.items()
+                             if isinstance(value, tuple) and value[0] == "integer_rows"}
+                      for name, schema in self.integer_record_schemas.items()}
+        row_fields = {name: fields for name, fields in row_fields.items() if fields}
+        methods_by_class = {}
+        trusted_scene = any(isinstance(imported, ast.ImportFrom) and imported.module == "noon"
+                            and any(alias.name == "*" or alias.name == "Scene" and alias.asname is None
+                                    for alias in imported.names)
+                            for imported in self.tree.body)
+        for cls in (node for node in self.tree.body if isinstance(node, ast.ClassDef)
+                    and trusted_scene and len(node.bases) == 1
+                    and isinstance(node.bases[0], ast.Name) and node.bases[0].id == "Scene"):
+            methods_by_class[cls.name] = {method.name: method for method in cls.body
+                                         if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        typed_formals = {}
+        call_types = {}
+        helper_call_counts = {}
+        active_binding_counts = {}
+        active_parameters = set()
+        for methods in methods_by_class.values():
+            for method in methods.values():
+                for call in (child for child in ast.walk(method) if isinstance(child, ast.Call)
+                             and isinstance(child.func, ast.Attribute)
+                             and isinstance(child.func.value, ast.Name)
+                             and child.func.value.id == "self"):
+                    helper_call_counts[call.func.attr] = helper_call_counts.get(call.func.attr, 0) + 1
+
+        def value(expr, env):
+            if isinstance(expr, ast.Name):
+                return env.get(expr.id)
+            if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+                return ("record", expr.func.id) if expr.func.id in row_fields else None
+            if isinstance(expr, ast.ListComp):
+                kind = value(expr.elt, env)
+                return ("record_list", kind[1]) if isinstance(kind, tuple) and kind[0] == "record" else None
+            if isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name):
+                record = env.get(expr.value.id)
+                key = expr.slice.value if isinstance(expr.slice, ast.Constant) else None
+                if isinstance(record, tuple) and record[0] == "record_list":
+                    return ("record", record[1])
+                if isinstance(record, tuple) and record[0] == "record" and key is not None:
+                    schema = self.integer_record_schemas[record[1]]
+                    field = schema.get(key)
+                    return ("integer_rows", field[1]) if isinstance(field, tuple) and field[0] == "integer_rows" else (
+                        "integer" if field == "integer" else None)
+            if isinstance(expr, (ast.Tuple, ast.List)):
+                return ("tuple", tuple(value(item, env) for item in expr.elts))
+            return None
+
+        def bind(target, kind, env):
+            if isinstance(target, ast.Name):
+                # A later unknown write invalidates an earlier type fact.
+                env[target.id] = kind
+                return
+            if isinstance(target, (ast.Tuple, ast.List)) and isinstance(kind, tuple) and kind[0] == "tuple":
+                for item, item_kind in zip(target.elts, kind[1]):
+                    bind(item, item_kind, env)
+
+        def process_class(methods):
+            def block(statements, env):
+                for statement in statements:
+                    if isinstance(statement, ast.Assign):
+                        kind = value(statement.value, env)
+                        for target in statement.targets:
+                            bind(target, kind, env)
+                        for call in (node for node in _walk_scope([statement.value]) if isinstance(node, ast.Call)):
+                            record_call(call, env)
+                    elif isinstance(statement, (ast.For, ast.AsyncFor)):
+                        iterable = value(statement.iter, env)
+                        target_kind = ("record", iterable[1]) if (
+                            isinstance(iterable, tuple) and iterable[0] == "record_list") else None
+                        if (isinstance(statement.iter, ast.Tuple)
+                                and isinstance(statement.target, (ast.Tuple, ast.List))
+                                and len(statement.target.elts) > 0):
+                            rows = [value(item, env) for item in statement.iter.elts]
+                            if rows and all(isinstance(row, tuple) and row[0] == "tuple"
+                                            and len(row[1]) == len(statement.target.elts) for row in rows):
+                                items = tuple(row[1][index] for index in range(len(statement.target.elts))
+                                              for row in rows)
+                                kinds = []
+                                for index in range(len(statement.target.elts)):
+                                    candidates = [row[1][index] for row in rows]
+                                    kinds.append(candidates[0] if all(item == candidates[0]
+                                                                      for item in candidates) else None)
+                                target_kind = ("tuple", tuple(kinds))
+                        child = env.copy()
+                        bind(statement.target, target_kind, child)
+                        for call in _walk_scope([statement.iter]):
+                            if isinstance(call, ast.Call):
+                                record_call(call, env)
+                        block(statement.body, child)
+                        else_env = child.copy()
+                        block(statement.orelse, else_env)
+                        before_loop = env.copy()
+                        merge_env(env, child, else_env)
+                        merge_env(env, env.copy(), before_loop)
+                    elif isinstance(statement, ast.If):
+                        for call in _walk_scope([statement.test]):
+                            if isinstance(call, ast.Call):
+                                record_call(call, env)
+                        body_env, else_env = env.copy(), env.copy()
+                        block(statement.body, body_env)
+                        block(statement.orelse, else_env)
+                        merge_env(env, body_env, else_env)
+                    else:
+                        for call in (node for node in _walk_scope([statement]) if isinstance(node, ast.Call)):
+                            record_call(call, env)
+
+            def record_call(call, env):
+                nonlocal changed
+                if (isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name)
+                        and call.func.value.id == "self" and call.func.attr in methods
+                        and helper_call_counts.get(call.func.attr) == 1):
+                    target = methods[call.func.attr]
+                    formals = [arg.arg for arg in [*target.args.posonlyargs, *target.args.args,
+                                                    *target.args.kwonlyargs]][1:]
+                    for formal, actual in zip(formals, call.args):
+                        kind = value(actual, env)
+                        if kind is not None and not stable_actual(actual):
+                            kind = None
+                        if isinstance(kind, tuple) and kind[0] in {"record", "record_list", "integer_rows"}:
+                            facts = typed_formals.setdefault(call.func.attr, {})
+                            if facts.get(formal) != kind:
+                                facts[formal] = kind
+                                changed = True
+                elif isinstance(call.func, ast.Name) and call.func.id in self.module_functions:
+                    formals = [arg.arg for arg in [*self.module_functions[call.func.id].args.posonlyargs,
+                                                   *self.module_functions[call.func.id].args.args,
+                                                   *self.module_functions[call.func.id].args.kwonlyargs]]
+                    kinds = call_types.setdefault(call.func.id, {})
+                    kinds[id(call)] = tuple(
+                        kind if stable_actual(actual) else None
+                        for actual in call.args
+                        for kind in (value(actual, env),))
+
+            def stable_actual(actual):
+                for name in (node.id for node in ast.walk(actual) if isinstance(node, ast.Name)):
+                    if (name in active_parameters and active_binding_counts.get(name, 0) != 0
+                            or name in active_binding_counts and active_binding_counts[name] != 1):
+                        return False
+                return True
+
+            def merge_env(target, left, right):
+                target.clear()
+                target.update({name: kind for name, kind in left.items()
+                               if kind is not None and right.get(name) == kind})
+
+            changed = True
+            while changed:
+                changed = False
+                for method_name, method in methods.items():
+                    nonlocal active_binding_counts, active_parameters
+                    bindings = _SourceBindings()
+                    for statement in method.body:
+                        bindings.visit(statement)
+                    active_binding_counts = bindings.binding_counts
+                    active_parameters = {argument.arg for argument in
+                                         [*method.args.posonlyargs, *method.args.args,
+                                          *method.args.kwonlyargs]}
+                    env = dict(typed_formals.get(method_name, {}))
+                    block(method.body, env)
+
+        for methods in methods_by_class.values():
+            process_class(methods)
+        row_parameters, row_widths = {}, {}
+        all_calls = {name: [node for node in ast.walk(self.tree) if isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name) and node.func.id == name]
+                     for name in self.module_functions}
+        for name, call_map in call_types.items():
+            calls = list(call_map.values())
+            sites = all_calls.get(name, [])
+            if len(sites) != len(calls) or not sites:
+                continue
+            formals = [arg.arg for arg in [*self.module_functions[name].args.posonlyargs,
+                                           *self.module_functions[name].args.args,
+                                           *self.module_functions[name].args.kwonlyargs]]
+            for index, formal in enumerate(formals):
+                actual_kinds = [site[index] if index < len(site) else None for site in calls]
+                if actual_kinds and all(isinstance(kind, tuple) and kind[0] == "integer_rows"
+                                        for kind in actual_kinds):
+                    row_parameters[name] = row_parameters.get(name, set()) | {formal}
+                    row_widths[name, formal] = actual_kinds[0][1]
+        return row_parameters, row_widths
+
+    @staticmethod
+    def _ancestors(node, parents):
+        parent = parents.get(node)
+        while parent is not None:
+            yield parent
+            parent = parents.get(parent)
+
+    def _closed_local_group_attributes(self, body, bindings, parameters):
+        """Prove mutations stay inside fresh, bounded local dictionary groups."""
+        nodes = [node for statement in body for node in _walk_scope([statement])]
+        owners = {}
+        for node in nodes:
+            if (not isinstance(node, ast.Assign) or len(node.targets) != 1
+                    or not isinstance(node.targets[0], ast.Name)
+                    or not isinstance(node.value, ast.ListComp)):
+                continue
+            comp = node.value
+            if (not isinstance(comp.elt, ast.Dict) or comp.elt.keys or comp.elt.values
+                    or len(comp.generators) != 1):
+                continue
+            gen = comp.generators[0]
+            if (not isinstance(gen.target, ast.Name) or not isinstance(gen.iter, ast.Call)
+                    or not isinstance(gen.iter.func, ast.Name) or gen.iter.func.id != "range"
+                    or len(gen.iter.args) != 1 or gen.iter.keywords
+                    or not isinstance(gen.iter.args[0], ast.Constant)
+                    or type(gen.iter.args[0].value) is not int
+                    or not 0 < gen.iter.args[0].value <= 1024 or gen.ifs
+                    or "range" in bindings.names | set(parameters)
+                    or self.module_binding_counts.get("range", 0)
+                    or bindings.binding_counts.get(node.targets[0].id) != 1):
+                continue
+            owners[node.targets[0].id] = gen.iter.args[0].value
+        function_name = self.function_context[-1] if self.function_context else None
+        typed_rows = self.integer_row_parameters.get(function_name, set()) & set(parameters)
+        if any(bindings.binding_counts.get(name, 0) for name in typed_rows):
+            return set()
+        row_targets = {}
+        for loop in nodes:
+            if (isinstance(loop, ast.For) and isinstance(loop.iter, ast.Name)
+                    and loop.iter.id in typed_rows and isinstance(loop.target, (ast.Tuple, ast.List))
+                    and len(loop.target.elts) == self.integer_row_widths.get((function_name, loop.iter.id))):
+                row_targets[id(loop)] = {target.id for target in loop.target.elts
+                                         if isinstance(target, ast.Name) and target.id != "_"}
+        if any(bindings.binding_counts.get(name) != 1
+               for names in row_targets.values() for name in names):
+            return set()
+        parents = {child: parent for parent in nodes for child in ast.iter_child_nodes(parent)}
+        admitted = set()
+        for node in nodes:
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            attr = node.func
+            if attr.attr == "setdefault":
+                receiver = attr.value
+                if (isinstance(receiver, ast.Subscript) and isinstance(receiver.value, ast.Name)
+                        and receiver.value.id in owners and receiver.value.id in bindings.container_names
+                        and isinstance(receiver.slice, ast.BinOp) and isinstance(receiver.slice.op, ast.Mod)
+                        and isinstance(receiver.slice.left, ast.Name)
+                        and isinstance(receiver.slice.right, ast.Constant)
+                        and type(receiver.slice.right.value) is int
+                        and receiver.slice.right.value == owners[receiver.value.id]
+                        and len(node.args) == 2 and isinstance(node.args[0], ast.Name)
+                        and isinstance(node.args[1], ast.List) and not node.args[1].elts
+                        and not node.keywords
+                        and any(receiver.slice.left.id in names and node.args[0].id in names
+                                for loop_id, names in row_targets.items()
+                                if any(parent is not None and id(parent) == loop_id
+                                       for parent in self._ancestors(node, parents)))):
+                    admitted.add(id(attr))
+            elif attr.attr == "values":
+                if (isinstance(attr.value, ast.Name) and not node.args and not node.keywords
+                        and "list" not in bindings.names | set(parameters)
+                        and self.module_binding_counts.get("list", 0) == 0
+                        and any(isinstance(parent, ast.ListComp)
+                                and any(isinstance(gen.target, ast.Name)
+                                        and gen.target.id == attr.value.id
+                                        and isinstance(gen.iter, ast.Name)
+                                        and gen.iter.id in owners
+                                        for gen in parent.generators)
+                                for parent in nodes)):
+                    admitted.add(id(attr))
+        if any(isinstance(node, ast.Attribute) and node.attr in {"setdefault", "values"}
+               and id(node) not in admitted for node in nodes):
+            return set()
+        for owner in owners:
+            if any(isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+                   and node.value.id == owner and isinstance(node.ctx, (ast.Store, ast.Del))
+                   for node in nodes):
+                return set()
+            for node in nodes:
+                if not (isinstance(node, ast.Name) and node.id == owner
+                        and isinstance(node.ctx, ast.Load)):
+                    continue
+                parent = parents.get(node)
+                if (isinstance(parent, ast.Subscript) and parent.value is node
+                        or isinstance(parent, ast.comprehension) and parent.iter is node):
+                    continue
+                return set()
+        return admitted
+
+    def _closed_regex_attributes(self, body, bindings, parameters):
+        if (self.module_binding_counts.get("re") != 1
+                or not isinstance(self.module_binding_locations.get("re"), ast.Import)
+                or "re" in bindings.names | parameters):
+            return set()
+        nodes, pending = [], list(body)
+        while pending:
+            node = pending.pop()
+            nodes.append(node)
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                pending.extend(ast.iter_child_nodes(node))
+        parents = {child: parent for parent in nodes for child in ast.iter_child_nodes(parent)
+                   if child in nodes}
+        literal_strings = {
+            statement.targets[0].id
+            for statement in nodes
+            if isinstance(statement, ast.Assign) and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and isinstance(statement.value, ast.Constant) and type(statement.value.value) is str
+            and bindings.binding_counts.get(statement.targets[0].id) == 1
+        }
+        match_names = set()
+        for node in nodes:
+            if (isinstance(node, ast.For) and isinstance(node.target, ast.Name)
+                    and isinstance(node.iter, ast.Call)
+                    and isinstance(node.iter.func, ast.Attribute) and node.iter.func.attr == "finditer"
+                    and isinstance(node.iter.func.value, ast.Name) and node.iter.func.value.id == "re"
+                    and len(node.iter.args) == 2 and not node.iter.keywords
+                    and not any(isinstance(arg, ast.Starred) for arg in node.iter.args)
+                    and (isinstance(node.iter.args[0], ast.Constant)
+                         and type(node.iter.args[0].value) is str
+                         or isinstance(node.iter.args[0], ast.Name)
+                         and node.iter.args[0].id in literal_strings)
+                    and bindings.binding_counts.get(node.target.id) == 1):
+                match_names.add(node.target.id)
+        tokens = set()
+        for node in nodes:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr == "group"
+                    and isinstance(node.value.func.value, ast.Name)
+                    and node.value.func.value.id in match_names
+                    and not node.value.args and not node.value.keywords
+                    and bindings.binding_counts.get(node.targets[0].id) == 1):
+                tokens.add(node.targets[0].id)
+        admitted = set()
+        for node in nodes:
+            if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+                continue
+            receiver = node.value.id
+            if node.attr not in {"group", "start", "end", "isdigit"}:
+                continue
+            call = parents.get(node)
+            if (not isinstance(call, ast.Call) or call.func is not node
+                    or call.args or call.keywords):
+                continue
+            if (node.attr in {"group", "start", "end"} and receiver in match_names
+                    or node.attr == "isdigit" and receiver in tokens):
+                admitted.add(id(node))
+        return admitted
+
     def visit_FunctionDef(self, node):
         if node.name.startswith("_") or node.decorator_list or node.returns or getattr(node, "type_params", ()):
             raise _OpaqueSource(node, "unproven_function_contract")
         arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
-        if any(argument.annotation for argument in arguments) or node.args.vararg or node.args.kwarg:
+        vararg = node.args.vararg
+        kwarg = node.args.kwarg
+        if (any(argument.annotation for argument in arguments)
+                or vararg and not self._closed_forwarded_vararg(node, vararg.arg)
+                or kwarg and not self._closed_forwarded_kwarg(node, kwarg.arg)):
             raise _OpaqueSource(node, "unproven_function_contract")
         for value in [*node.args.defaults, *filter(None, node.args.kw_defaults)]:
             self.visit(value)
-        self._scope(node.body, (argument.arg for argument in arguments),
-                    self.numpy_array_parameters.get(node.name, ()),
-                    self.numpy_scalar_parameters.get(node.name, ()),
-                    self.numpy_integer_parameters.get(node.name, ()))
+        self.function_context.append(node.name)
+        try:
+            self._scope(node.body, [*(argument.arg for argument in arguments),
+                                   *((vararg.arg,) if vararg else ()),
+                                   *((kwarg.arg,) if kwarg else ())],
+                        self.numpy_array_parameters.get(node.name, ()),
+                        self.numpy_scalar_parameters.get(node.name, ()),
+                        self.numpy_integer_parameters.get(node.name, ()))
+        finally:
+            self.function_context.pop()
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
+    def _closed_forwarded_kwarg(self, node, name):
+        loads = [item for item in ast.walk(node)
+                 if isinstance(item, ast.Name) and item.id == name and isinstance(item.ctx, ast.Load)]
+        return bool(loads) and all(id(item) in self.unreachable_scene_nodes for item in loads)
+
+    def _closed_forwarded_vararg(self, node, name):
+        if node.decorator_list or node.args.kwarg:
+            return False
+        loads = [item for item in ast.walk(node)
+                 if isinstance(item, ast.Name) and item.id == name and isinstance(item.ctx, ast.Load)]
+        calls = [call for call in ast.walk(node)
+                 if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                 and isinstance(call.func.value, ast.Name) and call.func.value.id == "self"
+                 and call.func.attr in self.members | self.scene_helper_names
+                 and any(isinstance(arg, ast.Starred) and arg.value is load
+                         for arg in call.args for load in loads)]
+        return (len(loads) == 1 and len(calls) == 1
+                and sum(isinstance(arg, ast.Starred) and arg.value is loads[0]
+                        for arg in calls[0].args) == 1)
+
+    def _prepare_optional_scene_fields(self, node):
+        if (len(node.bases) != 1 or not isinstance(node.bases[0], ast.Name)
+                or node.bases[0].id != "Scene" or not self._trusted_noon_binding("Scene")
+                or self.module_binding_counts.get("getattr", 0)):
+            return
+        methods = [member for member in node.body
+                   if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        method_names = {method.name for method in methods}
+        if method_names & {"__getattr__", "__getattribute__"}:
+            return
+        class_bindings = _SourceBindings()
+        for statement in node.body:
+            class_bindings.visit(statement)
+        class_names = class_bindings.names
+        writes = {child.attr for method in methods for child in ast.walk(method)
+                  if isinstance(child, ast.Attribute) and isinstance(child.ctx, (ast.Store, ast.Del))
+                  and isinstance(child.value, ast.Name) and child.value.id == "self"}
+        for method in methods:
+            nodes = _walk_scope(method.body)
+            argument_names = {argument.arg for argument in
+                              [*method.args.posonlyargs, *method.args.args, *method.args.kwonlyargs,
+                               *([method.args.vararg] if method.args.vararg else []),
+                               *([method.args.kwarg] if method.args.kwarg else [])]}
+            bindings = _SourceBindings()
+            for statement in method.body:
+                bindings.visit(statement)
+            for call in (child for child in nodes if isinstance(child, ast.Call)):
+                if (not isinstance(call.func, ast.Name) or call.func.id != "getattr"
+                        or len(call.args) != 3 or call.keywords
+                        or not isinstance(call.args[0], ast.Name) or call.args[0].id != "self"
+                        or not isinstance(call.args[1], ast.Constant)
+                        or type(call.args[1].value) is not str
+                        or not call.args[1].value.startswith("_")
+                        or call.args[1].value.startswith("__")
+                        or call.args[1].value in writes | class_names | method_names | self.members | _CANONICAL_SCENE_FIELDS
+                        or not isinstance(call.args[2], ast.Constant) or call.args[2].value is not None):
+                    continue
+                assign = next((parent for parent in nodes
+                               if isinstance(parent, ast.Assign) and parent.value is call), None)
+                if (not assign or len(assign.targets) != 1 or not isinstance(assign.targets[0], ast.Name)
+                        or bindings.binding_counts.get(assign.targets[0].id) != 1
+                        or "getattr" in bindings.names):
+                    continue
+                optional_name = assign.targets[0].id
+                if optional_name in argument_names or assign not in method.body:
+                    continue
+                assign_index = method.body.index(assign)
+                guards = []
+                for guard in (child for child in nodes if isinstance(child, ast.If)):
+                    test = guard.test
+                    if (isinstance(test, ast.Compare) and isinstance(test.left, ast.Name)
+                            and test.left.id == optional_name and len(test.ops) == 1
+                            and isinstance(test.ops[0], ast.IsNot) and len(test.comparators) == 1
+                            and isinstance(test.comparators[0], ast.Constant)
+                            and guard in method.body and method.body.index(guard) > assign_index
+                            and test.comparators[0].value is None and guard.body):
+                        dead = {id(child) for statement in guard.body for child in _walk_scope([statement])}
+                        guards.append((guard, dead))
+                loads = [child for child in nodes
+                         if isinstance(child, ast.Name) and child.id == optional_name
+                         and isinstance(child.ctx, ast.Load)]
+                tests = {id(guard.test.left) for guard, _ in guards}
+                dead = {item for _, nodes in guards for item in nodes}
+                if guards and all(id(child) in tests or id(child) in dead for child in loads):
+                    self.admitted_optional_scene_getters.add(id(call.func))
+                    for guard, nodes in guards:
+                        self.unreachable_scene_nodes.add(id(guard))
+                        self.unreachable_scene_nodes.update(nodes)
+
     def visit_ClassDef(self, node):
+        self._prepare_optional_scene_fields(node)
         if (node.decorator_list or node.keywords or getattr(node, "type_params", ()) or len(node.bases) != 1
                 or not isinstance(node.bases[0], ast.Name)):
             raise _OpaqueSource(node, "unsupported_class_contract")
@@ -3680,6 +4324,37 @@ class _SceneOnlySource(ast.NodeVisitor):
         # Methods resolve module globals, not names in their class dictionary.
         previous_members = self.members
         previous_module_scope = self.scopes[0]
+        previous_helpers = self.scene_helper_names
+        declared_helpers = {member.name for member in node.body
+                            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        self.scene_helper_names = declared_helpers
+        if len(declared_helpers) != sum(isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                        for member in node.body):
+            raise _OpaqueSource(node, "unsupported_class_contract")
+        owned_stores = {child.attr for member in node.body
+                        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        for child in ast.walk(member)
+                        if isinstance(child, ast.Attribute) and isinstance(child.ctx, ast.Store)
+                        and isinstance(child.value, ast.Name) and child.value.id == "self"}
+        if (owned_stores & (previous_members | declared_helpers | _CANONICAL_SCENE_FIELDS)
+                or any(name.startswith("__") for name in owned_stores)):
+            raise _OpaqueSource(node, "unsupported_class_contract")
+        for member in node.body:
+            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for child in ast.walk(member):
+                    if isinstance(child, ast.Name) and child.id == "self" and isinstance(child.ctx, ast.Store):
+                        raise _OpaqueSource(child, "unsupported_class_contract")
+                    if (isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name)
+                            and child.value.id == "self" and child.attr in owned_stores):
+                        self.admitted_scene_owned_attributes.add(id(child))
+        if declared_helpers & previous_members:
+            raise _OpaqueSource(node, "unsupported_class_contract")
+        for member in node.body:
+            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for child in ast.walk(member):
+                    if (isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name)
+                            and child.value.id == "self" and child.attr in declared_helpers):
+                        self.admitted_scene_helper_attributes.add(id(child))
         if spatial:
             self.members = self.members | _SOURCE_SPATIAL_MEMBERS
             self.scopes[0] = self.scopes[0] | _SOURCE_SPATIAL_CONSTRUCTORS
@@ -3706,6 +4381,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         finally:
             self.members = previous_members
             self.scopes[0] = previous_module_scope
+            self.scene_helper_names = previous_helpers
 
     def _trusted_noon_binding(self, name):
         if any(name in scope for scope in self.scopes[1:]):
@@ -3869,7 +4545,9 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unproven_numpy_write_origin")
             owner = next((owned for scope, owned in zip(reversed(self.scopes), reversed(self.owned_containers))
                 if name in scope), ())
-            if name not in owner:
+            owned_field = (isinstance(node.value, ast.Attribute)
+                           and id(node.value) in self.admitted_scene_owned_attributes)
+            if name not in owner and not owned_field:
                 raise _OpaqueSource(node, "unproven_ownership")
         self.generic_visit(node)
 
