@@ -170,8 +170,21 @@ fn prepared_audio_uses_reader_resources_and_never_reports_frontier_as_duration()
     .unwrap();
     assert_eq!(initial_anchor["time"], 0.0);
     assert_eq!(initial_anchor["playing"], false);
+    assert_eq!(initial_anchor["buffering"], false);
     assert_eq!(initial_anchor["authorizedUntil"], 0.25);
     assert_eq!(initial_anchor["sampledEpochMs"], 10.0);
+    player.set_prepared_playing(true);
+    player.execution_wake(1_000.0).unwrap();
+    player.tick_delta_json(1_250.0).unwrap();
+    assert!(player.prepared_buffering());
+    let buffered_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(1_250.0, 15.0)
+            .expect("buffered audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(buffered_anchor["playing"], true);
+    assert_eq!(buffered_anchor["buffering"], true);
     let resources = crate::worker_audio::WorkerAudioResources::decode(
         &player.audio_resource_bundle_bytes().unwrap(),
     )
@@ -186,6 +199,14 @@ fn prepared_audio_uses_reader_resources_and_never_reports_frontier_as_duration()
         .unwrap();
     player.preflight_append(&batch).unwrap();
     player.append(batch).unwrap();
+    let resumed_anchor: serde_json::Value = serde_json::from_str(
+        &player
+            .audio_anchor_json_at(1_250.0, 20.0)
+            .expect("resumed audio anchor"),
+    )
+    .unwrap();
+    assert_eq!(resumed_anchor["buffering"], false);
+    player.set_prepared_playing(false);
     let extended_anchor: serde_json::Value = serde_json::from_str(
         &player
             .audio_anchor_json_at(0.0, 20.0)

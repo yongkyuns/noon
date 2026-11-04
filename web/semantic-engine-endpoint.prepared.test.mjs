@@ -12,7 +12,7 @@ function fixture(mode = "transferable", options = {}) {
   const control = new MessageChannel(), render = new MessageChannel();
   const calls = [], messages = [], deltas = [], replies = [], waiters = new Set();
   let sequence = 0, requestId = 0, endpoint, reader;
-  let time = 0, frontier = 4, end, playing = !options.initiallyPaused, buffering = false;
+  let time = 0, frontier = 4, end, playing = !options.initiallyPaused, buffering = false, bufferOnTick = false;
   let observation = null, pendingDelta = false, tickDelta = false, tickFailure = null, payloadPadding;
   function changed() {
     for (const waiter of [...waiters]) {
@@ -51,6 +51,7 @@ function fixture(mode = "transferable", options = {}) {
     tickDeltaJson(wallTime) {
       record("tick", wallTime);
       if (tickFailure) throw tickFailure;
+      if (bufferOnTick) buffering = true;
       return tickDelta ? json() : null;
     },
     seekDeltaJson,
@@ -147,6 +148,7 @@ function fixture(mode = "transferable", options = {}) {
     },
     restoreDeltaSeek() { noChangeProof = null; player.seekDeltaJson = seekDeltaJson; },
     buffer() { buffering = true; },
+    bufferOnNextTick() { bufferOnTick = true; },
     publishOnTick(value = true) { tickDelta = value; },
     oversizePayload(bytes = 4096) { payloadPadding = "x".repeat(bytes); },
     setTickFailure(error) { tickFailure = error; },
@@ -540,7 +542,7 @@ test("prepared render failure freezes its reader until explicit retirement", { t
   } finally { f.close(); }
 });
 
-test("prepared prefix audio extends only an already playing Rust anchor", async () => {
+test("prepared prefix audio holds at Rust buffering and resumes from a fresh anchor", { timeout: 3000 }, async () => {
   const f = fixture(undefined, { initiallyPaused: true });
   Object.assign(f.player, {
     hasAudio: () => true,
@@ -550,7 +552,7 @@ test("prepared prefix audio extends only an already playing Rust anchor", async 
     audioResourceBundleBytes: () => new Uint8Array([1]),
     audioAnchorJsonAt: (wallTime, sampledEpochMs) => JSON.stringify({
         session: 7, time: f.player.preparedPlaybackTimeAt(wallTime),
-        playing: f.player.preparedPlaying(), sampledEpochMs,
+        playing: f.player.preparedPlaying(), buffering: f.player.preparedBuffering(), sampledEpochMs,
         authorizedUntil: f.player.preparedFrontier(),
       }),
     tickCallbackPhaseJson: () => null,
@@ -576,9 +578,22 @@ test("prepared prefix audio extends only an already playing Rust anchor", async 
     assert.equal(extension.audioAnchor.playing, true);
     assert.equal(extension.audioAnchor.authorizedUntil, 6);
     assert.equal(extension.audioAnchor.time, f.player.preparedTime());
+    f.bufferOnNextTick();
+    f.publishOnTick(false);
+    f.tick();
+    await f.when(() => f.replies.filter(message => message.type === "audio_state").length === 2);
+    const held = f.replies.filter(message => message.type === "audio_state")[1];
+    assert.equal(held.audioAnchor.playing, true, "buffering preserves the Rust play intent");
+    assert.equal(held.audioAnchor.buffering, true, "the device receives the Rust buffer transition");
+    f.deliver(6);
+    await f.when(() => f.replies.filter(message => message.type === "audio_state").length === 3);
+    const bufferResume = f.replies.filter(message => message.type === "audio_state")[2];
+    assert.equal(bufferResume.audioAnchor.buffering, false);
+    assert.equal(bufferResume.audioAnchor.authorizedUntil, 6,
+      "a held device resumes from a newer Rust anchor even when the frontier did not grow");
     f.endpoint.sourcePrefixDelivered();
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(f.replies.filter(message => message.type === "audio_state").length, 1,
+    assert.equal(f.replies.filter(message => message.type === "audio_state").length, 3,
       "repeated delivery without new Rust authorization does not re-anchor the device");
   } finally { f.close(); }
 });

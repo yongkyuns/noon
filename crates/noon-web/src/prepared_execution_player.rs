@@ -379,7 +379,7 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJson))]
     pub fn audio_anchor_json(&self, sampled_epoch_ms: f64) -> Result<String, String> {
-        self.audio_anchor_json_at(self.prepared_time(), sampled_epoch_ms)
+        self.serialize_audio_anchor(self.prepared_time(), sampled_epoch_ms)
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJsonAt))]
@@ -389,6 +389,10 @@ impl PreparedExecutionPlayer {
         sampled_epoch_ms: f64,
     ) -> Result<String, String> {
         let time = self.prepared_playback_time_at(wall_time_ms)?;
+        self.serialize_audio_anchor(time, sampled_epoch_ms)
+    }
+
+    fn serialize_audio_anchor(&self, time: f64, sampled_epoch_ms: f64) -> Result<String, String> {
         if !sampled_epoch_ms.is_finite() {
             return Err("audio anchor requires a finite host timestamp".into());
         }
@@ -396,6 +400,7 @@ impl PreparedExecutionPlayer {
             "session": self.encoder.session(),
             "time": time,
             "playing": self.playback.playing(),
+            "buffering": self.playback.buffering(),
             "sampledEpochMs": sampled_epoch_ms,
             "authorizedUntil": self.playback.reader.end_time()
                 .unwrap_or_else(|| self.playback.reader.frontier()),

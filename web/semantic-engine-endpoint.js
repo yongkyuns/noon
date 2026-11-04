@@ -101,6 +101,7 @@ export async function attachSemanticEngine(
   let replayUnavailable = null;
   let hasAudio = false;
   let lastAudioAuthorizedUntil = null;
+  let lastAudioBuffering = null;
   let sections = [];
   // Live execution leases its existing source player. Prepared execution owns
   // an independent typed reader; the source player stays in its active context.
@@ -526,6 +527,23 @@ export async function attachSemanticEngine(
       onExecutionDiagnostic({ stage: "disposition", disposition, ...facts,
         ...(prepared !== null ? { loopCount: snapshot.loopCount } : {}) });
     }
+  }
+  function publishPreparedAudioState(sampledAt = performance.now()) {
+    if (prepared === null || !hasAudio || typeof player.audioAnchorJsonAt !== "function") return;
+    const audioAnchor = JSON.parse(player.audioAnchorJsonAt(
+      sampledAt, performance.timeOrigin + sampledAt,
+    ));
+    if (typeof audioAnchor.buffering !== "boolean") {
+      throw new Error("prepared audio anchor is missing Rust buffering state");
+    }
+    const authorizationAdvanced = Number.isFinite(audioAnchor.authorizedUntil) &&
+      (lastAudioAuthorizedUntil === null || audioAnchor.authorizedUntil > lastAudioAuthorizedUntil);
+    const bufferingChanged = audioAnchor.buffering !== lastAudioBuffering;
+    if (!authorizationAdvanced && !bufferingChanged) return;
+    lastAudioAuthorizedUntil = Number.isFinite(audioAnchor.authorizedUntil)
+      ? audioAnchor.authorizedUntil : null;
+    lastAudioBuffering = audioAnchor.buffering;
+    post({ type: "audio_state", audioAnchor });
   }
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
     if (!force && cadence === "idle" && executionWakeCadence === "idle") return;
@@ -1407,6 +1425,7 @@ export async function attachSemanticEngine(
             : player.audioAnchorJson(performance.timeOrigin + sampledAt));
           lastAudioAuthorizedUntil = Number.isFinite(audioAnchor.authorizedUntil)
             ? audioAnchor.authorizedUntil : null;
+          lastAudioBuffering = typeof audioAnchor.buffering === "boolean" ? audioAnchor.buffering : null;
         }
         const observedState = state(message.type);
         if (noTargetSectionQuery && prepared !== null) {
@@ -1453,8 +1472,12 @@ export async function attachSemanticEngine(
               // The render timestamp is a wake opportunity only. The prepared
               // reader maps this producing context's monotonic clock in Rust.
               if (preparedClockAdmitted) {
-                send(player.tickDeltaJson(testOnlyTickTimestamp === null
-                  ? performance.now() : testOnlyTickTimestamp()));
+                const wasBuffering = player.preparedBuffering();
+                const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
+                send(player.tickDeltaJson(sampledAt));
+                if (hasAudio && wasBuffering !== player.preparedBuffering()) {
+                  publishPreparedAudioState(sampledAt);
+                }
                 observeExecutionWake(performance.now());
                 prepared.wakeSource();
                 requestSourceHandoff();
@@ -1850,15 +1873,7 @@ export async function attachSemanticEngine(
       // renderer delta. It may release Rust buffering/demand and wake sleepers.
       try {
         if (hasAudio && currentPlayerPlaying() && typeof player.audioAnchorJsonAt === "function") {
-          const sampledAt = performance.now();
-          const audioAnchor = JSON.parse(player.audioAnchorJsonAt(
-            sampledAt, performance.timeOrigin + sampledAt,
-          ));
-          if (Number.isFinite(audioAnchor.authorizedUntil) &&
-              (lastAudioAuthorizedUntil === null || audioAnchor.authorizedUntil > lastAudioAuthorizedUntil)) {
-            lastAudioAuthorizedUntil = audioAnchor.authorizedUntil;
-            post({ type: "audio_state", audioAnchor });
-          }
+          publishPreparedAudioState();
         }
         if (diagnosticReady) observeExecution(state("state"));
         observeExecutionWake(performance.now());

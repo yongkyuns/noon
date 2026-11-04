@@ -1307,7 +1307,7 @@ test("a prepared prefix extension is forwarded without issuing a second playback
   });
   const { client, engine } = await startClient();
   try {
-    const anchor = { session: 1, time: 0.2, playing: true, sampledEpochMs: 1234,
+    const anchor = { session: 1, time: 0.2, playing: true, buffering: false, sampledEpochMs: 1234,
       authorizedUntil: 0.75 };
     engine.emitMessage(engineMessage("audio_state", { audioAnchor: anchor }));
     await new Promise(resolve => setImmediate(resolve));
