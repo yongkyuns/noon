@@ -311,7 +311,9 @@ async function pauseReplay(page) {
   if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
   await page.waitForFunction(() => {
     const controls = document.querySelector(".playback-controls")?.dataset;
-    return controls?.playing === "false" && controls.busy === "false";
+    return controls?.playing === "false" && controls.busy === "false" &&
+      window.__noonExampleGallery?.runInFlight === false &&
+      document.querySelector("#status")?.dataset.state === "ready";
   });
 }
 
@@ -532,7 +534,7 @@ try {
   assert.equal(pausedSettled.playbackAvailability, "available");
   assert.equal(pausedSettled.canvasIdentity, "original");
   assert.equal(pausedSettled.canvasCount, 1);
-  assert.equal(pausedSettled.runtimeState, "running");
+  assert.equal(pausedSettled.runtimeState, "ready");
   await memoryMark(page, "after-paused-rerun");
   assert.equal(pausedSettled.patchExample, exampleId);
   assert.ok(
@@ -571,7 +573,7 @@ try {
   assert.equal(runningSettled.playbackAvailability, "available");
   assert.equal(runningSettled.canvasIdentity, "original");
   assert.equal(runningSettled.canvasCount, 1);
-  assert.equal(runningSettled.runtimeState, "running");
+  assert.equal(runningSettled.runtimeState, "ready");
   await memoryMark(page, "after-running-rerun");
 
   // Repeat state transitions without hooks to catch command-queue ordering bugs.
@@ -612,7 +614,7 @@ try {
     assert.equal(settled.canvasCount, 1);
     assert.equal(settled.patchState, "applied");
     assert.equal(settled.patchExample, exampleId);
-    assert.equal(settled.runtimeState, "running");
+    assert.equal(settled.runtimeState, "ready");
     await memoryMark(page, `after-iteration-${iteration}`);
   }
 
