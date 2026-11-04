@@ -12,7 +12,8 @@ function fixture(mode = "transferable", options = {}) {
   const control = new MessageChannel(), render = new MessageChannel();
   const calls = [], messages = [], deltas = [], replies = [], waiters = new Set();
   let sequence = 0, requestId = 0, endpoint, reader;
-  let time = 0, frontier = 4, end, playing = !options.initiallyPaused, buffering = false, bufferOnTick = false;
+  let time = 0, frontier = 4, end, playing = !options.initiallyPaused,
+    buffering = options.initialBuffering === true, bufferOnTick = false;
   let observation = null, pendingDelta = false, tickDelta = false, tickFailure = null, payloadPadding;
   function changed() {
     for (const waiter of [...waiters]) {
@@ -32,7 +33,7 @@ function fixture(mode = "transferable", options = {}) {
     if (!Number.isFinite(value) || value < 0 || (end === undefined ? value >= frontier : value > end)) {
       throw new Error("prepared target is unavailable");
     }
-    record("seek", value); time = value;
+    record("seek", value); time = value; buffering = false;
     return json();
   };
   const player = {
@@ -167,6 +168,87 @@ function fixture(mode = "transferable", options = {}) {
 }
 
 for (const mode of ["transferable", "shared"]) {
+  test(`prepared ${mode} diagnostics capture Rust waiting transitions, excluding paused buffering`, { timeout: 3000 }, async () => {
+    const events = [], f = fixture(mode, { onExecutionDiagnostic: event => events.push(event) });
+    try {
+      await f.attach();
+      const attached = events.find(event => event.stage === "attached");
+      assert.deepEqual([attached.bufferingCapture.playing, attached.bufferingCapture.buffering,
+        attached.bufferingCapture.waiting], [true, false, false]);
+      assert.equal(attached.bufferingCapture.session, 7);
+      f.acknowledge(); await f.present();
+      f.bufferOnNextTick(); f.tick();
+      await f.when(() => events.some(event => event.stage === "buffering-transition" && event.waiting));
+      await f.request("pause");
+      assert.equal(f.player.preparedBuffering(), true);
+      assert.equal(f.player.preparedPlaying(), false);
+      await f.request("set_loop_duration", { loopDurationSeconds: 4 });
+      assert.equal(events.filter(event => event.stage === "buffering-transition").length, 2,
+        "changing terminal loop policy cannot turn paused buffering into an active wait");
+      await f.request("resume");
+      const seeking = f.request("seek", { time: 0.5 });
+      await f.when(() => f.deltas.length === 2);
+      const delta = f.deltas.at(-1);
+      f.acknowledge(delta);
+      f.rendererMessage({ type: "execution_presented", session: delta.session, sequence: delta.sequence });
+      await seeking;
+
+      const transitions = events.filter(event => event.stage === "buffering-transition");
+      assert.deepEqual(transitions.map(({ waiting, boundary, reason }) => [waiting, boundary, reason]), [
+        [true, "tick", "open-history-frontier"],
+        [false, "pause", "pause"],
+        [true, "resume", "open-history-frontier"],
+        [false, "seek", "seek"],
+      ]);
+      assert.deepEqual(transitions.map(({ playing, buffering }) => [playing, buffering]), [
+        [true, true], [false, true], [true, true], [true, false],
+      ]);
+      for (const event of transitions) {
+        assert.equal(event.session, 7);
+        assert.ok(Number.isFinite(event.mutationStartedAtEpochMs));
+        assert.ok(event.observedAtEpochMs >= event.mutationStartedAtEpochMs);
+        assert.ok(Number.isFinite(event.time));
+      }
+      assert.equal(transitions[0].publication.session, 7);
+      assert.equal(transitions.length, 4, "paused buffering emits no active wait and unchanged reads do not duplicate transitions");
+    } finally { f.close(); }
+  });
+
+  test(`prepared ${mode} diagnostics close a frontier wait when terminal history is adopted`, { timeout: 3000 }, async () => {
+    const events = [], f = fixture(mode, { onExecutionDiagnostic: event => events.push(event) });
+    try {
+      await f.attach();
+      f.acknowledge(); await f.present();
+      f.bufferOnNextTick(); f.tick();
+      await f.when(() => events.some(event => event.stage === "buffering-transition" && event.waiting));
+      f.deliver(4, true);
+      f.endpoint.sourcePrefixDelivered();
+      const transitions = events.filter(event => event.stage === "buffering-transition");
+      assert.deepEqual(transitions.map(({ waiting, boundary, reason }) => [waiting, boundary, reason]), [
+        [true, "tick", "open-history-frontier"],
+        [false, "prefix-delivery", "terminal-adopted"],
+      ]);
+    } finally { f.close(); }
+  });
+
+  test(`prepared ${mode} diagnostics mark an active wait on retained-reader attach as left-censored`, { timeout: 3000 }, async () => {
+    const events = [], f = fixture(mode, { initialBuffering: true,
+      onExecutionDiagnostic: event => events.push(event) });
+    try {
+      await f.attach();
+      const transition = events.find(event => event.stage === "buffering-transition");
+      assert.equal(transition.waiting, true);
+      assert.equal(transition.leftCensored, true);
+      assert.equal(transition.boundary, "receiver-attached");
+      assert.equal(transition.session, 7);
+      const attached = events.find(event => event.stage === "attached");
+      assert.deepEqual([attached.bufferingCapture.playing, attached.bufferingCapture.buffering,
+        attached.bufferingCapture.waiting], [true, true, true]);
+      assert.equal(transition.observedAtEpochMs, attached.bufferingCapture.observedAtEpochMs,
+        "the censored marker and observer initialization share one Rust sample");
+    } finally { f.close(); }
+  });
+
   test(`prepared ${mode} diagnostics report actual adoption and first Rust wrap once`, async () => {
     const events = [], f = fixture(mode, { onExecutionDiagnostic: event => events.push(event) });
     try {

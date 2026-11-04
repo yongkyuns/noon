@@ -145,10 +145,62 @@ export async function attachSemanticEngine(
   const controlEnqueueEpochMs = new WeakMap();
   let diagnosticReady = false, diagnosticTerminal = false, diagnosticDisposition = false;
   let diagnosticCapabilities = null;
+  let preparedWaiting = null;
+  const hostEpochMs = () => performance.timeOrigin + performance.now();
+  const samplePreparedWaiting = (includeTimestamp = false) => {
+    if (prepared === null || player === null || onExecutionDiagnostic === null) return null;
+    const playing = player.preparedPlaying();
+    const buffering = player.preparedBuffering();
+    return { playing, buffering, waiting: playing && buffering,
+      session, ...(includeTimestamp ? { observedAtEpochMs: hostEpochMs() } : {}) };
+  };
+  const observePreparedWaiting = (boundary, mutationStartedAtEpochMs = null, sample = null) => {
+    sample ??= samplePreparedWaiting();
+    if (sample === null) return;
+    const { playing, buffering, waiting } = sample;
+    const firstObservation = preparedWaiting === null;
+    if (firstObservation) {
+      preparedWaiting = waiting;
+      if (!waiting) return;
+    } else {
+      if (preparedWaiting === waiting) return;
+      preparedWaiting = waiting;
+    }
+    const leftCensored = firstObservation && waiting;
+    mutationStartedAtEpochMs ??= hostEpochMs();
+    const observedAtEpochMs = sample.observedAtEpochMs ?? hostEpochMs();
+    const time = player.preparedTime();
+    const preparedFrontier = player.preparedFrontier();
+    const end = player.preparedEndTime() ?? null;
+    onExecutionDiagnostic({
+      stage: "buffering-transition",
+      session,
+      waiting,
+      playing,
+      buffering,
+      boundary,
+      reason: waiting ? "open-history-frontier"
+        : boundary === "prefix-delivery" ? end === null ? "prefix-adopted" : "terminal-adopted"
+          : boundary,
+      ...(leftCensored ? { leftCensored: true } : {}),
+      mutationStartedAtEpochMs,
+      observedAtEpochMs,
+      time,
+      preparedFrontier,
+      durationSeconds: end,
+      publication: lastSentPublication,
+    });
+  };
   const post = (payload, transfer = []) => {
     controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
     if (payload.type === "ready") diagnosticReady = true;
-    if (diagnosticReady && Number.isFinite(payload.time)) observeExecution(payload, payload.type === "ready");
+    if (diagnosticReady && Number.isFinite(payload.time)) {
+      const bufferingCapture = payload.type === "ready" ? samplePreparedWaiting(true) : null;
+      observeExecution(payload, payload.type === "ready", bufferingCapture);
+      if (bufferingCapture !== null) {
+        observePreparedWaiting("receiver-attached", bufferingCapture.observedAtEpochMs, bufferingCapture);
+      }
+    }
   };
   function requestSourceHandoff() {
     if (stopped || receiverFailed || prepared === null || !preparedClockAdmitted || sourceHandoffRequested || !player.sourceExecutionReady()) return;
@@ -495,7 +547,7 @@ export async function attachSemanticEngine(
   const currentPlayerPlaying = () => prepared !== null ? player.preparedPlaying() : player.isPlaying();
   // Observe admitted owners and command readiness, never the caller's desired
   // profile. Emit lifecycle changes only; the trace does not retain frames.
-  function observeExecution(snapshot, attached = false) {
+  function observeExecution(snapshot, attached = false, bufferingCapture = null) {
     if (onExecutionDiagnostic === null) return;
     const replay = snapshot.replaySupported === true;
     const controllable = replay || snapshot.sourcePlaybackControllable === true;
@@ -510,7 +562,8 @@ export async function attachSemanticEngine(
       durationSeconds: snapshot.durationSeconds ?? null, publication: lastSentPublication, capabilities };
     const signature = JSON.stringify(capabilities);
     if (attached || signature !== diagnosticCapabilities) {
-      onExecutionDiagnostic({ stage: attached ? "attached" : "capabilities-changed", ...facts });
+      onExecutionDiagnostic({ stage: attached ? "attached" : "capabilities-changed", ...facts,
+        ...(attached && bufferingCapture !== null ? { bufferingCapture } : {}) });
       diagnosticCapabilities = signature;
     }
     const terminal = prepared !== null ? snapshot.durationSeconds !== null
@@ -1188,8 +1241,10 @@ export async function attachSemanticEngine(
             latestTick = null;
             if (sourceFinished && (completedStaticSource || replayUnavailable !== null)) break;
             if (prepared !== null) {
+              const mutationStartedAtEpochMs = hostEpochMs();
               if (!preparedClockAdmitted) player.setPreparedPlaying(false);
               else player.pausePreparedAt(performance.now());
+              observePreparedWaiting("pause", mutationStartedAtEpochMs);
               const acceptedEpochMs = performance.timeOrigin + performance.now();
               const publication = drainAndSendDelta();
               presentationReceipt = await settlePreparedControlPresentation(
@@ -1239,7 +1294,11 @@ export async function attachSemanticEngine(
                 await awaitPresentation(send(player.seekDeltaJson(0)));
               }
             }
-            if (prepared !== null) player.setPreparedPlaying(true);
+            if (prepared !== null) {
+              const mutationStartedAtEpochMs = hostEpochMs();
+              player.setPreparedPlaying(true);
+              observePreparedWaiting("resume", mutationStartedAtEpochMs);
+            }
             else player.resume();
             const acceptedEpochMs = performance.timeOrigin + performance.now();
             if (prepared !== null) {
@@ -1268,6 +1327,7 @@ export async function attachSemanticEngine(
           case "set_loop_duration":
             if (prepared !== null) player.setPreparedLoopDuration(message.loopDurationSeconds);
             else player.setLoopDuration(message.loopDurationSeconds);
+            if (prepared !== null) observePreparedWaiting("loop-policy");
             observeExecutionWake(performance.now());
             break;
           case "seek":
@@ -1287,12 +1347,18 @@ export async function attachSemanticEngine(
             }
             const playing = hasAudio && currentPlayerPlaying();
             if (hasAudio) {
-              if (prepared !== null) player.pausePreparedAt(performance.now());
+              if (prepared !== null) {
+                const mutationStartedAtEpochMs = hostEpochMs();
+                player.pausePreparedAt(performance.now());
+                observePreparedWaiting("pause-before-seek", mutationStartedAtEpochMs);
+              }
               else player.pause();
             }
+            const seekStartedAtEpochMs = prepared === null ? null : hostEpochMs();
             const delta = message.type === "seek_section"
               ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
+            if (prepared !== null) observePreparedWaiting("seek", seekStartedAtEpochMs);
             const acceptedEpochMs = performance.timeOrigin + performance.now();
             const publication = send(delta);
             const evidence = prepared === null ? captureCommandPresentation(publication) : null;
@@ -1305,7 +1371,11 @@ export async function attachSemanticEngine(
                 acceptedEpochMs,
                 presentationSettledEpochMs: performance.timeOrigin + performance.now(),
               };
-              if (playing) player.setPreparedPlaying(true);
+              if (playing) {
+                const mutationStartedAtEpochMs = hostEpochMs();
+                player.setPreparedPlaying(true);
+                observePreparedWaiting("resume-after-seek", mutationStartedAtEpochMs);
+              }
             } else if (hasAudio) {
               const presented = await awaitPresentation(publication);
               if (presented !== null && (publication !== null || evidence !== null)) {
@@ -1486,7 +1556,10 @@ export async function attachSemanticEngine(
               if (preparedClockAdmitted) {
                 const wasBuffering = player.preparedBuffering();
                 const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
-                send(player.tickDeltaJson(sampledAt));
+                const mutationStartedAtEpochMs = hostEpochMs();
+                const delta = player.tickDeltaJson(sampledAt);
+                observePreparedWaiting("tick", mutationStartedAtEpochMs);
+                send(delta);
                 if (hasAudio && wasBuffering !== player.preparedBuffering()) {
                   publishPreparedAudioState(sampledAt);
                 }
@@ -1819,8 +1892,10 @@ export async function attachSemanticEngine(
               // A sleeping static wait can have observed elapsed time beyond
               // its last evaluated frame. Commit it through Rust before resetting
               // the wake epoch, preserving intent without publishing to a lost GPU.
+              const mutationStartedAtEpochMs = hostEpochMs();
               player.pausePreparedAt(performance.now());
               player.setPreparedPlaying(true);
+              observePreparedWaiting("recovery", mutationStartedAtEpochMs);
             }
           } catch (error) { terminateProgression(error); return; }
           receiverFailed = true;
@@ -1891,6 +1966,7 @@ export async function attachSemanticEngine(
       // History adoption alone neither selects another frame nor drains a
       // renderer delta. It may release Rust buffering/demand and wake sleepers.
       try {
+        observePreparedWaiting("prefix-delivery");
         if (hasAudio && currentPlayerPlaying() && typeof player.audioAnchorJsonAt === "function") {
           publishPreparedAudioState();
         }
