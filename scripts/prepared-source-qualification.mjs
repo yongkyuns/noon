@@ -119,6 +119,13 @@ try {
           // Registering a logical view can require a fresh receipt.
           direct.wake();
           globalThis.autoCanvas = { source, renderer, errors, direct, detach, pump: null, samples, trace,
+            highlightPresentationSnapshot() {
+              const playback = JSON.parse(renderer.debugPreparedPlaybackJson());
+              const pointer = JSON.parse(renderer.debugPointerPresentationJson());
+              return { atMs: performance.now(), interactions: playback.interactions,
+                current: pointer.current, presented: pointer.presented,
+                presentedFrames: direct.stats().presentedFrames };
+            },
             bufferedWakes: () => bufferedWakes,
             start() {
               const ahead = scenario === "bounded" ? 1 : scenario === "starved" ? 0.125 : 60;
@@ -157,8 +164,19 @@ try {
             if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("dom-click-returned"));
             await page.waitForFunction(() => JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions);
             if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("interaction-active"));
-            await page.waitForTimeout(100);
-            if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("after-existing-100ms"));
+            result.highlightPresentation = { afterActivation: await page.evaluate(() => autoCanvas.highlightPresentationSnapshot()) };
+            const activationReceipt = result.highlightPresentation.afterActivation;
+            assert.equal(activationReceipt.interactions, true);
+            const receipt = await page.waitForFunction(previousEpoch => {
+              const sample = autoCanvas.highlightPresentationSnapshot();
+              return !sample.interactions || (sample.presented !== null
+                && sample.current === sample.presented && sample.presented !== previousEpoch) ? sample : false;
+            }, activationReceipt.presented);
+            result.highlightPresentation.afterReceiptOrExpiry = await receipt.jsonValue();
+            await receipt.dispose();
+            assert.equal(result.highlightPresentation.afterReceiptOrExpiry.interactions, true,
+              "interaction expired before a newer matching presentation receipt");
+            if (backend === "webgpu") await page.evaluate(() => autoCanvas.trace.mark("after-receipt-wait"));
             const highlight = await capture("capped-highlight");
             if (backend === "webgpu") result.highlightDiagnosticTrace = await page.evaluate(() => autoCanvas.trace.result());
             assert.ok(!equalPixels(baseline, highlight));
@@ -250,6 +268,12 @@ try {
         console.log(`[PASS] cooperative ${backend}/${scenario}: ${result.checks.join(", ")}`);
       } catch (error) {
         result.status = "failed"; result.error = String(error); result.pageErrors = errors;
+        if (scenario === "bounded") {
+          try {
+            result.highlightPresentation ??= {};
+            result.highlightPresentation.atFailure = await page.evaluate(() => globalThis.autoCanvas?.highlightPresentationSnapshot?.() ?? null);
+          } catch (traceError) { result.highlightPresentationError = String(traceError); }
+        }
         if (backend === "webgpu" && scenario === "bounded") {
           try { result.highlightDiagnosticTrace = await page.evaluate(() => autoCanvas?.trace?.result() ?? null); }
           catch (traceError) { result.highlightDiagnosticTraceError = String(traceError); }
