@@ -120,6 +120,17 @@ export function readinessRendererSamples(stagedSamples, observations) {
     left.clockOriginMs + left.presentedAtMs - right.clockOriginMs - right.presentedAtMs);
 }
 
+export function readinessWarmSeekTargets(entry) {
+  const duration = entry?.duration;
+  const terminalHold = entry?.still_intervals?.findLast(([, end]) => end === duration);
+  const candidates = [...(entry?.beats ?? []).map(beat => beat.time), terminalHold?.[0], duration]
+    .filter(Number.isFinite).filter(time => time > 0 && time <= duration).sort((a, b) => a - b);
+  const unique = [...new Set(candidates)];
+  if (unique.length < 5) return [];
+  const targets = Array.from({ length: 5 }, (_, index) => unique[Math.round(index * (unique.length - 1) / 4)]);
+  return new Set(targets).size === targets.length ? targets : [];
+}
+
 export function readinessCommandReceipt(result, requestEpochMs, rendererSample = null) {
   const timing = result?.commandTiming;
   const acceptedEpochMs = Number.isFinite(timing?.acceptedEpochMs) ? timing.acceptedEpochMs : null;
@@ -347,8 +358,10 @@ export function summarizeReadiness(cases, contract) {
       const rows = cases.filter(row => row.sourceId === source.id && row.arm === arm && row.stratum === stratum && !row.warmup);
       const observed = rows.filter(row => row.status === "observed");
       const commands = {};
+      const commandPhases = {};
       for (const row of observed) for (const command of row.commands ?? []) {
         const values = commands[command.name] ??= { feedback: [], accepted: [], presented: [] };
+        if (command.commandPhase !== undefined) commandPhases[command.name] = command.commandPhase;
         const samples = {
           feedback: command.uiFeedbackMs ?? command.feedbackMs,
           accepted: command.runtimeAcceptanceMs ?? command.acceptedMs,
@@ -357,7 +370,8 @@ export function summarizeReadiness(cases, contract) {
         for (const [stage, value] of Object.entries(samples)) if (Number.isFinite(value)) values[stage].push(value);
       }
       const commandSummary = Object.fromEntries(Object.entries(commands).map(([name, values]) => [name,
-        Object.fromEntries(Object.entries(values).map(([stage, samples]) => [stage, distribution(samples)]))]));
+        { ...Object.fromEntries(Object.entries(values).map(([stage, samples]) => [stage, distribution(samples)])),
+          ...(commandPhases[name] ? { phase: commandPhases[name] } : {}) }]));
       const cadence = observed.flatMap(row => row.activeCadenceWindows ?? []);
       const buffering = observed.flatMap(row => row.bufferingEpisodes ?? []);
       return {
@@ -409,6 +423,15 @@ export function validateReadinessResults(cases, contract) {
           errors.push(`${source.id}/${arm}: malformed active renderer cadence summary`);
         }
         for (const command of row.commands ?? []) {
+          if (command.name === "seek" && command.commandPhase === "completed-history-warm") {
+            if (!Number.isFinite(command.targetTime) || command.targetTime < 0 ||
+                !Number.isFinite(row.durationSeconds) || command.targetTime > row.durationSeconds) {
+              errors.push(`${source.id}/${arm}: completed-history seek target is outside the authored range`);
+            }
+            if (command.matchingPresentation?.time !== command.targetTime || command.receiptTime !== command.targetTime) {
+              errors.push(`${source.id}/${arm}: completed-history seek receipt does not match its exact target`);
+            }
+          }
           if (!Number.isFinite(command.uiFeedbackMs)) errors.push(`${source.id}/${arm}: missing UI feedback timing`);
           if (!Number.isFinite(command.commandCompletionUpperMs)) errors.push(`${source.id}/${arm}: missing command completion timing`);
           if (!Number.isFinite(command.runtimeAcceptanceEpochMs)) errors.push(`${source.id}/${arm}: missing command acceptance receipt`);
@@ -469,6 +492,24 @@ export function validateReadinessResults(cases, contract) {
       if (byStratum.some(samples => samples.length === 0) ||
           commands.length < contract.sampling.minimumCommandObservationsPerSourceArm) {
         errors.push(`${source.id}/${arm}: too few command observations or a missing stratum`);
+      }
+      if (arm === "B" || arm === "D") for (const stratum of READINESS_STRATA) {
+        const seeks = cases.filter(row => row.sourceId === source.id && row.arm === arm &&
+          row.stratum === stratum && !row.warmup).flatMap(row => row.commands ?? [])
+          .filter(command => command.name === "seek" && command.commandPhase === "completed-history-warm");
+        if (seeks.length < contract.sampling.minimumCommandObservationsPerSourceArm) {
+          errors.push(`${source.id}/${arm}/${stratum}: too few completed-history seek observations`);
+        }
+        const seekAcceptance = distribution(seeks.map(command => command.runtimeAcceptanceMs));
+        if (Number.isFinite(contract.bounds.commandAcceptanceP95Ms) &&
+            seekAcceptance.p95 > contract.bounds.commandAcceptanceP95Ms) {
+          errors.push(`${source.id}/${arm}/${stratum}: completed-history seek acceptance p95 exceeds its bound`);
+        }
+        const seekPresentation = distribution(seeks.map(command => command.commandPresentationMs));
+        if (Number.isFinite(contract.bounds.commandPresentationP99Ms) &&
+            seekPresentation.p99 > contract.bounds.commandPresentationP99Ms) {
+          errors.push(`${source.id}/${arm}/${stratum}: completed-history seek presentation p99 exceeds its bound`);
+        }
       }
       const feedback = distribution(commands.map(command => command.uiFeedbackMs));
       if (Number.isFinite(contract.bounds.commandFeedbackMs) && feedback.p95 > contract.bounds.commandFeedbackMs) {

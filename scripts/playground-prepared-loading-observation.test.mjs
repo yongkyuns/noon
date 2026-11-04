@@ -7,7 +7,8 @@ import { sceneInkPixels, distribution, summarizeReadiness,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   activeCadenceWindows, summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
-  readinessReplayCycleEvidence, readinessRendererSamples, READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
+  readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets,
+  READINESS_STRATA } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 function canvas() {
@@ -129,7 +130,8 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
   const sourceId = contract.sources[0].id, stratum = "fresh-process-warm-resource-cache";
   const row = (arm, overrides = {}) => ({ sourceId, arm, stratum, warmup: false, status: "observed",
-    startup: { firstUsefulMs: 20 }, commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12 }],
+    startup: { firstUsefulMs: 20 }, commands: [{ name: "pause", feedbackMs: 5, acceptedMs: 8, presentedMs: 12 },
+      { name: "seek", commandPhase: "completed-history-warm", feedbackMs: 6, acceptedMs: 9, presentedMs: 13 }],
     activeCadenceWindows: [{ p95Ms: 16, p99Ms: 17 }], bufferingEpisodes: [{ durationMs: 40 }],
     memory: { peakSampledRssBytes: 100 }, ...overrides });
   const summary = summarizeReadiness([
@@ -148,9 +150,24 @@ test("readiness summaries keep failed and warmup starts out of timing samples", 
   assert.equal(summary.commands.pause.feedback.n, 1);
   assert.equal(summary.commands.pause.accepted.n, 1,
     "command acceptance remains a separately measured command milestone");
+  assert.equal(summary.commands.seek.phase, "completed-history-warm");
+  assert.equal(summary.commands.seek.presented.n, 1, "named seek timings remain separate from play/pause");
   assert.equal(summary.activeCadenceWindowP99Ms.n, 1);
   assert.equal(summary.buffering.episodes, 1);
   assert.equal(summary.peakProcessRssBytes.n, 1);
+});
+
+test("warm seek targets are five distinct manifest beats or closed terminal endpoints", async () => {
+  const manifest = JSON.parse(await readFile(new URL("../web/python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
+  for (const id of ["showcase-first-scene", "showcase-dynamic-scene"]) {
+    const entry = manifest.entries.find(row => row.id === id);
+    const targets = readinessWarmSeekTargets(entry);
+    assert.equal(targets.length, 5);
+    assert.equal(new Set(targets).size, 5);
+    assert.equal(targets.at(-1), entry.duration, "the closed authored endpoint remains selectable");
+    assert.ok(targets.every(time => entry.beats.some(beat => beat.time === time) ||
+      entry.still_intervals.some(([start, end]) => start === time && end === entry.duration) || time === entry.duration));
+  }
 });
 
 test("readiness requires actual attachment and ordered cleanup/disposition, not requested profile", () => {
@@ -222,6 +239,31 @@ test("strict readiness requires the first-submission bound and actual command re
   };
   assert.ok(validateReadinessResults(wrongSequence, contract)
     .some(error => /does not match the command publication/.test(error)));
+});
+
+test("strict replay arms require a full per-stratum completed-history seek sample set", async () => {
+  const contract = JSON.parse(await readFile(new URL("./fixtures/playground-readiness-contract.json", import.meta.url), "utf8"));
+  const sourceId = contract.sources[0].id;
+  const row = { sourceId, arm: "B", stratum: READINESS_STRATA[0], warmup: false,
+    status: "failed", commands: [] };
+  const command = sequence => ({ name: "seek", commandPhase: "completed-history-warm",
+    targetTime: 1, receiptTime: 1,
+    uiFeedbackMs: 1, commandCompletionUpperMs: 2, requestEpochMs: 10,
+    runtimeAcceptanceEpochMs: 11, presentationSettledEpochMs: 12, commandPresentationMs: 2,
+    commandPublication: { session: 2, sequence },
+    matchingPresentation: { session: 2, sequence, time: 1, unchanged: false } });
+  row.commands = Array.from({ length: 99 }, (_, index) => command(index + 1));
+  let errors = validateReadinessResults([row], contract);
+  assert.ok(errors.some(error => error === `${sourceId}/B/${READINESS_STRATA[0]}: too few completed-history seek observations`));
+  row.commands.push(command(100));
+  errors = validateReadinessResults([row], contract);
+  assert.ok(!errors.some(error => error === `${sourceId}/B/${READINESS_STRATA[0]}: too few completed-history seek observations`),
+    "play/pause counts cannot replace the named seek sample floor");
+  row.durationSeconds = contract.sources[0].durationSeconds;
+  row.commands[0].targetTime = row.durationSeconds;
+  errors = validateReadinessResults([row], contract);
+  assert.ok(errors.some(error => /completed-history seek receipt does not match its exact target/.test(error)),
+    "a matching publication identity cannot stand in for the requested authored time");
 });
 
 test("cold-network evidence records actual external responses and job-cache bypass", () => {

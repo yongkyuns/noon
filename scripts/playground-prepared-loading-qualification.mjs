@@ -19,7 +19,7 @@ import { sceneInkPixels, summarizeReadiness, validateReadinessContract,
   PRODUCT_GATE_THRESHOLD_ENVS, readinessCommandReceipt, readinessInstrumentationPlan,
   activeCadenceWindows, summarizeColdNetworkObservations,
   validateReusedHealthyInterpreter, readinessPresentationMatchesRun,
-  readinessReplayCycleEvidence, readinessRendererSamples } from "./playground-prepared-loading-observation.mjs";
+  readinessReplayCycleEvidence, readinessRendererSamples, readinessWarmSeekTargets } from "./playground-prepared-loading-observation.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -529,6 +529,60 @@ async function readinessCommand(page, row, desiredPlaying) {
   return after;
 }
 
+async function readinessWarmSeek(page, row, targetTime) {
+  const marker = await page.evaluate(() => ({ uiEventIndex: window.__noonReadinessPresentationProbe?.uiEvents.length ?? 0,
+    commandResultIndex: window.__noonReadinessPresentationProbe?.commandResults.length ?? 0,
+    automationIssuedEpochMs: performance.timeOrigin + performance.now() }));
+  const slider = page.locator(".playback-scrubber");
+  assert.equal(await slider.isDisabled(), false, "completed replay seek control is unavailable");
+  const selectedTime = await slider.evaluate((input, target) => {
+    if (Number(input.max) < target || Number(input.min) > target) throw new Error("seek target is outside the DOM range");
+    input.value = String(target);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return Number(input.value);
+  }, targetTime);
+  assert.equal(selectedTime, targetTime, "range control rounded an authored seek target");
+  const request = await page.evaluate(({ index, target }) =>
+    (window.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(index).find(event =>
+      event.kind === "request" && event.control === "playback-scrubber" && event.requestedTime === target) ?? null,
+  { index: marker.uiEventIndex, target: selectedTime });
+  assert.ok(request, "DOM range input did not produce the requested seek event");
+  await page.waitForFunction(target => {
+    const controls = document.querySelector(".playback-controls")?.dataset;
+    return controls?.busy === "false" && Number(controls.elapsedSeconds) === target;
+  }, selectedTime, { timeout: 30_000 });
+  const events = await page.evaluate(index =>
+    (window.__noonReadinessPresentationProbe?.uiEvents ?? []).slice(index), marker.uiEventIndex);
+  const feedback = events.find(event => event.kind === "state" && event.attribute === "data-busy" &&
+    event.state?.busy === "true" && event.epochMs >= request.epochMs) ?? null;
+  const completion = events.findLast(event => event.kind === "state" && event.attribute === "data-busy" &&
+    event.state?.busy === "false" && event.epochMs >= request.epochMs) ?? null;
+  assert.ok(completion, "seek command completion transition was not observed");
+  const result = await readinessCommandResult(page, marker.commandResultIndex, "seek");
+  assert.ok(result, "seek endpoint result was not observed");
+  const after = await observation(page);
+  const latest = after.metrics?.latestPresentationSample;
+  const minimalRendererSample = latest ? { ...latest, clockOriginMs: after.metrics.performanceTimeOriginMs } : null;
+  const publicationSample = instrumentationMode === "bounded-diagnostics"
+    ? await readinessPublicationSample(page, result.commandPublication) : minimalRendererSample;
+  const receipt = readinessCommandReceipt(result, request.epochMs, publicationSample);
+  const command = { name: "seek", commandPhase: "completed-history-warm", targetTime: selectedTime,
+    receiptTime: receipt.matchingPresentation?.time ?? null,
+    automationIssuedEpochMs: marker.automationIssuedEpochMs, requestEpochMs: request.epochMs,
+    uiFeedbackEpochMs: feedback?.epochMs ?? null,
+    uiFeedbackMs: feedback ? feedback.epochMs - request.epochMs : null,
+    uiFeedbackKind: feedback ? "data-busy=true" : null,
+    commandCompletedUiEpochMs: completion.epochMs,
+    commandCompletionUpperMs: after.epochMs - request.epochMs,
+    rendererObservation: rendererSnapshot(after.metrics), ...receipt,
+    runtimeAcceptanceLimitation: receipt.runtimeAcceptanceEpochMs === null
+      ? "endpoint seek result did not expose an acceptance timestamp" : null,
+    presentationReceiptLimitation: receipt.matchingPresentation === null
+      ? "endpoint seek result did not expose a validated matching publication receipt" : null };
+  row.commands.push(command);
+  return after;
+}
+
 async function measureReadinessPair(page, workers, source, initialArm, replayArm, stratum, trial, warmup, contextIdentity) {
   const startedAtEpochMs = Date.now();
   const showcaseEntry = inventory.find(entry => entry.id === source.id);
@@ -876,10 +930,16 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     assert.ok(replayCurrent.metrics?.presentedFrames > beforeFrames,
       "retained replay produced no new presentation");
     assert.ok(Number.isFinite(replayRow.startup.firstUsefulMs), "retained replay produced no useful picture");
+    replayRow.activeCadenceWindows = activeCadenceWindows(replayRow.cadenceObservations);
     replayRow.startup.replayRequestToRestartCompletionMs =
       replayRow.startup.restartCompletedUiEpochMs - replayStartedAtEpochMs;
     replayRow.startup.replayToWrapMs = replayCycleComplete.wrapped.observationEpochMs - replayStartedAtEpochMs;
     replayRow.replayCycleEvidence = replayCycleComplete;
+    const seekTargets = readinessWarmSeekTargets(showcaseEntry);
+    assert.equal(seekTargets.length, 5, "manifest does not supply five distinct warm-seek targets");
+    replayRow.warmSeekTargets = seekTargets;
+    if (replayCurrent.controls?.playing === "true") replayCurrent = await readinessCommand(page, replayRow, false);
+    for (const targetTime of seekTargets) replayCurrent = await readinessWarmSeek(page, replayRow, targetTime);
     const replayTrace = replayCurrent.executionDiagnostics;
     replayRow.endTrace = replayTrace;
     const replayExpectedProfile = replayArm === "B" ? "incremental" : "observed";
@@ -902,7 +962,6 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     const stagedReplaySamples = await page.evaluate(start =>
       (globalThis.__noonReadinessPresentationProbe?.samples ?? []).slice(start), sourceRow.presentationSampleEnd);
     replayRow.rendererSamples = readinessRendererSamples(stagedReplaySamples, replayRow.cadenceObservations);
-    replayRow.activeCadenceWindows = activeCadenceWindows(replayRow.cadenceObservations);
     delete replayRow.cadenceObservations;
     const firstReplayRender = replayRow.rendererSamples.map(sample => ({ sample,
       epochMs: sample.clockOriginMs + sample.presentedAtMs })).filter(value =>
