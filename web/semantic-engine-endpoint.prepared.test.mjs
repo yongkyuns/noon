@@ -65,10 +65,11 @@ function fixture(mode = "transferable", options = {}) {
     preparedEndTime: () => end,
     preparedPlaying: () => playing,
     preparedBuffering: () => buffering,
-    preparedPlaybackStateJson: () => JSON.stringify({ time, frontier, end: end ?? null,
+    preparedPlaybackStateJson(wallTime) { record("playback-state", wallTime); return JSON.stringify({ time, frontier, end: end ?? null,
       seekRange: { start: 0, end: end ?? Math.max(0, frontier - Number.EPSILON * Math.max(1, frontier)) },
       playing, buffering, completed: end === 0 || (end != null && loopDuration === null && time >= end),
-      advancing: playing && !buffering, loopDuration, loopCount, loopError: null }),
+      advancing: playing && !buffering, loopDuration, loopCount, loopError: null,
+      ...(options.heldPresentation ? { heldPresentation: options.heldPresentation } : {}) }); },
     setPreparedLoopDuration(value) { record("loop", value); loopDuration = value ?? null; },
     sourceExecutionReady: () => options.sourceExecutionRequired === true && buffering,
     preparedPlaybackTimeAt(wallTime) { record("observe-time", wallTime); return observation ?? time; },
@@ -442,13 +443,25 @@ test("exceeding the prepared shared packet byte cap retires the stream after ext
 });
 
 test("prepared pause commits Rust's static-wait sample and unsupported controls leave it unchanged", { timeout: 3000 }, async () => {
-  const f = fixture();
+  const heldPresentation = { publication: { session: 7, sequence: 0 }, evaluatedTime: 0.5,
+    time: 0.75, validUntil: 1 };
+  const f = fixture("transferable", { heldPresentation });
   try {
-    await f.attach(); f.acknowledge(); await f.present();
+    await f.attach();
+    const coldMetrics = (await f.request("metrics")).metrics.preparedPlayback;
+    assert.equal(coldMetrics, undefined, "unadmitted clock state cannot qualify a held picture");
+    f.acknowledge(); await f.present();
     f.observe(0.75);
-    const calls = f.calls.length;
-    assert.deepEqual((await f.request("metrics")).metrics.preparedRetention, { pending: { batches: 1 } });
-    assert.equal(f.calls.length, calls, "metrics cannot drain or advance the reader");
+    const calls = ["tick", "seek", "drain"].map(name => f.count(name));
+    const metrics = (await f.request("metrics")).metrics;
+    assert.deepEqual(metrics.preparedRetention, { pending: { batches: 1 } });
+    assert.equal(metrics.preparedPlayback.observedTime, 0.75);
+    assert.deepEqual(metrics.preparedPlayback.observation.heldPresentation, heldPresentation);
+    const stateCall = f.calls.filter(call => call[0] === "playback-state").at(-1)[1];
+    const timeCall = f.calls.filter(call => call[0] === "observe-time").at(-1)[1];
+    assert.equal(stateCall, timeCall, "state proof and observed clock use the same host timestamp");
+    assert.deepEqual(["tick", "seek", "drain"].map(name => f.count(name)), calls,
+      "metrics cannot drain or advance the reader");
     assert.equal((await f.request("state")).time, 0.75);
     const paused = await f.request("pause");
     assert.equal(paused.time, 0.75);

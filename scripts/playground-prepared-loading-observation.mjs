@@ -96,15 +96,28 @@ export function readinessReplayCycleEvidence(observations, { restartPublication,
     const clock = Number(controls?.elapsedSeconds);
     const frame = observation.metrics?.latestPresentationSample;
     const origin = observation.metrics?.performanceTimeOriginMs;
+    const prepared = observation.preparedPlayback;
+    const held = prepared?.observation?.heldPresentation;
+    const observedTime = prepared?.observedTime;
+    const heldPublicationMatches = held?.publication?.session === frame?.session &&
+      held?.publication?.sequence === frame?.sequence;
+    const heldTerminalStill = heldPublicationMatches && prepared.observation.loopCount === 0 &&
+      Number.isFinite(observedTime) && observedTime === held.time &&
+      Number.isFinite(held.evaluatedTime) && observedTime >= held.evaluatedTime &&
+      Number.isFinite(held.validUntil) && observedTime < held.validUntil &&
+      observedTime >= terminalHoldStartSeconds && observedTime < durationSeconds;
+    const presentedAfterRequest = Number.isFinite(origin) && Number.isFinite(frame?.presentedAtMs) &&
+      origin + frame.presentedAtMs >= requestEpochMs;
     if (!Number.isFinite(observation.epochMs) || observation.epochMs < requestEpochMs ||
         !Number.isFinite(clock) || controls?.busy !== "false" ||
         frame?.session !== restartPublication.session || !Number.isSafeInteger(frame?.sequence) ||
         frame.sequence < restartPublication.sequence || !Number.isFinite(frame.time) ||
-        !Number.isFinite(origin) || !Number.isFinite(frame.presentedAtMs) ||
-        origin + frame.presentedAtMs < requestEpochMs) continue;
+        !presentedAfterRequest) continue;
     const sample = { observationEpochMs: observation.epochMs, controlTime: clock,
       publication: { session: frame.session, sequence: frame.sequence, time: frame.time,
-        presentedAtEpochMs: origin + frame.presentedAtMs } };
+        presentedAtEpochMs: origin + frame.presentedAtMs,
+        heldPresentation: heldTerminalStill ? held : null,
+        observedTime: heldTerminalStill ? observedTime : null } };
     if (reset === null) {
       if (controls.playing === "false" && frame.sequence === restartPublication.sequence &&
           clock <= clockToleranceSeconds && frame.time <= clockToleranceSeconds) reset = sample;
@@ -115,7 +128,8 @@ export function readinessReplayCycleEvidence(observations, { restartPublication,
     if (advancedAfterReset && nearEnd === null && clock <= clockToleranceSeconds &&
         frame.time <= clockToleranceSeconds) return null;
     if (terminalHold === null && clock >= terminalHoldStartSeconds - clockToleranceSeconds &&
-        frame.sequence > restartPublication.sequence && acceptsTerminalPublication(frame.time)) {
+        frame.sequence > restartPublication.sequence &&
+        (acceptsTerminalPublication(frame.time) || heldTerminalStill)) {
       terminalHold = sample;
     }
     if (terminalHold !== null && nearEnd === null && clock >= durationSeconds - clockToleranceSeconds) {

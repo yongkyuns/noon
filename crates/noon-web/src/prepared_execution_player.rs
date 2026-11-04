@@ -14,10 +14,29 @@ use crate::{
 };
 use noon::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixReader};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PreparedPresentationIdentity {
     session: u32,
     sequence: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedHeldPresentation {
+    publication: PreparedPresentationIdentity,
+    evaluated_time: f64,
+    time: f64,
+    valid_until: f64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedPlaybackState {
+    #[serde(flatten)]
+    observation: crate::prepared_canvas_playback::PreparedPlaybackObservation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held_presentation: Option<PreparedHeldPresentation>,
 }
 
 use crate::retained_family_execution_encoder::NoChangePresentation as PreparedNoChangePresentation;
@@ -532,9 +551,45 @@ impl PreparedExecutionPlayer {
 
     /// One coherent Rust-owned observation for status and qualification traces.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaybackStateJson))]
-    pub fn prepared_playback_state_json(&self) -> String {
-        serde_json::to_string(&self.playback.observation())
-            .expect("prepared playback observation is serializable")
+    pub fn prepared_playback_state_json(&self, wall_time_ms: f64) -> Result<String, String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        let held_presentation = self.held_presentation(wall_time_ms);
+        serde_json::to_string(&PreparedPlaybackState {
+            observation: self.playback.observation(),
+            held_presentation,
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    fn held_presentation(&self, wall_time_ms: f64) -> Option<PreparedHeldPresentation> {
+        let publication = self.last_publication?;
+        let wake = self.playback.wake_state();
+        let plan = BrowserExecutionWakePlan::from_runtime(wake);
+        let BrowserExecutionCadence::TimerAtSceneTime(valid_until) = plan.cadence() else {
+            return None;
+        };
+        let evaluated_time = self.playback.reader.frame().time;
+        let time = self.clock.scene_time_at(wall_time_ms)?;
+        if !self.snapshot_sent
+            || publication.session != self.encoder.session()
+            || !self.playback.playing()
+            || self.playback.buffering()
+            || self.playback.reader.interactions_active()
+            || plan.present_now()
+            || !valid_until.is_finite()
+            || !evaluated_time.is_finite()
+            || !time.is_finite()
+            || time < evaluated_time
+            || time >= valid_until
+        {
+            return None;
+        }
+        Some(PreparedHeldPresentation {
+            publication,
+            evaluated_time,
+            time,
+            valid_until,
+        })
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedRetentionMetricsJson))]
@@ -672,7 +727,8 @@ impl PreparedExecutionPlayer {
     #[cfg(any(test, debug_assertions, feature = "renderer-smoke"))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugPreparedPlaybackJson))]
     pub fn debug_prepared_playback_json(&self) -> String {
-        self.prepared_playback_state_json()
+        self.prepared_playback_state_json(0.0)
+            .expect("zero is a valid diagnostic wall timestamp")
     }
 }
 

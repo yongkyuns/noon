@@ -203,7 +203,8 @@ function preparedAudioPage({ run, observations = [] } = {}) {
         };
       return { metrics: { time: sample.time, objectCount: current.objectCount ?? 55,
         needsPresent: current.needsPresent ?? false, bufferedDeltas: current.bufferedDeltas ?? 0,
-        latestPresentationSample: sample } };
+        latestPresentationSample: sample },
+      ...(current.preparedPlayback ? { engineMetrics: { preparedPlayback: current.preparedPlayback } } : {}) };
     },
     get executionDiagnostics() {
       const base = current.diagnostics ?? {
@@ -348,6 +349,41 @@ test("looping first pass captures one unseeked terminal hold before wrap with it
     session: 7, sequence: 5, time: 7.5, presentedAtMs: 100,
   });
   assert.match(result.firstPassCapture.pngDataUrl, /^data:image\/png;base64,/);
+});
+
+test("looping first pass accepts an earlier receipt only with matching Rust hold evidence", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[6, 8]] };
+  const held = { publication: { session: 7, sequence: 5 }, evaluatedTime: 5.9514,
+    time: 7.5, validUntil: 8 };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [
+      { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, preparedPlayback: {
+        observation: { loopCount: 0, heldPresentation: held }, observedTime: 7.5 } },
+      { elapsed: 0.1, publishedTime: 0.1, looped: true },
+    ],
+  });
+  const result = await runOrdinaryGallery(page, 100, lesson);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.firstPassCapture.heldPresentation)),
+    { ...held, observedTime: 7.5 });
+  assert.equal(result.firstPassCapture.rendererReceipt.time, 5.9514,
+    "capture retains the real renderer receipt rather than relabeling its time");
+  for (const invalid of [
+    { ...held, publication: { session: 7, sequence: 4 } },
+    { ...held, validUntil: 7.5 },
+  ]) {
+    const failed = preparedAudioPage({
+      run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+        time: 0, playing: true, durationSeconds: 8 } },
+      observations: [
+        { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, preparedPlayback: {
+          observation: { loopCount: 0, heldPresentation: invalid }, observedTime: 7.5 } },
+        { elapsed: 0.1, publishedTime: 0.1, looped: true },
+      ],
+    });
+    await assert.rejects(runOrdinaryGallery(failed.page, 100, lesson), /wrapped before its terminal hold picture/);
+  }
 });
 
 test("terminal hold bitmap and controls are captured before asynchronous PNG serialization", async () => {

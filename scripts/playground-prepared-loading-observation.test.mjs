@@ -407,6 +407,37 @@ test("replay requires its own terminal hold, near-end clock and newer postwrap f
     "a playing near-zero frame cannot substitute for the settled restart publication");
 });
 
+test("replay may reuse only a Rust-proven unchanged terminal-hold publication", () => {
+  const sample = (epochMs, elapsedSeconds, time, sequence, { held = null, loopCount = 0 } = {}) => ({ epochMs,
+    controls: { elapsedSeconds: String(elapsedSeconds), busy: "false", playing: String(elapsedSeconds === 0 ? false : true) },
+    metrics: { performanceTimeOriginMs: 1000,
+      latestPresentationSample: { session: 4, sequence, time, presentedAtMs: epochMs - 1000 } },
+    preparedPlayback: held ? { observedTime: held.time,
+      observation: { loopCount, heldPresentation: held } } : null });
+  const heldPublication = { publication: { session: 4, sequence: 20 },
+    evaluatedTime: 5.9514, time: 7.85, validUntil: 8 };
+  const observations = [sample(1005, 0, 0, 10), sample(1100, 0.1, 0.1, 11),
+    sample(7850, 7.85, 5.9514, 20, { held: heldPublication }),
+    sample(7900, 7.9, 5.9514, 20, { held: { ...heldPublication, time: 7.9 } }),
+    sample(9100, 0.1, 0.1, 21)];
+  const options = { restartPublication: { session: 4, sequence: 10 }, requestEpochMs: 1000,
+    durationSeconds: 8, terminalHoldStartSeconds: 6.8, clockToleranceSeconds: 0.15,
+    acceptsTerminalPublication: time => time === 6.8 };
+  const evidence = readinessReplayCycleEvidence(observations, options);
+  assert.equal(evidence?.terminalHold.publication.time, 5.9514,
+    "an earlier displayed frame qualifies only while Rust proves it remains valid in the manifest hold");
+  for (const invalid of [
+    sample(7850, 7.85, 5.9514, 20, { held: { ...heldPublication, validUntil: 7.85 } }),
+    sample(7850, 7.85, 5.9514, 20, { held: { ...heldPublication,
+      publication: { session: 4, sequence: 19 } } }),
+    sample(7850, 7.85, 5.9514, 20, { held: heldPublication, loopCount: 1 }),
+  ]) {
+    assert.equal(readinessReplayCycleEvidence([observations[0], observations[1], invalid,
+      observations[4]], options), null,
+    "expired, mismatched or post-wrap hold evidence cannot qualify the terminal interval");
+  }
+});
+
 test("minimal timing preserves current renderer samples for first-submission bounds", () => {
   const staged = [{ session: 2, sequence: 4, time: 1, presentedAtMs: 40, clockOriginMs: 1000, renderMs: 2 }];
   const observations = [{ metrics: { performanceTimeOriginMs: 1000,

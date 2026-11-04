@@ -424,9 +424,10 @@ export async function attachSemanticEngine(
   };
   const state = (type) => {
     if (prepared !== null && player !== null) {
-      const observation = JSON.parse(player.preparedPlaybackStateJson());
+      const observedAt = performance.now();
+      const observation = JSON.parse(player.preparedPlaybackStateJson(observedAt));
       const time = type === "state" && preparedClockAdmitted
-        ? player.preparedPlaybackTimeAt(performance.now()) : observation.time;
+        ? player.preparedPlaybackTimeAt(observedAt) : observation.time;
       sections = JSON.parse(player.sectionsJson());
       return {
         type, preparedPlayback: true,
@@ -444,6 +445,7 @@ export async function attachSemanticEngine(
         completed: observation.completed, advancing: observation.advancing,
         loopDuration: observation.loopDuration, loopCount: observation.loopCount,
         loopError: observation.loopError,
+        heldPresentation: preparedClockAdmitted ? observation.heldPresentation ?? null : null,
         replaySupported: true, replayUnavailable: null,
         canUndoTranslationDrag: false, nextPatchSequence: "0",
       };
@@ -1664,9 +1666,15 @@ export async function attachSemanticEngine(
         if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) throw new Error("invalid engine request ID");
         if (message.type === "state") { post({ requestId: message.requestId, ...state("state"), sceneJson: null }); return; }
         if (message.type === "metrics") {
+          const preparedPlayback = prepared === null || !preparedClockAdmitted ? null : (() => {
+            const observedAt = performance.now();
+            const observation = JSON.parse(player.preparedPlaybackStateJson(observedAt));
+            return { observation, observedTime: player.preparedPlaybackTimeAt(observedAt) };
+          })();
           post({ requestId: message.requestId, type: "metrics", metrics: {
             host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 },
             ...(prepared === null ? {} : {
+              ...(preparedPlayback === null ? {} : { preparedPlayback }),
               preparedRetention: JSON.parse(player.preparedRetentionMetricsJson()),
             }),
           } });

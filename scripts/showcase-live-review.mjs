@@ -27,7 +27,18 @@ export function assertFirstPass(entry, observed, expectedBackend, naturalCapture
     "first-pass lesson has no resolved composition");
   if (entry.performance) assert.ok(objectCount >= 600, "dense scene lost its geometry workload");
   if (naturalCapture !== null) {
-    assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, naturalCapture.metrics?.time);
+    if (naturalCapture.heldPresentation) {
+      const held = naturalCapture.heldPresentation;
+      assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, held.observedTime);
+      assert.equal(held.publication?.session, naturalCapture.rendererReceipt?.session,
+        "held terminal proof belongs to a different renderer session");
+      assert.equal(held.publication?.sequence, naturalCapture.rendererReceipt?.sequence,
+        "held terminal proof belongs to a different renderer publication");
+      assert.ok(held.observedTime >= held.evaluatedTime && held.observedTime < held.validUntil,
+        "held terminal proof is outside its Rust-owned validity interval");
+    } else {
+      assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, naturalCapture.metrics?.time);
+    }
     const elapsed = Number(naturalCapture.controls?.elapsedSeconds);
     assert.ok(Number.isFinite(elapsed) && elapsed >= naturalCapture.holdStart &&
       elapsed <= naturalCapture.authoredDuration + 8 * Number.EPSILON * Math.max(1, entry.duration),
@@ -95,6 +106,19 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
   const events = diagnostics?.events ?? [];
   const disposition = events.find((event) => event.stage === "disposition")?.disposition ?? null;
   if (disposition === "looped" || disposition === "finite-complete") return true;
+  const heldEvidence = (report, metrics, receipt) => {
+    const playback = report?.engineMetrics?.preparedPlayback;
+    const observation = playback?.observation;
+    const held = observation?.heldPresentation;
+    if (!held || observation.loopCount !== 0 || held.publication?.session !== receipt?.session ||
+        held.publication?.sequence !== receipt?.sequence || !Number.isFinite(playback.observedTime) ||
+        playback.observedTime !== held.time || !Number.isFinite(held.evaluatedTime) ||
+        playback.observedTime < held.evaluatedTime || !Number.isFinite(held.validUntil) ||
+        playback.observedTime >= held.validUntil || metrics?.needsPresent !== false ||
+        metrics?.bufferedDeltas !== 0 || metrics?.time !== receipt?.time ||
+        playback.observedTime < holdStart || playback.observedTime >= duration) return null;
+    return { ...held, observedTime: playback.observedTime };
+  };
 
   const controls = document.querySelector(".playback-controls")?.dataset;
   const elapsed = Number(controls?.elapsedSeconds);
@@ -118,13 +142,16 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
     const metrics = report?.metrics;
     const attached = [...(current?.events ?? [])].reverse().find((event) => event.stage === "attached");
     const receipt = metrics?.latestPresentationSample;
+    const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
+      receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
+    const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(report, metrics, receipt);
     if (current?.interpreterGeneration === runIdentity.interpreterGeneration &&
         current?.runRequestId === runIdentity.runRequestId &&
         JSON.stringify(current.context) === JSON.stringify(runIdentity.context) &&
         currentDisposition !== "looped" && attached?.publication &&
         attached.publication.session === receipt?.session && Number.isSafeInteger(receipt?.sequence) &&
         receipt.sequence >= attached.publication.sequence && Number.isFinite(receipt.time) &&
-        receipt.time >= holdStart && receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration) &&
+        (naturalTerminalReceipt || heldPresentation !== null) &&
         metrics.time === receipt.time && metrics.needsPresent === false && metrics.bufferedDeltas === 0 &&
         Number.isSafeInteger(metrics.objectCount)) {
       const canvas = document.querySelector("#scene");
@@ -146,6 +173,8 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
         const afterReport = await gallery.executionMetrics();
         const afterMetrics = afterReport?.metrics;
         const afterReceipt = afterMetrics?.latestPresentationSample;
+        const afterHeldPresentation = heldPresentation === null ? null :
+          heldEvidence(afterReport, afterMetrics, afterReceipt);
         const afterDiagnostics = gallery.executionDiagnostics;
         const afterAttached = [...(afterDiagnostics?.events ?? [])].reverse()
           .find((event) => event.stage === "attached");
@@ -158,7 +187,13 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
             afterReceipt?.session === receipt.session && afterReceipt.sequence === receipt.sequence &&
             afterReceipt.time === receipt.time && afterMetrics.time === receipt.time &&
             afterMetrics.needsPresent === false && afterMetrics.bufferedDeltas === 0 &&
-            afterMetrics.objectCount === metrics.objectCount) {
+            afterMetrics.objectCount === metrics.objectCount &&
+            (heldPresentation === null ? afterHeldPresentation === null :
+              afterHeldPresentation !== null &&
+              afterHeldPresentation.publication.session === heldPresentation.publication.session &&
+              afterHeldPresentation.publication.sequence === heldPresentation.publication.sequence &&
+              afterHeldPresentation.evaluatedTime === heldPresentation.evaluatedTime &&
+              afterHeldPresentation.validUntil === heldPresentation.validUntil)) {
           const pngBlob = await pngBlobPromise;
           if (!(pngBlob instanceof Blob)) return false;
           const pngDataUrl = await new Promise((resolve, reject) => {
@@ -172,6 +207,7 @@ async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId }) {
             pngDataUrl,
             metrics,
             rendererReceipt: receipt,
+            heldPresentation,
             controls: captureControls,
             authoredDuration: duration,
             holdStart,
@@ -246,7 +282,8 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
               "terminal picture receipt belongs to a different renderer session than attachment");
             assert.ok(capture.rendererReceipt.sequence >= capture.attached.publication.sequence,
               "terminal picture predates the attached source publication");
-            assertNaturalFirstPassPublication(entry, duration, capture.metrics.time);
+            assertNaturalFirstPassPublication(entry, duration,
+              capture.heldPresentation?.observedTime ?? capture.metrics.time);
             firstPassCapture = capture;
             firstPassCompletion = {
               disposition: "looped",
@@ -499,6 +536,7 @@ async function main() {
             context: firstPassRun.firstPassCapture.context,
             attachedPublication: firstPassRun.firstPassCapture.attached.publication,
             rendererReceipt: firstPassRun.firstPassCapture.rendererReceipt,
+            heldPresentation: firstPassRun.firstPassCapture.heldPresentation,
             rendererReceiptScope: "renderer publication sample; does not prove physical scanout",
           };
         } else {

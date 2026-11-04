@@ -688,7 +688,7 @@ if (javascript.includes("export class PreparedExecutionPlayer") || declarations.
   expectedTypeSurface.push("export class PreparedExecutionPlayer",
     "resetReceiver(transport_session: number): void",
     "beginObservedPreparedSource(scene_only_source?: boolean | null): string",
-    "preparedPlaybackStateJson(): string", "preparedTime(): number",
+    "preparedPlaybackStateJson(wall_time_ms: number): string", "preparedTime(): number",
     "takePreparedNoChangePresentationJson(): string | undefined",
     "setPreparedLoopDuration(duration?: number | null): void",
     "readonly sourceExecutionRequirementJson: string",

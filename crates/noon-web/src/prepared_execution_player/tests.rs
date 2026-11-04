@@ -89,7 +89,107 @@ fn receive(mirror: &mut InstalledRetainedExecutionMirror, json: &str) {
 }
 
 fn playback_state(player: &PreparedExecutionPlayer) -> serde_json::Value {
-    serde_json::from_str(&player.prepared_playback_state_json()).unwrap()
+    serde_json::from_str(&player.prepared_playback_state_json(0.0).unwrap()).unwrap()
+}
+
+fn static_loop_player(session: u32) -> (PreparedExecutionPlayer, PreparedPresentationIdentity) {
+    let mut fixture = Fixture::new(session);
+    ready(&mut fixture.player);
+    let terminal = fixture.next(true);
+    fixture.deliver(terminal);
+    let selected = decode(&fixture.player.seek_delta_json(1.5).unwrap().unwrap());
+    fixture
+        .player
+        .set_prepared_loop_duration(Some(2.0))
+        .unwrap();
+    fixture.player.set_prepared_playing(true);
+    fixture.player.execution_wake(1_000.0).unwrap();
+    (
+        fixture.player,
+        PreparedPresentationIdentity {
+            session: selected.retained.session,
+            sequence: selected.retained.sequence,
+        },
+    )
+}
+
+#[test]
+fn prepared_state_proves_only_a_current_unexpired_static_loop_hold() {
+    let (mut player, publication) = static_loop_player(311);
+
+    let state: serde_json::Value =
+        serde_json::from_str(&player.prepared_playback_state_json(1_250.0).unwrap()).unwrap();
+    assert_eq!(state["loopCount"], 0);
+    assert_eq!(
+        state["heldPresentation"]["publication"]["session"],
+        publication.session
+    );
+    assert_eq!(
+        state["heldPresentation"]["publication"]["sequence"],
+        publication.sequence
+    );
+    assert_eq!(state["heldPresentation"]["evaluatedTime"], 1.5);
+    assert_eq!(state["heldPresentation"]["time"], 1.75);
+    assert_eq!(state["heldPresentation"]["validUntil"], 2.0);
+
+    let expired: serde_json::Value =
+        serde_json::from_str(&player.prepared_playback_state_json(1_500.0).unwrap()).unwrap();
+    assert!(
+        expired.get("heldPresentation").is_none(),
+        "raw clock at the loop boundary cannot reuse the pre-wrap hold"
+    );
+
+    player.set_prepared_playing(false);
+    let paused: serde_json::Value =
+        serde_json::from_str(&player.prepared_playback_state_json(2_100.0).unwrap()).unwrap();
+    assert!(
+        paused.get("heldPresentation").is_none(),
+        "paused readers do not advertise a live hold"
+    );
+}
+
+#[test]
+fn held_presentation_rejects_stale_publication_and_dirty_interactive_state() {
+    let (mut stale, _) = static_loop_player(312);
+    stale.encoder = RetainedFamilyExecutionDeltaEncoder::new(313);
+    let stale_state: serde_json::Value =
+        serde_json::from_str(&stale.prepared_playback_state_json(1_500.0).unwrap()).unwrap();
+    assert!(
+        stale_state.get("heldPresentation").is_none(),
+        "a publication from an older receiver session cannot certify a hold"
+    );
+
+    let mut fixture = Fixture::new(314);
+    let (_mirror, receipt) = ready(&mut fixture.player);
+    fixture.player.set_prepared_playing(true);
+    fixture.player.execution_wake(1_000.0).unwrap();
+    assert!(input(&mut fixture.player, "press", receipt, 1));
+    assert!(input(&mut fixture.player, "release", receipt, 1));
+    assert!(fixture.player.playback.reader.interactions_active());
+    fixture
+        .player
+        .playback
+        .reader
+        .advance_interactions(1.1)
+        .unwrap();
+    fixture
+        .player
+        .playback
+        .reader
+        .advance_interactions(1.2)
+        .unwrap();
+    assert!(fixture.player.playback.reader.wake_state().frame_pending());
+    let dirty: serde_json::Value = serde_json::from_str(
+        &fixture
+            .player
+            .prepared_playback_state_json(1_100.0)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        dirty.get("heldPresentation").is_none(),
+        "pending interaction work cannot reuse an earlier picture"
+    );
 }
 
 fn ready(

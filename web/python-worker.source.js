@@ -1566,7 +1566,9 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     entry.endpoints.add(pendingAttachment);
     let endpoint;
     try {
-      const observation = invokePreparedEngine(() => JSON.parse(continuation.preparedPlayer.preparedPlaybackStateJson()));
+      const observation = invokePreparedEngine(() => JSON.parse(
+        continuation.preparedPlayer.preparedPlaybackStateJson(performance.now()),
+      ));
       const requirement = sourceExecutionRequirement(invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
       const playing = invokePreparedEngine(() => continuation.preparedPlayer.beginSourceExecution(entry.context));
       entry.sourceRequirement = requirement;

@@ -237,6 +237,7 @@ async function observation(page) {
     const scrubber = controls?.querySelector(".playback-scrubber");
     const renderProbe = globalThis.__noonReadinessPresentationProbe;
     return { metrics: response?.metrics, preparedRetention: response?.engineMetrics?.preparedRetention ?? null,
+      preparedPlayback: response?.engineMetrics?.preparedPlayback ?? null,
       run: gallery?.runPhaseMetrics,
       executionDiagnostics: gallery?.executionDiagnostics ?? null,
       presentationProbe: renderProbe ? { count: renderProbe.samples.length, error: renderProbe.error,
@@ -737,7 +738,7 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
       const sample = await observation(page);
       targetRow.lastObservation = sample;
       targetRow.cadenceObservations.push({ epochMs: sample.epochMs,
-        metrics: sample.metrics, controls: sample.controls });
+        metrics: sample.metrics, controls: sample.controls, preparedPlayback: sample.preparedPlayback });
       targetRow.preparedRetention = sample.preparedRetention ?? targetRow.preparedRetention ?? null;
       readinessTraceState(targetRow, sample);
       const diagnostic = sample.executionDiagnostics;
@@ -914,7 +915,8 @@ async function measureReadinessPair(page, workers, source, initialArm, replayArm
     const restartEngineResult = await readinessCommandResult(page, restartIssued.commandResultIndex, "restart_playback");
     const restartPresented = await observation(page);
     replayRow.cadenceObservations.push({ epochMs: restartPresented.epochMs,
-      metrics: restartPresented.metrics, controls: restartPresented.controls });
+      metrics: restartPresented.metrics, controls: restartPresented.controls,
+      preparedPlayback: restartPresented.preparedPlayback });
     const latestReplay = restartPresented.metrics?.latestPresentationSample;
     const minimalReplaySample = latestReplay ? { ...latestReplay,
       clockOriginMs: restartPresented.metrics.performanceTimeOriginMs } : null;
