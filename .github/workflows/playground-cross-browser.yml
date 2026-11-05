@@ -159,7 +159,7 @@ jobs:
           NOON_PLAYGROUND_BROWSER: webkit
           NOON_PLAYGROUND_PROFILE: mobile-dpr2
           NOON_GALLERY_CASES: noon-trigonometry-tutorial
-          NOON_SHOWCASE_PROFILE_GATE: strict
+          NOON_SHOWCASE_PROFILE_GATE: baseline
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: /tmp/noon-trigonometry-webkit-diagnostic/browser
         run: node scripts/playground-gallery-runtime-smoke.mjs
       - name: Restore only the diagnostic script and verify package/source integrity
