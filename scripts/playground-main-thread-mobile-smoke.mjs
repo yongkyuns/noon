@@ -55,6 +55,108 @@ async function waitForIdle(page) {
   );
 }
 
+async function installPlaybackTrace(page, variant) {
+  await page.evaluate(async (variantName) => {
+    const trace = { variant: variantName, stage: "setup", events: [], omitted: 0 };
+    const snapshot = () => {
+      const controls = document.querySelector(".playback-controls");
+      const button = controls?.querySelector(".playback-toggle");
+      return controls ? { data: { ...controls.dataset }, button: button ? {
+        ariaLabel: button.getAttribute("aria-label"), disabled: button.disabled, text: button.textContent,
+      } : null } : null;
+    };
+    const controlState = () => {
+      const controls = document.querySelector(".playback-controls");
+      const button = controls?.querySelector(".playback-toggle");
+      return controls ? { busy: controls.dataset.busy ?? null, playing: controls.dataset.playing ?? null,
+        label: button?.getAttribute("aria-label") ?? null, disabled: button?.disabled ?? null } : null;
+    };
+    const record = event => {
+      trace.events.push({ at: performance.now(), stage: trace.stage, ...event, controls: snapshot() });
+      if (trace.events.length > 48) { trace.events.shift(); trace.omitted++; }
+    };
+    Object.defineProperty(trace, "record", { value: record });
+    window.__noonPlaybackControlTrace = trace;
+    record({ kind: "trace-installed" });
+    document.addEventListener("click", event => {
+      const button = event.target instanceof Element ? event.target.closest(".playback-toggle") : null;
+      if (button) {
+        record({ kind: "toggle-click-before-handler", trusted: event.isTrusted,
+          label: button.getAttribute("aria-label") });
+        queueMicrotask(() => record({ kind: "toggle-click-after-handler", trusted: event.isTrusted,
+          label: button.getAttribute("aria-label") }));
+      }
+    }, true);
+    let controlsStateObserver = null;
+    let controlsInsertionObserver = null;
+    const observeControls = controls => {
+      if (!controls || controlsStateObserver) return;
+      let previousState = JSON.stringify(controlState());
+      controlsStateObserver = new MutationObserver(records => {
+        const nextState = JSON.stringify(controlState());
+        if (nextState !== previousState) {
+          const before = JSON.parse(previousState);
+          previousState = nextState;
+          record({ kind: "controls-state-change", before, after: JSON.parse(nextState),
+            attributes: [...new Set(records.map(mutation => mutation.attributeName))] });
+        }
+      });
+      controlsStateObserver.observe(controls, { attributes: true, subtree: true,
+        attributeFilter: ["data-busy", "data-playing", "aria-label", "disabled"] });
+      trace.controlsObserverState = "attached";
+      controlsInsertionObserver?.disconnect();
+      record({ kind: "controls-observed" });
+    };
+    observeControls(document.querySelector(".playback-controls"));
+    if (!controlsStateObserver) {
+      trace.controlsObserverState = "waiting-for-controls";
+      controlsInsertionObserver = new MutationObserver(() => observeControls(document.querySelector(".playback-controls")));
+      controlsInsertionObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    for (const method of ["pause", "seek"]) {
+      const original = ExecutionWorkerClient.prototype[method];
+      ExecutionWorkerClient.prototype[method] = async function (...args) {
+        const id = trace.events.length + trace.omitted + 1;
+        record({ kind: "command-entered", method, id, args: args.slice(0, 2) });
+        try {
+          const result = await original.apply(this, args);
+          record({ kind: "command-resolved", method, id, result: {
+            time: result?.time ?? null, playing: result?.playing ?? null,
+            session: result?.presentationReceipt?.session ?? null,
+            sequence: result?.presentationReceipt?.sequence ?? null,
+            receiptTime: result?.presentationReceipt?.time ?? null,
+          } });
+          return result;
+        } catch (error) {
+          record({ kind: "command-rejected", method, id,
+            error: { name: error?.name ?? null, message: String(error).slice(0, 1000), stack: String(error?.stack ?? "").slice(0, 3000) } });
+          throw error;
+        }
+      };
+    }
+  }, variant);
+}
+
+async function tracedSeek(page, duration, time, stage) {
+  await page.evaluate(value => {
+    const trace = window.__noonPlaybackControlTrace;
+    if (!trace) return;
+    trace.stage = value;
+    trace.record({ kind: "stage-start" });
+  }, stage).catch(() => {});
+  try {
+    const result = await seekPausedGallery(page, duration, time);
+    await page.evaluate(() => window.__noonPlaybackControlTrace?.record({ kind: "stage-resolved" }));
+    return result;
+  } catch (error) {
+    await page.evaluate(value => window.__noonPlaybackControlTrace?.record({
+      kind: "stage-rejected", error: { name: value.name, message: value.message, stack: value.stack },
+    }), { name: error?.name ?? "Error", message: String(error).slice(0, 1000), stack: String(error?.stack ?? "").slice(0, 3000) }).catch(() => {});
+    throw error;
+  }
+}
+
 async function assertApplied(page, expectedId) {
   await page.waitForFunction(
     (id) => {
@@ -151,6 +253,7 @@ try {
     // Compare every pixel against this empty surface, not against its corner.
     const background = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-background.png`), background);
+    await installPlaybackTrace(page, variant.name);
 
     // Release authoring startup and observe automatic initial playback.
     releaseStartup();
@@ -229,7 +332,7 @@ try {
     // exact FadeOut endpoint through the normal paused control path after the
     // natural first wrap; this is a paused replay checkpoint, not the natural
     // first-pass terminal image.
-    await seekPausedGallery(page, 3, 3);
+    await tracedSeek(page, 3, 3, "terminal-checkpoint");
     const terminalCheckpoint = await waitForPublishedGalleryFrame(page, 3, 3);
     assert.equal(terminalCheckpoint?.metrics?.objectCount, 0,
       "paused exact FadeOut endpoint must remove the object");
@@ -250,7 +353,7 @@ try {
     const frames = new Map();
     let observation = null;
     for (const [time, label] of [[1, "square"], [1.5, "intermediate"], [2, "circle"], [2.5, "fadeout"]]) {
-      await seekPausedGallery(page, 3, time);
+      await tracedSeek(page, 3, time, `frame-${label}-${time}`);
       const replay = await waitForPublishedGalleryFrame(page, time, 3);
       assert.equal(replay?.metrics?.objectCount, 1, `${label} frame must retain the transforming object`);
       assert.ok(Math.abs(replay.metrics.time - time) < 1e-7, `${label} frame has wrong authored time`);
@@ -342,6 +445,7 @@ try {
       selectedExampleId: await page.evaluate(() => window.__noonExampleGallery.selectedExampleId),
       pageErrors,
       consoleErrors,
+      playbackControlTrace: await page.evaluate(() => window.__noonPlaybackControlTrace ?? null),
     };
     await writeFile(
       path.join(artifactDir, `${variant.name}.json`),
@@ -359,6 +463,7 @@ try {
   }
 } catch (error) {
   const state = await activePage?.evaluate(() => ({
+    playbackControlTrace: window.__noonPlaybackControlTrace ?? null,
     status: document.querySelector("#status-text")?.textContent,
     patch: document.querySelector("#patch-status")?.value,
     patchState: document.querySelector("#patch-status")?.dataset.state,
