@@ -53,8 +53,9 @@ export class WorkerCpuProfileCapture {
   async start(boundary) {
     if (this.#lifecycle !== "attached") throw new Error(`cannot start profiler in ${this.#lifecycle} state`);
     if (!Number.isSafeInteger(boundary?.runGeneration) || !Number.isSafeInteger(boundary?.session) ||
-        !Number.isFinite(boundary?.time) || !Number.isFinite(boundary?.rendererAt)) {
-      throw new Error("worker CPU profile start is missing a valid renderer/run anchor");
+        !Number.isFinite(boundary?.time) || !Number.isFinite(boundary?.rendererAt) ||
+        typeof boundary?.exampleId !== "string") {
+      throw new Error("worker CPU profile start is missing a valid pre-Run renderer anchor");
     }
     this.#lifecycle = "starting";
     for (const entry of this.#profiles.values()) {
@@ -75,10 +76,12 @@ export class WorkerCpuProfileCapture {
 
   async stop(boundary, artifactDir) {
     if (this.#lifecycle !== "started") throw new Error(`cannot stop profiler in ${this.#lifecycle} state`);
-    if (boundary?.runGeneration !== this.startBoundary?.sample?.runGeneration ||
-        boundary?.session !== this.startBoundary?.sample?.session || !Number.isFinite(boundary?.time) ||
+    if (!Number.isSafeInteger(boundary?.runGeneration) ||
+        boundary.runGeneration <= this.startBoundary?.sample?.runGeneration ||
+        boundary?.exampleId !== this.startBoundary?.sample?.exampleId ||
+        !Number.isSafeInteger(boundary?.session) || !Number.isFinite(boundary?.time) ||
         !Number.isFinite(boundary?.rendererAt)) {
-      throw new Error("worker CPU profile end does not match its renderer/run anchor");
+      throw new Error("worker CPU profile end must identify the new completed run and renderer receipt");
     }
     this.#lifecycle = "stopping";
     const requestedAtMs = Date.now();
@@ -117,7 +120,7 @@ export class WorkerCpuProfileCapture {
     }
     const result = {
       status: "captured",
-      scope: "diagnostic-only; CPU sampling perturbs scheduling and is not an FPS measurement",
+      scope: "diagnostic-only whole warm pass from pre-Run start through looped source completion; sampling perturbs scheduling and is not an FPS measurement",
       samplingIntervalMicros: 1_000,
       boundary: { start: this.startBoundary, stop: { requestedAtMs, responseAtMs: Date.now(), sample: boundary,
         workers: profileStopTimes } },
