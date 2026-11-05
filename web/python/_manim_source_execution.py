@@ -402,13 +402,14 @@ def _integer_iteration_targets(iterator, target, known, module_literals):
     return set()
 
 
-def _integer_names_at_node(body, node, parameters, module_literals):
-    names = _integer_names_in_body(body, parameters, module_literals)
-    parents = {}
-    for statement in body:
-        for parent in ast.walk(statement):
-            for child in ast.iter_child_nodes(parent):
-                parents[child] = parent
+def _integer_names_at_node(body, node, parameters, module_literals, *, names=None, parents=None):
+    names = set(_integer_names_in_body(body, parameters, module_literals) if names is None else names)
+    if parents is None:
+        parents = {}
+        for statement in body:
+            for parent in ast.walk(statement):
+                for child in ast.iter_child_nodes(parent):
+                    parents[child] = parent
     ancestors = []
     current = parents.get(node)
     while current is not None:
@@ -1123,6 +1124,9 @@ class _SceneOnlySource(ast.NodeVisitor):
             node.name: node for node in ast.walk(tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
+        self.numpy_function_nodes = {
+            function: _walk_scope(function.body) for function in self.numpy_functions.values()
+        }
         self.numpy_function_outputs = {}
         self.numpy_array_functions = set()
         self.numpy_array_parameters = {name: set() for name in self.numpy_functions}
@@ -1146,14 +1150,31 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.function_context = []
         self.numpy_integer_parameters = {name: set() for name in self.numpy_functions}
         integer_names_by_call = {}
+        integer_names_by_scope = {}
+        integer_parents_by_function = {}
 
         def integer_names_at_call(function, call, parameters):
             # Each call belongs to one immutable lexical body. Reuse its proof
-            # across formals, recomputing when the fixed-point entry facts change.
-            key = (call, frozenset(parameters))
+            # across call sites with the same entry facts; only ancestor lookup
+            # remains call-specific.
+            parameter_facts = frozenset(parameters)
+            key = (call, parameter_facts)
             if key not in integer_names_by_call:
+                scope_key = (function, parameter_facts)
+                if scope_key not in integer_names_by_scope:
+                    integer_names_by_scope[scope_key] = _integer_names_in_body(
+                        function.body, parameter_facts, self.module_numpy_literals)
+                if function not in integer_parents_by_function:
+                    parents = {}
+                    for statement in function.body:
+                        for parent in ast.walk(statement):
+                            for child in ast.iter_child_nodes(parent):
+                                parents[child] = parent
+                    integer_parents_by_function[function] = parents
                 integer_names_by_call[key] = _integer_names_at_node(
-                    function.body, call, parameters, self.module_numpy_literals)
+                    function.body, call, parameter_facts, self.module_numpy_literals,
+                    names=integer_names_by_scope[scope_key],
+                    parents=integer_parents_by_function[function])
             return integer_names_by_call[key]
 
         changed = True
@@ -1161,7 +1182,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             changed = False
             call_sites = {name: [] for name in self.numpy_functions}
             for caller, function in self.numpy_functions.items():
-                for call in (node for node in _walk_scope(function.body)
+                for call in (node for node in self.numpy_function_nodes[function]
                              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                              and node.func.id in self.numpy_functions):
                     call_sites[call.func.id].append((caller, function, call))
@@ -1195,7 +1216,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             for callee, parameters in self.numpy_integer_parameters.items():
                 sites = [(caller, function, call)
                          for caller, function in self.numpy_functions.items()
-                         for call in _walk_scope(function.body)
+                         for call in self.numpy_function_nodes[function]
                          if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
                          and call.func.id == callee]
                 formals = [arg.arg for arg in [*self.numpy_functions[callee].args.posonlyargs,
@@ -1235,7 +1256,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                 scalar_candidates = (set(formal) - parameters) | self.numpy_scalar_parameters[name]
                 scalar_names = _numpy_scalar_names_in_body(function.body, scalar_candidates,
                                                             arrays, containers, self.module_numpy_literals)
-                returns = [node.value for node in _walk_scope(function.body)
+                returns = [node.value for node in self.numpy_function_nodes[function]
                            if isinstance(node, ast.Return) and node.value is not None]
                 if returns:
                     shape = None
@@ -1255,7 +1276,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                             self.numpy_array_functions.add(name)
                         changed = True
                 dependencies = _scope_name_dependencies(function.body)
-                for np_call in (node for node in _walk_scope(function.body)
+                for np_call in (node for node in self.numpy_function_nodes[function]
                                 if isinstance(node, ast.Call) and _attribute_path(node.func) in _NUMPY_CALLS):
                     for argument in np_call.args:
                         if (_numpy_numeric_expression(argument, arrays, containers,
@@ -1274,7 +1295,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                                     self.numpy_scalar_parameters[name].add(candidate)
                                     changed = True
                                 pending.extend(dependencies.get(candidate, ()))
-                for call in (node for node in _walk_scope(function.body)
+                for call in (node for node in self.numpy_function_nodes[function]
                              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                              and node.func.id in self.numpy_functions):
                     callee = call.func.id

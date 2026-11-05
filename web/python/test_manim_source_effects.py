@@ -1,3 +1,4 @@
+import ast
 import unittest
 from hashlib import sha256
 from pathlib import Path
@@ -8,6 +9,28 @@ from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
+    def test_helper_proof_work_scales_with_call_sites(self):
+        def visits(count):
+            source = ("def offset(value):\n    return value + 1\n\n"
+                      "def samples(count):\n    rows = []\n    for index in range(count):\n"
+                      + "        rows.append(offset(index))\n" * count + "    return rows\n")
+            original_walk = ast.walk
+            visited = 0
+
+            def counted_walk(node):
+                nonlocal visited
+                for child in original_walk(node):
+                    visited += 1
+                    yield child
+
+            with patch.object(ast, "walk", counted_walk):
+                self.assertTrue(source_execution_proof(source)["admitted"])
+            return visited
+
+        # Count syntax work, not wall time: doubling calls must not rescan the
+        # growing function body once per call (the previous quadratic behavior).
+        self.assertLessEqual(visits(64), 2.5 * visits(32))
+
     def test_regex_match_reads_require_canonical_iterator_results(self):
         source = '''import re
 
