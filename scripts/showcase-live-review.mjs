@@ -159,6 +159,7 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
     // terminal hold. The independent pixel oracle checks the copied bitmap.
     // The engine joins the actual renderer acknowledgement to Rust's current
     // observation. Full GPU metrics may settle after this hold has wrapped.
+    const stateRequestStartedAtEpochMs = performance.timeOrigin + performance.now();
     const state = await gallery.executionState();
     if (runState.stop) return false;
     const current = gallery.executionDiagnostics;
@@ -193,21 +194,44 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
       return false;
     }
 
-    // toBlob copies the bitmap synchronously before serializing it in parallel
-    // (https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
-    // Keep the validated run, receipt, and controls as this snapshot's evidence;
-    // playback may advance while toBlob returns and the PNG is encoded.
+    // The uninstrumented natural-sample path copies the page canvas here.
+    // Renderer-instrumented cases use the owner readback path above.
     const capture = { executionState: state, rendererReceipt: receipt, heldPresentation, controls: captureControls,
       authoredDuration: duration, holdStart, runRequestedAtEpochMs: runState.requestedAtEpochMs,
       observerStartedAtEpochMs: runState.observerStartedAtEpochMs,
       acceptedRunGeneration: runGeneration, capturedAtEpochMs: performance.timeOrigin + performance.now(),
-      ...runIdentity, attached };
+      stateRequestStartedAtEpochMs, ...runIdentity, attached };
     if (naturalTerminalReceipt && rendererReadbackEnabled) {
       capture.captureKind = "renderer-owned";
       capture.proofReceipt = receipt;
       window.__showcaseLiveReviewFirstPass = capture;
       return false;
     }
+    if (heldPresentation !== null && rendererReadbackEnabled) {
+      const deadlineEpochMs = stateRequestStartedAtEpochMs +
+        Math.max(0, heldPresentation.validUntil - heldPresentation.observedTime) * 1000;
+      const requestedReadback = await window.__showcaseRequestHeldRendererReadback({
+        exampleId, runGeneration, runRequestId: runIdentity.runRequestId,
+        interpreterGeneration: runIdentity.interpreterGeneration,
+        context: runIdentity.context,
+        session: receipt.session, sequence: receipt.sequence, time: receipt.time,
+        objectCount: receipt.objectCount, deadlineEpochMs,
+      });
+      if (runState.stop || gallery.generationDiagnostics?.runGeneration !== runGeneration ||
+          requestedReadback?.session !== receipt.session || requestedReadback?.sequence !== receipt.sequence ||
+          requestedReadback?.time !== receipt.time || requestedReadback?.objectCount !== receipt.objectCount ||
+          !Number.isFinite(requestedReadback.copyCalledAtEpochMs) ||
+          requestedReadback.copyCalledAtEpochMs > deadlineEpochMs) return false;
+      capture.captureKind = "renderer-owned";
+      capture.proofReceipt = receipt;
+      capture.readbackDeadlineEpochMs = deadlineEpochMs;
+      capture.heldReadbackRequest = { status: requestedReadback.status,
+        copyCalledAtEpochMs: requestedReadback.copyCalledAtEpochMs,
+        copyReturnedAtEpochMs: requestedReadback.copyReturnedAtEpochMs ?? null };
+      window.__showcaseLiveReviewFirstPass = capture;
+      return false;
+    }
+    if (heldPresentation !== null && !rendererReadbackEnabled) return false;
     const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     pngBlobPromise.catch(() => {});
     // Bracket the copy with Rust observations. A delayed main-thread callback
@@ -411,6 +435,8 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
               assertRendererReadback(readback, {
                 attachedPublication: capture.attached.publication,
                 proofReceipt: capture.proofReceipt,
+                heldPresentation: capture.heldPresentation,
+                deadlineEpochMs: capture.readbackDeadlineEpochMs,
                 holdStart: capture.holdStart,
                 duration: capture.authoredDuration,
                 minimumObjectCount: entry.performance ? 600 : 1,
