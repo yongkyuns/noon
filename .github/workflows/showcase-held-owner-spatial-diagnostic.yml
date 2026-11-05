@@ -1,0 +1,54 @@
+name: Held owner spatial diagnostic (temporary)
+
+on:
+  push:
+    branches:
+      - codex/2421-held-owner-spatial-diagnostic
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  spatial-diagnostic:
+    name: One WebGPU spatial first pass
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NOON_SHOWCASE_BACKEND: webgpu
+      NOON_SHOWCASE_CASES: showcase-spatial-scene
+      PINNED_RUNTIME_SOURCE: 7c50b9faf5cfe7c700c59995c2d6696134a6cb7c
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download the exact prior shared runtime
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: 13370127613
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 41927605033
+          path: web
+      - name: Verify the pinned runtime inventory and identity
+        run: |
+          GITHUB_SHA="$PINNED_RUNTIME_SOURCE" node .github/ci/wasm-build.mjs verify
+          node --input-type=module -e 'import fs from "node:fs"; const v=JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8")); if(v.buildId!=="f46ecefcab83bb14d5774b42688b187e5978f4707866bc759de8e383e6c2c1ad" || v.sourceRevision!==process.env.PINNED_RUNTIME_SOURCE) throw new Error(JSON.stringify(v)); console.log(JSON.stringify({buildId:v.buildId,sourceRevision:v.sourceRevision}));'
+          mkdir -p browser-smoke-artifacts/showcase/webgpu
+          node --input-type=module -e 'import fs from "node:fs"; import {execSync} from "node:child_process"; const v=JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8")); fs.writeFileSync("browser-smoke-artifacts/showcase/webgpu/diagnostic-overlay.json", JSON.stringify({eventRevision:execSync("git rev-parse HEAD",{encoding:"utf8"}).trim(),pinnedRuntimeSource:process.env.PINNED_RUNTIME_SOURCE,runtimeBuildId:v.buildId,rendererReadbackHelperSha256:execSync("sha256sum scripts/showcase-renderer-readback.mjs",{encoding:"utf8"}).trim().split(" ")[0],liveReviewSha256:execSync("sha256sum scripts/showcase-live-review.mjs",{encoding:"utf8"}).trim().split(" ")[0]}, null, 2)+"\\n");'
+      - name: Install pinned browser tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+      - name: Capture the selected authored spatial scene
+        id: capture
+        run: node scripts/showcase-capture.mjs
+      - name: Run unchanged first-pass and replay oracles
+        if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
+        run: node scripts/showcase-live-review.mjs
+      - name: Retain report, exact owner PNG, and oracle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: held-owner-spatial-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: browser-smoke-artifacts/showcase/webgpu
+          if-no-files-found: warn
+          retention-days: 3
