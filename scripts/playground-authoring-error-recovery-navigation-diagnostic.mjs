@@ -807,6 +807,7 @@ try {
     }
 
     phase = "catalog-failed-to-first";
+    await selectShowcase(page, "showcase-group-slicing");
     await setEditorSource(page, SOURCES.syntaxError);
     diagnostics.snapshots.catalogFailedSource = await runEditedSource(page, { expectedState: "error" });
     assert.equal(diagnostics.snapshots.catalogFailedSource.patchText, "Python raised SyntaxError");
@@ -814,6 +815,7 @@ try {
     assert.equal(diagnostics.snapshots.firstAfterCatalogFailure.exampleId, "showcase-first-scene");
 
     phase = "catalog-cancelled-to-first";
+    await selectShowcase(page, "showcase-transform-ownership");
     await setEditorSource(page, navigationCancellationSource);
     const beforeCancelledRun = await workerEvidence(page);
     await page.locator("#replace-scene").click();
