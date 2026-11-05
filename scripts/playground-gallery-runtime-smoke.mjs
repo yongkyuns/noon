@@ -34,20 +34,105 @@ const liveMathAnimations = {
 async function qualifyTriangleHistory(page, duration, initialDiagnostics) {
   await page.evaluate(async () => {
     window.__triangleControlReceipts = [];
+    const trace = { stage: "setup", events: [], omitted: 0 };
+    const snapshot = () => {
+      const controls = document.querySelector('.playback-controls');
+      const button = controls?.querySelector('.playback-toggle');
+      return controls ? { data: { ...controls.dataset }, button: button ? {
+        ariaLabel: button.getAttribute('aria-label'), disabled: button.disabled, text: button.textContent,
+      } : null } : null;
+    };
+    const controlState = () => {
+      const controls = document.querySelector('.playback-controls');
+      const button = controls?.querySelector('.playback-toggle');
+      return controls ? { busy: controls.dataset.busy ?? null, playing: controls.dataset.playing ?? null,
+        label: button?.getAttribute('aria-label') ?? null, disabled: button?.disabled ?? null } : null;
+    };
+    const record = event => {
+      trace.events.push({ at: performance.now(), stage: trace.stage, ...event, controls: snapshot() });
+      if (trace.events.length > 64) { trace.events.shift(); trace.omitted++; }
+    };
+    Object.defineProperty(trace, "record", { value: record });
+    window.__triangleControlTrace = trace;
+    record({ kind: 'trace-installed' });
+    document.addEventListener('click', event => {
+      const button = event.target instanceof Element ? event.target.closest('.playback-toggle') : null;
+      if (button) {
+        record({ kind: 'toggle-click-before-handler', trusted: event.isTrusted,
+          label: button.getAttribute('aria-label') });
+        queueMicrotask(() => record({ kind: 'toggle-click-after-handler', trusted: event.isTrusted,
+          label: button.getAttribute('aria-label') }));
+      }
+    }, true);
+    let controlsStateObserver = null;
+    let controlsInsertionObserver = null;
+    const observeControls = controls => {
+      if (!controls || controlsStateObserver) return;
+      let previousState = JSON.stringify(controlState());
+      controlsStateObserver = new MutationObserver(records => {
+        const nextState = JSON.stringify(controlState());
+        if (nextState !== previousState) {
+          const before = JSON.parse(previousState);
+          previousState = nextState;
+          record({ kind: 'controls-state-change', before, after: JSON.parse(nextState),
+            attributes: [...new Set(records.map(mutation => mutation.attributeName))] });
+        }
+      });
+      controlsStateObserver.observe(controls, { attributes: true, subtree: true,
+        attributeFilter: ['data-busy', 'data-playing', 'aria-label', 'disabled'] });
+      trace.controlsObserverState = 'attached';
+      controlsInsertionObserver?.disconnect();
+      record({ kind: 'controls-observed' });
+    };
+    observeControls(document.querySelector('.playback-controls'));
+    if (!controlsStateObserver) {
+      trace.controlsObserverState = 'waiting-for-controls';
+      controlsInsertionObserver = new MutationObserver(() => observeControls(document.querySelector('.playback-controls')));
+      controlsInsertionObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
     const { ExecutionWorkerClient } = await import('./execution-worker-client.js');
     for (const name of ['pause', 'seek']) {
       const original = ExecutionWorkerClient.prototype[name];
       ExecutionWorkerClient.prototype[name] = async function (...args) {
-        const result = await original.apply(this, args);
-        window.__triangleControlReceipts.push({ operation: name, requested: args[0] ?? null,
-          time: result?.time, playing: result?.playing, receipt: result?.presentationReceipt ?? null });
-        return result;
+        const id = window.__triangleControlReceipts.length + trace.events.length + trace.omitted + 1;
+        record({ kind: 'command-entered', operation: name, id, args: args.slice(0, 2) });
+        try {
+          const result = await original.apply(this, args);
+          const receipt = result?.presentationReceipt ?? null;
+          const observed = { operation: name, requested: args[0] ?? null,
+            time: result?.time ?? null, playing: result?.playing ?? null, receipt };
+          window.__triangleControlReceipts.push(observed);
+          record({ kind: 'command-resolved', id, ...observed });
+          return result;
+        } catch (error) {
+          record({ kind: 'command-rejected', operation: name, id,
+            error: { name: error?.name ?? null, message: String(error).slice(0, 1000), stack: String(error?.stack ?? '').slice(0, 3000) } });
+          throw error;
+        }
       };
     }
   });
+  const seekWithStage = async (target, stage) => {
+    await page.evaluate(value => {
+      const trace = window.__triangleControlTrace;
+      if (!trace) return;
+      trace.stage = value;
+      trace.record({ kind: 'stage-start' });
+    }, stage);
+    try {
+      const time = await seekPausedGallery(page, duration, target);
+      await page.evaluate(() => window.__triangleControlTrace?.record({ kind: 'stage-resolved' }));
+      return time;
+    } catch (error) {
+      await page.evaluate(value => window.__triangleControlTrace?.record({ kind: 'stage-rejected', error: value }), {
+        name: error?.name ?? 'Error', message: String(error).slice(0, 1000), stack: String(error?.stack ?? '').slice(0, 3000),
+      }).catch(() => {});
+      throw error;
+    }
+  };
   const captures = [];
   for (const target of [3, 12, 21]) {
-    const time = await seekPausedGallery(page, duration, target);
+    const time = await seekWithStage(target, `triangle-seek-${target}`);
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     assert.equal(Number(metrics.metrics.time), time,
       'renderer did not settle at the selected authored time');
@@ -60,7 +145,7 @@ async function qualifyTriangleHistory(page, duration, initialDiagnostics) {
   }
   assert.equal(new Set(captures.map(capture => capture.pixelSha256)).size, 3,
     'Triangle authored checkpoints must render distinct pictures');
-  const rewindTime = await seekPausedGallery(page, duration, 12);
+  const rewindTime = await seekWithStage(12, "triangle-rewind-12");
   const rewindMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
   const rewindPixels = await page.locator('#scene').screenshot();
   const rewindSha256 = createHash('sha256').update(rewindPixels).digest('hex');
@@ -99,7 +184,8 @@ async function qualifyTriangleHistory(page, duration, initialDiagnostics) {
     exactCanvasMatch: true, metrics: { time: rewindMetrics.metrics.time,
       session: rewindMetrics.metrics.presentedSession,
       presentedFrames: rewindMetrics.metrics.presentedFrames,
-      objectCount: rewindMetrics.metrics.objectCount } } };
+      objectCount: rewindMetrics.metrics.objectCount } },
+    controlTrace: await page.evaluate(() => window.__triangleControlTrace ?? null) };
 }
 await mkdir(artifacts, { recursive: true });
 let server, httpServerState, browser, runtimeCache;
@@ -560,6 +646,10 @@ try {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
         browserTrace: trace.snapshot(),
+        triangleControlTrace: await page.evaluate(() => ({
+          trace: window.__triangleControlTrace ?? null,
+          receipts: window.__triangleControlReceipts ?? null,
+        })).catch(() => null),
         httpServer: httpServerState ?? null,
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
