@@ -16,12 +16,14 @@ export async function waitForPublishedGalleryFrame(page, targetTime, storyboardD
   return page.evaluate(() => window.__noonExampleGallery.executionMetrics());
 }
 
-export async function seekPausedGallery(page, storyboardDuration, sampleTime = null) {
+export async function seekPausedGallery(page, storyboardDuration, sampleTime = null, trace = null) {
   assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
   assert.ok(sampleTime === null || (Number.isFinite(sampleTime) && sampleTime >= 0 && sampleTime <= storyboardDuration),
     "requested checkpoint is outside the storyboard");
-  const waitReady = async (expectedTime = null, paused = false) => {
-    await page.waitForFunction(({ expectedTime, paused }) => {
+  const waitReady = async (expectedTime = null, paused = false, stage = "controls-ready") => {
+    trace?.({ kind: "wait-entered", stage, expectedTime, paused });
+    try {
+      await page.waitForFunction(({ expectedTime, paused }) => {
       const patch = document.querySelector("#patch-status");
       const controls = document.querySelector(".playback-controls");
       if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery execution failed");
@@ -34,15 +36,34 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
         (!paused || (controls.dataset.playing === "false" &&
           toggle?.getAttribute("aria-label") === "Play animation")) &&
         (expectedTime === null || Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7);
-    }, { expectedTime, paused }, { polling: 50 });
+      }, { expectedTime, paused }, { polling: 50 });
+      trace?.({ kind: "wait-resolved", stage });
+    } catch (error) {
+      trace?.({ kind: "wait-rejected", stage,
+        error: { name: error?.name ?? "Error", message: String(error).slice(0, 500) } });
+      throw error;
+    }
   };
 
-  await waitReady();
+  await waitReady(null, false, "initial-controls-ready");
   const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-  if (await pause.count()) await pause.click();
+  trace?.({ kind: "pause-count-started" });
+  const pauseCount = await pause.count();
+  trace?.({ kind: "pause-count-resolved", count: pauseCount });
+  if (pauseCount) {
+    trace?.({ kind: "pause-click-started" });
+    try {
+      await pause.click();
+      trace?.({ kind: "pause-click-resolved" });
+    } catch (error) {
+      trace?.({ kind: "pause-click-rejected",
+        error: { name: error?.name ?? "Error", message: String(error).slice(0, 500) } });
+      throw error;
+    }
+  }
   // Do not rely on seek to stop playback. Pause first so an advancing clock
   // cannot race the command-completion check or the screenshot.
-  await waitReady(null, true);
+  await waitReady(null, true, "paused-controls-ready");
   const scrubber = page.locator(".playback-scrubber");
   const authoredDuration = Number(await scrubber.getAttribute("max"));
   assert.ok(Number.isFinite(authoredDuration) && Math.abs(authoredDuration - storyboardDuration) < 1e-7,
@@ -50,16 +71,18 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
   // Endpoint requests preserve the engine's actual floating-point duration.
   const targetTime = sampleTime === null ? authoredDuration : sampleTime;
   assert.ok(targetTime <= authoredDuration, "requested checkpoint exceeds the actual duration");
+  trace?.({ kind: "seek-input-started", targetTime });
   const requestedTime = await scrubber.evaluate((input, target) => {
     input.value = String(target);
     const time = Number(input.value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     return time;
   }, targetTime);
+  trace?.({ kind: "seek-input-dispatched", targetTime, requestedTime });
   assert.ok(Math.abs(requestedTime - targetTime) <= 8 * Number.EPSILON * Math.max(1, authoredDuration),
     "Browser slider quantized the requested checkpoint");
   // The slider remains enabled during a seek; data-busy is the command barrier.
-  await waitReady(targetTime, true);
+  await waitReady(targetTime, true, "seek-target-ready");
   return targetTime;
 }
 
