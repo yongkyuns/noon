@@ -1,0 +1,254 @@
+name: Bezier worker CPU profile diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/2422-bezier-cpu-profile-diagnostic
+    paths:
+      - .github/workflows/bezier-cpu-profile-diagnostic.yml
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RUN_ID: "41981888283"
+      CANDIDATE_ARTIFACT_ID: "13394652896"
+      CANDIDATE_ARTIFACT_NAME: product-candidate-1
+      CANDIDATE_ARCHIVE_SHA256: 524d17616961c8b8fa9ade48432d51e1e987bb37c1f812dc1eb09ffca0d9da06
+      CANDIDATE_ARCHIVE_BYTES: "24438283"
+      CANDIDATE_SOURCE: be814def71f9d34d9d28d106631544ca5a8eb3f8
+      CANDIDATE_TREE: 0ac6518799955a9a39b39820f0a2857f62144385
+      ANCHOR_ARTIFACT_ID: "13395155425"
+      ANCHOR_ARTIFACT_NAME: product-anchor-1
+      ANCHOR_ARCHIVE_SHA256: 094a17d4793bf64c71038bfc0ab41cfe157b0ce91a48092c3174198b351a0bbe
+      ANCHOR_ARCHIVE_BYTES: "21347498"
+      ANCHOR_SOURCE: 58135c4069a6f8d700dcaaee677d7c8c7a48d6c5
+      PROFILE_RUNNER_SHA256: fe75c514b6db8aebad071b90862ddf33b5fb54576c5216dd56acc89824b78fe6
+      PROFILE_HELPER_SHA256: 01c3bbdf8f67ea5d864f507fd5ee38ce9f308489b96bb13fa889f8789a78e0ee
+      PROFILE_TEST_SHA256: d5a15c7a8a6152240a2dd45fc90240e688169253914d8794722753d928a2abb3
+    steps:
+      - name: Checkout diagnostic workflow revision
+        uses: actions/checkout@v7
+        with:
+          path: diagnostic
+
+      - name: Checkout exact product candidate source
+        uses: actions/checkout@v7
+        with:
+          ref: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          fetch-depth: 2
+          path: candidate
+
+      - name: Checkout exact cumulative anchor source
+        uses: actions/checkout@v7
+        with:
+          ref: 58135c4069a6f8d700dcaaee677d7c8c7a48d6c5
+          fetch-depth: 1
+          path: anchor
+
+      - name: Install pinned Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.1
+
+      - name: Verify source identities and copy the two pinned diagnostic files
+        run: |
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SOURCE"
+          test "$(git -C candidate rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test "$(git -C anchor rev-parse HEAD)" = "$ANCHOR_SOURCE"
+          git -C anchor rev-parse HEAD^{tree} > "$RUNNER_TEMP/anchor-tree.txt"
+          test "$(git -C diagnostic show -s --format=%H HEAD)" = "$GITHUB_SHA"
+          cp diagnostic/scripts/playground-product-e2e-profile.mjs candidate/scripts/
+          cp diagnostic/scripts/worker-cpu-profile.mjs candidate/scripts/
+          echo "$PROFILE_RUNNER_SHA256  candidate/scripts/playground-product-e2e-profile.mjs" | sha256sum -c -
+          echo "$PROFILE_HELPER_SHA256  candidate/scripts/worker-cpu-profile.mjs" | sha256sum -c -
+          echo "$PROFILE_RUNNER_SHA256  diagnostic/scripts/playground-product-e2e-profile.mjs" | sha256sum -c -
+          echo "$PROFILE_HELPER_SHA256  diagnostic/scripts/worker-cpu-profile.mjs" | sha256sum -c -
+          echo "$PROFILE_TEST_SHA256  diagnostic/scripts/worker-cpu-profile.test.mjs" | sha256sum -c -
+
+      - name: Rehearse the worker-profile command router and syntax
+        run: |
+          node --check diagnostic/scripts/playground-product-e2e-profile.mjs
+          node --check diagnostic/scripts/worker-cpu-profile.mjs
+          node --test diagnostic/scripts/worker-cpu-profile.test.mjs
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install Playwright and Chromium
+        working-directory: candidate
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Verify artifact API metadata and download exact package archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            -o "$RUNNER_TEMP/artifacts.json"
+          node --input-type=module - <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          const data = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/artifacts.json`, 'utf8'));
+          for (const [id, name, size] of [
+            [Number(process.env.CANDIDATE_ARTIFACT_ID), process.env.CANDIDATE_ARTIFACT_NAME, Number(process.env.CANDIDATE_ARCHIVE_BYTES)],
+            [Number(process.env.ANCHOR_ARTIFACT_ID), process.env.ANCHOR_ARTIFACT_NAME, Number(process.env.ANCHOR_ARCHIVE_BYTES)],
+          ]) {
+            const artifact = data.artifacts.find(item => item.id === id);
+            assert.ok(artifact && !artifact.expired, `missing or expired artifact ${id}`);
+            assert.equal(artifact.name, name);
+            assert.equal(artifact.size_in_bytes, size);
+            assert.equal(artifact.workflow_run?.id, Number(process.env.RUN_ID));
+          }
+          NODE
+          for side in candidate anchor; do
+            if [ "$side" = candidate ]; then id="$CANDIDATE_ARTIFACT_ID"; else id="$ANCHOR_ARTIFACT_ID"; fi
+            curl --fail --silent --show-error --location \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" \
+              -o "$RUNNER_TEMP/$side.zip"
+          done
+          echo "$CANDIDATE_ARCHIVE_SHA256  $RUNNER_TEMP/candidate.zip" | sha256sum -c -
+          echo "$ANCHOR_ARCHIVE_SHA256  $RUNNER_TEMP/anchor.zip" | sha256sum -c -
+
+      - name: Safely extract and install the two frozen production packages
+        run: |
+          python3 - <<'PY'
+          import os, shutil, stat, zipfile
+          from pathlib import Path, PurePosixPath
+          root = Path(os.environ["RUNNER_TEMP"])
+          for side in ("candidate", "anchor"):
+              archive = root / f"{side}.zip"
+              extracted = root / f"{side}-archive"
+              extracted.mkdir()
+              seen = set()
+              with zipfile.ZipFile(archive) as bundle:
+                  for member in bundle.infolist():
+                      rel = PurePosixPath(member.filename)
+                      if rel.is_absolute() or ".." in rel.parts or "\\" in member.filename:
+                          raise SystemExit(f"unsafe package path: {member.filename!r}")
+                      mode = member.external_attr >> 16
+                      if stat.S_ISLNK(mode) or member.filename in seen:
+                          raise SystemExit(f"symlink/duplicate package entry: {member.filename!r}")
+                      seen.add(member.filename)
+                      destination = extracted.joinpath(*rel.parts)
+                      if member.is_dir():
+                          destination.mkdir(parents=True, exist_ok=True)
+                      else:
+                          destination.parent.mkdir(parents=True, exist_ok=True)
+                          destination.write_bytes(bundle.read(member))
+              source = extracted / "web" if (extracted / "web/ci-artifact.json").is_file() else extracted
+              if not (source / "ci-artifact.json").is_file():
+                  raise SystemExit(f"package manifest missing in {side} artifact")
+              target = Path(os.environ["GITHUB_WORKSPACE"]) / side / "web"
+              shutil.copytree(source, target, dirs_exist_ok=True)
+          PY
+          test "$(shasum -a 256 candidate/web/ci-artifact.json | cut -d' ' -f1)" != ""
+          test "$(shasum -a 256 anchor/web/ci-artifact.json | cut -d' ' -f1)" != ""
+
+      - name: Verify complete package manifests and exact source fixtures
+        run: |
+          verify_product() {
+            root="$1"; role="$2"
+            values="$(node -e 'const p=require(process.argv[1]).productSources; process.stdout.write([p.baseline,p.candidate,p.head,p.eventBase].join("\t"))' "$PWD/$root/web/ci-artifact.json")"
+            IFS=$'\t' read -r base candidate head event_base <<< "$values"
+            GITHUB_SHA="$(node -e 'process.stdout.write(require(process.argv[1]).source)' "$PWD/$root/web/ci-artifact.json")" \
+            NOON_PRODUCT_BASE_SHA="$base" NOON_PRODUCT_CANDIDATE_SHA="$candidate" \
+            NOON_PRODUCT_HEAD_SHA="$head" NOON_PRODUCT_EVENT_BASE_SHA="$event_base" \
+            NOON_WASM_PROFILE=release NOON_WASM_SKIP_OPT=0 NOON_RENDERER_SMOKE=0 \
+              node candidate/.github/ci/product-artifact.mjs verify "$role" "$root"
+          }
+          verify_product candidate candidate
+          verify_product anchor baseline
+          test "$(sha256sum candidate/web/python/examples/showcase_bezier_paths.py | cut -d' ' -f1)" = \
+               "$(sha256sum anchor/web/python/examples/showcase_bezier_paths.py | cut -d' ' -f1)"
+          sha256sum candidate/web/python/examples/showcase_bezier_paths.py > "$RUNNER_TEMP/bezier-source-pre.sha256"
+          find candidate/web -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$RUNNER_TEMP/candidate-package-pre.sha256"
+          find anchor/web -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$RUNNER_TEMP/anchor-package-pre.sha256"
+          git -C candidate status --porcelain --untracked-files=all > "$RUNNER_TEMP/candidate-source-pre.status"
+
+      - name: Capture one warm Bezier pass per package
+        working-directory: candidate
+        env:
+          NOON_PRODUCT_EXAMPLE: showcase-bezier-paths
+          NOON_PRODUCT_CPU_PROFILE: "1"
+          NOON_PRODUCT_PORT: "4205"
+          NOON_WASM_PROFILE: release
+          NOON_WASM_SKIP_OPT: "0"
+          NOON_RENDERER_SMOKE: "0"
+        run: |
+          mkdir -p "$RUNNER_TEMP/profiles/anchor" "$RUNNER_TEMP/profiles/candidate"
+          anchor_status=0
+          if NOON_PRODUCT_LABEL=baseline NOON_PRODUCT_SITE_ROOT="$GITHUB_WORKSPACE/anchor" \
+             NOON_PRODUCT_ARTIFACT_DIR="$RUNNER_TEMP/profiles/anchor" \
+             node scripts/playground-product-e2e-profile.mjs; then :; else anchor_status=$?; fi
+          candidate_status=0
+          if NOON_PRODUCT_LABEL=candidate NOON_PRODUCT_SITE_ROOT="$GITHUB_WORKSPACE/candidate" \
+             NOON_PRODUCT_ARTIFACT_DIR="$RUNNER_TEMP/profiles/candidate" \
+             node scripts/playground-product-e2e-profile.mjs; then :; else candidate_status=$?; fi
+          printf 'anchor_exit=%s\ncandidate_exit=%s\n' "$anchor_status" "$candidate_status" \
+            > "$RUNNER_TEMP/profile-exit-status.txt"
+          if [ "$anchor_status" -ne 0 ] || [ "$candidate_status" -ne 0 ]; then
+            echo "profile attempts failed: anchor=$anchor_status candidate=$candidate_status"
+            exit 1
+          fi
+
+      - name: Reverify package bytes and source after profiling
+        if: always()
+        run: |
+          verify_product() {
+            root="$1"; role="$2"
+            values="$(node -e 'const p=require(process.argv[1]).productSources; process.stdout.write([p.baseline,p.candidate,p.head,p.eventBase].join("\t"))' "$PWD/$root/web/ci-artifact.json")"
+            IFS=$'\t' read -r base candidate head event_base <<< "$values"
+            GITHUB_SHA="$(node -e 'process.stdout.write(require(process.argv[1]).source)' "$PWD/$root/web/ci-artifact.json")" \
+            NOON_PRODUCT_BASE_SHA="$base" NOON_PRODUCT_CANDIDATE_SHA="$candidate" \
+            NOON_PRODUCT_HEAD_SHA="$head" NOON_PRODUCT_EVENT_BASE_SHA="$event_base" \
+            NOON_WASM_PROFILE=release NOON_WASM_SKIP_OPT=0 NOON_RENDERER_SMOKE=0 \
+              node candidate/.github/ci/product-artifact.mjs verify "$role" "$root"
+          }
+          verify_product candidate candidate
+          verify_product anchor baseline
+          test "$(git -C candidate rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          test "$(git -C anchor rev-parse HEAD^{tree})" = "$(cat "$RUNNER_TEMP/anchor-tree.txt")"
+          sha256sum candidate/web/python/examples/showcase_bezier_paths.py > "$RUNNER_TEMP/bezier-source-post.sha256"
+          cmp "$RUNNER_TEMP/bezier-source-pre.sha256" "$RUNNER_TEMP/bezier-source-post.sha256"
+          find candidate/web -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$RUNNER_TEMP/candidate-package-post.sha256"
+          find anchor/web -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$RUNNER_TEMP/anchor-package-post.sha256"
+          cmp "$RUNNER_TEMP/candidate-package-pre.sha256" "$RUNNER_TEMP/candidate-package-post.sha256"
+          cmp "$RUNNER_TEMP/anchor-package-pre.sha256" "$RUNNER_TEMP/anchor-package-post.sha256"
+          echo "$PROFILE_RUNNER_SHA256  candidate/scripts/playground-product-e2e-profile.mjs" | sha256sum -c -
+          echo "$PROFILE_HELPER_SHA256  candidate/scripts/worker-cpu-profile.mjs" | sha256sum -c -
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SOURCE"
+          test "$(git -C anchor rev-parse HEAD)" = "$ANCHOR_SOURCE"
+          git -C candidate status --porcelain --untracked-files=all > "$RUNNER_TEMP/candidate-source-post.status"
+          cmp "$RUNNER_TEMP/candidate-source-pre.status" "$RUNNER_TEMP/candidate-source-post.status"
+
+      - name: Upload diagnostic profiles and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bezier-worker-cpu-profiles-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/profiles
+            ${{ runner.temp }}/bezier-source-*.sha256
+            ${{ runner.temp }}/candidate-source-*.status
+            ${{ runner.temp }}/*package-*.sha256
+            ${{ runner.temp }}/candidate.zip
+            ${{ runner.temp }}/anchor.zip
+            ${{ runner.temp }}/profile-exit-status.txt
+          if-no-files-found: warn
+          retention-days: 7
