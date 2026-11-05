@@ -1,0 +1,331 @@
+name: PR 2422 hosted failure diagnostics (TEMP — do not merge)
+
+on:
+  push:
+    branches:
+      - codex/2422-passive-failure-diagnostic
+    paths:
+      - ".github/workflows/playground-hosted-failure-diagnostic.yml"
+      - "scripts/playground-browser-matrix-smoke.mjs"
+      - "scripts/playground-main-thread-mobile-smoke.mjs"
+      - "scripts/playground-gallery-runtime-smoke.mjs"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pr-2422-hosted-failure-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firefox-public-matrix:
+    name: Firefox desktop-dpr2 public workflow diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download exact runtime artifact from the published 72c0 run
+        uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          path: runtime-artifact
+          repository: yongkyuns/noon
+          run-id: 41959201873
+          github-token: ${{ github.token }}
+      - name: Verify complete runtime artifact identity
+        id: runtime_verify
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          expected = {
+            "pkg/noon_web.d.ts": "5c8769180c2ed30d2939a96b7730eb0bd0b8f9c4b2fc31369efda2081cad2f04",
+            "pkg/noon_web.js": "75180e0a0ea5c75ee780d371ad2cb9b8bea0ff1edc6f0efbca5c8d237c3b112f",
+            "pkg/noon_web_bg.wasm": "b5e4a15db20553aed8438a48a35cfe784410719c6418aecb9579ce8cca5c8ee1",
+            "pkg/noon_web_bg.wasm.d.ts": "a56bab0cfb22e6f94473bec0ac25f9bf4f8705eeb7c6d6e5f43673a23c1e58f1",
+            "pkg/package.json": "d6638bab30595f734a886d311ab70778ee9b80008b0270ead761a89b4bd98968",
+            "pkg/python-editor-bundle.js": "b838be1042593a85c655398e1f9b00f2e38cd3742b517f01a5691805dc9962f9",
+            "pkg/python-editor-licenses.txt": "c8c22a791214343484985cb731b39a602a17397bc71901df9222a74a0720bb55",
+            "python-worker.js": "0af62914dafeab242f4b7353eb76e5c00ceab91bfc2bfb126fc94bd8cff92a5d",
+            "runtime-build-identity.json": "421185e7f50ad69c1110666875913b4dad3328b345bc035fc5c4de5a46168150",
+            "python/compat-bundle.b1f9cf1e8ed590497fb66102489681a5473ddc4d9f8532c3d9fa5fac29f8b1d8.json": "3f515f9a7eefa47626756846611fbbe33ce22ea5054675278df5b94c7785caf1",
+          }
+          root = Path("runtime-artifact")
+          files = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+          assert files == set(expected), (sorted(files), sorted(expected))
+          for name, digest in expected.items():
+            actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+            assert actual == digest, (name, actual)
+          identity = json.loads((root / "runtime-build-identity.json").read_text())
+          assert identity["sourceRevision"] == "a1fd50471c7089125bafebd4e619ec07f79732d8"
+          assert identity["buildId"] == "58b093fd60cf5a8c212bae336ba5eefedc448289dacdec2dc7e71abcd0d03eee"
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          source_paths = sorted(path.decode() for path in tracked if path and (
+            path.startswith((b"python/examples/", b"web/python/examples/", b"fixtures/"))))
+          source_hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in source_paths}
+          source_revision = identity["sourceRevision"]
+          subprocess.check_call(["git", "fetch", "--no-tags", "--depth=1", "origin", source_revision])
+          fetched = subprocess.check_output(["git", "rev-parse", "FETCH_HEAD"], text=True).strip()
+          assert fetched == source_revision, (fetched, source_revision)
+          for name, digest in source_hashes.items():
+            pinned = subprocess.check_output(["git", "show", f"FETCH_HEAD:{name}"])
+            assert hashlib.sha256(pinned).hexdigest() == digest, (name, "checkout differs from runtime source")
+          snapshot = {"runtime": expected, "source": source_hashes, "identity": identity}
+          snapshot_path = Path(os.environ["RUNNER_TEMP"]) / "noon-2422-runtime-source-snapshot.json"
+          snapshot_path.write_text(json.dumps(snapshot, sort_keys=True))
+          print("verified exact 10-file runtime artifact; buildId", identity["buildId"],
+            "source/fixture files", len(source_hashes))
+          PY
+          cp -R runtime-artifact/. web/
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: Linux-playwright-firefox-1.62.1
+      - name: Install pinned browser npm dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install Firefox and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh firefox
+      - name: Run unchanged public matrix scenario with passive worker diagnostics
+        env:
+          NOON_PLAYGROUND_BROWSER: firefox
+          NOON_PLAYGROUND_PROFILE: desktop-dpr2
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/pr2422-diagnostic/firefox-desktop-dpr2
+        run: xvfb-run -a node scripts/playground-browser-matrix-smoke.mjs
+      - name: Recheck runtime and source inputs after test
+        id: post_runtime_verify
+        if: always() && steps.runtime_verify.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          snapshot = json.loads((Path(os.environ["RUNNER_TEMP"]) / "noon-2422-runtime-source-snapshot.json").read_text())
+          for name, digest in snapshot["source"].items():
+            actual = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+            assert actual == digest, (name, actual)
+          for root in (Path("runtime-artifact"), Path("web")):
+            for name, digest in snapshot["runtime"].items():
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              assert actual == digest, (root.as_posix(), name, actual)
+          identity = json.loads(Path("web/runtime-build-identity.json").read_text())
+          assert identity == snapshot["identity"]
+          print("post-test source/fixture and runtime hashes unchanged")
+          PY
+      - name: Retain Firefox diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr2422-diagnostic-firefox-desktop-dpr2
+          path: browser-smoke-artifacts/pr2422-diagnostic/firefox-desktop-dpr2
+          if-no-files-found: warn
+          retention-days: 3
+
+  webkit-mobile-variants:
+    name: WebKit mobile automatic and fallback variants diagnostic
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download exact runtime artifact from the published 72c0 run
+        uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          path: runtime-artifact
+          repository: yongkyuns/noon
+          run-id: 41959201873
+          github-token: ${{ github.token }}
+      - name: Verify complete runtime artifact identity
+        id: runtime_verify
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          expected = {
+            "pkg/noon_web.d.ts": "5c8769180c2ed30d2939a96b7730eb0bd0b8f9c4b2fc31369efda2081cad2f04",
+            "pkg/noon_web.js": "75180e0a0ea5c75ee780d371ad2cb9b8bea0ff1edc6f0efbca5c8d237c3b112f",
+            "pkg/noon_web_bg.wasm": "b5e4a15db20553aed8438a48a35cfe784410719c6418aecb9579ce8cca5c8ee1",
+            "pkg/noon_web_bg.wasm.d.ts": "a56bab0cfb22e6f94473bec0ac25f9bf4f8705eeb7c6d6e5f43673a23c1e58f1",
+            "pkg/package.json": "d6638bab30595f734a886d311ab70778ee9b80008b0270ead761a89b4bd98968",
+            "pkg/python-editor-bundle.js": "b838be1042593a85c655398e1f9b00f2e38cd3742b517f01a5691805dc9962f9",
+            "pkg/python-editor-licenses.txt": "c8c22a791214343484985cb731b39a602a17397bc71901df9222a74a0720bb55",
+            "python-worker.js": "0af62914dafeab242f4b7353eb76e5c00ceab91bfc2bfb126fc94bd8cff92a5d",
+            "runtime-build-identity.json": "421185e7f50ad69c1110666875913b4dad3328b345bc035fc5c4de5a46168150",
+            "python/compat-bundle.b1f9cf1e8ed590497fb66102489681a5473ddc4d9f8532c3d9fa5fac29f8b1d8.json": "3f515f9a7eefa47626756846611fbbe33ce22ea5054675278df5b94c7785caf1",
+          }
+          root = Path("runtime-artifact")
+          files = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+          assert files == set(expected), (sorted(files), sorted(expected))
+          for name, digest in expected.items():
+            actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+            assert actual == digest, (name, actual)
+          identity = json.loads((root / "runtime-build-identity.json").read_text())
+          assert identity["sourceRevision"] == "a1fd50471c7089125bafebd4e619ec07f79732d8"
+          assert identity["buildId"] == "58b093fd60cf5a8c212bae336ba5eefedc448289dacdec2dc7e71abcd0d03eee"
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          source_paths = sorted(path.decode() for path in tracked if path and (
+            path.startswith((b"python/examples/", b"web/python/examples/", b"fixtures/"))))
+          source_hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in source_paths}
+          source_revision = identity["sourceRevision"]
+          subprocess.check_call(["git", "fetch", "--no-tags", "--depth=1", "origin", source_revision])
+          fetched = subprocess.check_output(["git", "rev-parse", "FETCH_HEAD"], text=True).strip()
+          assert fetched == source_revision, (fetched, source_revision)
+          for name, digest in source_hashes.items():
+            pinned = subprocess.check_output(["git", "show", f"FETCH_HEAD:{name}"])
+            assert hashlib.sha256(pinned).hexdigest() == digest, (name, "checkout differs from runtime source")
+          snapshot = {"runtime": expected, "source": source_hashes, "identity": identity}
+          snapshot_path = Path(os.environ["RUNNER_TEMP"]) / "noon-2422-runtime-source-snapshot.json"
+          snapshot_path.write_text(json.dumps(snapshot, sort_keys=True))
+          print("verified exact 10-file runtime artifact; buildId", identity["buildId"],
+            "source/fixture files", len(source_hashes))
+          PY
+          cp -R runtime-artifact/. web/
+      - uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: macOS-playwright-webkit-1.62.1
+      - name: Install pinned browser npm dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install WebKit and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh webkit
+      - name: Run unchanged WebKit mobile variants with passive control trace
+        env:
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/pr2422-diagnostic/webkit-mobile-variants
+        run: node scripts/playground-main-thread-mobile-smoke.mjs
+      - name: Recheck runtime and source inputs after test
+        id: post_runtime_verify
+        if: always() && steps.runtime_verify.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          snapshot = json.loads((Path(os.environ["RUNNER_TEMP"]) / "noon-2422-runtime-source-snapshot.json").read_text())
+          for name, digest in snapshot["source"].items():
+            actual = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+            assert actual == digest, (name, actual)
+          for root in (Path("runtime-artifact"), Path("web")):
+            for name, digest in snapshot["runtime"].items():
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              assert actual == digest, (root.as_posix(), name, actual)
+          identity = json.loads(Path("web/runtime-build-identity.json").read_text())
+          assert identity == snapshot["identity"]
+          print("post-test source/fixture and runtime hashes unchanged")
+          PY
+      - name: Retain WebKit mobile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr2422-diagnostic-webkit-mobile-variants
+          path: browser-smoke-artifacts/pr2422-diagnostic/webkit-mobile-variants
+          if-no-files-found: warn
+          retention-days: 3
+
+  webkit-gallery-controls:
+    name: WebKit triangle post-loop control trace
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download exact runtime artifact from the published 72c0 run
+        uses: actions/download-artifact@v8
+        with:
+          name: playground-cross-browser-web-runtime
+          path: runtime-artifact
+          repository: yongkyuns/noon
+          run-id: 41959201873
+          github-token: ${{ github.token }}
+      - name: Verify complete runtime artifact identity
+        id: runtime_verify
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          expected = {
+            "pkg/noon_web.d.ts": "5c8769180c2ed30d2939a96b7730eb0bd0b8f9c4b2fc31369efda2081cad2f04",
+            "pkg/noon_web.js": "75180e0a0ea5c75ee780d371ad2cb9b8bea0ff1edc6f0efbca5c8d237c3b112f",
+            "pkg/noon_web_bg.wasm": "b5e4a15db20553aed8438a48a35cfe784410719c6418aecb9579ce8cca5c8ee1",
+            "pkg/noon_web_bg.wasm.d.ts": "a56bab0cfb22e6f94473bec0ac25f9bf4f8705eeb7c6d6e5f43673a23c1e58f1",
+            "pkg/package.json": "d6638bab30595f734a886d311ab70778ee9b80008b0270ead761a89b4bd98968",
+            "pkg/python-editor-bundle.js": "b838be1042593a85c655398e1f9b00f2e38cd3742b517f01a5691805dc9962f9",
+            "pkg/python-editor-licenses.txt": "c8c22a791214343484985cb731b39a602a17397bc71901df9222a74a0720bb55",
+            "python-worker.js": "0af62914dafeab242f4b7353eb76e5c00ceab91bfc2bfb126fc94bd8cff92a5d",
+            "runtime-build-identity.json": "421185e7f50ad69c1110666875913b4dad3328b345bc035fc5c4de5a46168150",
+            "python/compat-bundle.b1f9cf1e8ed590497fb66102489681a5473ddc4d9f8532c3d9fa5fac29f8b1d8.json": "3f515f9a7eefa47626756846611fbbe33ce22ea5054675278df5b94c7785caf1",
+          }
+          root = Path("runtime-artifact")
+          files = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+          assert files == set(expected), (sorted(files), sorted(expected))
+          for name, digest in expected.items():
+            actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+            assert actual == digest, (name, actual)
+          identity = json.loads((root / "runtime-build-identity.json").read_text())
+          assert identity["sourceRevision"] == "a1fd50471c7089125bafebd4e619ec07f79732d8"
+          assert identity["buildId"] == "58b093fd60cf5a8c212bae336ba5eefedc448289dacdec2dc7e71abcd0d03eee"
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          source_paths = sorted(path.decode() for path in tracked if path and (
+            path.startswith((b"python/examples/", b"web/python/examples/", b"fixtures/"))))
+          source_hashes = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in source_paths}
+          source_revision = identity["sourceRevision"]
+          subprocess.check_call(["git", "fetch", "--no-tags", "--depth=1", "origin", source_revision])
+          fetched = subprocess.check_output(["git", "rev-parse", "FETCH_HEAD"], text=True).strip()
+          assert fetched == source_revision, (fetched, source_revision)
+          for name, digest in source_hashes.items():
+            pinned = subprocess.check_output(["git", "show", f"FETCH_HEAD:{name}"])
+            assert hashlib.sha256(pinned).hexdigest() == digest, (name, "checkout differs from runtime source")
+          snapshot = {"runtime": expected, "source": source_hashes, "identity": identity}
+          snapshot_path = Path(os.environ["RUNNER_TEMP"]) / "noon-2422-runtime-source-snapshot.json"
+          snapshot_path.write_text(json.dumps(snapshot, sort_keys=True))
+          print("verified exact 10-file runtime artifact; buildId", identity["buildId"],
+            "source/fixture files", len(source_hashes))
+          PY
+          cp -R runtime-artifact/. web/
+      - uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: macOS-playwright-webkit-1.62.1
+      - name: Install pinned browser npm dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+      - name: Install WebKit and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh webkit
+      - name: Run unchanged full WebKit gallery shard 1 with control trace
+        env:
+          NOON_PLAYGROUND_BROWSER: webkit
+          NOON_PLAYGROUND_PROFILE: mobile-dpr2
+          NOON_SHOWCASE_PROFILE_GATE: strict
+          NOON_GALLERY_SHARD_INDEX: 1
+          NOON_GALLERY_SHARD_COUNT: 3
+          NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/pr2422-diagnostic/webkit-gallery-shard-1
+        run: node scripts/playground-gallery-runtime-smoke.mjs
+      - name: Recheck runtime and source inputs after test
+        id: post_runtime_verify
+        if: always() && steps.runtime_verify.outcome == 'success'
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          snapshot = json.loads((Path(os.environ["RUNNER_TEMP"]) / "noon-2422-runtime-source-snapshot.json").read_text())
+          for name, digest in snapshot["source"].items():
+            actual = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+            assert actual == digest, (name, actual)
+          for root in (Path("runtime-artifact"), Path("web")):
+            for name, digest in snapshot["runtime"].items():
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              assert actual == digest, (root.as_posix(), name, actual)
+          identity = json.loads(Path("web/runtime-build-identity.json").read_text())
+          assert identity == snapshot["identity"]
+          print("post-test source/fixture and runtime hashes unchanged")
+          PY
+      - name: Retain WebKit gallery diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr2422-diagnostic-webkit-gallery-shard-1
+          path: browser-smoke-artifacts/pr2422-diagnostic/webkit-gallery-shard-1
+          if-no-files-found: warn
+          retention-days: 3
