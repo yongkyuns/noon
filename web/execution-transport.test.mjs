@@ -159,7 +159,9 @@ test("transferable transport preserves a large delta after buffer ownership move
 });
 
 test("transferable envelope metadata must match encoded payload", () => {
-  const payload = new TextEncoder().encode(delta(0));
+  const packet = `${JSON.stringify({ channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL,
+    session: 1, sequence: 0, snapshot: true })}\n${delta(0)}`;
+  const payload = new TextEncoder().encode(packet);
   const validBuffer = payload.buffer.slice(
     payload.byteOffset,
     payload.byteOffset + payload.byteLength,
@@ -174,9 +176,7 @@ test("transferable envelope metadata must match encoded payload", () => {
     { session: 1, sequence: 0, snapshot: true },
   );
 
-  const retainedPayload = new TextEncoder().encode(
-    delta(0, { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL }),
-  );
+  const retainedPayload = new TextEncoder().encode(packet);
   const retainedBuffer = retainedPayload.buffer.slice(
     retainedPayload.byteOffset,
     retainedPayload.byteOffset + retainedPayload.byteLength,
@@ -191,7 +191,7 @@ test("transferable envelope metadata must match encoded payload", () => {
     { session: 1, sequence: 0, snapshot: true },
   );
 
-  const mismatchPayload = new TextEncoder().encode(delta(0));
+  const mismatchPayload = new TextEncoder().encode(packet);
   const mismatchBuffer = mismatchPayload.buffer.slice(
     mismatchPayload.byteOffset,
     mismatchPayload.byteOffset + mismatchPayload.byteLength,
@@ -289,13 +289,13 @@ test("delta send reuses only metadata validated for the identical JSON payload",
 });
 
 
-test("canonical worker header avoids a full producer parse while receivers validate the unchanged body", async () => {
+test("worker carrier avoids parsing the retained body at the producer", async () => {
   const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 1,
     sequence: 0, snapshot: true, pointer_view: { revision: 8, width: 640, height: 360 } };
   const json = JSON.stringify({ ...header, time: 0,
     objects: Array.from({ length: 600 }, (_, id) => ({ id, geometry: "●\n".repeat(256) })) });
   const packet = `${JSON.stringify(header)}\n${json}`;
-  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length);
+  const mailbox = createSharedExecutionMailbox(new TextEncoder().encode(json).length + 512);
   const shared = new SharedExecutionDeltaWriter(mailbox);
   const reader = new SharedExecutionDeltaReader(mailbox);
   const { port1, port2 } = new MessageChannel();
@@ -311,10 +311,10 @@ test("canonical worker header avoids a full producer parse while receivers valid
     };
     try {
       prepared = prepareExecutionDeltaTransportForSend(packet);
-      assert.equal(prepared.json, json);
-      assert.equal(shared.send(prepared.json, prepared.metadata), true);
+      assert.equal(prepared.packet, packet);
+      assert.equal(shared.send(prepared.packet, prepared.metadata), true);
       const second = prepareExecutionDeltaTransportForSend(packet);
-      assert.equal(sender.send(second.json, second.metadata), true);
+      assert.equal(sender.send(second.packet, second.metadata), true);
     } finally { JSON.parse = originalParse; }
     assert.deepEqual(parsedLengths, [JSON.stringify(header).length, JSON.stringify(header).length],
       "only the constant-size headers are parsed at the producer");
@@ -331,7 +331,7 @@ test("canonical worker header avoids a full producer parse while receivers valid
   } finally { port1.close(); port2.close(); }
 });
 
-test("worker carrier validates bounded metadata and never relaxes generic JSON or receiver validation", () => {
+test("worker carrier validates bounded metadata and keeps generic JSON validation", () => {
   const header = JSON.parse(delta(0));
   const packet = value => `${JSON.stringify(value)}\n${delta(0)}`;
   assert.throws(() => prepareExecutionDeltaTransportForSend(null), /header\/body string/);
@@ -344,16 +344,58 @@ test("worker carrier validates bounded metadata and never relaxes generic JSON o
     ["snapshot", 1, /snapshot flag/], ["pointer_view", { revision: 0, width: 0, height: 1 }, /pointer view/],
   ]) assert.throws(() => prepareExecutionDeltaTransportForSend(packet({ ...header, [field]: value })), error);
   assert.throws(() => prepareExecutionDeltaMetadataForSend("not JSON"), /invalid JSON/);
+  const validPacket = `${JSON.stringify(header)}\n${delta(0)}`;
   assert.throws(() => decodeTransferableExecutionDelta({ type: "execution_delta", session: 1,
-    sequence: 99, buffer: new TextEncoder().encode(delta(0)).buffer }), /does not match/);
+    sequence: 99, buffer: new TextEncoder().encode(validPacket).buffer }), /does not match/);
   const mailbox = createSharedExecutionMailbox(4096);
   const writer = new SharedExecutionDeltaWriter(mailbox);
   const reader = new SharedExecutionDeltaReader(mailbox);
   const malformed = prepareExecutionDeltaTransportForSend(`${JSON.stringify(header)}\nnot JSON`);
-  assert.equal(writer.send(malformed.json, malformed.metadata), true);
-  let applied = false;
-  assert.throws(() => reader.drain(() => { applied = true; }), /invalid JSON/);
-  assert.equal(applied, false, "an invalid body must not reach the consumer");
+  assert.equal(writer.send(malformed.packet, malformed.metadata), true);
+  let received;
+  assert.equal(reader.drain((body, _metadata, packet) => { received = { body, packet }; }), 1);
+  assert.deepEqual(received, { body: "not JSON", packet: malformed.packet },
+    "the bounded router forwards the opaque body for typed Rust validation");
+});
+
+test("both receivers parse only the bounded header and forward the intact carrier", async () => {
+  const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 1,
+    sequence: 0, snapshot: true };
+  const packet = `${JSON.stringify(header)}\nnot JSON`;
+  const parsed = [];
+  const originalParse = JSON.parse;
+  JSON.parse = function (text, ...args) { parsed.push(text); return originalParse.call(this, text, ...args); };
+  const { port1, port2 } = new MessageChannel();
+  try {
+    const sender = new TransferableExecutionDeltaSender(port1);
+    const incoming = new Promise(resolve => new TransferableExecutionDeltaReceiver(
+      port2,
+      (body, metadata, intactPacket) => { resolve({ body, metadata, packet: intactPacket }); return true; },
+    ));
+    const prepared = prepareExecutionDeltaTransportForSend(packet);
+    assert.equal(sender.send(prepared.packet, prepared.metadata), true);
+    const transferable = await incoming;
+    assert.equal(transferable.body, "not JSON");
+    assert.equal(transferable.packet, packet);
+
+    const mailbox = createSharedExecutionMailbox(4096);
+    const writer = new SharedExecutionDeltaWriter(mailbox);
+    const reader = new SharedExecutionDeltaReader(mailbox);
+    const sharedCarrier = prepareExecutionDeltaTransportForSend(packet);
+    assert.equal(writer.send(sharedCarrier.packet, sharedCarrier.metadata), true);
+    let shared;
+    assert.equal(reader.drain((body, metadata, intactPacket) => {
+      shared = { body, metadata, packet: intactPacket };
+    }), 1);
+    assert.equal(shared.body, "not JSON");
+    assert.equal(shared.packet, packet);
+    assert.deepEqual(shared.metadata, transferable.metadata);
+    assert.deepEqual(parsed, [JSON.stringify(header), JSON.stringify(header),
+      JSON.stringify(header), JSON.stringify(header)]);
+  } finally {
+    JSON.parse = originalParse;
+    port1.close(); port2.close();
+  }
 });
 
 
@@ -430,12 +472,14 @@ test("chunk framing rejects invalid budgets and identity before applying a packe
   }
 });
 
-test("chunk assembly validates the completed JSON against the worker carrier identity", () => {
+test("chunk assembly preserves the carrier while validating its bounded framing identity", () => {
   const { writer, reader } = sharedPair();
   const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 7, sequence: 5, snapshot: true };
   const carrier = prepareExecutionDeltaTransportForSend(`${JSON.stringify(header)}\n${largeDelta()}`);
-  writer.send(carrier.json, carrier.metadata);
-  assert.throws(() => completeChunks(writer, reader, () => assert.fail("mismatched packet reached apply")), /metadata does not match/);
+  writer.send(carrier.packet, carrier.metadata);
+  let received;
+  completeChunks(writer, reader, (_body, _metadata, packet) => { received = packet; });
+  assert.equal(received, carrier.packet);
 });
 
 test("chunk identity preserves full safe-integer sessions and sequences", () => {
@@ -468,11 +512,11 @@ test("a retired shared writer consumes its one-shot metadata instead of retainin
   const { writer } = sharedPair(); writer.close();
   const header = { channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL, session: 1, sequence: 0, snapshot: true };
   const carrier = prepareExecutionDeltaTransportForSend(`${JSON.stringify(header)}\nnot JSON`);
-  assert.throws(() => writer.send(carrier.json, carrier.metadata), /closed/);
+  assert.throws(() => writer.send(carrier.packet, carrier.metadata), /closed/);
   const { port1, port2 } = new MessageChannel();
   try {
     const sender = new TransferableExecutionDeltaSender(port1);
-    assert.throws(() => sender.send(carrier.json, carrier.metadata), /invalid JSON/,
+    assert.throws(() => sender.send(carrier.packet, carrier.metadata), /invalid JSON/,
       "rejected handoff must not leave a retained validation association");
   } finally { port1.close(); port2.close(); }
 });

@@ -437,7 +437,7 @@ export function createAuthoringRenderController(host) {
     if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
       transferableReceiver = new TransferableExecutionDeltaReceiver(
         port,
-        (json, metadata) => (renderPort === port ? consumeDelta(json, metadata) : true),
+        (json, metadata, packet) => (renderPort === port ? consumeDelta(packet, metadata) : true),
       );
     }
     port.start();
@@ -618,7 +618,7 @@ export function createAuthoringRenderController(host) {
   function drainTransport() {
     try {
       if (sharedReader !== null) {
-        const drained = sharedReader.drain((json, metadata) => consumeDelta(json, metadata));
+        const drained = sharedReader.drain((json, metadata, packet) => consumeDelta(packet, metadata));
         if (drained > 0) {
           renderPort?.postMessage({ type: "transport_writable" });
         }
@@ -911,7 +911,7 @@ export function createAuthoringRenderController(host) {
 
   function applyRendererDelta(json) {
     const startedAtMs = performance.now();
-    const applied = renderer.applyDeltaJson(json);
+    const applied = renderer.applyDeltaTransportJson(json);
     if (applied) lastDeltaApplyMs = Math.max(0, performance.now() - startedAtMs);
     return applied;
   }

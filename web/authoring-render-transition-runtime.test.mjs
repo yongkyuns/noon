@@ -314,6 +314,7 @@ function createRenderer(renderResults) {
     gpuCompletionProfiling: false,
     gpuCompletionSamplesJson: "null",
     applyDeltaJson: () => true,
+    applyDeltaTransportJson(json) { return this.applyDeltaJson(json); },
     setRendererObservationRequestJson(json) { this.observationRequests.push(json); },
     takeRendererObservationJson() {
       const result = this.observationResult;
@@ -1144,9 +1145,9 @@ test("first presentation timestamp latches only after renderer reports a success
   assert.equal(vm.runInContext("currentMetrics().lastRendererCallMs", harness.context), null);
 
   harness.context.advanceClock = () => { now += 5; };
-  vm.runInContext("renderer.applyDeltaJson = () => { advanceClock(); return true; }; applyRendererDelta('{}')", harness.context);
+  vm.runInContext("renderer.applyDeltaTransportJson = () => { advanceClock(); return true; }; applyRendererDelta('{}')", harness.context);
   assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5);
-  vm.runInContext("renderer.applyDeltaJson = () => false; applyRendererDelta('{}')", harness.context);
+  vm.runInContext("renderer.applyDeltaTransportJson = () => false; applyRendererDelta('{}')", harness.context);
   assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5,
     "a stale delta cannot replace the last successfully applied interval");
 

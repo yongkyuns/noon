@@ -40,26 +40,17 @@ export function executionDeltaMetadata(json) {
 // skip a second producer parse. Send consumes the association immediately.
 export function prepareExecutionDeltaMetadataForSend(json) {
   const metadata = parseExecutionDeltaMetadata(json);
-  validatedDeltaJson.set(metadata, json);
+  validatedDeltaJson.set(metadata, { json, packet: encodeWorkerCarrier(json, metadata) });
   return metadata;
 }
 
 // Only accepts the atomic header/body carrier from drainDeltaTransportJson.
-// The body remains the ordinary worker delta; both receiving transports still
-// parse/validate it before admission. Generic/untrusted JSON uses the reader
-// above, which never treats a supplied header as proof of its body.
+// Rust validates the duplicated bounded header against the full typed body
+// before admission. Generic/untrusted JSON uses the full-body reader above.
 export function prepareExecutionDeltaTransportForSend(packet) {
-  if (typeof packet !== "string") {
-    throw new TypeError("worker publication must be a header/body string");
-  }
-  const separator = packet.indexOf("\n");
-  if (separator < 1 || separator > 512 || separator === packet.length - 1) {
-    throw new Error("worker publication has an invalid bounded metadata header");
-  }
-  const metadata = parseExecutionDeltaMetadata(packet.slice(0, separator));
-  const json = packet.slice(separator + 1);
-  validatedDeltaJson.set(metadata, json);
-  return { json, metadata };
+  const decoded = decodeWorkerCarrier(packet);
+  validatedDeltaJson.set(decoded.metadata, { json: packet, packet });
+  return { packet, metadata: decoded.metadata };
 }
 
 function parseExecutionDeltaMetadata(json) {
@@ -72,6 +63,10 @@ function parseExecutionDeltaMetadata(json) {
   } catch (error) {
     throw new Error(`execution delta is invalid JSON: ${error.message}`);
   }
+  return metadataFromDelta(delta);
+}
+
+function metadataFromDelta(delta) {
   if (!isRecord(delta) || delta.channel !== RETAINED_EXECUTION_TRANSPORT_CHANNEL) {
     throw new Error("execution delta has an invalid channel");
   }
@@ -100,17 +95,57 @@ function parseExecutionDeltaMetadata(json) {
   return metadata;
 }
 
+function parseWorkerCarrierHeader(header) {
+  let parsed;
+  try { parsed = JSON.parse(header); }
+  catch (error) { throw new Error(`worker publication metadata is invalid: ${error.message}`); }
+  return metadataFromDelta(parsed);
+}
+
+function decodeWorkerCarrier(packet) {
+  if (typeof packet !== "string") {
+    throw new TypeError("worker publication must be a header/body string");
+  }
+  const separator = packet.indexOf("\n");
+  if (separator < 1 || separator === packet.length - 1 ||
+      encoder.encode(packet.slice(0, separator)).byteLength > 512) {
+    throw new Error("worker publication has an invalid bounded metadata header");
+  }
+  return {
+    packet,
+    bodyOffset: separator + 1,
+    metadata: parseWorkerCarrierHeader(packet.slice(0, separator)),
+  };
+}
+
+function encodeWorkerCarrier(json, metadata) {
+  const header = JSON.stringify({
+    channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL,
+    session: metadata.session,
+    sequence: metadata.sequence,
+    snapshot: metadata.snapshot,
+    ...(metadata.pointerView === undefined ? {} : { pointer_view: metadata.pointerView }),
+  });
+  if (encoder.encode(header).byteLength > 512) {
+    throw new Error("worker publication metadata exceeds its bounded header");
+  }
+  return `${header}\n${json}`;
+}
+
 function metadataForSend(json, validatedMetadata) {
   // Consume the temporary exact-string association even when it mismatches,
   // so a retained or misused handoff cannot pin a large delta indefinitely.
   if (validatedMetadata !== null && typeof validatedMetadata === "object") {
-    const validatedJson = validatedDeltaJson.get(validatedMetadata);
-    if (validatedJson !== undefined) {
+    const validated = validatedDeltaJson.get(validatedMetadata);
+    if (validated !== undefined) {
       validatedDeltaJson.delete(validatedMetadata);
-      if (typeof json === "string" && validatedJson === json) return validatedMetadata;
+      if (typeof json === "string" && validated.json === json) {
+        return { metadata: validatedMetadata, packet: validated.packet };
+      }
     }
   }
-  return executionDeltaMetadata(json);
+  const metadata = executionDeltaMetadata(json);
+  return { metadata, packet: encodeWorkerCarrier(json, metadata) };
 }
 
 export function decodeTransferableExecutionDelta(message) {
@@ -121,11 +156,12 @@ export function decodeTransferableExecutionDelta(message) {
     throw new Error("transferable execution delta payload must be an ArrayBuffer");
   }
   const json = decoder.decode(new Uint8Array(message.buffer));
-  const metadata = executionDeltaMetadata(json);
+  const decoded = decodeWorkerCarrier(json);
+  const metadata = decoded.metadata;
   if (metadata.session !== message.session || metadata.sequence !== message.sequence) {
     throw new Error("transferable execution delta metadata does not match its envelope");
   }
-  return { json, metadata };
+  return { json: json.slice(decoded.bodyOffset), packet: decoded.packet, metadata };
 }
 
 export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SHARED_SLOT_CAPACITY) {
@@ -170,12 +206,12 @@ export class SharedExecutionDeltaWriter {
       validatedDeltaJson.delete(validatedMetadata);
       throw new Error("shared execution delta exceeds packet byte limit");
     }
-    const metadata = metadataForSend(json, validatedMetadata);
+    const { metadata, packet } = metadataForSend(json, validatedMetadata);
     if (!this.canSend()) {
       Atomics.add(this.#header, BACKPRESSURE_COUNTER, 1);
       return false;
     }
-    const payload = encoder.encode(json);
+    const payload = encoder.encode(packet);
     if (payload.byteLength > MAX_SHARED_EXECUTION_DELTA_BYTES) {
       throw new Error("shared execution delta exceeds packet byte limit");
     }
@@ -285,7 +321,9 @@ export class SharedExecutionDeltaReader {
             if (pending.received === total) {
               pending.json = decoder.decode(pending.bytes);
               pending.bytes = null;
-              pending.metadata = executionDeltaMetadata(pending.json);
+              const decoded = decodeWorkerCarrier(pending.json);
+              pending.metadata = decoded.metadata;
+              pending.bodyOffset = decoded.bodyOffset;
               pending.finalOffset = offset;
               if (pending.metadata.session !== pending.session || pending.metadata.sequence !== pending.sequence) {
                 throw new Error("shared execution chunk metadata does not match its packet");
@@ -295,12 +333,12 @@ export class SharedExecutionDeltaReader {
             throw new Error("shared execution chunk repeats a completed packet");
           }
           if (pending.json !== null) {
-            if (apply(pending.json, pending.metadata) === false) break;
+            if (apply(pending.json.slice(pending.bodyOffset), pending.metadata, pending.json) === false) break;
             this.#pending = null;
           }
         } else {
           if (this.#pending !== null) throw new Error("shared execution packet interrupted an incomplete chunk sequence");
-          if (apply(item.json, item.metadata) === false) break;
+          if (apply(item.body, item.metadata, item.json) === false) break;
         }
       } catch (error) {
         this.#pending = null;
@@ -335,7 +373,8 @@ export class SharedExecutionDeltaReader {
     }
     // Browsers cannot decode a SharedArrayBuffer-backed view directly.
     const json = decoder.decode(this.#bytes.slice(offset, offset + length));
-    return { slot, stateIndex, json, metadata: executionDeltaMetadata(json) };
+    const decoded = decodeWorkerCarrier(json);
+    return { slot, stateIndex, json: decoded.packet, body: json.slice(decoded.bodyOffset), metadata: decoded.metadata };
   }
 
   close() { this.#closed = true; this.#pending = null; }
@@ -372,12 +411,12 @@ export class TransferableExecutionDeltaSender {
   }
 
   send(json, validatedMetadata = null) {
-    const metadata = metadataForSend(json, validatedMetadata);
+    const { metadata, packet } = metadataForSend(json, validatedMetadata);
     if (this.#inFlight >= this.#maxInFlight) {
       this.#backpressure += 1;
       return false;
     }
-    const payload = encoder.encode(json);
+    const payload = encoder.encode(packet);
     // TextEncoder normally returns an exact, standalone buffer. Transfer that
     // allocation directly; retain the fallback for nonstandard typed-array views.
     const buffer = payload.byteOffset === 0 && payload.byteLength === payload.buffer.byteLength
@@ -449,7 +488,7 @@ export class TransferableExecutionDeltaReceiver {
     try {
       while (this.#pending.length > 0) {
         const item = this.#pending[0];
-        if (this.#apply(item.json, item.metadata) === false) {
+        if (this.#apply(item.json, item.metadata, item.packet) === false) {
           break;
         }
         this.#pending.shift();

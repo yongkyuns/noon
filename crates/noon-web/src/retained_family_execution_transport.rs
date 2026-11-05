@@ -20,6 +20,43 @@ use crate::{
 
 pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
 
+/// Bounded identity duplicated at the genuine worker boundary so JavaScript can
+/// route/chunk a publication without deserializing its retained body. Rust still
+/// compares every field against the typed body before admission.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetainedFamilyExecutionDeltaHeader {
+    pub channel: String,
+    pub session: u32,
+    pub sequence: u64,
+    pub snapshot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer_view: Option<crate::PointerPresentationView>,
+}
+
+pub(crate) fn decode_worker_execution_delta_carrier(
+    packet: &str,
+) -> Result<RetainedFamilyExecutionDeltaEnvelope, String> {
+    let separator = packet
+        .find('\n')
+        .filter(|&index| index > 0 && index <= 512 && index + 1 < packet.len())
+        .ok_or_else(|| "worker publication has an invalid bounded metadata header".to_owned())?;
+    let header: RetainedFamilyExecutionDeltaHeader = serde_json::from_str(&packet[..separator])
+        .map_err(|error| format!("worker publication metadata is invalid: {error}"))?;
+    let delta: RetainedFamilyExecutionDeltaEnvelope =
+        serde_json::from_str(&packet[separator + 1..])
+            .map_err(|error| format!("worker publication body is invalid: {error}"))?;
+    if header.channel != delta.retained.channel
+        || header.session != delta.retained.session
+        || header.sequence != delta.retained.sequence
+        || header.snapshot != delta.retained.snapshot
+        || header.pointer_view != delta.pointer_view
+    {
+        return Err("worker publication header does not match its retained body".into());
+    }
+    Ok(delta)
+}
+
 /// One identity-free transient presentation occurrence crossing the genuine
 /// execution-worker to render-worker boundary. `anchor` is an existing stable
 /// source object used only to recover renderer-local painter placement; it never
@@ -993,6 +1030,54 @@ mod tests {
             std::slice::from_ref(&geometry_plan()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn worker_carrier_requires_typed_header_body_identity_before_admission() {
+        let delta = family_snapshot(0.5);
+        let packet = delta.encode_worker_carrier().unwrap();
+        assert_eq!(
+            decode_worker_execution_delta_carrier(&packet).unwrap(),
+            delta
+        );
+
+        let (header, body) = packet.split_once('\n').unwrap();
+        let header: serde_json::Value = serde_json::from_str(header).unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        for (field, value) in [
+            ("channel", serde_json::json!("other")),
+            ("session", serde_json::json!(delta.retained.session + 1)),
+            ("sequence", serde_json::json!(delta.retained.sequence + 1)),
+            ("snapshot", serde_json::json!(!delta.retained.snapshot)),
+            (
+                "pointer_view",
+                serde_json::json!({"revision": 1, "width": 10.0, "height": 10.0}),
+            ),
+        ] {
+            let mut mismatched = body.clone();
+            mismatched[field] = value;
+            let candidate = format!("{}\n{}", header, mismatched);
+            assert!(
+                decode_worker_execution_delta_carrier(&candidate)
+                    .unwrap_err()
+                    .contains("does not match"),
+                "{field}"
+            );
+        }
+
+        let mut invalid_resource = body;
+        invalid_resource["resource_additions"] = serde_json::json!("invalid resource bundle");
+        assert!(decode_worker_execution_delta_carrier(&format!(
+            "{}\n{}",
+            header, invalid_resource
+        ))
+        .unwrap_err()
+        .contains("body is invalid"));
+        assert!(
+            decode_worker_execution_delta_carrier(&format!("{}\n{{", header))
+                .unwrap_err()
+                .contains("body is invalid")
+        );
     }
 
     #[test]

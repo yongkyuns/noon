@@ -2,7 +2,7 @@
 //! This codec is used only at a genuine cross-context renderer boundary. Native
 //! and single-context rendering continue to borrow RendererPublication directly.
 use super::RetainedFamilyExecutionDeltaEncoder;
-use crate::RetainedFamilyExecutionDeltaEnvelope;
+use crate::{RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionDeltaHeader};
 use noon_core::Camera2DState;
 use noon_runtime::RendererPublication;
 
@@ -135,17 +135,8 @@ impl RetainedFamilyExecutionDeltaEnvelope {
     /// only on the genuine worker channel, never between in-process Rust layers.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn encode_worker_carrier(&self) -> Result<String, String> {
-        #[derive(serde::Serialize)]
-        struct Header<'a> {
-            channel: &'a str,
-            session: u32,
-            sequence: u64,
-            snapshot: bool,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            pointer_view: Option<crate::worker_pointer_presentation::PointerPresentationView>,
-        }
-        let header = Header {
-            channel: &self.retained.channel,
+        let header = RetainedFamilyExecutionDeltaHeader {
+            channel: self.retained.channel.clone(),
             session: self.retained.session,
             sequence: self.retained.sequence,
             snapshot: self.retained.snapshot,

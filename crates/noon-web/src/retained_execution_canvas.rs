@@ -446,17 +446,38 @@ mod wasm {
 
         #[wasm_bindgen(js_name = applyDeltaJson)]
         pub fn apply_delta_json(&mut self, json: &str) -> Result<bool, JsValue> {
+            self.ensure_delta_available()?;
+            let delta: RetainedFamilyExecutionDeltaEnvelope =
+                serde_json::from_str(json).map_err(js_error)?;
+            self.apply_delta(delta)
+        }
+
+        #[wasm_bindgen(js_name = applyDeltaTransportJson)]
+        pub fn apply_delta_transport_json(&mut self, packet: &str) -> Result<bool, JsValue> {
+            self.ensure_delta_available()?;
+            let delta = crate::decode_worker_execution_delta_carrier(packet)
+                .map_err(|error| js_message(&error))?;
+            self.apply_delta(delta)
+        }
+    }
+
+    impl WasmRetainedExecutionCanvasRenderer {
+        fn ensure_delta_available(&self) -> Result<(), JsValue> {
             if self.pending_frame {
                 return Err(js_message(
                     "render worker must present the retained execution delta before accepting another",
                 ));
             }
+            Ok(())
+        }
 
+        fn apply_delta(
+            &mut self,
+            delta: RetainedFamilyExecutionDeltaEnvelope,
+        ) -> Result<bool, JsValue> {
             // The mirror remains authoritative through context loss. Resource
             // uploads are deferred until recovery, but the exact delta is still
             // admitted so its frame can be rebuilt without a transport retry.
-            let delta: RetainedFamilyExecutionDeltaEnvelope =
-                serde_json::from_str(json).map_err(js_error)?;
             let gpu_available = !self.webgl_context_lifecycle.is_lost()
                 && !self.webgl_context_lifecycle.recovery_pending();
             let stale = self.mirror.transport_mirror().session() == Some(delta.retained.session)
@@ -721,7 +742,10 @@ mod wasm {
                 RetainedTransportApplyOutcome::DroppedStale => Ok(false),
             }
         }
+    }
 
+    #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
+    impl WasmRetainedExecutionCanvasRenderer {
         /// Arm one bounded callback-publication observation. The request is
         /// resolved only against the exact retained delta session/sequence.
         #[wasm_bindgen(js_name = setRendererObservationRequestJson)]

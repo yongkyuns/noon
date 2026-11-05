@@ -125,7 +125,7 @@ try {
             if (packet == null) return null;
             if (host.errors.length) throw new Error(host.errors.join("\n"));
             const carrier = workerCarrier ? prepareExecutionDeltaTransportForSend(packet) : null;
-            const json = carrier?.json ?? packet;
+            const json = carrier?.packet ?? packet;
             const metadata = carrier?.metadata ?? executionDeltaMetadata(json);
             const promise = new Promise((resolve,reject) => {
               const timer = setTimeout(() => { host.pending.delete(metadata.sequence); reject(new Error("prepared worker presentation timeout")); }, 30_000);

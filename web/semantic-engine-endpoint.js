@@ -245,7 +245,7 @@ export async function attachSemanticEngine(
       const rustTime = prepared !== null ? player.preparedTime() : player?.time?.();
       const publication = Number.isFinite(rustTime)
         ? Object.freeze({ ...metadata, time: rustTime }) : metadata;
-      if (carrier !== null) json = carrier.json;
+      if (carrier !== null) json = carrier.packet;
       if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
       const transportStartedAtMs = timing === null ? 0 : performance.now();
       if (!transport.send(json, metadata)) {
