@@ -1,0 +1,81 @@
+name: Three-variant Bezier mechanism diagnostic
+
+on:
+  push:
+    branches:
+      - codex/2422-bezier-latin-diagnostic
+    paths:
+      - .github/workflows/bezier-three-variant-diagnostic.yml
+      - scripts/prepare_three_variant_packages.py
+      - scripts/run_bezier_three_variant_study.mjs
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  measure-pinned-variants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout the diagnostic wrapper
+        uses: actions/checkout@v7
+
+      - name: Checkout the canonical 8ca product harness
+        uses: actions/checkout@v7
+        with:
+          ref: 8ca4f6afd3bc1a7a41de254a0750dcbe392d6a20
+          fetch-depth: 2
+          path: harness
+
+      - name: Checkout the three package source trees
+        uses: actions/checkout@v7
+        with:
+          ref: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          fetch-depth: 2
+          path: current-source
+
+      - name: Checkout preceding D7 package source
+        uses: actions/checkout@v7
+        with:
+          ref: f3def9bc39afe95f5ba2207d906714bae15d60f7
+          fetch-depth: 2
+          path: d7-source
+
+      - name: Checkout pinned performance anchor source
+        uses: actions/checkout@v7
+        with:
+          ref: 58135c4069a6f8d700dcaaee677d7c8c7a48d6c5
+          fetch-depth: 2
+          path: anchor-source
+
+      - name: Use the pinned Node and browser test dependencies
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.22.1
+
+      - name: Install the existing Playwright product harness dependencies
+        working-directory: harness
+        run: |
+          npm install --no-save --ignore-scripts --package-lock=false playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Verify and safely extract the three pinned package artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STUDY_ROOT: ${{ runner.temp }}/latin-bezier-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python3 scripts/prepare_three_variant_packages.py
+
+      - name: Run the unchanged product harness in the declared Latin-square order
+        env:
+          STUDY_ROOT: ${{ runner.temp }}/latin-bezier-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/run_bezier_three_variant_study.mjs
+
+      - name: Preserve every run report, failure and package identity
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bezier-three-variant-diagnostic-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/latin-bezier-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
