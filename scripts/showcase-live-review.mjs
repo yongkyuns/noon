@@ -98,10 +98,57 @@ export function assertNaturalFirstPassPublication(entry, authoredDuration, publi
   }
 }
 
-export async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration, rendererReadbackEnabled }) {
+export async function observeNaturalFirstPassWrap({ duration, holdStart, exampleId, runGeneration,
+  rendererReadbackEnabled, diagnoseBloomWrap }) {
   const gallery = window.__noonExampleGallery;
   const runState = window.__showcaseLiveReviewRun;
   if (!runState || runState.stop) return true;
+  async function collectBloomWrapDiagnostic(beforeDiagnostics) {
+    const stamp = () => performance.timeOrigin + performance.now();
+    const diagnostic = { runGeneration, selectedExampleId: gallery.selectedExampleId,
+      runIdentityBefore: { runRequestId: beforeDiagnostics.runRequestId,
+        interpreterGeneration: beforeDiagnostics.interpreterGeneration, context: beforeDiagnostics.context },
+      disposition: beforeDiagnostics.events.find((event) => event.stage === "disposition") ?? null };
+    try {
+      diagnostic.stateRequestStartedAtEpochMs = stamp();
+      diagnostic.state = await gallery.executionState();
+      diagnostic.stateRequestResolvedAtEpochMs = stamp();
+    } catch (error) {
+      diagnostic.stateRequestResolvedAtEpochMs = stamp();
+      diagnostic.stateRequestError = String(error?.stack ?? error);
+    }
+    const afterState = gallery.executionDiagnostics;
+    diagnostic.runIdentityAfterState = { runRequestId: afterState?.runRequestId ?? null,
+      interpreterGeneration: afterState?.interpreterGeneration ?? null, context: afterState?.context ?? null };
+    try {
+      diagnostic.metricsRequestStartedAtEpochMs = stamp();
+      const metrics = await gallery.executionMetrics();
+      diagnostic.metricsRequestResolvedAtEpochMs = stamp();
+      const render = metrics?.metrics ?? {};
+      diagnostic.rendererAckDiagnostic = render.showcaseRendererAckDiagnostic ?? null;
+      const readback = render.showcaseRendererReadback;
+      diagnostic.rendererReadback = readback == null ? { status: "absent" } : {
+        status: readback.status ?? "unknown", session: readback.session ?? null,
+        sequence: readback.sequence ?? null, time: readback.time ?? null,
+        presentedAtMs: readback.presentedAtMs ?? null,
+        rendererAckOrdinal: readback.rendererAckOrdinal ?? null,
+        rendererTimeDecreases: readback.rendererTimeDecreases ?? null,
+        performanceTimeOriginMs: readback.performanceTimeOriginMs ?? null,
+        copyCalledAtEpochMs: readback.copyCalledAtEpochMs ?? null,
+        copyReturnedAtEpochMs: readback.copyReturnedAtEpochMs ?? null,
+        resolvedAtEpochMs: readback.resolvedAtEpochMs ?? null,
+        objectCount: readback.objectCount ?? null, error: readback.error ?? null,
+      };
+    } catch (error) {
+      diagnostic.metricsRequestResolvedAtEpochMs = stamp();
+      diagnostic.metricsRequestError = String(error?.stack ?? error);
+      diagnostic.rendererReadback = { status: "unavailable" };
+    }
+    const afterMetrics = gallery.executionDiagnostics;
+    diagnostic.runIdentityAfterMetrics = { runRequestId: afterMetrics?.runRequestId ?? null,
+      interpreterGeneration: afterMetrics?.interpreterGeneration ?? null, context: afterMetrics?.context ?? null };
+    return diagnostic;
+  }
   runState.observerStartedAtEpochMs ??= performance.timeOrigin + performance.now();
   const patch = document.querySelector("#patch-status");
   if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
@@ -126,7 +173,20 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
     return false;
   }
   const disposition = events.find((event) => event.stage === "disposition")?.disposition ?? null;
-  if (disposition === "looped" || disposition === "finite-complete") return true;
+  if (disposition === "looped" || disposition === "finite-complete") {
+    if (diagnoseBloomWrap && exampleId === "showcase-bloom-emission" && rendererReadbackEnabled &&
+        window.__showcaseLiveReviewFirstPass === null && !runState.wrapDiagnostic) {
+      runState.wrapDiagnosticPromise = collectBloomWrapDiagnostic(diagnostics).then((diagnostic) => {
+        runState.wrapDiagnostic = diagnostic;
+        return diagnostic;
+      }, (error) => {
+        const diagnostic = { status: "unavailable", error: String(error?.stack ?? error) };
+        runState.wrapDiagnostic = diagnostic;
+        return diagnostic;
+      });
+    }
+    return true;
+  }
   const heldEvidence = (state, receipt) => {
     const held = state?.heldPresentation;
     if (!held || state.loopCount !== 0 || held.publication?.session !== receipt?.session ||
@@ -282,6 +342,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
   let timer;
   let firstPassCapture = null;
   let firstPassCompletion = null;
+  let firstPassWrapDiagnostic = null;
   let observerPromise = null;
   let runStateInstalled = false;
   let acceptedRunGeneration = null;
@@ -296,7 +357,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
           const runInFlightBefore = gallery.runInFlight;
           const phaseBefore = gallery.runPhaseMetrics;
           const state = { requestedAtEpochMs, runGenerationBefore,
-            acceptedRunGeneration: null, stop: false };
+            acceptedRunGeneration: null, stop: false, wrapDiagnostic: null };
           window.__showcaseLiveReviewFirstPass = null;
           window.__showcaseLiveReviewRun = state;
           if (runInFlightBefore || (expectColdStart && phaseBefore !== null)) {
@@ -352,6 +413,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
             exampleId: entry.id,
             runGeneration: acceptedRunGeneration,
             rendererReadbackEnabled: rendererReadback !== null,
+            diagnoseBloomWrap: process.env.NOON_BLOOM_WRAP_DIAGNOSTIC === "1",
           }, { timeout: Math.max(1, deadlineMs - (performance.now() - started)) });
           observerPromise.catch(() => {});
         }
@@ -400,10 +462,12 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
           const observed = await page.evaluate(() => {
             const capture = window.__showcaseLiveReviewFirstPass ?? null;
             delete window.__showcaseLiveReviewFirstPass;
+            const wrapDiagnostic = window.__showcaseLiveReviewRun?.wrapDiagnostic ?? null;
             return { capture, diagnostics: window.__noonExampleGallery.executionDiagnostics,
               generationDiagnostics: window.__noonExampleGallery.generationDiagnostics,
-              selectedExampleId: window.__noonExampleGallery.selectedExampleId };
+              selectedExampleId: window.__noonExampleGallery.selectedExampleId, wrapDiagnostic };
           });
+          firstPassWrapDiagnostic = observed.wrapDiagnostic;
           const disposition = observed.diagnostics?.events?.find((event) => event.stage === "disposition")?.disposition;
           if (disposition === "looped") {
             const capture = observed.capture;
@@ -513,7 +577,8 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
       runGeneration: acceptedRunGeneration });
     if (observerPromise) observerPromise.catch(() => {});
   }
-  return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion };
+  return { wallMs: performance.now() - started, firstPassCapture, firstPassCompletion,
+    firstPassWrapDiagnostic };
 }
 
 export async function readLiveState(page) {
@@ -671,6 +736,8 @@ async function main() {
         const terminalHold = entry.still_intervals?.find(([, end]) => Math.abs(end - entry.duration) <= roundoff);
         const rendererReadback = terminalHold === undefined ? null : await installAuthoringRendererReadback(page, {
           holdStart: terminalHold[0], duration: entry.duration,
+          diagnosticAckTrace: process.env.NOON_BLOOM_WRAP_DIAGNOSTIC === "1" &&
+            entry.id === "showcase-bloom-emission",
         });
         result.rendererControllerInstrumentation = rendererReadback?.report ?? null;
         await page.goto(`${base}/index.html?catalog=showcase&example=${entry.id}`, {
@@ -690,6 +757,9 @@ async function main() {
         result.firstPassOutcome = "fail";
         // Closing the page in finally retires its workers on timeout; no stuck run survives.
         const firstPassRun = await runOrdinaryGallery(page, 360000, entry, { expectColdStart: true, rendererReadback });
+        if (firstPassRun.firstPassWrapDiagnostic !== null) {
+          result.firstPassWrapDiagnostic = firstPassRun.firstPassWrapDiagnostic;
+        }
         await rendererReadback?.assertServed();
         result.firstPassWallMsIncludingAuthoring = firstPassRun.wallMs;
         // Check execution before viewport convergence so a runtime panic is not
@@ -863,6 +933,30 @@ async function main() {
         console.log(`PASS live ${entry.id}: normal source run, replay endpoint, and ${result.intermediateSamples.length} intermediate comparisons`);
       } catch (error) {
         result.error = String(error.stack ?? error);
+        if (result.firstPassWrapDiagnostic == null) {
+          let diagnosticTimer;
+          try {
+            result.firstPassWrapDiagnostic = await Promise.race([
+              page.evaluate(async () => {
+                const run = window.__showcaseLiveReviewRun;
+                if (run?.wrapDiagnostic) return run.wrapDiagnostic;
+                const pending = run?.wrapDiagnosticPromise;
+                if (!pending) return null;
+                let timer;
+                try {
+                  return await Promise.race([pending, new Promise((resolve) => {
+                    timer = setTimeout(() => resolve({ status: "timeout" }), 1500);
+                  })]);
+                } finally { clearTimeout(timer); }
+              }),
+              new Promise((resolve) => {
+                diagnosticTimer = setTimeout(() => resolve({ status: "timeout" }), 2000);
+              }),
+            ]);
+          } catch (diagnosticError) {
+            result.firstPassWrapDiagnostic = { status: "unavailable", error: String(diagnosticError) };
+          } finally { clearTimeout(diagnosticTimer); }
+        }
         result.unexpectedReplayDenial = entry.playbackCapability === "deterministic-retained-replay" &&
           result.firstPass?.controls?.controllable === "false";
         result.failureState = await page.evaluate(() => ({
