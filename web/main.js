@@ -535,7 +535,7 @@ function beginBusy() {
 
 function showError(error, fallbackTitle = "Runtime failed") {
   resetPresentationRate();
-  console.error(error);
+  console.error(error?.stack ?? error);
   const title = diagnosticPanel.show(error, fallbackTitle);
   if (title === null) return;
   setRuntimeStatus(title, "error");
@@ -545,7 +545,7 @@ function showError(error, fallbackTitle = "Runtime failed") {
 
 function showSceneError(error) {
   resetPresentationRate();
-  console.error(error);
+  console.error(error?.stack ?? error);
   const title = diagnosticPanel.show(error, "Scene failed");
   if (title === null) return;
   patchStatus.value = title;
@@ -561,7 +561,7 @@ function showRecoverableSceneError(error) {
 }
 
 function showPlaybackError(error) {
-  console.error(error);
+  console.error(error?.stack ?? error);
   const title = diagnosticPanel.show(error, "Playback failed");
   if (title === null) return;
   patchStatus.value = title;
