@@ -133,6 +133,63 @@ async function json(relative) {
   assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
   return response.json();
 }
+async function installPlaybackControlCommandTrace(page) {
+  return page.evaluate(async () => {
+    const trace = window.__galleryPlaybackDomTrace;
+    if (!trace) return { state: "early-dom-trace-unavailable" };
+    try {
+      const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+      for (const method of ["pause", "seek"]) {
+        const original = ExecutionWorkerClient.prototype[method];
+        ExecutionWorkerClient.prototype[method] = function (...args) {
+          const id = (trace.nextCommandId ?? 0) + 1;
+          trace.nextCommandId = id;
+          trace.record({ kind: "command-entered", method, id, args: args.slice(0, 1) });
+          let pending;
+          try { pending = original.apply(this, args); }
+          catch (error) {
+            trace.record({ kind: "command-rejected-sync", method, id,
+              error: { name: error?.name ?? "Error", message: String(error).slice(0, 500),
+                stack: String(error?.stack ?? "").slice(0, 1200) } });
+            throw error;
+          }
+          if (pending && typeof pending.then === "function") {
+            pending.then(result => trace.record({ kind: "command-resolved", method, id,
+              result: { time: result?.time ?? null, playing: result?.playing ?? null,
+                receipt: result?.presentationReceipt ?? null } }), error => trace.record({
+              kind: "command-rejected", method, id,
+              error: { name: error?.name ?? "Error", message: String(error).slice(0, 500),
+                stack: String(error?.stack ?? "").slice(0, 1200) } }));
+          }
+          return pending;
+        };
+      }
+      trace.record({ kind: "command-observer-installed" });
+      return { state: "installed" };
+    } catch (error) {
+      trace.record({ kind: "command-observer-error", error: { name: error?.name ?? "Error",
+        message: String(error).slice(0, 500) } });
+      return { state: "install-error", message: String(error).slice(0, 500) };
+    }
+  });
+}
+
+async function readPlaybackControlTrace(page) {
+  try {
+    return await Promise.race([
+      page.evaluate(() => window.__galleryPlaybackDomTrace ? {
+        recorder: { controlsObserver: window.__galleryPlaybackDomTrace.controlsObserver,
+          recordingErrors: window.__galleryPlaybackDomTrace.recordingErrors,
+          omitted: window.__galleryPlaybackDomTrace.omitted },
+        events: window.__galleryPlaybackDomTrace.events,
+      } : null),
+      new Promise(resolve => setTimeout(() => resolve({ state: "page-evaluation-timeout" }), 500)),
+    ]);
+  } catch (error) {
+    return { state: "page-evaluation-error", error: String(error).slice(0, 500) };
+  }
+}
+
 async function showcaseSourceBytes(relative) {
   if (!external) return readFileSync(path.join(root, 'web', relative));
   const response = await fetch(new URL(relative, base), {
@@ -213,6 +270,17 @@ try {
   async function runCase(caseBrowser, { entry, noJspi }) {
     const caseStartedAt = performance.now();
     const caseStartedWallMs = Date.now();
+    const playbackControlDiagnostic = process.env.NOON_GALLERY_CONTROL_DIAGNOSTIC === "1" &&
+      browserName === "webkit" && profile === "mobile-dpr2";
+    const controlStageEvents = [];
+    let controlStageEventsOmitted = 0;
+    const recordControlStage = event => {
+      if (!playbackControlDiagnostic) return;
+      try {
+        controlStageEvents.push({ at: performance.now(), ...event });
+        if (controlStageEvents.length > 64) { controlStageEvents.shift(); controlStageEventsOmitted++; }
+      } catch { /* diagnostic recording cannot change the test path */ }
+    };
     const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
     if (noJspi) await disableAuthoringJspi(context);
@@ -220,9 +288,69 @@ try {
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
     // Renderer time may precede completion of an authored static wait.
-    await context.addInitScript(({ channel, protocolVersion, profilePublications }) => {
+    await context.addInitScript(({ channel, protocolVersion, profilePublications, playbackControlDiagnostic }) => {
       window.__galleryAuthoringResults = [];
       window.__galleryWorkerMessages = [];
+      if (playbackControlDiagnostic) {
+        const trace = { events: [], omitted: 0, recordingErrors: 0, controlsObserver: "waiting-for-controls" };
+        const state = () => {
+          const controls = document.querySelector(".playback-controls"), toggle = controls?.querySelector(".playback-toggle");
+          const run = document.querySelector("#replace-scene");
+          return { runButton: run ? { disabled: run.disabled, label: run.getAttribute("aria-label"), text: run.textContent } : null,
+            controls: controls ? { data: { ...controls.dataset }, ariaBusy: controls.getAttribute("aria-busy"),
+              hidden: Boolean(controls.hidden), ariaHidden: controls.getAttribute("aria-hidden"),
+              toggle: toggle ? { label: toggle.getAttribute("aria-label"), disabled: Boolean(toggle.disabled),
+                hidden: Boolean(toggle.hidden), ariaHidden: toggle.getAttribute("aria-hidden") } : null } : null };
+        };
+        trace.record = event => {
+          try {
+            trace.events.push({ at: performance.now(), ...event, state: state() });
+            if (trace.events.length > 96) { trace.events.shift(); trace.omitted++; }
+          } catch { trace.recordingErrors++; }
+        };
+        window.__galleryPlaybackDomTrace = trace;
+        trace.record({ kind: "document-start" });
+        document.addEventListener("DOMContentLoaded", () => trace.record({ kind: "dom-content-loaded" }), { once: true });
+        document.addEventListener("click", event => {
+          const target = event.target instanceof Element ? event.target.closest("#replace-scene, .playback-toggle") : null;
+          if (!target) return;
+          trace.record({ kind: "control-click-before-handler", control: target.id || "playback-toggle",
+            trusted: event.isTrusted, label: target.getAttribute("aria-label") });
+          queueMicrotask(() => trace.record({ kind: "control-click-after-handler", control: target.id || "playback-toggle",
+            trusted: event.isTrusted, label: target.getAttribute("aria-label") }));
+        }, true);
+        const observeControls = () => {
+          const controls = document.querySelector(".playback-controls");
+          if (!controls || trace.controlsObserver === "attached") return false;
+          trace.controlsObserver = "attached";
+          trace.record({ kind: "playback-controls-attached" });
+          let previousDiscreteState = "";
+          const attrs = new MutationObserver(records => {
+            const state = { busy: controls.dataset.busy, playing: controls.dataset.playing,
+              controllable: controls.dataset.controllable, buffering: controls.dataset.buffering,
+              durationKnown: controls.dataset.durationKnown,
+              toggleLabel: toggle?.getAttribute("aria-label"), toggleDisabled: Boolean(toggle?.disabled),
+              toggleHidden: Boolean(toggle?.hidden) };
+            const discreteState = JSON.stringify(state);
+            if (discreteState === previousDiscreteState) return;
+            previousDiscreteState = discreteState;
+            trace.record({ kind: "controls-mutation", changes: records.slice(0, 12).map(record => ({
+              target: record.target.className || record.target.tagName,
+              attribute: record.attributeName, oldValue: record.oldValue })), discreteState: state,
+              elapsedSeconds: controls.dataset.elapsedSeconds ?? null });
+          });
+          attrs.observe(controls, { attributes: true, attributeOldValue: true, subtree: true,
+            attributeFilter: ["data-busy", "data-playing", "data-controllable", "data-buffering", "data-duration-known",
+              "data-elapsed-seconds", "aria-label", "aria-busy", "aria-hidden", "disabled", "hidden"] });
+          return true;
+        };
+        if (!observeControls()) {
+          const insertion = new MutationObserver(() => {
+            if (observeControls()) insertion.disconnect();
+          });
+          insertion.observe(document, { childList: true, subtree: true });
+        }
+      }
       const profilingRequestId = Number.MAX_SAFE_INTEGER;
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
@@ -265,7 +393,7 @@ try {
         },
       });
     }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION,
-      profilePublications: Object.hasOwn(liveMathAnimations, entry.id) });
+      profilePublications: Object.hasOwn(liveMathAnimations, entry.id), playbackControlDiagnostic });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const trace = createBrowserFailureTrace();
@@ -525,9 +653,17 @@ try {
             // Inspect the closed endpoint separately through normal controls.
             let endpointMetrics = metrics;
             if (result.state.playback?.controllable === 'true' && result.authoredDuration > 0) {
-              const time = await seekPausedGallery(page, result.authoredDuration);
+              if (playbackControlDiagnostic) {
+                result.playbackControlDiagnostic = { commandObserver: await installPlaybackControlCommandTrace(page),
+                  nodeStages: controlStageEvents, nodeStagesOmitted: controlStageEventsOmitted };
+              }
+              const time = await seekPausedGallery(page, result.authoredDuration,
+                null, playbackControlDiagnostic ? recordControlStage : null);
               endpointMetrics = await waitForPublishedGalleryFrame(page, time, result.authoredDuration);
-              result.terminalInspection = { time, metrics: endpointMetrics };
+              result.terminalInspection = { time, metrics: endpointMetrics,
+                ...(playbackControlDiagnostic ? { playbackControlTrace: await readPlaybackControlTrace(page) } : {}) };
+              if (playbackControlDiagnostic) Object.assign(result.playbackControlDiagnostic,
+                { nodeStages: controlStageEvents, nodeStagesOmitted: controlStageEventsOmitted });
             }
             assert.equal(endpointMetrics.metrics.objectCount, entry.expected_object_count);
           }
@@ -599,6 +735,10 @@ try {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
         browserTrace: trace.snapshot(),
+        ...(playbackControlDiagnostic ? { playbackControlDiagnostic: {
+          nodeStages: controlStageEvents, nodeStagesOmitted: controlStageEventsOmitted,
+          browser: await readPlaybackControlTrace(page),
+        } } : {}),
         httpServer: httpServerState ?? null,
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
