@@ -133,6 +133,117 @@ async function json(relative) {
   assert.ok(response.ok, `${relative}: HTTP ${response.status}`);
   return response.json();
 }
+async function installPlaybackControlTrace(page) {
+  return page.evaluate(async () => {
+    const trace = { events: [], omitted: 0, recordingErrors: 0 };
+    const state = () => {
+      const controls = document.querySelector('.playback-controls');
+      const button = controls?.querySelector('.playback-toggle');
+      return controls ? {
+        data: { busy: controls.dataset.busy ?? null, playing: controls.dataset.playing ?? null,
+          controllable: controls.dataset.controllable ?? null },
+        button: button ? { label: button.getAttribute('aria-label'), disabled: button.disabled } : null,
+      } : null;
+    };
+    const record = event => {
+      try {
+        trace.events.push({ at: performance.now(), ...event, controls: state(),
+          elapsedSeconds: document.querySelector('.playback-controls')?.dataset.elapsedSeconds ?? null });
+        if (trace.events.length > 64) { trace.events.shift(); trace.omitted++; }
+      } catch { trace.recordingErrors++; }
+    };
+    window.__galleryPlaybackControlTrace = trace;
+    const wasm = WebAssembly;
+    trace.jsPi = { Function: typeof wasm.Function, Suspending: typeof wasm.Suspending,
+      promising: typeof wasm.promising, exception: typeof wasm.Exception };
+    record({ kind: 'trace-installed' });
+    document.addEventListener('click', event => {
+      const button = event.target instanceof Element ? event.target.closest('.playback-toggle') : null;
+      if (!button) return;
+      record({ kind: 'toggle-click-before-handler', trusted: event.isTrusted,
+        label: button.getAttribute('aria-label') });
+      queueMicrotask(() => record({ kind: 'toggle-click-after-handler', trusted: event.isTrusted,
+        label: button.getAttribute('aria-label') }));
+    }, true);
+    let controlsObserver = null;
+    let insertionObserver = null;
+    const observeControls = controls => {
+      if (!controls || controlsObserver) return;
+      const fingerprint = () => JSON.stringify(state());
+      let previous = fingerprint();
+      controlsObserver = new MutationObserver(() => {
+        const current = fingerprint();
+        if (current !== previous) {
+          const before = previous;
+          previous = current;
+          record({ kind: 'controls-state-change', before: JSON.parse(before), after: JSON.parse(current) });
+        }
+      });
+      controlsObserver.observe(controls, { attributes: true, subtree: true,
+        attributeFilter: ['data-busy', 'data-playing', 'data-controllable', 'aria-label', 'disabled'] });
+      trace.controlsObserver = 'attached';
+      insertionObserver?.disconnect();
+      record({ kind: 'controls-observed' });
+    };
+    observeControls(document.querySelector('.playback-controls'));
+    if (!controlsObserver) {
+      trace.controlsObserver = 'waiting-for-controls';
+      insertionObserver = new MutationObserver(() => observeControls(document.querySelector('.playback-controls')));
+      insertionObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    try {
+      const { ExecutionWorkerClient } = await import('./execution-worker-client.js');
+      for (const method of ['pause', 'seek']) {
+        const original = ExecutionWorkerClient.prototype[method];
+        ExecutionWorkerClient.prototype[method] = function (...args) {
+          const id = (trace.nextId ?? 0) + 1;
+          trace.nextId = id;
+          record({ kind: 'command-entered', method, id, args: args.slice(0, 1) });
+          let pending;
+          try { pending = original.apply(this, args); }
+          catch (error) {
+            record({ kind: 'command-rejected-sync', method, id,
+              error: { name: error?.name ?? 'Error', message: String(error).slice(0, 500),
+                stack: String(error?.stack ?? '').slice(0, 1200) } });
+            throw error;
+          }
+          if (pending && typeof pending.then === 'function') {
+            pending.then(result => record({ kind: 'command-resolved', method, id,
+              result: { time: result?.time ?? null, playing: result?.playing ?? null,
+                receipt: result?.presentationReceipt ?? null } }),
+            error => record({ kind: 'command-rejected', method, id,
+              error: { name: error?.name ?? 'Error', message: String(error).slice(0, 500),
+                stack: String(error?.stack ?? '').slice(0, 1200) } }));
+          }
+          return pending;
+        };
+      }
+      trace.commandObserver = 'installed';
+    } catch (error) {
+      record({ kind: 'command-observer-error', error: { name: error?.name ?? 'Error',
+        message: String(error).slice(0, 500) } });
+    }
+    return { jsPi: trace.jsPi, controlsObserver: trace.controlsObserver,
+      commandObserver: trace.commandObserver ?? null };
+  });
+}
+async function readPlaybackControlTrace(page) {
+  try {
+    return await Promise.race([
+      page.evaluate(() => window.__galleryPlaybackControlTrace ? {
+        jsPi: window.__galleryPlaybackControlTrace.jsPi,
+        controlsObserver: window.__galleryPlaybackControlTrace.controlsObserver,
+        commandObserver: window.__galleryPlaybackControlTrace.commandObserver ?? null,
+        recordingErrors: window.__galleryPlaybackControlTrace.recordingErrors,
+        omitted: window.__galleryPlaybackControlTrace.omitted,
+        events: window.__galleryPlaybackControlTrace.events,
+      } : null),
+      new Promise(resolve => setTimeout(() => resolve({ state: 'page-evaluation-timeout' }), 500)),
+    ]);
+  } catch (error) {
+    return { state: 'page-evaluation-error', error: String(error).slice(0, 500) };
+  }
+}
 async function showcaseSourceBytes(relative) {
   if (!external) return readFileSync(path.join(root, 'web', relative));
   const response = await fetch(new URL(relative, base), {
@@ -278,6 +389,8 @@ try {
       errors: [], failedRequests: [], samples: [], presentations: [] };
     let audioGestureIssued = false;
     let audioAttachmentObserved = false;
+    const controlStageEvents = [];
+    let controlStageEventsOmitted = 0;
     const observedPublications = new Set();
     const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
     const native = createNativeWebKitEvidence({
@@ -525,9 +638,21 @@ try {
             // Inspect the closed endpoint separately through normal controls.
             let endpointMetrics = metrics;
             if (result.state.playback?.controllable === 'true' && result.authoredDuration > 0) {
-              const time = await seekPausedGallery(page, result.authoredDuration);
+              const traceControl = process.env.NOON_GALLERY_CONTROL_DIAGNOSTIC === '1' &&
+                entry.id === 'parity-moving-around';
+              if (traceControl) await installPlaybackControlTrace(page);
+              const recordStage = event => {
+                controlStageEvents.push({ at: performance.now(), ...event });
+                if (controlStageEvents.length > 64) { controlStageEvents.shift(); controlStageEventsOmitted++; }
+              };
+              const time = await seekPausedGallery(page, result.authoredDuration, null,
+                traceControl ? recordStage : null);
               endpointMetrics = await waitForPublishedGalleryFrame(page, time, result.authoredDuration);
-              result.terminalInspection = { time, metrics: endpointMetrics };
+              result.terminalInspection = { time, metrics: endpointMetrics,
+                ...(traceControl ? { controlTrace: {
+                  nodeStages: controlStageEvents, browser: await readPlaybackControlTrace(page),
+                  nodeStagesOmitted: controlStageEventsOmitted,
+                } } : {}) };
             }
             assert.equal(endpointMetrics.metrics.objectCount, entry.expected_object_count);
           }
@@ -599,6 +724,10 @@ try {
       result.outcome = 'fail'; result.failure = String(error);
       result.failureDiagnostics = {
         browserTrace: trace.snapshot(),
+        ...(process.env.NOON_GALLERY_CONTROL_DIAGNOSTIC === '1' && entry.id === 'parity-moving-around'
+          ? { playbackControlTrace: { nodeStages: controlStageEvents,
+            nodeStagesOmitted: controlStageEventsOmitted,
+            browser: await readPlaybackControlTrace(page) } } : {}),
         httpServer: httpServerState ?? null,
         pendingRequestCount: pendingRequests.size,
         pendingRequests: [...pendingRequests.values()].slice(0, 20).map(request => ({
