@@ -391,7 +391,9 @@ function attemptedPageFixture(executionMetrics, diagnostics = { runGeneration: 7
     location: { href: "http://localhost/current" },
     document: { visibilityState: "visible", hasFocus: () => true,
       querySelector: selector => selector === "#status" ? status : null },
-    window: { __noonExampleGallery: { generationDiagnostics: diagnostics, executionMetrics } },
+    window: { __noonExampleGallery: { generationDiagnostics: diagnostics, executionMetrics,
+      runPhaseMetrics: { runGeneration: 7, runAcceptedAtMs: 12, sourceRunStartedAtMs: 15,
+        renderPreparation: { startedAtMs: 13, readyAtMs: 25 }, reconciliations: Array(1000).fill({}) } } },
   };
   return { evaluate: async (callback, argument) => runInNewContext(`(${callback.toString()})(argument)`,
     { ...globals, argument }) };
@@ -406,6 +408,9 @@ test("failure metrics retain bounded renderer progress without consuming profile
   }));
   assert.equal(result.observed.visibilityState, "visible");
   assert.equal(result.observed.documentHasFocus, true);
+  assert.equal(result.observed.runPhaseMetrics.sourceRunStartedAtMs, 15);
+  assert.equal(result.observed.runPhaseMetrics.renderPreparationReadyAtMs, 25);
+  assert.equal(Object.hasOwn(result.observed.runPhaseMetrics, "reconciliations"), false);
   assert.equal(result.executionMetrics.state, "captured");
   assert.equal(result.executionMetrics.observed.time, 0.932);
   assert.equal(result.executionMetrics.observed.needsPresent, true);
