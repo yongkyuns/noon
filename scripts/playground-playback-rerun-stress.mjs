@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
 import { createProcessTreeRssSampler } from "./playground-cold-start-memory.mjs";
 
 const { chromium } = playwright;
@@ -66,29 +66,7 @@ const memory = memoryEnabled ? { enabled: true, build: await memoryBuildIdentity
   caveat: "Rust retained charges are category-local logical bytes; sampled Chromium process-tree RSS is separate and may double-count shared pages. The opt-in observer covers Noon wasm-bindgen memory only, not Pyodide memory." }
   : null;
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground rerun stress server did not start: ${lastError}\n${serverOutput}`);
-}
+const server = await serveRepository(repoRoot, port);
 
 async function waitForApplied(page, exampleId, timeout = 60_000) {
   await page.waitForFunction(
@@ -355,10 +333,9 @@ function assertHeldControls(held) {
 let page = null;
 const pageErrors = [];
 const consoleErrors = [];
-const diagnostics = { profile, phases: [] };
+const diagnostics = { profile, phases: [], failedRequests: [], failedRequestsDropped: 0 };
 
 try {
-  await waitForServer();
   const launchOptions = {
     channel: "chromium",
     headless: true,
@@ -383,6 +360,12 @@ try {
     exampleContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     page = await exampleContext.newPage();
   } else page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  page.on("requestfailed", request => {
+    if (diagnostics.failedRequests.length < 32) diagnostics.failedRequests.push({
+      url: request.url(), resourceType: request.resourceType(), error: request.failure()?.errorText,
+    });
+    else diagnostics.failedRequestsDropped++;
+  });
   if (wasmAccountingEnabled) await installWasmCapacityProbe(page);
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
@@ -622,7 +605,6 @@ try {
   assert.deepEqual(consoleErrors, [], `console errors: ${consoleErrors.join("\n")}`);
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
-  diagnostics.serverOutput = serverOutput;
   diagnostics.runTriggers = await page.evaluate(() => window.__noonRerunStress.runTriggers);
   await page.screenshot({ path: path.join(artifactDir, "playground.png"), fullPage: true });
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
@@ -631,7 +613,6 @@ try {
   if (memoryEnabled) memory.errors.push(`rerun qualification: ${String(error)}`);
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
-  diagnostics.serverOutput = serverOutput;
   diagnostics.error = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error);
   if (page !== null) {
     try {
@@ -689,7 +670,7 @@ try {
   }
   await browser?.close().catch(() => {});
   await browserServer?.close().catch(() => {});
-  server.kill("SIGTERM");
+  await server.close();
   if (memoryEnabled && memory.status === "failed" && diagnostics.error === undefined) {
     diagnostics.error = { name: "MemoryObservationError", message: memory.errors.join("; ") };
     await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`).catch(() => {});
