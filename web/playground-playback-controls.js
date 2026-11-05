@@ -806,6 +806,7 @@ function renderPlaybackPlaceholder(root) {
   liveStatus.textContent = "Loading playback state";
   liveStatus.removeAttribute("title");
   sectionMarkers.replaceChildren();
+  sectionMarkers.hidden = true;
   previousSection.disabled = true;
   nextSection.disabled = true;
   sectionNames.replaceChildren();
@@ -958,6 +959,7 @@ function installStyles() {
       white-space: nowrap;
       text-overflow: ellipsis;
     }
+    .playback-slot [hidden],
     .playback-controls [hidden] { display: none !important; }
     .playback-section-controls,
     .playback-audio-controls {

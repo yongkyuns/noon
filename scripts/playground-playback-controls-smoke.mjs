@@ -150,7 +150,9 @@ try {
   });
 
   await page.addInitScript(() => {
-    window.__playbackScrubberLifecycle = { initial: null, replaced: false, detached: false };
+    window.__playbackScrubberLifecycle = {
+      initial: null, replaced: false, detached: false, placeholderVisibleHiddenControls: null,
+    };
     const captureScrubber = (records = []) => {
       const lifecycle = window.__playbackScrubberLifecycle;
       if (lifecycle.initial !== null && records.some(record =>
@@ -159,6 +161,11 @@ try {
       }
       const scrubber = document.querySelector(".playback-scrubber");
       if (!scrubber) return;
+      const placeholder = document.querySelector(".playback-slot");
+      if (placeholder && lifecycle.placeholderVisibleHiddenControls === null) {
+        lifecycle.placeholderVisibleHiddenControls = [...placeholder.querySelectorAll("[hidden]")]
+          .filter(element => element.getClientRects().length > 0).map(element => element.className);
+      }
       if (lifecycle.initial === null) lifecycle.initial = scrubber;
       else if (lifecycle.initial !== scrubber) lifecycle.replaced = true;
     };
@@ -272,10 +279,14 @@ try {
     initialFound: window.__playbackScrubberLifecycle.initial !== null,
     replaced: window.__playbackScrubberLifecycle.replaced,
     detached: window.__playbackScrubberLifecycle.detached,
+    placeholderVisibleHiddenControls: window.__playbackScrubberLifecycle.placeholderVisibleHiddenControls,
     currentIsInitial: window.__playbackScrubberLifecycle.initial === document.querySelector(".playback-scrubber"),
   }));
   diagnostics.scrubberLifecycle = scrubberLifecycle;
-  assert.deepEqual(scrubberLifecycle, { initialFound: true, replaced: false, detached: false, currentIsInitial: true },
+  assert.deepEqual(scrubberLifecycle, {
+    initialFound: true, replaced: false, detached: false, currentIsInitial: true,
+    placeholderVisibleHiddenControls: [],
+  },
     "runtime initialization must keep the original loading scrubber node attached");
   diagnostics.initial = initial;
   diagnostics.lifecycle = await page.evaluate(() => window.__noonPlaybackLifecycle);
