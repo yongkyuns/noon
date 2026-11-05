@@ -173,10 +173,12 @@ async function waitForApplied(page) {
 const runEvidence = [];
 
 async function runAndMeasure(page, { captureFrames = false, cpuProfiler = null } = {}) {
+  if (cpuProfiler !== null) await sampleRendererObservation(page);
   const prior = await page.evaluate(() => ({
     runGeneration: window.__noonExampleGallery?.runPhaseMetrics?.runGeneration ?? 0,
     rendererSession: window.__noonProductRenderProbe?.latest?.session ?? null,
     rendererTime: window.__noonProductRenderProbe?.latest?.time ?? null,
+    rendererAt: window.__noonProductRenderProbe?.latest?.rendererAt ?? null,
     metricReply: window.__noonProductRenderProbe?.latest?.metricReply ?? 0,
   }));
   await page.evaluate(capture => {
@@ -210,25 +212,6 @@ async function runAndMeasure(page, { captureFrames = false, cpuProfiler = null }
         };
       });
       frameSamples.push(sample);
-      if (cpuProfiler !== null && cpuProfiler.stopped !== true && sample.exampleId === exampleId &&
-          sample.runGeneration > prior.runGeneration && sample.metricReply > prior.metricReply &&
-          (sample.session !== prior.rendererSession || sample.time < prior.rendererTime) &&
-          sample.runInFlight === true) {
-        if (cpuProfiler.started !== true && sample.time >= measurement.windowStartSeconds - 0.15) {
-          if (sample.time > measurement.windowStartSeconds + 0.15) {
-            throw new Error("worker profile missed the beginning of the authored measurement window");
-          }
-          await cpuProfiler.start(sample);
-          cpuProfiler.started = true;
-        } else if (cpuProfiler.started === true && sample.time >= measurement.windowEndSeconds + 0.15) {
-          if (sample.time > measurement.windowEndSeconds + 0.35) {
-            throw new Error("worker profile missed the end of the authored measurement window");
-          }
-          cpuProfiler.result = await cpuProfiler.stop(sample, artifactDir);
-          cpuProfiler.started = false;
-          cpuProfiler.stopped = true;
-        }
-      }
       await page.waitForTimeout(50);
     }
   })().catch(error => {
@@ -237,6 +220,10 @@ async function runAndMeasure(page, { captureFrames = false, cpuProfiler = null }
   });
   let runFailed = false;
   try {
+    if (cpuProfiler !== null) {
+      await cpuProfiler.start({ runGeneration: prior.runGeneration, session: prior.rendererSession,
+        time: prior.rendererTime, rendererAt: prior.rendererAt, exampleId });
+    }
     await page.locator("#replace-scene").click();
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
@@ -284,6 +271,17 @@ async function runAndMeasure(page, { captureFrames = false, cpuProfiler = null }
       disposition: lifecycle.diagnostics?.events?.findLast(event => event.stage === "disposition"),
       context: lifecycle.diagnostics?.context, run: lifecycle.run, controls: lifecycle.controls,
     })}`);
+    if (cpuProfiler !== null) {
+      const profileEnd = await sampleRendererObservation(page);
+      assert.equal(profileEnd.exampleId, exampleId, "worker CPU profile ended outside the Bezier run");
+      assert.equal(profileEnd.runGeneration, lifecycle.run.runGeneration,
+        "worker CPU profile end must belong to the completed warm Run");
+      assert.ok(profileEnd.runGeneration > prior.runGeneration,
+        "worker CPU profile must span a newly accepted warm Run");
+      assert.ok(profileEnd.metricReply > prior.metricReply, "warm Run must produce a fresh renderer metrics receipt");
+      cpuProfiler.result = await cpuProfiler.stop(profileEnd, artifactDir);
+      cpuProfiler.stopped = true;
+    }
     const disposition = lifecycle.diagnostics?.events.findLast(event => event.stage === "disposition") ?? null;
     evidence.completion = { runGeneration: lifecycle.run.runGeneration,
       runRequestId: lifecycle.diagnostics?.runRequestId ?? null, attachedProfile: disposition?.profile ?? null,
@@ -696,10 +694,10 @@ try {
     workerCpuProfile: warm.workerCpuProfile,
     cpuProfileDiagnostic: cpuProfiler === null ? null : {
       profiler: "CDP Profiler on dedicated authoring/render worker targets",
-      scope: "diagnostic-only; CPU sampling perturbs scheduling and does not measure GPU execution or FPS",
+      scope: "diagnostic-only whole warm pass, from pre-Run start through looped source completion; CPU sampling perturbs scheduling and does not measure GPU execution or FPS",
       runnerSha256: createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex"),
       helperSha256: createHash("sha256").update(await readFile(new URL("./worker-cpu-profile.mjs", import.meta.url))).digest("hex"),
-      windowSeconds: [measurement.windowStartSeconds, measurement.windowEndSeconds],
+      authoredFpsWindowSeconds: [measurement.windowStartSeconds, measurement.windowEndSeconds],
       packageIdentity: JSON.parse(await readFile(path.join(siteRoot, "web/runtime-build-identity.json"), "utf8")),
     },
     rendererCosts: measurement.gapClock === null ? null
