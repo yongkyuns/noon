@@ -343,7 +343,7 @@ impl SceneInstance {
 
         let preview = self.timeline_scheduler.preview_advance(time);
         let mut rows = BTreeMap::<usize, FrameRowState>::new();
-        let mut cursor_updates = BTreeMap::<CompiledChannelKey, usize>::new();
+        let mut cursor_updates = Vec::new();
         let mut stats = EvaluationStats::default();
         let mut prior_driver_rows = 0;
 
@@ -376,7 +376,7 @@ impl SceneInstance {
                     object.base_style,
                     &self.path_motion_plans,
                 );
-                cursor_updates.insert(channel, cursor);
+                cursor_updates.push((channel, cursor));
                 stats.groups_evaluated += 1;
             }
             rows.insert(object_index, row);
@@ -415,7 +415,7 @@ impl SceneInstance {
                 object.base_style,
                 &self.path_motion_plans,
             );
-            cursor_updates.insert(channel, cursor);
+            cursor_updates.push((channel, cursor));
             stats.groups_evaluated += 1;
         }
 
@@ -497,7 +497,7 @@ impl SceneInstance {
             time,
             requested_channels: preview.requested().to_vec(),
             requested_family_animations: preview.requested_family_animations().to_vec(),
-            cursor_updates: cursor_updates.into_iter().collect(),
+            cursor_updates,
             rows: rows
                 .into_iter()
                 .map(|(object_index, state)| PreparedFrameRow {
