@@ -23,6 +23,8 @@ pub(crate) fn apply_family_then_resident_preparation<T, E>(
 
 #[cfg(any(target_arch = "wasm32", test))]
 const RENDER_SUBSTAGE_SAMPLE_CAPACITY: usize = 32;
+#[cfg(target_arch = "wasm32")]
+const RENDER_LOCALITY_RECORD_LIMIT: usize = 16;
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -35,6 +37,8 @@ struct RenderSubstageSample {
     upload_cpu_wall_ms: f64,
     encode_cpu_wall_ms: f64,
     submit_present_cpu_wall_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locality: Option<serde_json::Value>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -98,10 +102,12 @@ mod render_substage_tests {
                 upload_cpu_wall_ms: 3.0,
                 encode_cpu_wall_ms: 4.0,
                 submit_present_cpu_wall_ms: 5.0,
+                locality: None,
             });
         }
-        let drained: Vec<RenderSubstageSample> =
-            serde_json::from_str(&samples.take_json().unwrap()).unwrap();
+        let drained_json = samples.take_json().unwrap();
+        assert!(!drained_json.contains("locality"));
+        let drained: Vec<RenderSubstageSample> = serde_json::from_str(&drained_json).unwrap();
         assert_eq!(drained.len(), RENDER_SUBSTAGE_SAMPLE_CAPACITY);
         assert_eq!(drained.first().and_then(|sample| sample.sequence), Some(1));
         assert_eq!(drained.last().and_then(|sample| sample.sequence), Some(32));
@@ -118,6 +124,7 @@ mod render_substage_tests {
             upload_cpu_wall_ms: 0.0,
             encode_cpu_wall_ms: 0.0,
             submit_present_cpu_wall_ms: 0.0,
+            locality: None,
         });
         assert_eq!(samples.take_json().unwrap().matches("sequence").count(), 1);
     }
@@ -137,7 +144,9 @@ mod wasm {
     use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;
 
-    use super::{apply_family_then_resident_preparation, FamilyAdmission};
+    use super::{
+        apply_family_then_resident_preparation, FamilyAdmission, RENDER_LOCALITY_RECORD_LIMIT,
+    };
 
     #[derive(Default)]
     struct RenderSubstageTimings {
@@ -923,6 +932,7 @@ mod wasm {
             let resolved_observation_target = observation_target
                 .as_ref()
                 .and_then(|target| target.as_ref().ok());
+            let outline_cache_before = profiling.then(|| self.preparer.outline_cache_stats());
             let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
             // Worker transport has already resolved and validated this frame and
@@ -1197,6 +1207,89 @@ mod wasm {
                 timings.submit_present_cpu_wall_ms = performance_now_ms() - started;
             }
             if let Some(timings) = substage_timings {
+                let changes = &self.pending_changes;
+                let changed_rows = changes.object_indices();
+                let change_range = changes.painter_order_range();
+                let geometry = prepared.geometry_stats();
+                let retained = prepared.stats;
+                let image_residency = self.renderer.image_residency_stats();
+                let resource_handles = self
+                    .mirror
+                    .resources()
+                    .diagnostic_resource_handles(RENDER_LOCALITY_RECORD_LIMIT);
+                let [effect_rows, effect_programs] = self.renderer.resident_effect_program_counts();
+                let locality = serde_json::json!({
+                    "frame": {
+                        "presentationSequence": self.presentation_sequence,
+                        "gpuGeneration": self.gpu_generation,
+                        "bytesUploaded": self.last_bytes_uploaded,
+                    },
+                    "frameChanges": {
+                        "scope": if changes.is_all() { "all" } else if changes.is_structural() {
+                            "structural"
+                        } else if changes.has_painter_order_change() { "painter-order" }
+                        else if changes.object_indices().is_empty() && changes.requires_presentation_redraw() {
+                            "presentation-only"
+                        } else if changes.object_indices().is_empty() { "empty" } else { "objects" },
+                        "all": changes.is_all(),
+                        "presentationRedraw": changes.requires_presentation_redraw(),
+                        "explicitRowIndexCount": changed_rows.len(),
+                        "addedCount": changes.added_indices().len(),
+                        "removedCount": changes.removed_indices().len(),
+                        "explicitRowIndices": changed_rows.iter().take(RENDER_LOCALITY_RECORD_LIMIT).collect::<Vec<_>>(),
+                        "explicitRowIndicesTruncated": changed_rows.len().saturating_sub(RENDER_LOCALITY_RECORD_LIMIT),
+                        "explicitRowIndicesScope": "retained-mirror row indices; not semantic object ids",
+                        "painterOrderRange": change_range.map(|range| [range.start, range.end]),
+                    },
+                    "renderStats": {
+                        "batchCount": geometry.batch_count,
+                        "instanceCount": geometry.instance_count,
+                        "capacityGrowths": geometry.capacity_growths,
+                        "instancesRepacked": geometry.instances_repacked,
+                        "dirtyInstanceCount": geometry.dirty_instance_count,
+                        "geometryCacheMisses": geometry.geometry_cache_misses,
+                        "pathVerticesRepacked": geometry.path_vertices_repacked,
+                        "pathIndicesRepacked": geometry.path_indices_repacked,
+                        "megaPathIndicesRepacked": geometry.mega_path_indices_repacked,
+                        "structuralSlotsAdded": geometry.structural_slots_added,
+                        "structuralSlotsRetired": geometry.structural_slots_retired,
+                        "fullRebuilds": geometry.full_rebuilds,
+                        "renderOrderPositionsVisited": geometry.render_order_positions_visited,
+                        "renderOrderChunksRebuilt": geometry.render_order_chunks_rebuilt,
+                        "semanticObjects": retained.semantic_objects,
+                        "geometrySlots": retained.geometry_slots,
+                        "glyphBatches": retained.glyph_batches,
+                        "vectorItems": retained.vector_items,
+                        "outlineRuns": retained.outline_runs,
+                        "imageObjects": retained.image_objects,
+                        "prepareOutlineCacheHits": retained.outline_cache_hits,
+                        "prepareOutlineCacheMisses": retained.outline_cache_misses,
+                    },
+                    "outlineCache": {
+                        "scope": "cumulative stats sampled immediately before current frame preparation",
+                        "outlineEntries": outline_cache_before.map(|stats| stats.outline_entries),
+                        "strokedEntries": outline_cache_before.map(|stats| stats.stroked_entries),
+                        "retainedCpuBytes": outline_cache_before.map(|stats| stats.retained_bytes),
+                        "fontFaces": outline_cache_before.map(|stats| stats.font_faces),
+                        "hits": outline_cache_before.map(|stats| stats.hits),
+                        "misses": outline_cache_before.map(|stats| stats.misses),
+                        "evictions": outline_cache_before.map(|stats| stats.evictions),
+                        "rejectedAdmissions": outline_cache_before.map(|stats| stats.rejected_admissions),
+                    },
+                    "imageResidency": {
+                        "textures": image_residency.textures,
+                        "objects": image_residency.objects,
+                        "pixelBytes": image_residency.pixel_bytes,
+                        "scope": "renderer-resident RGBA pixel payload; excludes GPU allocation overhead",
+                    },
+                    "resourceHandles": resource_handles,
+                    "effects": {
+                        "residentRows": effect_rows,
+                        "residentPrograms": effect_programs,
+                        "captureAndBackdropBytes": self.renderer.effect_capture_texture_bytes(),
+                        "captureBytesScope": "retained effect capture and backdrop textures; not total GPU allocation",
+                    },
+                });
                 self.render_substage_samples.push(RenderSubstageSample {
                     session: self.mirror.transport_mirror().session(),
                     sequence: self.mirror.transport_mirror().applied_sequence(),
@@ -1205,6 +1298,7 @@ mod wasm {
                     upload_cpu_wall_ms: timings.upload_cpu_wall_ms,
                     encode_cpu_wall_ms: timings.encode_cpu_wall_ms,
                     submit_present_cpu_wall_ms: timings.submit_present_cpu_wall_ms,
+                    locality: Some(locality),
                 });
             }
             self.last_draw_calls = draw.draw_calls();

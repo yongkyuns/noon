@@ -1006,6 +1006,54 @@ pub struct InstalledRetainedResources {
 }
 
 impl InstalledRetainedResources {
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn diagnostic_resource_handles(&self, limit: usize) -> serde_json::Value {
+        let inventory = &self.inventory;
+        let total = inventory.images.len() + inventory.texts.len() + inventory.geometries.len();
+        let mut records = inventory
+            .images
+            .iter()
+            .take(limit)
+            .map(|handle| ("image", handle.arena, handle.id, handle.version))
+            .chain(
+                inventory
+                    .texts
+                    .values()
+                    .take(limit)
+                    .map(|handle| ("text", handle.arena, handle.id, handle.version)),
+            )
+            .chain(
+                inventory
+                    .geometries
+                    .iter()
+                    .take(limit)
+                    .map(|handle| ("geometry", handle.arena, handle.id, handle.version)),
+            )
+            .collect::<Vec<_>>();
+        records.sort_unstable();
+        let omitted = total.saturating_sub(records.len());
+        let records = records
+            .into_iter()
+            .map(|(kind, arena, id, version)| {
+                serde_json::json!({"kind": kind, "handle": {
+                    "arena": arena.to_string(), "id": id.to_string(), "version": version.to_string()
+                }})
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "total": total,
+            "counts": {
+                "images": inventory.images.len(),
+                "texts": inventory.texts.len(),
+                "geometries": inventory.geometries.len(),
+            },
+            "omitted": omitted,
+            "recordLimitPerKind": limit,
+            "records": records,
+            "scope": "authoritative image, text, and geometry transport handles; bounded sample per kind",
+        })
+    }
+
     pub(crate) fn render_geometry_session(&self) -> Option<u32> {
         self.render_geometry_session
     }

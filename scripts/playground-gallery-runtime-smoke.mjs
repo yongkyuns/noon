@@ -20,6 +20,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
 const profile = process.env.NOON_PLAYGROUND_PROFILE ?? 'mobile-dpr2';
 const profileGateMode = process.env.NOON_SHOWCASE_PROFILE_GATE ?? 'disabled';
+const profilePreparation = process.env.NOON_GALLERY_PREPARATION_TIMING === '1';
 assert.ok(['disabled', 'baseline', 'strict'].includes(profileGateMode), 'NOON_SHOWCASE_PROFILE_GATE must be disabled, baseline, or strict');
 const port = Number(process.env.NOON_GALLERY_PORT ?? 4197);
 const external = process.env.NOON_GALLERY_BASE;
@@ -220,7 +221,11 @@ try {
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
     // Renderer time may precede completion of an authored static wait.
-    await context.addInitScript(({ channel, protocolVersion, profilePublications }) => {
+    await context.addInitScript(({ channel, protocolVersion, profilePublications, profilePreparation }) => {
+      if (profilePreparation) globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+        ...(globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ ?? {}),
+        authoringRunOptions: () => ({ diagnosticPreparationTiming: true }),
+      };
       window.__galleryAuthoringResults = [];
       window.__galleryWorkerMessages = [];
       const profilingRequestId = Number.MAX_SAFE_INTEGER;
@@ -265,7 +270,7 @@ try {
         },
       });
     }, { channel: AUTHORING_CHANNEL, protocolVersion: AUTHORING_PROTOCOL_VERSION,
-      profilePublications: Object.hasOwn(liveMathAnimations, entry.id) });
+      profilePublications: Object.hasOwn(liveMathAnimations, entry.id), profilePreparation });
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
     const trace = createBrowserFailureTrace();
@@ -618,6 +623,12 @@ try {
       result.failureDiagnostics.attemptedPage = await captureAttemptedPage(page);
     } finally {
       clearTimeout(caseTimer);
+      if (profilePreparation) {
+        result.preparationTimingDiagnostics = await Promise.race([
+          page.evaluate(() => window.__noonExampleGallery?.executionPreparationTimingDiagnostics ?? null),
+          new Promise(resolve => setTimeout(() => resolve(null), 1000)),
+        ]).catch(() => null);
+      }
       if (expectedProfile && !Object.hasOwn(result, 'executionDiagnostics')) {
         const snapshot = await Promise.race([
           page.evaluate(() => window.__noonExampleGallery?.executionDiagnostics ?? null),

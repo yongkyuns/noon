@@ -103,6 +103,16 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
   const runState = window.__showcaseLiveReviewRun;
   if (!runState || runState.stop) return true;
   runState.observerStartedAtEpochMs ??= performance.timeOrigin + performance.now();
+  const observedAtEpochMs = performance.timeOrigin + performance.now();
+  const captureDiagnostics = runState.captureDiagnostics ??= {
+    polls: 0, maxPollGapMs: 0, lastPollAtEpochMs: null, lastControls: null, lastCandidate: null,
+  };
+  captureDiagnostics.polls += 1;
+  if (captureDiagnostics.lastPollAtEpochMs !== null) {
+    captureDiagnostics.maxPollGapMs = Math.max(captureDiagnostics.maxPollGapMs,
+      observedAtEpochMs - captureDiagnostics.lastPollAtEpochMs);
+  }
+  captureDiagnostics.lastPollAtEpochMs = observedAtEpochMs;
   const patch = document.querySelector("#patch-status");
   if (patch?.dataset.state === "error") throw new Error(patch.value || "Gallery playback failed");
   if (gallery?.selectedExampleId !== exampleId) throw new Error("gallery selection changed during the first pass");
@@ -126,7 +136,10 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
     return false;
   }
   const disposition = events.find((event) => event.stage === "disposition")?.disposition ?? null;
-  if (disposition === "looped" || disposition === "finite-complete") return true;
+  if (disposition === "looped" || disposition === "finite-complete") {
+    captureDiagnostics.disposition = { disposition, observedAtEpochMs };
+    return true;
+  }
   const heldEvidence = (state, receipt) => {
     const held = state?.heldPresentation;
     if (!held || state.loopCount !== 0 || held.publication?.session !== receipt?.session ||
@@ -139,6 +152,9 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
 
   const controls = document.querySelector(".playback-controls")?.dataset;
   const elapsed = Number(controls?.elapsedSeconds);
+  captureDiagnostics.lastControls = { observedAtEpochMs, controls: { ...controls },
+    context: diagnostics.context, runRequestId: diagnostics.runRequestId,
+    interpreterGeneration: diagnostics.interpreterGeneration };
   const alreadyCaptured = window.__showcaseLiveReviewFirstPass;
   if (!alreadyCaptured && diagnostics?.context?.exampleId === exampleId &&
       Number.isSafeInteger(diagnostics.runRequestId) &&
@@ -180,6 +196,10 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
     const naturalTerminalReceipt = Number.isFinite(receipt?.time) && receipt.time >= holdStart &&
       receipt.time <= duration + 8 * Number.EPSILON * Math.max(1, duration);
     const heldPresentation = naturalTerminalReceipt ? null : heldEvidence(state, receipt);
+    captureDiagnostics.lastCandidate = { observedAtEpochMs: performance.timeOrigin + performance.now(),
+      executionState: state, controls: captureControls, rustTimeInHold, naturalTerminalReceipt,
+      heldPresentation, disposition: currentDisposition, context: current.context,
+      runRequestId: current.runRequestId, interpreterGeneration: current.interpreterGeneration };
     if (captureControls.busy !== "false" ||
         captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
         captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
@@ -869,6 +889,7 @@ async function main() {
           patch: document.querySelector("#patch-status")?.value,
           status: document.querySelector("#status-text")?.textContent,
           controls: { ...document.querySelector(".playback-controls")?.dataset },
+          captureDiagnostics: window.__showcaseLiveReviewRun?.captureDiagnostics ?? null,
         })).catch(() => null);
         await page.screenshot({ path: path.join(output, `${entry.id}-failure.png`) }).catch(() => {});
         console.error(`FAIL live ${entry.id}: ${result.error}`);
