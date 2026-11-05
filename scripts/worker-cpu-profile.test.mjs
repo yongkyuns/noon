@@ -36,11 +36,16 @@ test("worker CPU capture routes profiles through attached dedicated-worker targe
     const capture = new WorkerCpuProfileCapture(new FakeBrowserCdp());
     await capture.attach();
     await assert.rejects(capture.attach(), /cannot attach profiler in attached state/);
-    const boundary = { runGeneration: 4, session: 9, time: 1.3, rendererAt: 50 };
+    const boundary = { runGeneration: 4, session: 9, time: 8.7, rendererAt: 4_000,
+      exampleId: "showcase-bezier-paths" };
     await capture.start(boundary);
     await assert.rejects(capture.start(boundary), /cannot start profiler in started state/);
-    const result = await capture.stop({ ...boundary, time: 3.6, rendererAt: 2_350 }, directory);
-    await assert.rejects(capture.stop({ ...boundary, time: 3.6, rendererAt: 2_350 }, directory),
+    await assert.rejects(capture.stop({ ...boundary, time: 9.5, rendererAt: 4_100 }, directory),
+      /new completed run/);
+    const end = { runGeneration: 5, session: 10, time: 9.5, rendererAt: 4_100,
+      exampleId: "showcase-bezier-paths" };
+    const result = await capture.stop(end, directory);
+    await assert.rejects(capture.stop(end, directory),
       /cannot stop profiler in stopped state/);
     assert.equal(result.status, "captured");
     assert.deepEqual(Object.keys(result.profiles).sort(), ["authoring", "render"]);
