@@ -1,0 +1,233 @@
+name: PR 2422 fresh cumulative product evidence summary (TEMP)
+
+on:
+  push:
+    branches:
+      - codex/2422-8ca-browser-diagnostic
+    paths:
+      - ".github/workflows/pr-2422-8ca-product-summary.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pr-2422-8ca-product-summary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  summarize-fresh-cumulative:
+    name: Summarize authenticated current and D7 cumulative evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Download and authenticate immutable inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/product-inputs"
+          fetch_artifact() {
+            local id="$1" digest="$2" name="$3"
+            curl --fail --location --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/yongkyuns/noon/actions/artifacts/$id/zip" \
+              -o "$RUNNER_TEMP/product-inputs/$name.zip"
+            printf '%s %s %s\n' "$id" "$digest" "$name" >> "$RUNNER_TEMP/product-inputs/pins.txt"
+          }
+          fetch_artifact 13400133542 88e30d7d66936fb726fbebaa98cefc77fb9f29fa4f4eb91a36271b293c4dfa0b current-cumulative
+          fetch_artifact 13394652896 524d17616961c8b8fa9ade48432d51e1e987bb37c1f812dc1eb09ffca0d9da06 current-candidate
+          fetch_artifact 13392026858 545cc36e5226a27ef0beef9eed2029703e6b5c338d8de56b8a3ab088fb017414 d7-cumulative
+          fetch_artifact 13391235889 77a11940c4e3bcc5ca9a98d01e469103d639a0f3c7f99d32d28fb4dd2cc8dd79 d7-candidate
+      - name: Verify archives and print per-pair and workload summaries
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, math, os, stat, zipfile
+          from collections import defaultdict
+          from pathlib import Path, PurePosixPath
+
+          base = Path(os.environ["RUNNER_TEMP"]) / "product-inputs"
+          out_root = Path("product-evidence-summary")
+          out_root.mkdir()
+          inputs = {}
+          for line in (base / "pins.txt").read_text().splitlines():
+              artifact, expected, name = line.split()
+              archive = base / f"{name}.zip"
+              actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+              assert len(expected) == 64 and actual == expected, (name, actual, expected)
+              root = base / name
+              root.mkdir()
+              with zipfile.ZipFile(archive) as z:
+                  entries = z.infolist()
+                  names = [entry.filename.rstrip("/") for entry in entries if not entry.is_dir()]
+                  assert names and len(names) == len(set(names)), (name, names)
+                  for entry in entries:
+                      path = PurePosixPath(entry.filename)
+                      assert not path.is_absolute() and ".." not in path.parts, (name, entry.filename)
+                      assert not stat.S_ISLNK(entry.external_attr >> 16), (name, entry.filename)
+                  z.extractall(root)
+              inputs[name] = {"artifactId": int(artifact), "zipSha256": actual,
+                  "fileCount": sum(p.is_file() for p in root.rglob("*"))}
+
+          expected_workloads = {
+              "parity-square-and-circle", "showcase-camera-follows-path",
+              "showcase-first-scene", "showcase-raster-images", "showcase-bezier-paths",
+          }
+          specifications = {
+              "current": ("current-cumulative", "current-candidate", "be814def71f9d34d9d28d106631544ca5a8eb3f8"),
+              "d7": ("d7-cumulative", "d7-candidate", "f3def9bc39afe95f5ba2207d906714bae15d60f7"),
+          }
+
+          def one_file(root, name):
+              found = list(root.rglob(name))
+              assert len(found) == 1, (root, name, [str(p) for p in found])
+              return found[0]
+
+          def reports(root):
+              found = []
+              for path in root.rglob("report.json"):
+                  try:
+                      row = json.loads(path.read_text())
+                  except (OSError, json.JSONDecodeError):
+                      continue
+                  if isinstance(row, dict) and row.get("exampleId") in expected_workloads:
+                      found.append((path, row))
+              return found
+
+          def report_files(row):
+              files = row.get("packageSizes", {}).get("files")
+              assert isinstance(files, dict) and files, "report has no package size file hashes"
+              return {name: item["sha256"] for name, item in files.items()}
+
+          result = {"schemaVersion": 1, "purpose": "diagnostic summary of a fresh cumulative cohort; no thresholds altered",
+                    "inputs": inputs, "scopes": {}}
+          for scope, (evidence_name, package_name, source_sha) in specifications.items():
+              evidence_root = base / evidence_name
+              package_root = base / package_name
+              identity = json.loads(one_file(package_root, "runtime-build-identity.json").read_text())
+              ci_artifact = json.loads(one_file(package_root, "ci-artifact.json").read_text())
+              assert identity["sourceRevision"] == source_sha, (scope, identity)
+              manifest_files = ci_artifact["files"]
+              package_hashes = {name: digest for name, digest in manifest_files.items()
+                                if name != "web/ci-Cargo.lock"}
+              expected_archive_files = {name.removeprefix("web/") for name in manifest_files} | {
+                  "ci-artifact.json", "runtime-build-identity.json"}
+              actual_archive_files = {p.relative_to(package_root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                                      for p in package_root.rglob("*") if p.is_file()}
+              assert set(actual_archive_files) == expected_archive_files, (scope, sorted(actual_archive_files), sorted(expected_archive_files))
+              for name, digest in manifest_files.items():
+                  actual = actual_archive_files[name.removeprefix("web/")]
+                  assert actual == digest, (scope, name, actual, digest)
+              found = reports(evidence_root)
+              assert len(found) == 30, (scope, len(found))
+              grouped = defaultdict(lambda: defaultdict(dict))
+              for path, row in found:
+                  example = row["exampleId"]
+                  label = row.get("label")
+                  assert label in {"baseline", "candidate"}, (scope, path, label)
+                  pair = row.get("pair")
+                  assert isinstance(pair, dict) and pair.get("index") in {1, 2, 3}, (scope, path, pair)
+                  index = pair["index"]
+                  assert index not in grouped[example][label], (scope, example, label, index)
+                  grouped[example][label][index] = (path, row)
+                  if label == "candidate":
+                      assert row.get("runtimeIdentity") == identity, (scope, path, "runtime identity mismatch")
+                      assert report_files(row) == package_hashes, (scope, path, "reported package hashes mismatch candidate package")
+              assert set(grouped) == expected_workloads, (scope, sorted(grouped))
+              for example in expected_workloads:
+                  assert set(grouped[example]["baseline"]) == {1, 2, 3}, (scope, example, "baseline pairs")
+                  assert set(grouped[example]["candidate"]) == {1, 2, 3}, (scope, example, "candidate pairs")
+
+              pair_rows = []
+              workload_rows = []
+              for example in sorted(expected_workloads):
+                  values = defaultdict(list)
+                  for index in (1, 2, 3):
+                      pair = {"workload": example, "pairIndex": index}
+                      for label in ("baseline", "candidate"):
+                          path, row = grouped[example][label][index]
+                          measurement = row.get("measurement", {})
+                          fps = row.get("fps", {})
+                          costs = row.get("rendererCosts") or {}
+                          cpu = costs.get("cpuWallMs") or {}
+                          gaps = row.get("presentationGaps") or {}
+                          cadence = gaps.get("cadence") or {}
+                          intervals = gaps.get("intervalMs") or {}
+                          latency = row
+                          item = {
+                              "label": label, "pairPosition": row.get("pair", {}).get("position"),
+                              "report": path.relative_to(evidence_root).as_posix(),
+                              "sourceRevision": row.get("runtimeIdentity", {}).get("sourceRevision"),
+                              "source": row.get("source"),
+                              "sampleWindowSeconds": [measurement.get("windowStartSeconds"), measurement.get("windowEndSeconds")],
+                              "preparation": measurement.get("preparation"),
+                              "effectiveFps": fps.get("effectiveFps"),
+                              "rendererFrameCount": costs.get("frameCount"),
+                              "renderedFrames": [fps.get("startFrames"), fps.get("endFrames")],
+                              "rendererCostsCpuWallMs": {
+                                  metric: cpu.get(metric, {}).get("mean")
+                                  for metric in ("applyMs", "renderMs", "ackPostMs")
+                              },
+                              "presentation": {
+                                  "effectiveFps": cadence.get("effectiveFps"),
+                                  "missedVsyncs": cadence.get("missedVsyncs"),
+                                  "longFrames": cadence.get("longFrames"),
+                                  "veryLongFrames": cadence.get("veryLongFrames"),
+                                  "intervalMs": {k: intervals.get(k) for k in ("mean", "p50", "p95", "max")},
+                              },
+                              "latencyMs": {k: latency.get(k) for k in ("shellReadyMs", "coldRunMs", "warmRunMs", "editRunMs")},
+                              "runtimeIdentity": row.get("runtimeIdentity"),
+                          }
+                          pair[label] = item
+                          values[label].append(item)
+                      pair_rows.append(pair)
+                  aggregates = {}
+                  for label, items in values.items():
+                      def mean_number(values):
+                          nums = [v for v in values if isinstance(v, (int, float)) and math.isfinite(v)]
+                          return sum(nums) / len(nums) if nums else None
+                      aggregates[label] = {
+                          "effectiveFpsMean": mean_number([x["effectiveFps"] for x in items]),
+                          "rendererFrameCountMean": mean_number([x["rendererFrameCount"] for x in items]),
+                          "rendererCostsCpuWallMsMean": {
+                              k: mean_number([x["rendererCostsCpuWallMs"][k] for x in items])
+                              for k in ("applyMs", "renderMs", "ackPostMs")
+                          },
+                          "presentationIntervalMsMean": {
+                              k: mean_number([x["presentation"]["intervalMs"][k] for x in items])
+                              for k in ("mean", "p50", "p95", "max")
+                          },
+                          "latencyMsMean": {
+                              k: mean_number([x["latencyMs"][k] for x in items])
+                              for k in ("shellReadyMs", "coldRunMs", "warmRunMs", "editRunMs")
+                          },
+                      }
+                  workload_rows.append({"workload": example, "aggregates": aggregates})
+              result["scopes"][scope] = {
+                  "candidateRuntimeIdentity": identity,
+                  "candidatePackageBuildId": identity.get("buildId"),
+                  "candidatePackageHashes": package_hashes,
+                  "pairRows": pair_rows,
+                  "workloadAggregates": workload_rows,
+              }
+
+          out = out_root / "summary.json"
+          out.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+          for scope in ("current", "d7"):
+              record = result["scopes"][scope]
+              print(f"{scope}: candidate source={record['candidateRuntimeIdentity']['sourceRevision']} build={record['candidatePackageBuildId']}")
+              for pair in record["pairRows"]:
+                  print(json.dumps(pair, sort_keys=True, separators=(",", ":")))
+              for aggregate in record["workloadAggregates"]:
+                  print("WORKLOAD_AGGREGATE " + json.dumps({"scope": scope, **aggregate}, sort_keys=True, separators=(",", ":")))
+          print(f"wrote {out}; authenticated artifacts={len(inputs)}, current/D7 pairs per workload=3, workloads={len(expected_workloads)}")
+          PY
+      - name: Retain the bounded summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr2422-fresh-cumulative-product-summary
+          path: product-evidence-summary
+          if-no-files-found: warn
+          retention-days: 3
