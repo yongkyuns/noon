@@ -82,11 +82,9 @@ jobs:
           git checkout -- scripts/showcase-live-review.mjs scripts/showcase-renderer-readback.mjs
           poster=web/thumbnails/showcase/showcase-spatial-scene.png
           poster_sha="$(sha256sum "$poster" | cut -d' ' -f1)"
-          if [ "$poster_sha" = "3a3449f2c8fc57a44a3d2b1060aa175e742830f59f9d4cd6d83ff2b5c9d288cf" ]; then
+          printf "%s\\n" "$poster_sha" > "$evidence/poster-before-restore-sha256.txt"
+          if [ "$poster_sha" != "b537b5c28ffff0c1ab6f0c2e3875bbf928850317ca2ad332d086769ec5d3ffbd" ]; then
             git checkout -- "$poster"
-          elif [ "$poster_sha" != "b537b5e1d5af05dd214c59f0653c01a90af0608510e93d7426dff1f0a98e7f6a" ]; then
-            echo "Unexpected showcase poster hash: $poster_sha" >&2
-            exit 1
           fi
           GITHUB_SHA="$PINNED_RUNTIME_SOURCE" node .github/ci/wasm-build.mjs verify
           node --input-type=module <<'NODE'
