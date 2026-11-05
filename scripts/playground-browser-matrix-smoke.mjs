@@ -163,17 +163,25 @@ async function runtimeSnapshot(page) {
   });
 }
 
-async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000) {
+function appliedSceneMatchesCurrentRun({ expectedExampleId, previousRunGeneration }) {
+  const patch = document.querySelector("#patch-status");
+  if (patch?.dataset.state === "error") {
+    return true;
+  }
+  const selected = document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId;
+  const activeGeneration = window.__noonExampleGallery?.executionDiagnostics?.context?.runGeneration;
+  return selected === expectedExampleId &&
+    patch?.dataset.exampleId === expectedExampleId &&
+    patch?.dataset.state === "applied" &&
+    Number.isSafeInteger(activeGeneration) &&
+    patch.dataset.runGeneration === String(activeGeneration) &&
+    (previousRunGeneration === null || activeGeneration > previousRunGeneration);
+}
+
+async function waitForAppliedScene(page, expectedExampleId, timeout = 60_000, previousRunGeneration = null) {
   await page.waitForFunction(
-    (id) => {
-      const patch = document.querySelector("#patch-status");
-      const selected = document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId;
-      if (patch?.dataset.state === "error") {
-        return true;
-      }
-      return selected === id && patch?.dataset.state === "applied";
-    },
-    expectedExampleId,
+    appliedSceneMatchesCurrentRun,
+    { expectedExampleId, previousRunGeneration },
     { timeout },
   );
   const runtime = await runtimeSnapshot(page);
@@ -429,8 +437,16 @@ async function editAndRerun(page, expectedExampleId) {
   }, editMarker);
 
   const runButton = page.locator("#replace-scene");
+  const previousRunGeneration = await page.evaluate(() => {
+    const generationText = document.querySelector("#patch-status")?.dataset.runGeneration;
+    const generation = Number(generationText);
+    if (typeof generationText !== "string" || String(generation) !== generationText || !Number.isSafeInteger(generation)) {
+      throw new Error("previous applied run generation is unavailable");
+    }
+    return generation;
+  });
   await runButton.click();
-  await waitForAppliedScene(page, expectedExampleId);
+  await waitForAppliedScene(page, expectedExampleId, 60_000, previousRunGeneration);
 
   const source = await page.evaluate(() => document.querySelector("#python-scene-source")?.value ?? "");
   assert.ok(source.includes(editMarker), `${browserName}/${profileName}: edited source was not retained`);

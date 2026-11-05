@@ -17,6 +17,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/build-runtime-identity.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
+      - "scripts/playground-browser-matrix-smoke.test.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
@@ -68,6 +69,7 @@ on:
       - "scripts/build-python-worker.mjs"
       - "scripts/build-runtime-identity.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
+      - "scripts/playground-browser-matrix-smoke.test.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
@@ -152,7 +154,7 @@ jobs:
           fallback: none
       - name: Verify gallery inventory, dependency setup and edit observations
         run: |
-          node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs
+          node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs scripts/playground-browser-matrix-smoke.test.mjs
           python3 -S scripts/test_ci_install_reference_deps.py
           python3 -S scripts/test_ci_install_playwright_browser.py
       - name: Build browser package
