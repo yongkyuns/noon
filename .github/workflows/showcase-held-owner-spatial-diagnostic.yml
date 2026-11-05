@@ -30,10 +30,17 @@ jobs:
           path: web
       - name: Verify the pinned runtime inventory and identity
         run: |
+          echo "DIAGNOSTIC_EVENT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          cp scripts/showcase-live-review.mjs "$RUNNER_TEMP/showcase-live-review.mjs"
+          cp scripts/showcase-renderer-readback.mjs "$RUNNER_TEMP/showcase-renderer-readback.mjs"
+          git fetch --no-tags origin "$PINNED_RUNTIME_SOURCE"
+          git checkout --detach "$PINNED_RUNTIME_SOURCE"
           GITHUB_SHA="$PINNED_RUNTIME_SOURCE" node .github/ci/wasm-build.mjs verify
           node --input-type=module -e 'import fs from "node:fs"; const v=JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8")); if(v.buildId!=="f46ecefcab83bb14d5774b42688b187e5978f4707866bc759de8e383e6c2c1ad" || v.sourceRevision!==process.env.PINNED_RUNTIME_SOURCE) throw new Error(JSON.stringify(v)); console.log(JSON.stringify({buildId:v.buildId,sourceRevision:v.sourceRevision}));'
+          cp "$RUNNER_TEMP/showcase-live-review.mjs" scripts/showcase-live-review.mjs
+          cp "$RUNNER_TEMP/showcase-renderer-readback.mjs" scripts/showcase-renderer-readback.mjs
           mkdir -p browser-smoke-artifacts/showcase/webgpu
-          node --input-type=module -e 'import fs from "node:fs"; import {execSync} from "node:child_process"; const v=JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8")); fs.writeFileSync("browser-smoke-artifacts/showcase/webgpu/diagnostic-overlay.json", JSON.stringify({eventRevision:execSync("git rev-parse HEAD",{encoding:"utf8"}).trim(),pinnedRuntimeSource:process.env.PINNED_RUNTIME_SOURCE,runtimeBuildId:v.buildId,rendererReadbackHelperSha256:execSync("sha256sum scripts/showcase-renderer-readback.mjs",{encoding:"utf8"}).trim().split(" ")[0],liveReviewSha256:execSync("sha256sum scripts/showcase-live-review.mjs",{encoding:"utf8"}).trim().split(" ")[0]}, null, 2)+"\\n");'
+          node --input-type=module -e 'import fs from "node:fs"; import {execSync} from "node:child_process"; const v=JSON.parse(fs.readFileSync("web/runtime-build-identity.json", "utf8")); fs.writeFileSync("browser-smoke-artifacts/showcase/webgpu/diagnostic-overlay.json", JSON.stringify({eventRevision:process.env.DIAGNOSTIC_EVENT_SHA,pinnedRuntimeSource:process.env.PINNED_RUNTIME_SOURCE,runtimeBuildId:v.buildId,rendererReadbackHelperSha256:execSync("sha256sum scripts/showcase-renderer-readback.mjs",{encoding:"utf8"}).trim().split(" ")[0],liveReviewSha256:execSync("sha256sum scripts/showcase-live-review.mjs",{encoding:"utf8"}).trim().split(" ")[0]}, null, 2)+"\\n");'
       - name: Install pinned browser tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
@@ -44,6 +51,20 @@ jobs:
       - name: Run unchanged first-pass and replay oracles
         if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
         run: node scripts/showcase-live-review.mjs
+      - name: Recheck pinned runtime package bytes after the diagnostic overlay
+        if: always()
+        run: |
+          git checkout -- scripts/showcase-live-review.mjs scripts/showcase-renderer-readback.mjs
+          GITHUB_SHA="$PINNED_RUNTIME_SOURCE" node .github/ci/wasm-build.mjs verify
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from "node:fs/promises";
+          const manifest = JSON.parse(await readFile("web/ci-artifact.json", "utf8"));
+          const identity = JSON.parse(await readFile("web/runtime-build-identity.json", "utf8"));
+          assert.equal(identity.buildId, "f46ecefcab83bb14d5774b42688b187e5978f4707866bc759de8e383e6c2c1ad");
+          await writeFile("browser-smoke-artifacts/showcase/webgpu/runtime-post-check.json",
+            JSON.stringify({ sourceRevision: manifest.source, buildId: identity.buildId,
+              checkedFiles: Object.keys(manifest.files).length, allPackageHashesMatch: true }, null, 2) + "\n");
+          NODE
       - name: Retain report, exact owner PNG, and oracle evidence
         if: always()
         uses: actions/upload-artifact@v7
