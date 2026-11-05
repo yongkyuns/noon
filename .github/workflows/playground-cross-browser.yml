@@ -37,7 +37,7 @@ jobs:
           git show "${GITHUB_SHA}:.github/workflows/playground-cross-browser.yml" > /tmp/noon-trigonometry-webkit-diagnostic/temporary-workflow.yml
           shasum -a 256 /tmp/noon-trigonometry-webkit-diagnostic/event-overlay.patch /tmp/noon-trigonometry-webkit-diagnostic/gallery-runtime-smoke.overlay.mjs > /tmp/noon-trigonometry-webkit-diagnostic/source-hashes.txt
           git status --short > /tmp/noon-trigonometry-webkit-diagnostic/pinned-checkout-status-before.txt
-      - name: Download and verify the exact published browser runtime
+      - name: Download and verify the exact browser runtime package
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -48,6 +48,18 @@ jobs:
           echo "0844458280e2305f829ccc42b1c912b836d5561877faaab6595736940feb1842  $archive" | shasum -a 256 -c -
           python3 - "$archive" <<'PY'
           import hashlib, json, pathlib, sys, zipfile
+          expected = {
+            "pkg/noon_web.d.ts": "46d9f20b2206e2d283d9b4579322cd182cb8c16d57db0f2dbe8ffd6867f29a16",
+            "pkg/noon_web.js": "19484f25b34a654c87a09b268e058f80c0508d91a45c91623dca4dd7b168a210",
+            "pkg/noon_web_bg.wasm": "e6cc6a531e4881b7033bc6c41c4241d9aa2d4e17a7708f01a141824dd1fe2a25",
+            "pkg/noon_web_bg.wasm.d.ts": "df6c3a2d9b3b15953673cf1568d19b9a284ba6789dd0752275a164e7881056ad",
+            "pkg/package.json": "d6638bab30595f734a886d311ab70778ee9b80008b0270ead761a89b4bd98968",
+            "pkg/python-editor-bundle.js": "b838be1042593a85c655398e1f9b00f2e38cd3742b517f01a5691805dc9962f9",
+            "pkg/python-editor-licenses.txt": "c8c22a791214343484985cb731b39a602a17397bc71901df9222a74a0720bb55",
+            "python-worker.js": "0af62914dafeab242f4b7353eb76e5c00ceab91bfc2bfb126fc94bd8cff92a5d",
+            "python/compat-bundle.b1f9cf1e8ed590497fb66102489681a5473ddc4d9f8532c3d9fa5fac29f8b1d8.json": "3f515f9a7eefa47626756846611fbbe33ce22ea5054675278df5b94c7785caf1",
+            "runtime-build-identity.json": "65e2c672bce18eab7e3fa797b75241dff607df21143ba1a8701c7bc7912bf911"
+          }
           archive = pathlib.Path(sys.argv[1])
           root = pathlib.Path("web")
           with zipfile.ZipFile(archive) as source:
@@ -57,23 +69,34 @@ jobs:
               identities = [name for name in names if name.endswith("runtime-build-identity.json")]
               assert len(identities) == 1, identities
               prefix = identities[0][:-len("runtime-build-identity.json")]
-              inventory = {}
+              actual = {}
               for name in names:
                   assert name.startswith(prefix), name
                   relative = name[len(prefix):]
+                  actual[relative] = hashlib.sha256(source.read(name)).hexdigest()
+              assert actual == expected, {"missing": sorted(set(expected) - set(actual)),
+                                          "unexpected": sorted(set(actual) - set(expected)),
+                                          "mismatched": sorted(name for name in set(expected) & set(actual)
+                                                               if expected[name] != actual[name])}
+              for relative in expected:
                   target = root / relative
                   target.parent.mkdir(parents=True, exist_ok=True)
-                  data = source.read(name)
-                  target.write_bytes(data)
-                  inventory[relative] = hashlib.sha256(data).hexdigest()
-              identity = json.loads((root / "runtime-build-identity.json").read_text())
-              assert identity.get("sourceRevision") == "ffb8e9a6ab87c8f8ae6206f05344501d53e2608c", identity
-              assert identity.get("buildId") == "28f03b378f7bca186cf7483909d42b63045c1c945cd30723a438c2a2d829288e", identity
-              pathlib.Path("/tmp/noon-trigonometry-webkit-diagnostic/runtime-inventory.json").write_text(
-                  json.dumps({"archiveSha256": "0844458280e2305f829ccc42b1c912b836d5561877faaab6595736940feb1842",
-                              "identity": identity, "files": inventory}, sort_keys=True, indent=2) + "\n")
+                  target.write_bytes(source.read(prefix + relative))
+          identity = json.loads((root / "runtime-build-identity.json").read_text())
+          assert identity["sourceRevision"] == "ffb8e9a6ab87c8f8ae6206f05344501d53e2608c", identity
+          assert identity["buildId"] == "28f03b378f7bca186cf7483909d42b63045c1c945cd30723a438c2a2d829288e", identity
+          for key, relative in [("worker", "python-worker.js"), ("wasm", "pkg/noon_web_bg.wasm"),
+                                ("glue", "pkg/noon_web.js")]:
+              assert identity["files"][key]["sha256"] == expected[relative], key
+          verifier_hash = hashlib.sha256((root / "runtime-build-verifier.js").read_bytes()).hexdigest()
+          assert identity["files"]["verifier"]["sha256"] == verifier_hash
+          pathlib.Path("/tmp/noon-trigonometry-webkit-diagnostic/runtime-inventory.json").write_text(
+              json.dumps({"artifactId": 13379760636,
+                          "archiveSha256": "0844458280e2305f829ccc42b1c912b836d5561877faaab6595736940feb1842",
+                          "identity": identity, "files": actual,
+                          "ciArtifactManifestPresent": (root / "ci-artifact.json").exists()},
+                         sort_keys=True, indent=2) + "\n")
           PY
-          GITHUB_SHA=ffb8e9a6ab87c8f8ae6206f05344501d53e2608c node .github/ci/wasm-build.mjs verify
           node --input-type=module -e '
             import assert from "node:assert/strict";
             import { readFile } from "node:fs/promises";
@@ -81,6 +104,36 @@ jobs:
             const expected = JSON.parse(await readFile("web/runtime-build-identity.json", "utf8"));
             assert.deepEqual(await createRuntimeBuildIdentity(process.cwd()), expected);
           '
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          names = subprocess.check_output(["git", "ls-files", "-z", "--", "Cargo.toml", "Cargo.lock",
+              "rust-toolchain.toml", ":(glob)crates/**/Cargo.toml", ".cargo",
+              "scripts/build-web-demo.sh", "scripts/build-runtime-identity.mjs",
+              ".github/actions/dev-wasm-build/action.yml", ".github/workflows/playground-cross-browser.yml"], text=False).split(b"\0")
+          names = [name.decode() for name in names if name]
+          required = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates/noon-web/Cargo.toml",
+                      "scripts/build-web-demo.sh", "scripts/build-runtime-identity.mjs",
+                      ".github/workflows/playground-cross-browser.yml"}
+          assert required.issubset(names), required - set(names)
+          inputs = {name: hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest() for name in names}
+          revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert revision == "ffb8e9a6ab87c8f8ae6206f05344501d53e2608c", revision
+          status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], text=True)
+          assert not status, status
+          snapshot = {"sourceRevision": revision, "cargoLockSha256": inputs["Cargo.lock"],
+                      "trackedBuildInputHashes": inputs,
+                      "producer": {"runId": 41946268987, "jobId": 126979129323,
+                                   "jobUrl": "https://github.com/yongkyuns/noon/actions/runs/41946268987/job/126979129323",
+                                   "status": "success", "sourceRevision": revision,
+                                   "buildCommand": "bash scripts/build-web-demo.sh",
+                                   "buildEnvironment": {"CARGO_INCREMENTAL": "0",
+                                     "NOON_WASM_SKIP_OPT": "1", "NOON_RENDERER_SMOKE": "1",
+                                     "wasmPack": "0.15.0", "rustc": "1.98.1"},
+                                   "validatedWasmBytes": 77970554, "publicApiContracts": 436,
+                                   "devStampVerify": "not run in producer job; absent ci-artifact.json is not fabricated"}}
+          pathlib.Path("/tmp/noon-trigonometry-webkit-diagnostic/source-snapshot.before.json").write_text(
+              json.dumps(snapshot, sort_keys=True, indent=2) + "\n")
+          PY
       - name: Install pinned browser dependencies
         timeout-minutes: 10
         run: npm install --no-save --no-package-lock --ignore-scripts playwright@1.62.1 pngjs@7.0.0
@@ -109,13 +162,30 @@ jobs:
           NOON_SHOWCASE_PROFILE_GATE: strict
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: /tmp/noon-trigonometry-webkit-diagnostic/browser
         run: node scripts/playground-gallery-runtime-smoke.mjs
-      - name: Restore only the diagnostic script and verify the pinned source again
+      - name: Restore only the diagnostic script and verify package/source integrity
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           git checkout -- scripts/playground-gallery-runtime-smoke.mjs
-          GITHUB_SHA=ffb8e9a6ab87c8f8ae6206f05344501d53e2608c node .github/ci/wasm-build.mjs verify
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          expected = {
+            "pkg/noon_web.d.ts": "46d9f20b2206e2d283d9b4579322cd182cb8c16d57db0f2dbe8ffd6867f29a16",
+            "pkg/noon_web.js": "19484f25b34a654c87a09b268e058f80c0508d91a45c91623dca4dd7b168a210",
+            "pkg/noon_web_bg.wasm": "e6cc6a531e4881b7033bc6c41c4241d9aa2d4e17a7708f01a141824dd1fe2a25",
+            "pkg/noon_web_bg.wasm.d.ts": "df6c3a2d9b3b15953673cf1568d19b9a284ba6789dd0752275a164e7881056ad",
+            "pkg/package.json": "d6638bab30595f734a886d311ab70778ee9b80008b0270ead761a89b4bd98968",
+            "pkg/python-editor-bundle.js": "b838be1042593a85c655398e1f9b00f2e38cd3742b517f01a5691805dc9962f9",
+            "pkg/python-editor-licenses.txt": "c8c22a791214343484985cb731b39a602a17397bc71901df9222a74a0720bb55",
+            "python-worker.js": "0af62914dafeab242f4b7353eb76e5c00ceab91bfc2bfb126fc94bd8cff92a5d",
+            "python/compat-bundle.b1f9cf1e8ed590497fb66102489681a5473ddc4d9f8532c3d9fa5fac29f8b1d8.json": "3f515f9a7eefa47626756846611fbbe33ce22ea5054675278df5b94c7785caf1",
+            "runtime-build-identity.json": "65e2c672bce18eab7e3fa797b75241dff607df21143ba1a8701c7bc7912bf911"
+          }
+          for name, digest in expected.items():
+              actual = hashlib.sha256((pathlib.Path("web") / name).read_bytes()).hexdigest()
+              assert actual == digest, (name, digest, actual)
+          PY
           node --input-type=module -e '
             import assert from "node:assert/strict";
             import { readFile } from "node:fs/promises";
@@ -123,7 +193,18 @@ jobs:
             const expected = JSON.parse(await readFile("web/runtime-build-identity.json", "utf8"));
             assert.deepEqual(await createRuntimeBuildIdentity(process.cwd()), expected);
           '
-          test -z "$(git status --porcelain --untracked-files=all)"
+          python3 - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          before = json.loads(pathlib.Path("/tmp/noon-trigonometry-webkit-diagnostic/source-snapshot.before.json").read_text())
+          inputs = {name: hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()
+                    for name in before["trackedBuildInputHashes"]}
+          revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], text=True)
+          assert revision == before["sourceRevision"] and not status, (revision, status)
+          assert inputs == before["trackedBuildInputHashes"]
+          pathlib.Path("/tmp/noon-trigonometry-webkit-diagnostic/source-snapshot.after.json").write_text(
+              json.dumps({**before, "worktreeCleanAfter": True}, sort_keys=True, indent=2) + "\n")
+          PY
           git status --short > /tmp/noon-trigonometry-webkit-diagnostic/pinned-checkout-status-after.txt
       - name: Preserve failure status
         if: always()
