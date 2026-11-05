@@ -1,0 +1,752 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import playwright from "playwright";
+import pngjs from "pngjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
+import { packageSizes } from "../.github/ci/wasm-build.mjs";
+import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
+import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
+import { WorkerCpuProfileCapture } from "./worker-cpu-profile.mjs";
+
+const { chromium } = playwright;
+const { PNG } = pngjs;
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
+const siteRoot = path.resolve(process.env.NOON_PRODUCT_SITE_ROOT ?? repoRoot);
+const port = Number(process.env.NOON_PRODUCT_PORT ?? "4205");
+const baseUrl = `http://127.0.0.1:${port}`;
+const artifactDir = path.resolve(
+  process.env.NOON_PRODUCT_ARTIFACT_DIR ?? path.join(repoRoot, "browser-smoke-artifacts/product-e2e"),
+);
+const label = process.env.NOON_PRODUCT_LABEL ?? "candidate";
+assert.ok(["baseline", "candidate"].includes(label), "product measurement role must be baseline or candidate");
+const allowLegacyBaseline = label === "baseline";
+const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
+assert.ok(process.env.NOON_PRODUCT_CPU_PROFILE === undefined || process.env.NOON_PRODUCT_CPU_PROFILE === "1",
+  "worker CPU profiling is opt-in");
+const cpuProfileEnabled = process.env.NOON_PRODUCT_CPU_PROFILE === "1";
+const measurement = productMeasurement(exampleId);
+const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
+const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
+  disposition: profileExpectation?.disposition ?? "looped" };
+const showcaseEntry = JSON.parse(await readFile(path.join(repoRoot,
+  "web/python/examples/noon_showcase_manifest.json"), "utf8")).entries.find(entry => entry.id === exampleId) ?? null;
+if (showcaseEntry !== null) {
+  assert.equal(showcaseEntry.path, measurement.sourcePath, "product source differs from its declared lesson");
+  assert.equal(showcaseEntry.duration, measurement.sourceEndSeconds, "product endpoint differs from its declared lesson");
+}
+
+function authoredPassLifecycleReady({ runInFlight, run, diagnostics, controls }) {
+  if (diagnostics == null) return allowLegacyBaseline && runInFlight === false && run?.exampleId === exampleId &&
+    Number.isFinite(run.sourceRunCompletedAtMs) && controls?.busy === "false" &&
+    Number(controls.elapsedSeconds) >= measurement.sourceEndSeconds - 1e-7;
+  const context = diagnostics?.context;
+  if (runInFlight !== false || run?.exampleId !== exampleId ||
+      context?.exampleId !== exampleId || context.runGeneration !== run.runGeneration ||
+      context.selectionGeneration !== run.selectionGeneration ||
+      !Number.isFinite(run.sourceRunCompletedAtMs) || !Number.isSafeInteger(diagnostics.runRequestId) ||
+      diagnostics.droppedEvents !== 0 || !Array.isArray(diagnostics.events)) return false;
+  const events = diagnostics.events;
+  const attached = events.find(event => event.stage === "attached");
+  const sourceComplete = events.find(event => event.stage === "source-complete");
+  const terminal = events.find(event => event.stage === "terminal-adopted");
+  const final = events.findLast(event => event.stage === "disposition");
+  if (attached?.profile !== completionExpectation.attachedProfile ||
+      events.some(event => event.stage === "profile-change") || !sourceComplete || !terminal ||
+      !Number.isSafeInteger(sourceComplete.sequence) || !Number.isSafeInteger(terminal.sequence) ||
+      !Number.isSafeInteger(final?.sequence) ||
+      final.sequence <= Math.max(sourceComplete.sequence, terminal.sequence)) return false;
+  if (completionExpectation.disposition === "looped") return final.disposition === "looped" &&
+    Number.isSafeInteger(final.loopCount) && final.loopCount >= 1 &&
+    Number.isSafeInteger(final.publication?.session) && final.publication.session >= 0 &&
+    Number.isSafeInteger(final.publication?.sequence) && final.publication.sequence >= 0;
+  const tolerance = 8 * Number.EPSILON * Math.max(1, measurement.sourceEndSeconds);
+  return ["observed-complete", "finite-complete"].includes(completionExpectation.disposition) &&
+    final.disposition === completionExpectation.disposition && Number.isFinite(final.time) &&
+    Math.abs(final.time - measurement.sourceEndSeconds) <= tolerance;
+}
+
+function firstPassEndpointSample(samples, fps, runGeneration) {
+  if (!Array.isArray(samples)) return null;
+  let previousTime = -Infinity;
+  for (const sample of samples) {
+    if (sample.session !== fps.session || sample.exampleId !== exampleId ||
+        sample.runGeneration !== runGeneration || !Number.isFinite(sample.time)) continue;
+    if (sample.time + 0.001 < previousTime) break;
+    previousTime = sample.time;
+    if (sample.ready !== true || sample.needsPresent !== false || sample.bufferedDeltas !== 0 ||
+        !Number.isSafeInteger(sample.frames) || sample.frames < 1 || sample.time < 0 ||
+        sample.time > measurement.sourceEndSeconds || !Number.isFinite(sample.rendererAt)) continue;
+    if (showcaseEntry !== null) {
+      try {
+        assertNaturalFirstPassPublication(showcaseEntry, measurement.sourceEndSeconds, sample.time);
+      } catch {
+        continue;
+      }
+    } else if (sample.time < measurement.windowEndSeconds - 1e-7) continue;
+    return sample;
+  }
+  return null;
+}
+const MIN_PRODUCT_MEASUREMENT_MS = 1_000;
+const startedAtMs = Date.now();
+const pair = process.env.NOON_PRODUCT_PAIR_INDEX === undefined ? null : {
+  index: Number(process.env.NOON_PRODUCT_PAIR_INDEX),
+  position: Number(process.env.NOON_PRODUCT_PAIR_POSITION),
+};
+if (pair !== null) {
+  assert.ok(Number.isSafeInteger(pair.index) && pair.index >= 1 && pair.index <= 3,
+    "product pair index must be between one and three");
+  assert.ok(pair.position === 1 || pair.position === 2, "product pair position must be one or two");
+}
+
+await mkdir(artifactDir, { recursive: true });
+
+let serverOutput = "";
+const server = spawn(
+  "python3",
+  ["-u", "-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", siteRoot],
+  { cwd: siteRoot, stdio: ["ignore", "pipe", "pipe"] },
+);
+server.stdout.on("data", (chunk) => (serverOutput += chunk));
+server.stderr.on("data", (chunk) => (serverOutput += chunk));
+let serverStartError = null;
+const serverClosed = new Promise((resolve) => {
+  server.once("error", (error) => { serverStartError = error; resolve(); });
+  server.once("close", resolve);
+});
+
+async function waitForServer() {
+  let lastError = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (serverStartError !== null || server.exitCode !== null) {
+      throw new Error(`product E2E server failed: ${serverStartError ?? server.exitCode}\n${serverOutput}`);
+    }
+    try {
+      // A pre-existing server on this port must not masquerade as our checkout.
+      if (serverOutput.includes("Serving HTTP on")) {
+        const response = await fetch(`${baseUrl}/web/index.html`);
+        if (response.ok) return;
+        lastError = new Error(`HTTP ${response.status}`);
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`product E2E server did not start: ${lastError}\n${serverOutput}`);
+}
+
+async function waitForApplied(page) {
+  await page.waitForFunction(
+    () => {
+      const patch = document.querySelector("#patch-status");
+      return patch?.dataset.state === "applied" || patch?.dataset.state === "error";
+    },
+    null,
+    { timeout: 30_000 },
+  );
+  const state = await page.evaluate(() => ({
+    patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
+    patchText:
+      document.querySelector("#patch-status")?.value ??
+      document.querySelector("#patch-status")?.textContent ?? "",
+    statusState: document.querySelector("#status")?.dataset.state ?? null,
+    statusText: document.querySelector("#status-text")?.textContent ?? "",
+    backend: document.querySelector("#status")?.dataset.rendererBackend ?? "",
+    executionMode: document.querySelector("#status")?.dataset.executionMode ?? "",
+  }));
+  assert.equal(
+    state.patchState,
+    "applied",
+    `playground run failed: ${state.patchText} / ${state.statusText}`,
+  );
+  return state;
+}
+
+const runEvidence = [];
+
+async function runAndMeasure(page, { captureFrames = false, cpuProfiler = null } = {}) {
+  const prior = await page.evaluate(() => ({
+    runGeneration: window.__noonExampleGallery?.runPhaseMetrics?.runGeneration ?? 0,
+    rendererSession: window.__noonProductRenderProbe?.latest?.session ?? null,
+    rendererTime: window.__noonProductRenderProbe?.latest?.time ?? null,
+    metricReply: window.__noonProductRenderProbe?.latest?.metricReply ?? 0,
+  }));
+  await page.evaluate(capture => {
+    const probe = window.__noonProductRenderProbe;
+    probe.captureStages = capture && probe.profileStages;
+    probe.presentationSamples = [];
+    probe.stageKeys.clear();
+  }, captureFrames);
+  const started = performance.now();
+  let sampling = captureFrames;
+  const frameSamples = [];
+  const evidence = { startedAtMs: Date.now(), captureFrames, frameSamples };
+  runEvidence.push(evidence);
+  let samplerError = null;
+  const sampleFrames = (async () => {
+    while (sampling) {
+      const sample = await page.evaluate(async () => {
+        const gallery = window.__noonExampleGallery;
+        const probe = window.__noonProductRenderProbe;
+        // Sample only the renderer. Aggregate metrics also query the source
+        // owner and would add work to the callback lane being measured.
+        probe.requestMetrics();
+        return {
+          phase: "source",
+          ...probe.latest,
+          now: performance.now(),
+          runInFlight: gallery?.runInFlight ?? false,
+          exampleId: gallery?.runPhaseMetrics?.exampleId ?? null,
+          runGeneration: gallery?.runPhaseMetrics?.runGeneration ?? null,
+          playbackControls: document.querySelector("#status")?.dataset.playbackControls ?? "",
+        };
+      });
+      frameSamples.push(sample);
+      if (cpuProfiler !== null && cpuProfiler.stopped !== true && sample.exampleId === exampleId &&
+          sample.runGeneration > prior.runGeneration && sample.metricReply > prior.metricReply &&
+          (sample.session !== prior.rendererSession || sample.time < prior.rendererTime) &&
+          sample.runInFlight === true) {
+        if (cpuProfiler.started !== true && sample.time >= measurement.windowStartSeconds - 0.15) {
+          if (sample.time > measurement.windowStartSeconds + 0.15) {
+            throw new Error("worker profile missed the beginning of the authored measurement window");
+          }
+          await cpuProfiler.start(sample);
+          cpuProfiler.started = true;
+        } else if (cpuProfiler.started === true && sample.time >= measurement.windowEndSeconds + 0.15) {
+          if (sample.time > measurement.windowEndSeconds + 0.35) {
+            throw new Error("worker profile missed the end of the authored measurement window");
+          }
+          cpuProfiler.result = await cpuProfiler.stop(sample, artifactDir);
+          cpuProfiler.started = false;
+          cpuProfiler.stopped = true;
+        }
+      }
+      await page.waitForTimeout(50);
+    }
+  })().catch(error => {
+    samplerError = error;
+    sampling = false;
+  });
+  let runFailed = false;
+  try {
+    await page.locator("#replace-scene").click();
+    // Run may replace its canvas during startup; the preview frame is stable.
+    await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
+    const state = await waitForApplied(page);
+    // Elapsed time wraps at the configured loop, so it is not a durable
+    // completion signal. Wait for the same run's source cleanup and final
+    // profile disposition, including one actual loop before accepting a
+    // replayable pass.
+    await page.waitForFunction(({ exampleId, expectedProfile, expectedDisposition, durationSeconds,
+      allowLegacyBaseline }) => {
+      const gallery = window.__noonExampleGallery;
+      const run = gallery?.runPhaseMetrics;
+      const diagnostics = gallery?.executionDiagnostics;
+      const controls = document.querySelector(".playback-controls")?.dataset;
+      if (gallery?.runInFlight !== false || run?.exampleId !== exampleId ||
+          !Number.isFinite(run.sourceRunCompletedAtMs)) return false;
+      if (diagnostics == null) return allowLegacyBaseline && controls?.busy === "false" &&
+        Number(controls.elapsedSeconds) >= durationSeconds - 1e-7;
+      const events = diagnostics.events ?? [];
+      const attached = events.find(event => event.stage === "attached");
+      const sourceComplete = events.find(event => event.stage === "source-complete");
+      const terminal = events.find(event => event.stage === "terminal-adopted");
+      const final = events.findLast(event => event.stage === "disposition");
+      const ordered = Number.isSafeInteger(sourceComplete?.sequence) &&
+        Number.isSafeInteger(terminal?.sequence) && Number.isSafeInteger(final?.sequence) &&
+        final.sequence > Math.max(sourceComplete.sequence, terminal.sequence);
+      const dispositionReady = expectedDisposition === "looped"
+        ? final?.disposition === "looped" && Number.isSafeInteger(final.loopCount) && final.loopCount >= 1
+        : final?.disposition === expectedDisposition && Number.isFinite(final.time) &&
+          Math.abs(final.time - durationSeconds) <= 8 * Number.EPSILON * Math.max(1, durationSeconds);
+      return diagnostics.droppedEvents === 0 && attached?.profile === expectedProfile && ordered &&
+        !events.some(event => event.stage === "profile-change") && dispositionReady;
+    }, { exampleId, expectedProfile: completionExpectation.attachedProfile,
+      expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds,
+      allowLegacyBaseline },
+    { timeout: 30_000 });
+    const lifecycle = await page.evaluate(() => {
+      const gallery = window.__noonExampleGallery;
+      return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
+        diagnostics: gallery.executionDiagnostics,
+        controls: document.querySelector(".playback-controls")?.dataset ?? null };
+    });
+    assert.ok(authoredPassLifecycleReady(lifecycle),
+      `authored source did not complete its expected lifecycle: ${JSON.stringify({
+      disposition: lifecycle.diagnostics?.events?.findLast(event => event.stage === "disposition"),
+      context: lifecycle.diagnostics?.context, run: lifecycle.run, controls: lifecycle.controls,
+    })}`);
+    const disposition = lifecycle.diagnostics?.events.findLast(event => event.stage === "disposition") ?? null;
+    evidence.completion = { runGeneration: lifecycle.run.runGeneration,
+      runRequestId: lifecycle.diagnostics?.runRequestId ?? null, attachedProfile: disposition?.profile ?? null,
+      disposition: disposition?.disposition ?? "legacy-natural-endpoint",
+      loopCount: disposition?.loopCount ?? null,
+      sourceRunCompletedAtMs: lifecycle.run.sourceRunCompletedAtMs };
+    const milliseconds = performance.now() - started;
+    if (captureFrames) {
+      // This current observation is separate from the natural terminal sample
+      // retained in this run's 50 ms renderer observations.
+      const endpoint = { phase: "endpoint", ...await sampleRendererObservation(page) };
+      frameSamples.push(endpoint);
+    }
+    const presentationSamples = await page.evaluate(() => window.__noonProductRenderProbe.presentationSamples);
+    evidence.presentationSamples = presentationSamples;
+    return { milliseconds, state, frameSamples, presentationSamples,
+      completion: evidence.completion, runGeneration: lifecycle.run.runGeneration };
+  } catch (error) {
+    runFailed = true;
+    throw error;
+  } finally {
+    sampling = false;
+    try {
+      await sampleFrames;
+    } finally {
+      evidence.finishedAtMs = Date.now();
+    }
+    if (!runFailed && samplerError !== null) throw samplerError;
+    if (!runFailed && cpuProfiler !== null && cpuProfiler.stopped !== true) {
+      throw new Error("worker CPU profile did not cover the authored first-pass window");
+    }
+  }
+}
+
+async function sampleRendererObservation(page) {
+  const previousReplies = await page.evaluate(() => {
+    const probe = window.__noonProductRenderProbe;
+    const previous = probe.metricsReplies;
+    probe.requestMetrics();
+    return previous;
+  });
+  await page.waitForFunction(previous => window.__noonProductRenderProbe.metricsReplies > previous,
+    previousReplies, { timeout: 10_000 });
+  return page.evaluate(() => ({ ...window.__noonProductRenderProbe.latest, now: performance.now(),
+    exampleId: window.__noonExampleGallery?.runPhaseMetrics?.exampleId ?? null,
+    runGeneration: window.__noonExampleGallery?.runPhaseMetrics?.runGeneration ?? null }));
+}
+
+function changedPixelStats(buffer) {
+  const png = PNG.sync.read(buffer);
+  const background = [png.data[0], png.data[1], png.data[2], png.data[3]];
+  let changed = 0;
+  for (let offset = 0; offset < png.data.length; offset += 4) {
+    const distance =
+      Math.abs(png.data[offset] - background[0]) +
+      Math.abs(png.data[offset + 1] - background[1]) +
+      Math.abs(png.data[offset + 2] - background[2]) +
+      Math.abs(png.data[offset + 3] - background[3]);
+    if (distance >= 32) changed += 1;
+  }
+  return { width: png.width, height: png.height, changedPixels: changed };
+}
+
+async function captureBackingBitmap(canvas, filename) {
+  const encoded = await canvas.evaluate(element => {
+    const copy = document.createElement("canvas");
+    copy.width = element.width;
+    copy.height = element.height;
+    copy.getContext("2d").drawImage(element, 0, 0);
+    return copy.toDataURL("image/png");
+  });
+  const buffer = Buffer.from(encoded.split(",")[1], "base64");
+  const png = PNG.sync.read(buffer);
+  const stats = changedPixelStats(buffer);
+  assert.ok(stats.changedPixels > 100, "capture backing bitmap is effectively blank");
+  await writeFile(path.join(artifactDir, filename), buffer);
+  return { png, evidence: { ...stats, screenshot: filename,
+    rgbaSha256: createHash("sha256").update(png.data).digest("hex") } };
+}
+
+async function waitForRenderedEndpoint(page, seconds, { explicitSeek = false } = {}) {
+  const deadline = performance.now() + 10_000;
+  let observedReplies = await page.evaluate(
+    () => window.__noonProductRenderProbe?.metricsReplies ?? 0,
+  );
+  while (performance.now() < deadline) {
+    await page.evaluate(() => window.__noonProductRenderProbe.requestMetrics());
+    await page.waitForTimeout(50);
+    const sample = await page.evaluate(() => {
+      const probe = window.__noonProductRenderProbe;
+      return {
+        metricsReplies: Number(probe?.metricsReplies ?? 0),
+        latest: probe?.latest ?? null,
+        logicalTime: Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds),
+        busy: document.querySelector(".playback-controls")?.dataset.busy,
+        runInFlight: window.__noonExampleGallery?.runInFlight,
+      };
+    });
+    const rendered = sample.latest;
+    if (
+      sample.metricsReplies > observedReplies &&
+      rendered?.ready === true &&
+      Number.isFinite(rendered?.frames) &&
+      rendered.frames > 0 &&
+      Number.isFinite(rendered?.time) &&
+      rendered.needsPresent === false &&
+      rendered.bufferedDeltas === 0 &&
+      sample.busy === "false" && sample.runInFlight === false &&
+      Math.abs(sample.logicalTime - seconds) <= 1e-7
+    ) {
+      // A natural final still may retain its last changing publication. After
+      // an explicit seek, wait for that request's actual renderer endpoint;
+      // the UI acknowledgement can precede its retained publication.
+      let publicationMatches = false;
+      try {
+        if (!explicitSeek && showcaseEntry !== null) assertNaturalFirstPassPublication(showcaseEntry, sample.logicalTime, rendered.time);
+        else assert.ok(Math.abs(rendered.time - seconds) <= 0.001);
+        publicationMatches = true;
+      } catch {}
+      if (publicationMatches) return { ...rendered, logicalTime: sample.logicalTime };
+    }
+    observedReplies = sample.metricsReplies;
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`render worker did not present authored endpoint ${seconds.toFixed(3)} s`);
+}
+
+async function synchronizeFinalFrame(page, seconds) {
+  const capability = await page.locator("#status").getAttribute("data-playback-controls");
+  assert.ok(
+    capability === "available" || capability === "unavailable",
+    `product E2E did not publish playback capability (${capability})`,
+  );
+  const toggle = page.locator(".playback-controls .playback-toggle");
+  const hasControls = (await toggle.count()) > 0;
+  if (capability === "available") {
+    assert.ok(hasControls, "replayable execution must expose playback controls");
+    await toggle.waitFor({ state: "visible", timeout: 10_000 });
+    assert.equal(await toggle.isEnabled(), true, "completed replay controls must be enabled");
+    if ((await toggle.getAttribute("aria-label")) === "Pause animation") {
+      await toggle.click();
+      await page.waitForFunction(
+        () => document.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation",
+      );
+    }
+    await page.locator(".playback-scrubber").evaluate((input, target) => {
+      input.value = String(target);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, seconds);
+  } else if (hasControls) {
+    assert.equal(await toggle.isDisabled(), true, "nonreplayable execution must disable playback");
+    assert.equal(await page.locator(".playback-scrubber").isDisabled(), true,
+      "nonreplayable execution must disable seeking");
+  }
+  const rendered = await waitForRenderedEndpoint(page, seconds, { explicitSeek: capability === "available" });
+  assert.ok(rendered.frames > 0, "authored endpoint was not presented by the render worker");
+  return { capability, rendered };
+}
+
+let browser = null;
+let page = null;
+const pageErrors = [];
+const consoleErrors = [];
+try {
+  await waitForServer();
+  browser = await chromium.launch({
+    channel: "chromium",
+    headless: true,
+    args: [
+      "--disable-features=WebGPU",
+      "--enable-unsafe-swiftshader",
+      "--ignore-gpu-blocklist",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--disable-gpu-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    deviceScaleFactor: 1,
+  });
+  page = await context.newPage();
+  await page.addInitScript(profileStages => {
+    const NativeWorker = window.Worker;
+    // The product client rejects this ID before issuing it (counter exhausted).
+    // Consume only this test-owned diagnostic reply before its normal listener.
+    const diagnosticRequestId = Number.MAX_SAFE_INTEGER;
+    const probe = { worker: null, pending: false, latest: null, metricsReplies: 0,
+      profileStages, captureStages: false, presentationSamples: [], stageKeys: new Set(),
+      requestMetrics() {
+        if (probe.worker === null || probe.pending) return;
+        probe.pending = true;
+        probe.worker.postMessage({ channel: "noon.render", protocolVersion: 1,
+          type: "metrics", requestId: diagnosticRequestId,
+          profilePublicationStages: probe.captureStages });
+      },
+      observation: (metrics) => ({
+        frames: metrics?.presentedFrames,
+        time: metrics?.time,
+        session: metrics?.presentedSession,
+        clockOriginMs: metrics?.performanceTimeOriginMs,
+        rendererAt: metrics?.sampledAtMs,
+        ready: metrics?.ready === true,
+        needsPresent: metrics?.needsPresent === true,
+        bufferedDeltas: metrics?.bufferedDeltas,
+        metricAt: performance.now(),
+        metricReply: probe.metricsReplies,
+        counters: Object.fromEntries(["drawCalls", "instancesDrawn", "bytesUploaded", "geometryCacheMisses",
+          "objectCount", "rendererRebuilds", "modeSwitches"].map(key => [key, metrics?.[key]])),
+      }),
+    };
+    window.__noonProductRenderProbe = probe;
+
+    // Test-only read-only metrics requests use the existing render control lane.
+    // Ordinary client replies and all semantic messages pass through untouched.
+    class ObservedWorker extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        if (!String(url).includes("execution-render-worker.js")) return;
+        probe.worker = this;
+        probe.pending = false;
+        this.addEventListener("message", (event) => {
+          const message = event.data;
+          if (message?.channel !== "noon.render" || message.requestId !== diagnosticRequestId) return;
+          event.stopImmediatePropagation();
+          if (probe.worker !== this) return;
+          probe.pending = false;
+          const presentedFrames = Number(message?.metrics?.presentedFrames);
+          if (message?.type !== "metrics" || !Number.isFinite(presentedFrames)) {
+            throw new Error(`product renderer metrics failed: ${message.message ?? message.type}`);
+          }
+          probe.metricsReplies += 1;
+          probe.latest = probe.observation(message.metrics);
+          if (probe.captureStages) {
+            for (const sample of message.metrics.publicationStageSamples ?? []) {
+              const clockOriginMs = message.metrics.performanceTimeOriginMs;
+              const key = `${clockOriginMs}:${sample.session}:${sample.sequence}`;
+              if (probe.stageKeys.has(key)) continue;
+              if (probe.stageKeys.size >= 2_000) throw new Error("product publication capture exceeded its bound");
+              probe.stageKeys.add(key);
+              probe.presentationSamples.push({ ...sample, clockOriginMs });
+            }
+          }
+        });
+      }
+    }
+    Object.defineProperty(window, "Worker", {
+      configurable: true,
+      writable: true,
+      value: ObservedWorker,
+    });
+  }, true);
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+
+  const navigationStarted = performance.now();
+  await page.goto(`${baseUrl}/web/index.html?example=${encodeURIComponent(exampleId)}`, {
+    waitUntil: "load",
+  });
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined, null, {
+    timeout: 20_000,
+  });
+  const shellReadyMs = performance.now() - navigationStarted;
+  const shell = await page.evaluate(() => ({
+    selected: window.__noonExampleGallery?.selectedExampleId ?? null,
+    runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
+    executionMode: document.querySelector("#status")?.dataset.executionMode ?? null,
+    controls: document.querySelector(".playback-controls") !== null,
+    statusText: document.querySelector("#status-text")?.textContent ?? "",
+  }));
+  assert.equal(shell.selected, exampleId, "product E2E loaded the wrong example");
+  assert.equal(shell.executionMode, null, "page shell entered an execution mode before Run");
+  assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
+
+  // All source arms execute the same candidate-owned fixture bytes. In
+  // particular, an older anchor's gallery cannot silently substitute its source.
+  let authoredSource = await readFile(path.join(repoRoot, "web", measurement.sourcePath), "utf8");
+  if (exampleId === "parity-square-and-circle") {
+    // Preserve the established square/circle duration and endpoint hold.
+    const target = "self.play(Create(circle), Create(square))";
+    assert.equal(authoredSource.split(target).length, 2, "product first-pass fixture was not found exactly once");
+    authoredSource = authoredSource.replace(target,
+      `self.play(Create(circle), Create(square), run_time=${measurement.windowEndSeconds})\n        self.wait(${measurement.endpointHoldSeconds})`);
+  }
+  await page.locator("#python-scene-source").evaluate((editor, source) => { editor.value = source; }, authoredSource);
+  const source = { path: measurement.sourcePath,
+    sha256: createHash("sha256").update(authoredSource).digest("hex") };
+
+  const cold = await runAndMeasure(page);
+  assert.equal(cold.state.backend, "WebGL2", `expected WebGL2 product path, got ${cold.state.backend}`);
+  const cpuProfiler = cpuProfileEnabled
+    ? new WorkerCpuProfileCapture(await browser.newBrowserCDPSession()) : null;
+  await cpuProfiler?.attach();
+  // Complete a cold pass before scoring the declared warm authored window.
+  const warm = await runAndMeasure(page, { captureFrames: true, cpuProfiler });
+  warm.workerCpuProfile = cpuProfiler?.result ?? null;
+  const fps = sampleRendererFps(warm.frameSamples, measurement.windowEndSeconds, {
+    minMeasurementMs: MIN_PRODUCT_MEASUREMENT_MS,
+    warmupSeconds: measurement.windowStartSeconds,
+    maxEndDelaySeconds: measurement.maxEndDelaySeconds,
+  });
+  const firstPassEndpoint = firstPassEndpointSample(warm.frameSamples, fps, warm.runGeneration);
+  assert.ok(firstPassEndpoint !== null,
+    `no natural first-pass terminal hold was sampled in the scored renderer epoch: ${JSON.stringify({
+      runGeneration: warm.runGeneration, session: fps.session, samples: warm.frameSamples.slice(-8),
+    })}`);
+  warm.firstPassEndpoint = firstPassEndpoint;
+  const presentationGaps = measurement.gapClock === null ? null
+    : samplePresentationGaps(warm.presentationSamples, fps);
+
+  const marker = `# product gate ${label}`;
+  await page.evaluate((text) => {
+    const editor = document.querySelector("#python-scene-source");
+    if (!(editor instanceof HTMLTextAreaElement)) throw new Error("scene editor is unavailable");
+    editor.value = `${editor.value.trimEnd()}\n\n${text}\n`;
+  }, marker);
+  const edited = await runAndMeasure(page);
+
+  const endpoint = await synchronizeFinalFrame(page, measurement.sourceEndSeconds);
+  const screenshotName = "frame-final.png";
+  const screenshotPath = path.join(artifactDir, screenshotName);
+  const canvas = page.locator("#scene");
+  await canvas.scrollIntoViewIfNeeded();
+  const backingBefore = await captureBackingBitmap(canvas, "frame-backing-before.png");
+  // Different control layouts can place the same bitmap half a CSS pixel
+  // apart. Align its layout origin, not a composited transform of an already
+  // resampled image. Keep the existing absolute positioning and all dimensions.
+  const captureAlignment = await canvas.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    if (style.position !== "absolute" || style.left !== "0px" || style.top !== "0px") {
+      throw new Error("product canvas has unexpected layout positioning");
+    }
+    const dpr = devicePixelRatio;
+    const offset = { x: Math.round(bounds.x * dpr) / dpr - bounds.x,
+      y: Math.round(bounds.y * dpr) / dpr - bounds.y };
+    const before = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+    const backing = { width: element.width, height: element.height };
+    element.style.left = `${offset.x}px`;
+    element.style.top = `${offset.y}px`;
+    return { before, backing, offset, dpr };
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const bounds = await canvas.boundingBox();
+  assert.ok(bounds?.width > 0 && bounds?.height > 0, "product canvas must have positive bounds");
+  assert.equal(bounds.width, captureAlignment.before.width, "capture alignment resized the canvas width");
+  assert.equal(bounds.height, captureAlignment.before.height, "capture alignment resized the canvas height");
+  assert.deepEqual(await canvas.evaluate(element => ({ width: element.width, height: element.height })),
+    captureAlignment.backing, "capture alignment resized the backing bitmap");
+  for (const axis of ["x", "y"]) assert.ok(Math.abs(bounds[axis] * captureAlignment.dpr -
+    Math.round(bounds[axis] * captureAlignment.dpr)) < 1e-6, "capture origin is not pixel aligned");
+  const alignedPublication = await waitForRenderedEndpoint(page, measurement.sourceEndSeconds,
+    { explicitSeek: endpoint.capability === "available" });
+  const publicationDetail = JSON.stringify({ before: endpoint.rendered, after: alignedPublication });
+  for (const key of ["time", "session", "clockOriginMs"]) {
+    assert.equal(alignedPublication[key], endpoint.rendered[key],
+      `capture alignment changed the presented frame: ${publicationDetail}`);
+  }
+  assert.ok(Number.isSafeInteger(alignedPublication.frames) &&
+    alignedPublication.frames >= endpoint.rendered.frames, "capture presentation counter moved backwards");
+  const backingAfter = await captureBackingBitmap(canvas, "frame-backing-after.png");
+  for (const bitmap of [backingBefore, backingAfter]) {
+    assert.equal(bitmap.png.width, captureAlignment.backing.width, "capture backing width changed");
+    assert.equal(bitmap.png.height, captureAlignment.backing.height, "capture backing height changed");
+  }
+  // Layout/input receipts can present the same paused frame again. Compare
+  // unscaled rendered pixels directly instead of requiring an unchanged count.
+  assert.ok(backingAfter.png.data.equals(backingBefore.png.data),
+    `capture alignment changed backing pixels: ${publicationDetail}`);
+  // Element screenshots round both edges outwards, so moving identical content
+  // to a fractional page offset can add a row. Compare the same pixel-sized
+  // region in both runs; genuine canvas size changes still fail comparison.
+  const captureBounds = Object.fromEntries(Object.entries(bounds).map(([key, value]) => [key, Math.round(value)]));
+  const screenshot = await page.screenshot({ path: screenshotPath, clip: captureBounds });
+  const visual = changedPixelStats(screenshot);
+  assert.ok(visual.changedPixels > 100, `product frame is effectively blank (${visual.changedPixels} changed pixels)`);
+
+  assert.deepEqual(pageErrors, [], `product E2E page errors:\n${pageErrors.join("\n")}`);
+  assert.deepEqual(consoleErrors, [], `product E2E console errors:\n${consoleErrors.join("\n")}`);
+
+  const report = {
+    schemaVersion: 2,
+    label,
+    exampleId,
+    siteRoot,
+    pair,
+    startedAtMs,
+    finishedAtMs: Date.now(),
+    runtimeIdentity: JSON.parse(await readFile(path.join(siteRoot, "web/runtime-build-identity.json"), "utf8")),
+    measurement,
+    source,
+    shellReadyMs,
+    shell,
+    coldRunMs: cold.milliseconds,
+    coldPassLifecycle: cold.completion,
+    warmRunMs: warm.milliseconds,
+    warmPassLifecycle: warm.completion,
+    warmFirstPassEndpoint: warm.firstPassEndpoint,
+    editRunMs: edited.milliseconds,
+    editPassLifecycle: edited.completion,
+    fps,
+    // Preserve the actual observations so a short-window regression can be
+    // diagnosed without reconstructing telemetry from an aggregate FPS value.
+    fpsSamples: warm.frameSamples,
+    presentationSamples: warm.presentationSamples,
+    presentationGaps,
+    workerCpuProfile: warm.workerCpuProfile,
+    cpuProfileDiagnostic: cpuProfiler === null ? null : {
+      profiler: "CDP Profiler on dedicated authoring/render worker targets",
+      scope: "diagnostic-only; CPU sampling perturbs scheduling and does not measure GPU execution or FPS",
+      runnerSha256: createHash("sha256").update(await readFile(fileURLToPath(import.meta.url))).digest("hex"),
+      helperSha256: createHash("sha256").update(await readFile(new URL("./worker-cpu-profile.mjs", import.meta.url))).digest("hex"),
+      windowSeconds: [measurement.windowStartSeconds, measurement.windowEndSeconds],
+      packageIdentity: JSON.parse(await readFile(path.join(siteRoot, "web/runtime-build-identity.json"), "utf8")),
+    },
+    rendererCosts: measurement.gapClock === null ? null
+      : sampleRendererCosts(warm.presentationSamples, warm.frameSamples, fps),
+    packageSizes: await packageSizes(siteRoot),
+    visual,
+    fixedFrame: {
+      authoredEndpointSeconds: measurement.sourceEndSeconds,
+      presentation: endpoint,
+    },
+    screenshot: screenshotName,
+    captureBounds,
+    captureAlignment: { ...captureAlignment, alignedBounds: bounds, publication: alignedPublication,
+      backingBefore: backingBefore.evidence, backingAfter: backingAfter.evidence },
+    runtime: {
+      runnerPlatform: process.platform,
+      backend: cold.state.backend,
+      executionMode: cold.state.executionMode,
+      browserVersion: browser.version(),
+      viewport: { width: 1280, height: 800 },
+      deviceScaleFactor: 1,
+      gpuMode: "software-WebGL",
+    },
+    pageErrors,
+    consoleErrors,
+  };
+  await writeFile(path.join(artifactDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  console.log(
+    `${label}: shell ${shellReadyMs.toFixed(0)} ms, cold ${cold.milliseconds.toFixed(0)} ms, ` +
+      `warm ${warm.milliseconds.toFixed(0)} ms, edit ${edited.milliseconds.toFixed(0)} ms, ` +
+      `${fps.effectiveFps.toFixed(1)} FPS, ${visual.changedPixels} visible pixels`,
+  );
+  if (presentationGaps !== null) {
+    console.log(`${exampleId} ${measurement.windowStartSeconds}–${measurement.windowEndSeconds} s: ` +
+      `submission gaps p95 ${presentationGaps.intervalMs.p95.toFixed(1)} ms, ` +
+      `max ${presentationGaps.intervalMs.max.toFixed(1)} ms, ` +
+      `${presentationGaps.cadence.longFrames}/${presentationGaps.intervalCount} intervals ≥25 ms`);
+  }
+} catch (error) {
+  await writeFile(path.join(artifactDir, "failure.json"), `${JSON.stringify({
+    label, exampleId, siteRoot, pair, startedAtMs, finishedAtMs: Date.now(),
+    error: error?.stack ?? String(error), runEvidence, pageErrors, consoleErrors, serverOutput,
+    attemptedPage: await captureAttemptedPage(page),
+  }, null, 2)}\n`, "utf8");
+  throw error;
+} finally {
+  await browser?.close();
+  server.kill("SIGTERM");
+  await serverClosed;
+}
