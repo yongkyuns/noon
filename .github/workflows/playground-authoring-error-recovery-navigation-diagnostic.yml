@@ -1,0 +1,180 @@
+name: Playground authoring navigation diagnostic
+
+on:
+  push:
+    branches:
+      - codex/2422-authoring-navigation-diagnostic
+    paths:
+      - ".github/workflows/playground-authoring-error-recovery-navigation-diagnostic.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: authoring-navigation-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  navigation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      RUN_ID: "41981888283"
+      CANDIDATE_ARTIFACT_ID: "13394652896"
+      CANDIDATE_ARTIFACT_NAME: product-candidate-1
+      CANDIDATE_ARCHIVE_SHA256: 524d17616961c8b8fa9ade48432d51e1e987bb37c1f812dc1eb09ffca0d9da06
+      CANDIDATE_ARCHIVE_BYTES: "24438283"
+      CANDIDATE_SOURCE: be814def71f9d34d9d28d106631544ca5a8eb3f8
+      CANDIDATE_TREE: 0ac6518799955a9a39b39820f0a2857f62144385
+      NAVIGATION_SCRIPT_SHA256: 5b799c316f56b36d6916e7a59a234717f2cb84890df1015f4aa069385dc5aee7
+    steps:
+      - name: Checkout diagnostic workflow
+        uses: actions/checkout@v7
+        with:
+          path: diagnostic
+
+      - name: Checkout exact product source
+        uses: actions/checkout@v7
+        with:
+          ref: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          fetch-depth: 2
+          path: candidate
+
+      - name: Install pinned Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.1
+
+      - name: Verify revisions and stage the isolated navigation runner
+        run: |
+          test "$(git -C diagnostic rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SOURCE"
+          test "$(git -C candidate rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          git -C candidate status --porcelain --untracked-files=all -- . ':!web' > "$RUNNER_TEMP/candidate-source-pre.status"
+          test ! -e candidate/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs
+          cp diagnostic/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs \
+            candidate/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs
+          echo "$NAVIGATION_SCRIPT_SHA256  diagnostic/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs" | sha256sum -c -
+          echo "$NAVIGATION_SCRIPT_SHA256  candidate/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs" | sha256sum -c -
+          node --check candidate/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs
+
+      - name: Install pinned browser dependencies
+        working-directory: candidate
+        run: |
+          npm install --no-save --no-package-lock --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+
+      - name: Verify artifact metadata and download exact candidate package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            -o "$RUNNER_TEMP/artifacts.json"
+          node --input-type=module - <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFile } from 'node:fs/promises';
+          const data = JSON.parse(await readFile(`${process.env.RUNNER_TEMP}/artifacts.json`, 'utf8'));
+          const artifact = data.artifacts.find(item => item.id === Number(process.env.CANDIDATE_ARTIFACT_ID));
+          assert.ok(artifact && !artifact.expired, 'candidate package artifact is missing or expired');
+          assert.equal(artifact.name, process.env.CANDIDATE_ARTIFACT_NAME);
+          assert.equal(artifact.size_in_bytes, Number(process.env.CANDIDATE_ARCHIVE_BYTES));
+          assert.equal(artifact.workflow_run?.id, Number(process.env.RUN_ID));
+          NODE
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$CANDIDATE_ARTIFACT_ID/zip" \
+            -o "$RUNNER_TEMP/candidate.zip"
+          echo "$CANDIDATE_ARCHIVE_SHA256  $RUNNER_TEMP/candidate.zip" | sha256sum -c -
+          test "$(wc -c < "$RUNNER_TEMP/candidate.zip" | tr -d ' ')" = "$CANDIDATE_ARCHIVE_BYTES"
+
+      - name: Safely extract the pinned candidate package
+        run: |
+          python3 - <<'PY'
+          import os, shutil, stat, zipfile
+          from pathlib import Path, PurePosixPath
+          archive = Path(os.environ["RUNNER_TEMP"]) / "candidate.zip"
+          extracted = Path(os.environ["RUNNER_TEMP"]) / "candidate-archive"
+          extracted.mkdir()
+          seen = set()
+          with zipfile.ZipFile(archive) as bundle:
+              for member in bundle.infolist():
+                  rel = PurePosixPath(member.filename)
+                  if rel.is_absolute() or ".." in rel.parts or "\\" in member.filename:
+                      raise SystemExit(f"unsafe package path: {member.filename!r}")
+                  mode = member.external_attr >> 16
+                  if stat.S_ISLNK(mode) or member.filename in seen:
+                      raise SystemExit(f"symlink/duplicate package entry: {member.filename!r}")
+                  seen.add(member.filename)
+                  destination = extracted.joinpath(*rel.parts)
+                  if member.is_dir():
+                      destination.mkdir(parents=True, exist_ok=True)
+                  else:
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      destination.write_bytes(bundle.read(member))
+          source = extracted / "web" if (extracted / "web/ci-artifact.json").is_file() else extracted
+          if not (source / "ci-artifact.json").is_file():
+              raise SystemExit("candidate package manifest is missing")
+          shutil.copytree(source, Path(os.environ["GITHUB_WORKSPACE"]) / "candidate/web", dirs_exist_ok=True)
+          PY
+
+      - name: Verify candidate manifest, runtime identity, and source ledger
+        run: |
+          values="$(node -e 'const p=require(process.argv[1]).productSources; process.stdout.write([p.baseline,p.candidate,p.head,p.eventBase].join("\t"))' "$PWD/candidate/web/ci-artifact.json")"
+          IFS=$'\t' read -r base candidate head event_base <<< "$values"
+          GITHUB_SHA="$(node -e 'process.stdout.write(require(process.argv[1]).source)' "$PWD/candidate/web/ci-artifact.json")" \
+          NOON_PRODUCT_BASE_SHA="$base" NOON_PRODUCT_CANDIDATE_SHA="$candidate" \
+          NOON_PRODUCT_HEAD_SHA="$head" NOON_PRODUCT_EVENT_BASE_SHA="$event_base" \
+          NOON_WASM_PROFILE=release NOON_WASM_SKIP_OPT=0 NOON_RENDERER_SMOKE=0 \
+            node candidate/.github/ci/product-artifact.mjs verify candidate candidate
+          find candidate/web -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$RUNNER_TEMP/candidate-package-pre.sha256"
+          sha256sum candidate/web/python/examples/showcase_first_scene.py > "$RUNNER_TEMP/first-scene-source-pre.sha256"
+
+      - name: Run same-page navigation and recovery qualification
+        working-directory: candidate
+        env:
+          NOON_PLAYGROUND_AUTHORING_RECOVERY_PROFILE: default
+          NOON_PLAYGROUND_AUTHORING_RECOVERY_PORT: "4185"
+          NOON_PLAYGROUND_AUTHORING_RECOVERY_ARTIFACTS: ${{ runner.temp }}/navigation-artifacts
+        run: node scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs
+
+      - name: Reverify package and exact source after navigation
+        if: always()
+        run: |
+          echo "$NAVIGATION_SCRIPT_SHA256  candidate/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs" | sha256sum -c -
+          rm -f candidate/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs
+          values="$(node -e 'const p=require(process.argv[1]).productSources; process.stdout.write([p.baseline,p.candidate,p.head,p.eventBase].join("\t"))' "$PWD/candidate/web/ci-artifact.json")"
+          IFS=$'\t' read -r base candidate head event_base <<< "$values"
+          GITHUB_SHA="$(node -e 'process.stdout.write(require(process.argv[1]).source)' "$PWD/candidate/web/ci-artifact.json")" \
+          NOON_PRODUCT_BASE_SHA="$base" NOON_PRODUCT_CANDIDATE_SHA="$candidate" \
+          NOON_PRODUCT_HEAD_SHA="$head" NOON_PRODUCT_EVENT_BASE_SHA="$event_base" \
+          NOON_WASM_PROFILE=release NOON_WASM_SKIP_OPT=0 NOON_RENDERER_SMOKE=0 \
+            node candidate/.github/ci/product-artifact.mjs verify candidate candidate
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SOURCE"
+          test "$(git -C candidate rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
+          find candidate/web -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$RUNNER_TEMP/candidate-package-post.sha256"
+          cmp "$RUNNER_TEMP/candidate-package-pre.sha256" "$RUNNER_TEMP/candidate-package-post.sha256"
+          sha256sum candidate/web/python/examples/showcase_first_scene.py > "$RUNNER_TEMP/first-scene-source-post.sha256"
+          cmp "$RUNNER_TEMP/first-scene-source-pre.sha256" "$RUNNER_TEMP/first-scene-source-post.sha256"
+          git -C candidate status --porcelain --untracked-files=all -- . ':!web' > "$RUNNER_TEMP/candidate-source-post.status"
+          cmp "$RUNNER_TEMP/candidate-source-pre.status" "$RUNNER_TEMP/candidate-source-post.status"
+          echo "$NAVIGATION_SCRIPT_SHA256  diagnostic/scripts/playground-authoring-error-recovery-navigation-diagnostic.mjs" | sha256sum -c -
+
+      - name: Upload navigation diagnostics and artifact identity
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: authoring-navigation-diagnostic-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/navigation-artifacts
+            ${{ runner.temp }}/artifacts.json
+            ${{ runner.temp }}/candidate.zip
+            ${{ runner.temp }}/candidate-package-*.sha256
+            ${{ runner.temp }}/first-scene-source-*.sha256
+            ${{ runner.temp }}/candidate-source-*.status
+          if-no-files-found: warn
+          retention-days: 7
