@@ -215,6 +215,103 @@ try {
     const caseStartedWallMs = Date.now();
     const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
+    // Diagnostic-only hooks: preserve the tested source/package and observe
+    // existing worker/GPU calls without polling engine state.
+    await context.route('**/execution-render-worker.js', async route => {
+      const response = await route.fetch();
+      const original = await response.text();
+      const importLine = 'import "./authoring-render-worker.js";';
+      assert.equal(original.split(importLine).length - 1, 1, 'unexpected renderer worker entrypoint');
+      const prelude = `
+const __galleryRouteEmit = observation => {
+  try { self.postMessage({ __galleryRouteObservation: observation }); } catch {}
+};
+const __galleryRouteSampled = (key, intervalMs) => {
+  const now = performance.now();
+  const previous = __galleryRouteLast.get(key) ?? -Infinity;
+  if (now - previous < intervalMs) return false;
+  __galleryRouteLast.set(key, now);
+  return true;
+};
+const __galleryRouteLast = new Map();
+globalThis.__galleryRouteSampled = __galleryRouteSampled;
+let __galleryTextureHookInstalled = false;
+let __galleryPortHookInstalled = false;
+try {
+  const contextPrototype = globalThis.GPUCanvasContext?.prototype;
+  const originalTexture = contextPrototype?.getCurrentTexture;
+  if (typeof originalTexture === 'function') {
+    let lastTextureSample = -Infinity;
+    contextPrototype.getCurrentTexture = function (...args) {
+      const startedAt = performance.now();
+      const sample = startedAt - lastTextureSample >= 1000;
+      if (sample) { lastTextureSample = startedAt; __galleryRouteEmit({ kind: 'texture-enter', at: startedAt }); }
+      try {
+        const value = Reflect.apply(originalTexture, this, args);
+        if (sample) __galleryRouteEmit({ kind: 'texture-return', at: performance.now(), elapsedMs: performance.now() - startedAt });
+        return value;
+      } catch (error) {
+        if (sample) __galleryRouteEmit({ kind: 'texture-throw', at: performance.now(), message: String(error).slice(0, 200) });
+        throw error;
+      }
+    };
+    __galleryTextureHookInstalled = contextPrototype.getCurrentTexture !== originalTexture;
+  }
+} catch (error) {
+  __galleryRouteEmit({ kind: 'hook-error', hook: 'texture', at: performance.now(), message: String(error).slice(0, 200) });
+}
+try {
+  const portPrototype = globalThis.MessagePort?.prototype;
+  const originalPost = portPrototype?.postMessage;
+  if (typeof originalPost === 'function') {
+    portPrototype.postMessage = function (message, ...args) {
+      const type = message?.type;
+      const interval = type === 'execution_wake' ? 1000 : 250;
+      if (['execution_presented', 'execution_wake', 'execution_ack'].includes(type) &&
+          __galleryRouteSampled('port:' + type, interval)) {
+        __galleryRouteEmit({ kind: 'port-send', type, at: performance.now(),
+          session: Number.isSafeInteger(message.session) ? message.session : null,
+          sequence: Number.isSafeInteger(message.sequence) ? message.sequence : null,
+          objectCount: Number.isSafeInteger(message.objectCount) ? message.objectCount : null });
+      }
+      return Reflect.apply(originalPost, this, [message, ...args]);
+    };
+    __galleryPortHookInstalled = portPrototype.postMessage !== originalPost;
+  }
+} catch (error) {
+  __galleryRouteEmit({ kind: 'hook-error', hook: 'message-port', at: performance.now(), message: String(error).slice(0, 200) });
+}
+setTimeout(() => __galleryRouteEmit({ kind: 'hook-status', at: performance.now(),
+  texture: __galleryTextureHookInstalled ? 'installed' : 'unavailable',
+  messagePort: __galleryPortHookInstalled ? 'installed' : 'unavailable' }), 0);
+`;
+      const body = original + '\n' + prelude;
+      const headers = { ...response.headers(), 'content-type': 'text/javascript; charset=utf-8' };
+      delete headers['content-length'];
+      delete headers['content-encoding'];
+      delete headers.etag;
+      await route.fulfill({ status: response.status(), headers, body });
+    });
+    await context.route('**/authoring-render-controller.js', async route => {
+      const response = await route.fetch();
+      const original = await response.text();
+      const marker = '    const applied = applyRendererDelta(json);';
+      assert.equal(original.split(marker).length - 1, 1, 'unexpected delta-consumer location');
+      const instrumented = original.replace(marker, `${marker}
+    try {
+      const at = performance.now();
+      if (globalThis.__galleryRouteSampled?.('delta-consume', 250)) globalThis.postMessage({ __galleryRouteObservation: {
+        kind: 'delta-consume', applied, at,
+        session: Number.isSafeInteger(publication?.session) ? publication.session : null,
+        sequence: Number.isSafeInteger(publication?.sequence) ? publication.sequence : null,
+      } });
+    } catch {}`);
+      const headers = { ...response.headers(), 'content-type': 'text/javascript; charset=utf-8' };
+      delete headers['content-length'];
+      delete headers['content-encoding'];
+      delete headers.etag;
+      await route.fulfill({ status: response.status(), headers, body: instrumented });
+    });
     if (noJspi) await disableAuthoringJspi(context);
     // Observe the existing result envelope without guessing its payload shape.
     // The production parser below validates the semantic descriptor and duration;
@@ -223,6 +320,15 @@ try {
     await context.addInitScript(({ channel, protocolVersion, profilePublications }) => {
       window.__galleryAuthoringResults = [];
       window.__galleryWorkerMessages = [];
+      window.__galleryRouteObservations = [];
+      window.__galleryRouteObservationsDropped = 0;
+      const recordRoute = observation => {
+        if (window.__galleryRouteObservations.length === 64) {
+          window.__galleryRouteObservations.shift();
+          window.__galleryRouteObservationsDropped += 1;
+        }
+        window.__galleryRouteObservations.push(observation);
+      };
       const profilingRequestId = Number.MAX_SAFE_INTEGER;
       window.Worker = new Proxy(window.Worker, {
         construct(target, args, newTarget) {
@@ -231,6 +337,12 @@ try {
           const worker = Reflect.construct(target, workerArgs, newTarget);
           worker.addEventListener('message', event => {
             const { data } = event;
+            if (data?.__galleryRouteObservation && typeof data.__galleryRouteObservation.kind === 'string') {
+              event.stopImmediatePropagation();
+              recordRoute({ ...data.__galleryRouteObservation,
+                workerScriptUrl: workerScriptUrl.slice(0, 500), receivedAt: performance.now() });
+              return;
+            }
             if (data?.channel === 'noon.render' && data.requestId === profilingRequestId) {
               // This ID is outside the product client's request range. Consume
               // only our initial diagnostic reply before its normal listener.
@@ -323,7 +435,7 @@ try {
           // The existing whole-case deadline bounds startup and natural playback.
           // A second, shorter timer can reject a lesson that is still progressing.
           while (true) {
-            const { workerMessages, ...state } = await page.evaluate(profilePublicationStages => {
+            const { workerMessages, routeObservations, routeObservationsDropped, ...state } = await page.evaluate(profilePublicationStages => {
               const gallery = window.__noonExampleGallery;
               if (!window.__galleryMetricsPending) {
                 window.__galleryMetricsPending = true;
@@ -331,6 +443,8 @@ try {
                   .finally(() => { window.__galleryMetricsPending = false; });
               }
               return { workerMessages: window.__galleryWorkerMessages ?? [],
+                routeObservations: window.__galleryRouteObservations ?? [],
+                routeObservationsDropped: window.__galleryRouteObservationsDropped ?? 0,
                 selected: gallery.selectedExampleId, inFlight: gallery.runInFlight,
                 transportMode: gallery.transportMode,
                 crossOriginIsolated: window.crossOriginIsolated,
@@ -346,6 +460,8 @@ try {
                   ? gallery.executionDiagnostics ?? null : null };
             }, Object.hasOwn(liveMathAnimations, entry.id));
             lastWorkerMessages = workerMessages;
+            result.routeObservations = routeObservations;
+            result.routeObservationsDropped = routeObservationsDropped;
             result.state = state;
             assert.equal(state.selected, entry.id);
             assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
@@ -568,6 +684,8 @@ try {
           elapsedMs: performance.now() - request.startedAt,
         })),
         workerMessages: lastWorkerMessages,
+        routeObservations: result.routeObservations ?? [],
+        routeObservationsDropped: result.routeObservationsDropped ?? 0,
       };
       // Capture outside the browser protocol: even page.evaluate can be stuck.
       // Failure remains a failure regardless of whether stack collection works.
