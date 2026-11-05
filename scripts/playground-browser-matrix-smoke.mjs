@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -564,6 +565,9 @@ let page = null;
 let lastCompletedRuntime = null;
 const pageErrors = [];
 const consoleErrors = [];
+const authoringWorkerEvents = [];
+let authoringWorkerEventsOmitted = 0;
+const authoringWorkerProbe = { state: "not-installed", requestCount: 0, resourceTypes: [], originalSha256: null, instrumentedSha256: null };
 let capabilities = null;
 let runtimeSupported = null;
 let finalRuntime = null;
@@ -574,13 +578,95 @@ try {
     viewport: profile.viewport,
     deviceScaleFactor: profile.deviceScaleFactor,
   });
+  await context.route("**/python-worker.js", async (route) => {
+    const request = route.request();
+    authoringWorkerProbe.requestCount += 1;
+    if (authoringWorkerProbe.resourceTypes.length < 8) authoringWorkerProbe.resourceTypes.push(request.resourceType());
+    if (request.resourceType() !== "script") return route.continue();
+    const response = await route.fetch();
+    const original = await response.text();
+    const originalSha256 = createHash("sha256").update(original).digest("hex");
+    authoringWorkerProbe.originalSha256 = originalSha256;
+    if (originalSha256 !== "0af62914dafeab242f4b7353eb76e5c00ceab91bfc2bfb126fc94bd8cff92a5d") {
+      authoringWorkerProbe.state = "source-hash-mismatch";
+      return route.fulfill({ response });
+    }
+    const probe = `
+;(() => {
+  const prefix = "__NOON_PASSIVE_WORKER_FAILURE__";
+  let emitted = 0, omitted = 0, truncationReported = false;
+  const safe = callback => { try { return callback(); } catch { return null; } };
+  const text = value => {
+    try { return (typeof value === "string" ? value : String(value)).slice(0, 2048); }
+    catch { return "<unprintable>"; }
+  };
+  const describe = value => safe(() => ({
+    type: safe(() => value === null ? "null" : typeof value),
+    tag: safe(() => Object.prototype.toString.call(value)),
+    name: safe(() => typeof value?.name === "string" ? value.name.slice(0, 128) : null),
+    message: safe(() => text(value?.message ?? value)),
+    stack: safe(() => typeof value?.stack === "string" ? value.stack.slice(0, 4096) : null),
+  })) ?? { type: "unknown", tag: null, name: null, message: "<unprintable>", stack: null };
+  const active = () => {
+    return safe(() => {
+      const run = typeof activeAuthoringRun === "undefined" ? null : activeAuthoringRun;
+      const continuation = run?.continuation ?? null;
+      return {
+        requestId: Number.isSafeInteger(run?.requestId) ? run.requestId : null,
+        contextId: typeof continuation?.contextId === "string" ? continuation.contextId : null,
+        continuationGeneration: Number.isSafeInteger(continuation?.generation) ? continuation.generation : null,
+        fatalAuthoringFailure: typeof fatalAuthoringFailure === "boolean" ? fatalAuthoringFailure : null,
+      };
+    }) ?? null;
+  };
+  const emit = (kind, facts) => {
+    if (emitted >= 8 || (emitted >= 7 && kind !== "truncated")) { omitted++; return; }
+    emitted++;
+    safe(() => console.info(prefix + JSON.stringify({ kind, at: performance.now(), active: active(), ...facts })));
+  };
+  const reportOmitted = () => {
+    if (omitted > 0 && !truncationReported && emitted < 8) {
+      truncationReported = true;
+      emit("truncated", { omittedAtMarker: omitted });
+    }
+  };
+  const feature = name => safe(() => typeof WebAssembly[name] === "function") ?? false;
+  safe(() => console.info(prefix + JSON.stringify({ kind: "hook-installed", at: performance.now(),
+    jspi: { Suspending: feature("Suspending"), Suspender: feature("Suspender"),
+      promising: feature("promising"), Function: feature("Function") } })));
+  safe(() => self.addEventListener("unhandledrejection", event => {
+    safe(() => emit("unhandledrejection", { reason: describe(event.reason) }));
+    safe(reportOmitted);
+  }, true));
+  safe(() => self.addEventListener("error", event => {
+    safe(() => emit("error", { message: text(event.message), filename: text(event.filename),
+      lineno: safe(() => event.lineno), colno: safe(() => event.colno), error: describe(event.error) }));
+    safe(reportOmitted);
+  }, true));
+})();
+`;
+    const instrumented = `${original}\n${probe}`;
+    authoringWorkerProbe.instrumentedSha256 = createHash("sha256").update(instrumented).digest("hex");
+    authoringWorkerProbe.state = "installed";
+    return route.fulfill({ response, body: instrumented });
+  });
   page = await context.newPage();
   trace.attach(browser, context, page);
   trace.setPhase("initial-navigation");
   await native.observe("initial-page-created");
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    try {
+      const text = message.text();
+      if (text.startsWith("__NOON_PASSIVE_WORKER_FAILURE__")) {
+        if (authoringWorkerEvents.length < 16) authoringWorkerEvents.push({
+          at: Date.now(), phase: trace.snapshot().phase, text: text.slice(0, 8192),
+          location: message.location(),
+        });
+        else authoringWorkerEventsOmitted++;
+      }
+      if (message.type() === "error") consoleErrors.push(text);
+    } catch { /* Diagnostic capture must not replace browser console handling. */ }
   });
 
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
@@ -721,6 +807,7 @@ ${consoleErrors.join("\n")}`,
       lifecycle: trace.snapshot(),
       pageErrors,
       consoleErrors,
+      authoringWorkerProbe, authoringWorkerEvents, authoringWorkerEventsOmitted,
     });
     console.log(
       `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize + 600-shape showcase playback`,
@@ -749,6 +836,7 @@ ${consoleErrors.join("\n")}`,
     nativeCrashReports,
     pageErrors,
     consoleErrors,
+    authoringWorkerProbe, authoringWorkerEvents, authoringWorkerEventsOmitted,
     error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
     testServer: { baseUrl, host: "shared-node-file-server" },
   });
