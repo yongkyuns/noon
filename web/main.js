@@ -1413,13 +1413,13 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
 
       const operation = result.preparedPlayback === true ? "Prepared history retained"
         : result.incremental ? "Scene updated incrementally" : "Scene rebuilt atomically";
-      const phase = setPlaybackRuntimeStatus(
+      setPlaybackRuntimeStatus(
         result,
         `${report.metrics.objectCount} objects · ${rendererBackend} ${player.mode} worker`,
       );
       const completionMessage = result.replaySupported === false
         ? `Completed · ${example.title} · replay unavailable: ${result.replayUnavailable}`
-        : `${phase.label} · ${example.title} · ${report.metrics.objectCount} objects · timeline ready`;
+        : `Ready · ${example.title} · ${report.metrics.objectCount} objects · timeline ready`;
       activeRunIdentity.outcome = "complete";
       setRunPatchStatus(runToken, completionMessage, "applied");
       if (activeRunIdentity?.token === runToken && example.id === selectedExampleId && source === sceneSourceEditor.value) {
