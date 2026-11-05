@@ -1,0 +1,226 @@
+name: PR 2422 8ca WebKit diagnostic retry (TEMP — do not merge)
+
+on:
+  push:
+    branches:
+      - codex/2422-8ca-browser-diagnostic
+    paths:
+      - ".github/workflows/pr-2422-8ca-webkit-diagnostic.yml"
+      - "scripts/playground-gallery-runtime-smoke-wk-diagnostic.mjs"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pr-2422-8ca-webkit-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  webkit-gallery-shard-zero:
+    name: WebKit strict gallery shard 0, three retained attempts
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: be814def71f9d34d9d28d106631544ca5a8eb3f8
+      - name: Pin source and diagnostic overlay
+        id: source
+        env:
+          DIAGNOSTIC_SHA: ${{ github.sha }}
+          NOON_EXPECTED_SOURCE_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
+        run: |
+          set -euo pipefail
+          actual_head=$(git rev-parse HEAD)
+          actual_tree=$(git rev-parse 'HEAD^{tree}')
+          actual_status=$(git status --porcelain)
+          printf 'event GITHUB_SHA=%s expected source=%s HEAD=%s tree=%s status=%q diagnostic commit=%s\n' \
+            "$GITHUB_SHA" "$NOON_EXPECTED_SOURCE_SHA" "$actual_head" "$actual_tree" "$actual_status" "$DIAGNOSTIC_SHA"
+          test "$actual_head" = "$NOON_EXPECTED_SOURCE_SHA"
+          test "$actual_tree" = "0ac6518799955a9a39b39820f0a2857f62144385"
+          test -z "$actual_status"
+          git fetch --no-tags --depth=1 origin "$DIAGNOSTIC_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$DIAGNOSTIC_SHA"
+          mkdir -p "$RUNNER_TEMP/diagnostic-overlay/scripts"
+          for file in scripts/playground-gallery-runtime-smoke-wk-diagnostic.mjs scripts/showcase-playback.mjs; do
+            git show "$DIAGNOSTIC_SHA:$file" > "$RUNNER_TEMP/diagnostic-overlay/$file"
+          done
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "diagnostic-overlay"
+          files = {"scripts/playground-gallery-runtime-smoke.mjs": "scripts/playground-gallery-runtime-smoke-wk-diagnostic.mjs",
+                   "scripts/showcase-playback.mjs": "scripts/showcase-playback.mjs"}
+          snapshot = {destination: hashlib.sha256((root / source).read_bytes()).hexdigest()
+                      for destination, source in files.items()}
+          (Path(os.environ["RUNNER_TEMP"]) / "overlay-snapshot.json").write_text(json.dumps(snapshot, sort_keys=True))
+          PY
+          printf 'Pinned source %s; diagnostic commit %s\n' "$NOON_EXPECTED_SOURCE_SHA" "$DIAGNOSTIC_SHA"
+      - name: Download and verify the exact WebKit runtime artifact
+        id: runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/yongkyuns/noon/actions/artifacts/13394492580/zip \
+            -o "$RUNNER_TEMP/webkit-runtime.zip"
+          python3 - <<'PY'
+          import hashlib, json, os, stat, zipfile
+          from pathlib import Path, PurePosixPath
+          archive = Path(os.environ["RUNNER_TEMP"]) / "webkit-runtime.zip"
+          expected = "e0802f0c52218aa0339a34720c83abc8e4204f3a4ed25baf9acd8495b1cc599c"
+          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert actual == expected, (actual, expected)
+          root = Path(os.environ["RUNNER_TEMP"]) / "webkit-runtime"
+          root.mkdir()
+          with zipfile.ZipFile(archive) as z:
+              members = z.infolist()
+              names = [m.filename.rstrip("/") for m in members if not m.is_dir()]
+              assert len(names) == 10 and len(set(names)) == 10, names
+              for m in members:
+                  p = PurePosixPath(m.filename)
+                  assert not p.is_absolute() and ".." not in p.parts, m.filename
+                  assert not stat.S_ISLNK(m.external_attr >> 16), m.filename
+              z.extractall(root)
+          identity = json.loads((root / "runtime-build-identity.json").read_text())
+          assert identity["sourceRevision"] == "be814def71f9d34d9d28d106631544ca5a8eb3f8", identity
+          inventory = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                       for p in sorted(root.rglob("*")) if p.is_file()}
+          assert len(inventory) == 10
+          snapshot = {"zipSha256": actual, "inventory": inventory, "identity": identity}
+          snap = Path(os.environ["RUNNER_TEMP"]) / "webkit-runtime-snapshot.json"
+          snap.write_text(json.dumps(snapshot, sort_keys=True))
+          print(json.dumps({"artifact": 13394492580, "zipSha256": actual,
+                            "buildId": identity["buildId"], "files": len(inventory)}))
+          PY
+          cp -R "$RUNNER_TEMP/webkit-runtime/." web/
+          git diff --quiet -- Cargo.toml Cargo.lock rust-toolchain.toml .cargo crates scripts/build-web-demo.sh .github/actions/dev-wasm-build
+      - uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: macOS-playwright-webkit-1.62.1
+      - name: Install pinned browser npm dependencies
+        timeout-minutes: 10
+        run: npm install --no-save --ignore-scripts --no-package-lock playwright@1.62.1 pngjs@7.0.0
+      - name: Install WebKit and system dependencies
+        timeout-minutes: 15
+        run: bash scripts/ci-install-playwright-browser.sh webkit
+      - name: Install passive gallery observer overlay
+        env:
+          DIAGNOSTIC_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          touch "$RUNNER_TEMP/diagnostic-overlay-installed"
+          cp "$RUNNER_TEMP/diagnostic-overlay/scripts/playground-gallery-runtime-smoke-wk-diagnostic.mjs" scripts/playground-gallery-runtime-smoke.mjs
+          cp "$RUNNER_TEMP/diagnostic-overlay/scripts/showcase-playback.mjs" scripts/
+          git diff --check
+      - name: Run unchanged strict full shard 0 in three fresh browser processes
+        id: attempts
+        timeout-minutes: 60
+        env:
+          NOON_PLAYGROUND_BROWSER: webkit
+          NOON_PLAYGROUND_PROFILE: mobile-dpr2
+          NOON_GALLERY_SHARD_INDEX: "0"
+          NOON_GALLERY_SHARD_COUNT: "3"
+          NOON_SHOWCASE_PROFILE_GATE: strict
+          NOON_GALLERY_CONTROL_DIAGNOSTIC: "1"
+        shell: bash
+        run: |
+          set -uo pipefail
+          cat > "$RUNNER_TEMP/verify-attempt.py" <<'PY'
+          import hashlib, json, subprocess, sys
+          from pathlib import Path
+          runtime_snapshot, runtime_archive, deployed, overlay_snapshot = map(Path, sys.argv[1:5])
+          expected_source = "be814def71f9d34d9d28d106631544ca5a8eb3f8"
+          assert subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() == expected_source
+          overlays = json.loads(overlay_snapshot.read_text())
+          changed = set(subprocess.check_output(["git", "diff", "--name-only", "HEAD", "--"], text=True).splitlines())
+          assert changed == set(overlays), (sorted(changed), sorted(overlays))
+          for name, expected in overlays.items():
+              actual = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+              assert actual == expected, (name, actual, expected)
+          snapshot = json.loads(runtime_snapshot.read_text())
+          for root in (runtime_archive, deployed):
+              for name, expected in snapshot["inventory"].items():
+                  actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+                  assert actual == expected, (str(root), name, actual)
+          assert json.loads((deployed / "runtime-build-identity.json").read_text()) == snapshot["identity"]
+          print("attempt integrity: pinned source, allowed overlays, exact runtime inventory PASS")
+          PY
+          mkdir -p browser-smoke-artifacts/pr2422-8ca/webkit
+          failures=0
+          for attempt in 1 2 3; do
+            if ! python3 "$RUNNER_TEMP/verify-attempt.py" "$RUNNER_TEMP/webkit-runtime-snapshot.json" \
+                "$RUNNER_TEMP/webkit-runtime" web "$RUNNER_TEMP/overlay-snapshot.json" \
+                > "browser-smoke-artifacts/pr2422-8ca/webkit/attempt-$attempt-precheck.log" 2>&1; then
+              failures=1
+              printf '{"attempt":%s,"integrity":"precheck-failed","exitCode":null}\n' "$attempt" >> browser-smoke-artifacts/pr2422-8ca/webkit/attempt-status.jsonl
+              break
+            fi
+            export NOON_PLAYGROUND_MATRIX_ARTIFACTS="browser-smoke-artifacts/pr2422-8ca/webkit/attempt-$attempt"
+            set +e
+            node scripts/playground-gallery-runtime-smoke.mjs 2>&1 | tee "browser-smoke-artifacts/pr2422-8ca/webkit/attempt-$attempt.log"
+            status=${PIPESTATUS[0]}
+            set -e
+            integrity=pass
+            if ! python3 "$RUNNER_TEMP/verify-attempt.py" "$RUNNER_TEMP/webkit-runtime-snapshot.json" \
+                "$RUNNER_TEMP/webkit-runtime" web "$RUNNER_TEMP/overlay-snapshot.json" \
+                > "browser-smoke-artifacts/pr2422-8ca/webkit/attempt-$attempt-postcheck.log" 2>&1; then
+              integrity=fail
+              failures=1
+            fi
+            printf '{"attempt":%s,"exitCode":%s,"integrity":"%s"}\n' "$attempt" "$status" "$integrity" >> browser-smoke-artifacts/pr2422-8ca/webkit/attempt-status.jsonl
+            if [ "$status" -ne 0 ]; then failures=1; fi
+            if [ "$integrity" = fail ]; then break; fi
+          done
+          exit "$failures"
+      - name: Restore harness scripts and verify runtime and source are unchanged
+        if: always() && steps.runtime.outcome == 'success'
+        env:
+          NOON_EXPECTED_SOURCE_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
+        run: |
+          set -euo pipefail
+          overlay_status=0
+          if [ -f "$RUNNER_TEMP/diagnostic-overlay-installed" ] && [ -f "$RUNNER_TEMP/overlay-snapshot.json" ]; then
+            python3 - <<'PY' || overlay_status=$?
+          import hashlib, json, os
+          from pathlib import Path
+          expected = json.loads((Path(os.environ["RUNNER_TEMP"]) / "overlay-snapshot.json").read_text())
+          changed = set(__import__("subprocess").check_output(["git", "diff", "--name-only", "HEAD", "--"], text=True).splitlines())
+          assert changed == set(expected), (sorted(changed), sorted(expected))
+          for name, digest in expected.items():
+              actual = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+              assert actual == digest, (name, actual, digest)
+          print("final harness overlay hashes match before restore")
+          PY
+          fi
+          if [ -f "$RUNNER_TEMP/diagnostic-overlay-installed" ]; then
+            git checkout -- scripts/playground-gallery-runtime-smoke.mjs scripts/showcase-playback.mjs
+          fi
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          snap = json.loads((Path(os.environ["RUNNER_TEMP"]) / "webkit-runtime-snapshot.json").read_text())
+          for root in (Path(os.environ["RUNNER_TEMP"]) / "webkit-runtime", Path("web")):
+              for name, digest in snap["inventory"].items():
+                  actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+                  assert actual == digest, (root.as_posix(), name, actual)
+          assert json.loads(Path("web/runtime-build-identity.json").read_text()) == snap["identity"]
+          assert not __import__("subprocess").check_output(["git", "diff", "--name-only", "HEAD", "--"], text=True).strip()
+          __import__("subprocess").check_call(["git", "diff", "--quiet", "HEAD", "--"])
+          print("post-run runtime inventory and pinned source tree unchanged")
+          PY
+          exit "$overlay_status"
+      - name: Retain all WebKit attempts and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr2422-8ca-webkit-gallery-diagnostic
+          path: browser-smoke-artifacts/pr2422-8ca/webkit
+          if-no-files-found: warn
+          retention-days: 3
+
