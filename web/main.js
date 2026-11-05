@@ -1827,6 +1827,9 @@ try {
     get executionDiagnostics() {
       return authoringWorkers.activeClient?.executionDiagnostics ?? null;
     },
+    get executionPreparationTimingDiagnostics() {
+      return authoringWorkers.activeClient?.executionPreparationTimingDiagnostics ?? null;
+    },
     async select(id) {
       return selectExample(id, { run: true, updateUrl: true });
     },

@@ -4,6 +4,7 @@ import { parseAuthoringDiagnostic } from "./authoring-diagnostic.js";
 export const AUTHORING_CHANNEL = "noon.authoring";
 export const AUTHORING_PROTOCOL_VERSION = 8;
 export const MAX_EXECUTION_DIAGNOSTICS = 128;
+export const MAX_PREPARATION_TIMING_DIAGNOSTICS = 1024;
 let nextInterpreterGeneration = 0;
 
 export class PythonAuthoringClient {
@@ -20,6 +21,7 @@ export class PythonAuthoringClient {
   #interpreterGeneration = nextInterpreterGeneration++;
   #libraryTrust = "unknown";
   #executionDiagnostics = null;
+  #executionPreparationTimingDiagnostics = null;
 
   constructor(worker = createAuthoringWorker()) {
     this.#worker = worker;
@@ -47,6 +49,12 @@ export class PythonAuthoringClient {
   get executionDiagnostics() {
     return this.#executionDiagnostics === null ? null : structuredClone({
       ...this.#executionDiagnostics, libraryTrust: this.#libraryTrust,
+    });
+  }
+
+  get executionPreparationTimingDiagnostics() {
+    return this.#executionPreparationTimingDiagnostics === null ? null : structuredClone({
+      ...this.#executionPreparationTimingDiagnostics, libraryTrust: this.#libraryTrust,
     });
   }
 
@@ -96,14 +104,19 @@ export class PythonAuthoringClient {
     await this.ready();
     const requestId = this.#beginRequest();
     const playground = context.playground ?? {};
+    const diagnosticContext = { exampleId: playground.example_id ?? null,
+      selectionGeneration: playground.selection_generation ?? null,
+      runGeneration: playground.run_generation ?? null };
     this.#executionDiagnostics = {
       schemaVersion: 1, interpreterGeneration: this.#interpreterGeneration, runRequestId: requestId,
-      context: { exampleId: playground.example_id ?? null,
-        selectionGeneration: playground.selection_generation ?? null,
-        runGeneration: playground.run_generation ?? null },
+      context: diagnosticContext,
       requestedProfile: preparedPlayback ? "incremental" : "observed",
       events: [], droppedEvents: 0,
     };
+    this.#executionPreparationTimingDiagnostics = diagnosticPreparationTiming ? {
+      schemaVersion: 1, interpreterGeneration: this.#interpreterGeneration, runRequestId: requestId,
+      context: diagnosticContext, events: [], droppedEvents: 0,
+    } : null;
     const result = this.#resultFor(requestId, { onSemanticContinuation, preparedPlayback });
     this.#worker.postMessage(
       envelope("run", {
@@ -318,6 +331,16 @@ export class PythonAuthoringClient {
           throw new Error("invalid execution diagnostic event");
         }
         if (libraryTrust !== undefined) this.#observeLibraryTrust(libraryTrust);
+        if (event.stage === "preparation-timing") {
+          const timings = this.#executionPreparationTimingDiagnostics;
+          if (timings?.runRequestId !== message.requestId) {
+            this.#staleResponses += 1;
+            return;
+          }
+          if (timings.events.length >= MAX_PREPARATION_TIMING_DIAGNOSTICS) timings.droppedEvents += 1;
+          else timings.events.push({ ...structuredClone(event), sequence: timings.events.length });
+          return;
+        }
         const trace = this.#executionDiagnostics;
         if (trace.events.length >= MAX_EXECUTION_DIAGNOSTICS) trace.droppedEvents += 1;
         else trace.events.push({ ...structuredClone(event), sequence: trace.events.length });

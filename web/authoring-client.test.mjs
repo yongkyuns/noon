@@ -6,6 +6,7 @@ import {
   AUTHORING_CHANNEL,
   AUTHORING_PROTOCOL_VERSION,
   MAX_EXECUTION_DIAGNOSTICS,
+  MAX_PREPARATION_TIMING_DIAGNOSTICS,
   PythonAuthoringClient,
   parseAuthoringResult,
   validateSceneDuration,
@@ -123,6 +124,39 @@ test("diagnostics stay bounded and expose loss rather than silently passing a co
   assert.equal(client.executionDiagnostics.events.length, MAX_EXECUTION_DIAGNOSTICS);
   assert.equal(client.executionDiagnostics.droppedEvents, 2);
   worker.emit("message", workerMessage("result", { requestId: 0, resultJson: JSON.stringify(semanticResult()) }));
+  await run; client.terminate();
+});
+
+test("opt-in preparation timings are bounded separately from essential lifecycle diagnostics", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
+  const run = client.run("pass", {}, { preparedPlayback: true, diagnosticPreparationTiming: true,
+    onSemanticContinuation() {} }); await Promise.resolve();
+  const descriptor = { context_id: "timed", continuation_generation: 1, prepared_playback: true };
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0, generation: 1, duration: 1, semanticExecution: descriptor,
+  })); await Promise.resolve();
+  worker.emit("message", workerMessage("execution_diagnostic", { requestId: 0,
+    event: { stage: "attached", profile: "incremental" } }));
+  for (let i = 0; i < MAX_PREPARATION_TIMING_DIAGNOSTICS + 2; i++) worker.emit("message", workerMessage("execution_diagnostic", {
+    requestId: 0, event: { stage: "preparation-timing", owner: "source-turn", ordinal: i, durationMs: 1 },
+  }));
+  for (const stage of ["source-complete", "terminal-adopted", "disposition"]) worker.emit("message", workerMessage("execution_diagnostic", {
+    requestId: 0, event: { stage, disposition: stage === "disposition" ? "looped" : undefined },
+  }));
+  const lifecycle = client.executionDiagnostics;
+  assert.deepEqual(lifecycle.events.map(event => event.stage), [
+    "attached", "source-complete", "terminal-adopted", "disposition",
+  ]);
+  assert.equal(lifecycle.droppedEvents, 0);
+  const timings = client.executionPreparationTimingDiagnostics;
+  assert.equal(timings.events.length, MAX_PREPARATION_TIMING_DIAGNOSTICS);
+  assert.equal(timings.droppedEvents, 2);
+  timings.events[0].owner = "mutated";
+  assert.equal(client.executionPreparationTimingDiagnostics.events[0].owner, "source-turn",
+    "the opt-in timing snapshot is detached");
+  worker.emit("message", workerMessage("result", { requestId: 0,
+    resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: descriptor, duration: 1 }) }));
   await run; client.terminate();
 });
 

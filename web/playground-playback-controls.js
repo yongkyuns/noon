@@ -688,11 +688,13 @@ export class PlaygroundPlaybackControls {
   #render() {
     if (this.#destroyed) return;
     const playing = this.#desiredPlaying ?? this.#playing;
-    this.#playButton.textContent = this.#forwardPlayback ? (playing ? "Pause" : "Play")
+    let toggleLabel = this.#forwardPlayback ? (playing ? "Pause" : "Play")
       : this.#unavailableReason !== null ? "Complete" : !this.#controllable ? "Live" : playing ? "Pause" : "Play";
     if (this.#hasAudio && this.#controllable && !playing && !this.#audioReady) {
-      this.#playButton.textContent = "Play with sound";
+      toggleLabel = "Play with sound";
     }
+    // Replacing text during a WebKit pointer gesture can discard its click.
+    if (this.#playButton.textContent !== toggleLabel) this.#playButton.textContent = toggleLabel;
     this.#playButton.setAttribute(
       "aria-label",
       !this.#controllable && !this.#forwardPlayback ? (this.#unavailableReason !== null ? "Replay unavailable" : "Python owns live playback") : playing ? "Pause animation" : "Play animation",

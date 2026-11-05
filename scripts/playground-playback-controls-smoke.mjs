@@ -202,6 +202,51 @@ try {
     waitUntil: "load",
   });
   await startDeferredRuntime(page, "parity-square-and-circle");
+
+  // A no-op playback render must not replace the button's text node during a
+  // pointer gesture. WebKit can then drop the click after mouseup.
+  await page.evaluate(async () => {
+    const { PlaygroundPlaybackControls } = await import("/web/playground-playback-controls.js");
+    const preview = document.createElement("div");
+    preview.style.cssText = "position:fixed;left:20px;top:20px;z-index:10000";
+    document.body.append(preview);
+    const player = {
+      pause: async () => { window.__controlsGesturePauseCalls++; return { time: 0, playing: false }; },
+      resume: async () => ({ time: 0, playing: true }),
+      seek: async (time) => ({ time, playing: true }),
+      restartPlayback: async () => ({ time: 0, playing: true }),
+    };
+    window.__controlsGesturePauseCalls = 0;
+    const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 4 });
+    window.__controlsGestureRegression = { controls, preview, state: { time: 0, playing: true, durationSeconds: 4 } };
+    controls.sync(window.__controlsGestureRegression.state);
+    window.__controlsGestureRegression.labelNode = preview.querySelector(".playback-toggle").firstChild;
+  });
+  const gestureToggle = page.locator(".playback-controls .playback-toggle").last();
+  const gestureBounds = await gestureToggle.boundingBox();
+  assert.ok(gestureBounds, "gesture regression toggle must be visible");
+  const gestureX = gestureBounds.x + gestureBounds.width / 2;
+  const gestureY = gestureBounds.y + gestureBounds.height / 2;
+  await page.mouse.move(gestureX, gestureY);
+  await page.mouse.down();
+  await page.waitForTimeout(40);
+  await page.evaluate(() => {
+    const { controls, state, preview, labelNode } = window.__controlsGestureRegression;
+    controls.sync(state);
+    if (preview.querySelector(".playback-toggle").firstChild !== labelNode) {
+      throw new Error("unchanged playback render replaced the toggle label text node");
+    }
+  });
+  await page.mouse.up();
+  await page.waitForFunction(() => window.__controlsGesturePauseCalls === 1);
+  assert.equal(await page.evaluate(() => window.__controlsGesturePauseCalls), 1,
+    "unchanged control state during a pointer gesture must preserve the pause click");
+  await page.evaluate(() => {
+    const { controls, preview } = window.__controlsGestureRegression;
+    controls.destroy();
+    preview.remove();
+  });
+
   await page.evaluate(() => {
     document.querySelector("#scene").dataset.playbackSmokeIdentity = "original";
   });
