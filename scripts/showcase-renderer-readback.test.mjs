@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
-import { decorateAuthoringRenderController, assertRendererReadback } from "./showcase-renderer-readback.mjs";
+import { decorateAuthoringRenderController, assertRendererReadback,
+  installAuthoringRendererReadback } from "./showcase-renderer-readback.mjs";
 
 const source = await readFile(new URL("../web/authoring-render-controller.js", import.meta.url), "utf8");
 const INITIAL = "  let latestPresentationSample = null;";
@@ -124,4 +125,57 @@ test("renderer readback is joined to the attached session, first-loop proof and 
     { ...valid, time: 6.7 }, { ...valid, time: 7.5 }, { ...valid, objectCount: 599 },
     { ...valid, pngDataUrl: null }, { ...valid, status: "pending" }, { ...valid, resolvedAtEpochMs: 100 },
   ]) assert.throws(() => assertRendererReadback(candidate, args));
+});
+
+test("held compositor screenshot is bounded by the same before/after Rust publication", async () => {
+  const contextId = { exampleId: "spatial", selectionGeneration: 2, runGeneration: 9 };
+  const request = { exampleId: "spatial", runGeneration: 9, runRequestId: 18, interpreterGeneration: 3,
+    context: contextId, session: 4, sequence: 12, time: 5.95, objectCount: 626,
+    holdStart: 6, duration: 8, width: 960, height: 540, deadlineEpochMs: Date.now() + 5000 };
+  const heldState = (changes = {}) => ({ time: 7.5, preparedPlayback: true, loopCount: 0,
+    playing: true, buffering: false, preparedFrontier: 8, durationSeconds: 8,
+    presentationReceipt: { session: 4, sequence: 12, time: 5.95, objectCount: 626 },
+    heldPresentation: { publication: { session: 4, sequence: 12 }, evaluatedTime: 5.95,
+      time: 7.5, validUntil: 8 }, ...changes });
+  const observe = (state) => ({ executionState: state, stateRequestStartedAtEpochMs: Date.now(),
+    runStopped: false, selectedExampleId: "spatial", runGeneration: 9, runRequestId: 18,
+    interpreterGeneration: 3, context: contextId });
+  async function capture(states, bounds = { x: 0, y: 0, width: 960, height: 540 }) {
+    let binding;
+    const events = [];
+    const page = {
+      async exposeBinding(_name, callback) { binding = callback; },
+      async route() {},
+    };
+    const instrumentation = await installAuthoringRendererReadback(page, { holdStart: 6, duration: 8 });
+    const sourcePage = {
+      async evaluate(fn) { return runInNewContext(`(${fn.toString()})(request)`, {
+        request, window: { __noonExampleGallery: { async executionState() { return states.shift(); },
+          get selectedExampleId() { return "spatial"; },
+          generationDiagnostics: { runGeneration: 9 },
+          executionDiagnostics: { runRequestId: 18, interpreterGeneration: 3, context: contextId } },
+          __showcaseLiveReviewRun: { stop: false } }, Date }); },
+      locator() { return { async boundingBox() { return bounds; }, async screenshot(options) {
+        events.push(options); return Buffer.from("png");
+      } }; },
+    };
+    const result = await binding({ page: sourcePage }, request);
+    return { result, report: instrumentation.report, events };
+  }
+  const valid = await capture([heldState({ time: 6.05, preparedFrontier: 7, durationSeconds: null,
+    heldPresentation: { publication: { session: 4, sequence: 12 }, evaluatedTime: 5.95,
+      time: 6.05, validUntil: 7 } }), heldState({ time: 6.1, preparedFrontier: 8,
+    heldPresentation: { publication: { session: 4, sequence: 12 }, evaluatedTime: 5.95,
+      time: 6.1, validUntil: 8 } })]);
+  assert.match(valid.result.pngDataUrl, /^data:image\/png;base64,/);
+  assert.equal(valid.events[0].scale, "css");
+  assert.deepEqual(valid.result.screenshotBounds, { x: 0, y: 0, width: 960, height: 540 });
+  assert.equal(valid.report.heldScreenshotAttempts[0].outcome, "pass");
+  for (const [before, after, bounds] of [
+    [heldState(), heldState({ presentationReceipt: { session: 4, sequence: 13, time: 5.96, objectCount: 626 } })],
+    [heldState({ loopCount: 1 }), heldState()],
+    [heldState(), heldState(), { x: 0, y: 0, width: 959, height: 540 }],
+  ]) {
+    await assert.rejects(capture([before, after], bounds));
+  }
 });

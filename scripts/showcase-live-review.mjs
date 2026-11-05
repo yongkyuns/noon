@@ -154,11 +154,12 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
       context: diagnostics.context,
     };
     const canvas = document.querySelector("#scene");
-    if (typeof canvas?.toBlob !== "function") return false;
+    if (!canvas) return false;
     // Avoid waiting for display animation frames: a starved RAF can outlast the
     // terminal hold. The independent pixel oracle checks the copied bitmap.
     // The engine joins the actual renderer acknowledgement to Rust's current
     // observation. Full GPU metrics may settle after this hold has wrapped.
+    const stateRequestStartedAtEpochMs = Date.now();
     const state = await gallery.executionState();
     if (runState.stop) return false;
     const current = gallery.executionDiagnostics;
@@ -206,6 +207,38 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
       capture.captureKind = "renderer-owned";
       capture.proofReceipt = receipt;
       window.__showcaseLiveReviewFirstPass = capture;
+      return false;
+    }
+    if (heldPresentation !== null && rendererReadbackEnabled) {
+      const deadlineEpochMs = stateRequestStartedAtEpochMs +
+        Math.max(0, heldPresentation.validUntil - heldPresentation.observedTime) * 1000;
+      const screenshot = await window.__showcaseCaptureHeldCompositedScreenshot({
+        exampleId, runGeneration, runRequestId: runIdentity.runRequestId,
+        interpreterGeneration: runIdentity.interpreterGeneration, context: runIdentity.context,
+        session: receipt.session, sequence: receipt.sequence, time: receipt.time,
+        objectCount: receipt.objectCount, holdStart, duration, width: 960, height: 540,
+        deadlineEpochMs,
+      });
+      if (runState.stop || gallery.generationDiagnostics?.runGeneration !== runGeneration ||
+          screenshot?.before?.executionState?.presentationReceipt?.session !== receipt.session ||
+          screenshot?.before?.executionState?.presentationReceipt?.sequence !== receipt.sequence ||
+          screenshot?.after?.executionState?.presentationReceipt?.session !== receipt.session ||
+          screenshot?.after?.executionState?.presentationReceipt?.sequence !== receipt.sequence ||
+          !Number.isFinite(screenshot.screenshotStartedAtEpochMs) ||
+          screenshot.screenshotStartedAtEpochMs > deadlineEpochMs) return false;
+      capture.captureKind = "compositor-screenshot";
+      capture.proofReceipt = receipt;
+      capture.compositorScreenshot = {
+        startedAtEpochMs: screenshot.screenshotStartedAtEpochMs,
+        returnedAtEpochMs: screenshot.screenshotReturnedAtEpochMs,
+        bounds: screenshot.screenshotBounds,
+        beforeStateRequestStartedAtEpochMs: screenshot.before.stateRequestStartedAtEpochMs,
+        beforeExecutionState: screenshot.before.executionState,
+        afterStateRequestStartedAtEpochMs: screenshot.after.stateRequestStartedAtEpochMs,
+        afterExecutionState: screenshot.after.executionState,
+      };
+      capture.afterCopyState = screenshot.after.executionState;
+      window.__showcaseLiveReviewFirstPass = { pngDataUrl: screenshot.pngDataUrl, ...capture };
       return false;
     }
     const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
@@ -695,6 +728,7 @@ async function main() {
             rendererReceipt: firstPassRun.firstPassCapture.rendererReceipt,
             heldPresentation: firstPassRun.firstPassCapture.heldPresentation,
             rendererReadback: firstPassRun.firstPassCapture.rendererReadback ?? null,
+            compositorScreenshot: firstPassRun.firstPassCapture.compositorScreenshot ?? null,
             captureKind: firstPassRun.firstPassCapture.captureKind ?? "held-html",
             rendererReceiptScope: "renderer publication sample; does not prove physical scanout",
           };

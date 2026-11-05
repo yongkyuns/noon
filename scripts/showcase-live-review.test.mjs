@@ -292,7 +292,11 @@ function preparedAudioPage({ run, runDelayMs = 0, priorRunInFlight = false,
     }
   }
   const browser = {
-    window: { __noonExampleGallery: gallery },
+    window: { __noonExampleGallery: gallery,
+      __showcaseCaptureHeldCompositedScreenshot: async (request) => {
+        current.captureEvents?.push("held-compositor-screenshot");
+        return current.heldScreenshotResult ?? null;
+      } },
     document: { querySelector(selector) {
       if (selector === "#patch-status") return {
         dataset: { state: current.patchState ?? "applied" }, value: current.patchError,
@@ -527,7 +531,7 @@ test("closed Rust endpoint admits a matching in-hold receipt but rejects open, l
   }
 });
 
-test("looping first pass accepts an earlier receipt only with matching Rust hold evidence", async () => {
+test("looping first pass accepts a held compositor screenshot only with matching before/after Rust proof", async () => {
   const lesson = { id: "showcase-example", duration: 8, still_intervals: [[6, 8]] };
   const held = { publication: { session: 7, sequence: 5 }, evaluatedTime: 5.9514,
     time: 7.5, validUntil: 8 };
@@ -535,16 +539,31 @@ test("looping first pass accepts an earlier receipt only with matching Rust hold
     run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
       time: 0, playing: true, durationSeconds: 8 } },
     observations: [
-      { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, preparedPlayback: {
+      { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, heldScreenshotResult: {
+        pngDataUrl: "data:image/png;base64,cGFnZQ==", screenshotStartedAtEpochMs: 11,
+        screenshotReturnedAtEpochMs: 12, screenshotBounds: { x: 0, y: 0, width: 960, height: 540 },
+        before: { executionState: { time: 7.5, preparedPlayback: true, loopCount: 0, playing: true, buffering: false,
+          preparedFrontier: 8, durationSeconds: 8,
+          presentationReceipt: { session: 7, sequence: 5, time: 5.9514, objectCount: 626 },
+          heldPresentation: { ...held, observedTime: 7.5 } }, stateRequestStartedAtEpochMs: 10 },
+        after: { executionState: { time: 7.5, preparedPlayback: true, loopCount: 0, playing: true, buffering: false,
+          preparedFrontier: 8, durationSeconds: 8,
+          presentationReceipt: { session: 7, sequence: 5, time: 5.9514, objectCount: 626 },
+          heldPresentation: { ...held, observedTime: 7.5 } }, stateRequestStartedAtEpochMs: 12 },
+      }, preparedPlayback: {
         observation: { loopCount: 0, heldPresentation: held }, observedTime: 7.5 } },
       { elapsed: 0.1, publishedTime: 0.1, looped: true },
     ],
   });
-  const result = await runOrdinaryGallery(page, 100, lesson);
+  const result = await runOrdinaryGallery(page, 100, lesson, { rendererReadback: {} });
   assert.deepEqual(JSON.parse(JSON.stringify(result.firstPassCapture.heldPresentation)),
     { ...held, observedTime: 7.5 });
   assert.equal(result.firstPassCapture.rendererReceipt.time, 5.9514,
     "capture retains the real renderer receipt rather than relabeling its time");
+  assert.equal(result.firstPassCapture.captureKind, "compositor-screenshot");
+  assert.equal(result.firstPassCapture.pngDataUrl, "data:image/png;base64,cGFnZQ==");
+  assert.deepEqual({ ...result.firstPassCapture.compositorScreenshot.bounds },
+    { x: 0, y: 0, width: 960, height: 540 });
   for (const invalid of [
     { ...held, publication: { session: 7, sequence: 4 } },
     { ...held, validUntil: 7.5 },

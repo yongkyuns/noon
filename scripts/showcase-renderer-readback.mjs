@@ -7,6 +7,92 @@ const METRICS_MARKER = '            respond(message.requestId, { type: "metrics"
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
+async function readHeldScreenshotState() {
+  const gallery = window.__noonExampleGallery;
+  const stateRequestStartedAtEpochMs = Date.now();
+  const executionState = await gallery.executionState();
+  const diagnostics = gallery.executionDiagnostics;
+  return { executionState, stateRequestStartedAtEpochMs,
+    runStopped: window.__showcaseLiveReviewRun?.stop === true,
+    selectedExampleId: gallery.selectedExampleId,
+    runGeneration: gallery.generationDiagnostics?.runGeneration,
+    runRequestId: diagnostics?.runRequestId,
+    interpreterGeneration: diagnostics?.interpreterGeneration,
+    context: diagnostics?.context };
+}
+
+function assertHeldScreenshotState(snapshot, expected) {
+  const state = snapshot.executionState;
+  const receipt = state?.presentationReceipt;
+  const held = state?.heldPresentation;
+  assert.equal(snapshot.runStopped, false, "held screenshot Run was cancelled");
+  assert.equal(snapshot.selectedExampleId, expected.exampleId, "held screenshot belongs to a different lesson");
+  assert.equal(snapshot.runGeneration, expected.runGeneration, "held screenshot belongs to a stale Run generation");
+  assert.equal(snapshot.runRequestId, expected.runRequestId, "held screenshot belongs to a stale source Run");
+  assert.equal(snapshot.interpreterGeneration, expected.interpreterGeneration, "held screenshot belongs to a stale interpreter");
+  assert.deepEqual(snapshot.context, expected.context, "held screenshot belongs to a different run context");
+  assert.equal(state?.preparedPlayback, true);
+  assert.equal(state?.loopCount, 0);
+  assert.equal(state?.playing, true);
+  assert.equal(state?.buffering, false);
+  assert.ok(Number.isFinite(state?.time) && state.time >= expected.holdStart && state.time < expected.duration);
+  assert.ok(Number.isFinite(state?.preparedFrontier) && state.preparedFrontier >= state.time);
+  assert.ok(state?.durationSeconds == null || (Number.isFinite(state.durationSeconds) &&
+    Math.abs(state.durationSeconds - expected.duration) <= 8 * Number.EPSILON * Math.max(1, expected.duration)));
+  assert.equal(receipt?.session, expected.session);
+  assert.equal(receipt?.sequence, expected.sequence);
+  assert.equal(receipt?.time, expected.time);
+  assert.equal(receipt?.objectCount, expected.objectCount);
+  assert.equal(held?.publication?.session, expected.session);
+  assert.equal(held?.publication?.sequence, expected.sequence);
+  assert.equal(held?.evaluatedTime, expected.time);
+  assert.equal(held?.time, state.time);
+  assert.ok(Number.isFinite(held?.validUntil) && state.time < held.validUntil);
+  return held;
+}
+
+async function captureHeldCompositedScreenshot(page, request, report) {
+  const attempt = { session: request.session, sequence: request.sequence, time: request.time,
+    deadlineEpochMs: request.deadlineEpochMs, error: null };
+  report.heldScreenshotAttempts.push(attempt);
+  try {
+    const before = await page.evaluate(readHeldScreenshotState);
+    attempt.before = before;
+    const beforeHeld = assertHeldScreenshotState(before, request);
+    const deadline = Math.min(request.deadlineEpochMs,
+      before.stateRequestStartedAtEpochMs + (beforeHeld.validUntil - before.executionState.time) * 1000);
+    const canvas = page.locator("#scene");
+    const bounds = await canvas.boundingBox();
+    assert.ok(bounds && Math.abs(bounds.width - request.width) < 0.01 &&
+      Math.abs(bounds.height - request.height) < 0.01,
+    "held screenshot canvas does not match the authored pixel viewport");
+    attempt.bounds = bounds;
+    attempt.startedAtEpochMs = Date.now();
+    assert.ok(attempt.startedAtEpochMs < deadline, "held compositor screenshot started after the Rust validity deadline");
+    const screenshot = await canvas.screenshot({ type: "png", scale: "css",
+      timeout: Math.max(1, Math.floor(deadline - attempt.startedAtEpochMs)) });
+    attempt.returnedAtEpochMs = Date.now();
+    assert.ok(attempt.returnedAtEpochMs <= deadline, "held compositor screenshot returned after the Rust validity deadline");
+    const after = await page.evaluate(readHeldScreenshotState);
+    attempt.after = after;
+    const afterHeld = assertHeldScreenshotState(after, request);
+    assert.ok(attempt.startedAtEpochMs >= before.stateRequestStartedAtEpochMs &&
+      after.stateRequestStartedAtEpochMs >= attempt.returnedAtEpochMs,
+    "held screenshot is not bracketed by Rust state observations");
+    assert.ok(after.executionState.time >= before.executionState.time &&
+      afterHeld.validUntil >= beforeHeld.validUntil,
+    "held screenshot Rust observation moved backward");
+    attempt.outcome = "pass";
+    return { pngDataUrl: `data:image/png;base64,${screenshot.toString("base64")}`,
+      screenshotStartedAtEpochMs: attempt.startedAtEpochMs,
+      screenshotReturnedAtEpochMs: attempt.returnedAtEpochMs,
+      screenshotBounds: bounds, before, after };
+  } catch (error) {
+    attempt.error = String(error?.stack ?? error);
+    throw error;
+  }
+}
+
 export function decorateAuthoringRenderController(source, { holdStart, duration }) {
   assert.equal(typeof source, "string");
   assert.ok(Number.isFinite(holdStart) && holdStart >= 0);
@@ -65,7 +151,10 @@ export async function installAuthoringRendererReadback(page, { holdStart, durati
   let resolveServed;
   let rejectServed;
   const served = new Promise((resolve, reject) => { resolveServed = resolve; rejectServed = reject; });
-  const report = { requestCount: 0, error: null, sourceSha256: null, instrumentedSha256: null };
+  const report = { requestCount: 0, error: null, sourceSha256: null, instrumentedSha256: null,
+    heldScreenshotAttempts: [] };
+  await page.exposeBinding("__showcaseCaptureHeldCompositedScreenshot", async ({ page: sourcePage }, request) =>
+    captureHeldCompositedScreenshot(sourcePage, request, report));
   await page.route("**/authoring-render-controller.js", async (route) => {
     report.requestCount += 1;
     try {
