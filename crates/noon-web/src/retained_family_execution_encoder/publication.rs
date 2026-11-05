@@ -2,7 +2,9 @@
 //! This codec is used only at a genuine cross-context renderer boundary. Native
 //! and single-context rendering continue to borrow RendererPublication directly.
 use super::RetainedFamilyExecutionDeltaEncoder;
-use crate::{RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionDeltaHeader};
+use crate::RetainedFamilyExecutionDeltaEnvelope;
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::RetainedFamilyExecutionDeltaHeader;
 use noon_core::Camera2DState;
 use noon_runtime::RendererPublication;
 

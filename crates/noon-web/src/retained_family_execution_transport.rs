@@ -23,6 +23,7 @@ pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState
 /// Bounded identity duplicated at the genuine worker boundary so JavaScript can
 /// route/chunk a publication without deserializing its retained body. Rust still
 /// compares every field against the typed body before admission.
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RetainedFamilyExecutionDeltaHeader {
@@ -34,6 +35,7 @@ pub(crate) struct RetainedFamilyExecutionDeltaHeader {
     pub pointer_view: Option<crate::PointerPresentationView>,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 pub(crate) fn decode_worker_execution_delta_carrier(
     packet: &str,
 ) -> Result<RetainedFamilyExecutionDeltaEnvelope, String> {
