@@ -51,10 +51,43 @@ jobs:
       - name: Run unchanged first-pass and replay oracles
         if: ${{ !cancelled() && (steps.capture.outcome == 'success' || steps.capture.outcome == 'failure') }}
         run: node scripts/showcase-live-review.mjs
-      - name: Recheck pinned runtime package bytes after the diagnostic overlay
+      - name: Record exact compositor screenshot evidence
+        if: ${{ always() && steps.capture.outcome == 'success' || always() && steps.capture.outcome == 'failure' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFile, writeFile } from "node:fs/promises";
+          const dir = "browser-smoke-artifacts/showcase/webgpu";
+          let report = null, png = null, error = null;
+          try { report = JSON.parse(await readFile(`${dir}/report.json`, "utf8")); } catch (cause) { error = String(cause); }
+          const capture = report?.results?.find((result) => result.id === "showcase-spatial-scene")?.firstPassCapture ?? null;
+          const pngPath = `${dir}/showcase-spatial-scene-first-pass.png`;
+          try { png = await readFile(pngPath); } catch (cause) { error ??= String(cause); }
+          await writeFile(`${dir}/compositor-screenshot-evidence.json`, JSON.stringify({
+            captureKind: capture?.captureKind ?? null,
+            compositorScreenshot: capture?.compositorScreenshot ?? null,
+            pngPath: png ? pngPath : null,
+            pngBytes: png?.length ?? null,
+            pngSha256: png ? createHash("sha256").update(png).digest("hex") : null,
+            evidenceError: error,
+          }, null, 2) + "\\n");
+          NODE
+      - name: Record post-run worktree and reverify pinned runtime
         if: always()
         run: |
+          evidence=browser-smoke-artifacts/showcase/webgpu
+          mkdir -p "$evidence"
+          git status --short > "$evidence/post-run-git-status.txt"
+          git diff --binary > "$evidence/post-run-tracked.diff"
           git checkout -- scripts/showcase-live-review.mjs scripts/showcase-renderer-readback.mjs
+          poster=web/thumbnails/showcase/showcase-spatial-scene.png
+          poster_sha="$(sha256sum "$poster" | cut -d' ' -f1)"
+          if [ "$poster_sha" = "3a3449f2c8fc57a44a3d2b1060aa175e742830f59f9d4cd6d83ff2b5c9d288cf" ]; then
+            git checkout -- "$poster"
+          elif [ "$poster_sha" != "b537b5e1d5af05dd214c59f0653c01a90af0608510e93d7426dff1f0a98e7f6a" ]; then
+            echo "Unexpected showcase poster hash: $poster_sha" >&2
+            exit 1
+          fi
           GITHUB_SHA="$PINNED_RUNTIME_SOURCE" node .github/ci/wasm-build.mjs verify
           node --input-type=module <<'NODE'
           import { readFile, writeFile } from "node:fs/promises";

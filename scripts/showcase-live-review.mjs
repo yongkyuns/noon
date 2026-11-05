@@ -154,12 +154,12 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
       context: diagnostics.context,
     };
     const canvas = document.querySelector("#scene");
-    if (typeof canvas?.toBlob !== "function") return false;
+    if (!canvas) return false;
     // Avoid waiting for display animation frames: a starved RAF can outlast the
     // terminal hold. The independent pixel oracle checks the copied bitmap.
     // The engine joins the actual renderer acknowledgement to Rust's current
     // observation. Full GPU metrics may settle after this hold has wrapped.
-    const stateRequestStartedAtEpochMs = performance.timeOrigin + performance.now();
+    const stateRequestStartedAtEpochMs = Date.now();
     const state = await gallery.executionState();
     if (runState.stop) return false;
     const current = gallery.executionDiagnostics;
@@ -194,13 +194,15 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
       return false;
     }
 
-    // The uninstrumented natural-sample path copies the page canvas here.
-    // Renderer-instrumented cases use the owner readback path above.
+    // toBlob copies the bitmap synchronously before serializing it in parallel
+    // (https://html.spec.whatwg.org/multipage/canvas.html#dom-canvas-toblob).
+    // Keep the validated run, receipt, and controls as this snapshot's evidence;
+    // playback may advance while toBlob returns and the PNG is encoded.
     const capture = { executionState: state, rendererReceipt: receipt, heldPresentation, controls: captureControls,
       authoredDuration: duration, holdStart, runRequestedAtEpochMs: runState.requestedAtEpochMs,
       observerStartedAtEpochMs: runState.observerStartedAtEpochMs,
       acceptedRunGeneration: runGeneration, capturedAtEpochMs: performance.timeOrigin + performance.now(),
-      stateRequestStartedAtEpochMs, ...runIdentity, attached };
+      ...runIdentity, attached };
     if (naturalTerminalReceipt && rendererReadbackEnabled) {
       capture.captureKind = "renderer-owned";
       capture.proofReceipt = receipt;
@@ -210,28 +212,35 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
     if (heldPresentation !== null && rendererReadbackEnabled) {
       const deadlineEpochMs = stateRequestStartedAtEpochMs +
         Math.max(0, heldPresentation.validUntil - heldPresentation.observedTime) * 1000;
-      const requestedReadback = await window.__showcaseRequestHeldRendererReadback({
+      const screenshot = await window.__showcaseCaptureHeldCompositedScreenshot({
         exampleId, runGeneration, runRequestId: runIdentity.runRequestId,
-        interpreterGeneration: runIdentity.interpreterGeneration,
-        context: runIdentity.context,
+        interpreterGeneration: runIdentity.interpreterGeneration, context: runIdentity.context,
         session: receipt.session, sequence: receipt.sequence, time: receipt.time,
-        objectCount: receipt.objectCount, deadlineEpochMs,
+        objectCount: receipt.objectCount, holdStart, duration, width: 960, height: 540,
+        deadlineEpochMs,
       });
       if (runState.stop || gallery.generationDiagnostics?.runGeneration !== runGeneration ||
-          requestedReadback?.session !== receipt.session || requestedReadback?.sequence !== receipt.sequence ||
-          requestedReadback?.time !== receipt.time || requestedReadback?.objectCount !== receipt.objectCount ||
-          !Number.isFinite(requestedReadback.copyCalledAtEpochMs) ||
-          requestedReadback.copyCalledAtEpochMs > deadlineEpochMs) return false;
-      capture.captureKind = "renderer-owned";
+          screenshot?.before?.executionState?.presentationReceipt?.session !== receipt.session ||
+          screenshot?.before?.executionState?.presentationReceipt?.sequence !== receipt.sequence ||
+          screenshot?.after?.executionState?.presentationReceipt?.session !== receipt.session ||
+          screenshot?.after?.executionState?.presentationReceipt?.sequence !== receipt.sequence ||
+          !Number.isFinite(screenshot.screenshotStartedAtEpochMs) ||
+          screenshot.screenshotStartedAtEpochMs > deadlineEpochMs) return false;
+      capture.captureKind = "compositor-screenshot";
       capture.proofReceipt = receipt;
-      capture.readbackDeadlineEpochMs = deadlineEpochMs;
-      capture.heldReadbackRequest = { status: requestedReadback.status,
-        copyCalledAtEpochMs: requestedReadback.copyCalledAtEpochMs,
-        copyReturnedAtEpochMs: requestedReadback.copyReturnedAtEpochMs ?? null };
-      window.__showcaseLiveReviewFirstPass = capture;
+      capture.compositorScreenshot = {
+        startedAtEpochMs: screenshot.screenshotStartedAtEpochMs,
+        returnedAtEpochMs: screenshot.screenshotReturnedAtEpochMs,
+        bounds: screenshot.screenshotBounds,
+        beforeStateRequestStartedAtEpochMs: screenshot.before.stateRequestStartedAtEpochMs,
+        beforeExecutionState: screenshot.before.executionState,
+        afterStateRequestStartedAtEpochMs: screenshot.after.stateRequestStartedAtEpochMs,
+        afterExecutionState: screenshot.after.executionState,
+      };
+      capture.afterCopyState = screenshot.after.executionState;
+      window.__showcaseLiveReviewFirstPass = { pngDataUrl: screenshot.pngDataUrl, ...capture };
       return false;
     }
-    if (heldPresentation !== null && !rendererReadbackEnabled) return false;
     const pngBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
     pngBlobPromise.catch(() => {});
     // Bracket the copy with Rust observations. A delayed main-thread callback
@@ -435,8 +444,6 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
               assertRendererReadback(readback, {
                 attachedPublication: capture.attached.publication,
                 proofReceipt: capture.proofReceipt,
-                heldPresentation: capture.heldPresentation,
-                deadlineEpochMs: capture.readbackDeadlineEpochMs,
                 holdStart: capture.holdStart,
                 duration: capture.authoredDuration,
                 minimumObjectCount: entry.performance ? 600 : 1,
@@ -721,6 +728,7 @@ async function main() {
             rendererReceipt: firstPassRun.firstPassCapture.rendererReceipt,
             heldPresentation: firstPassRun.firstPassCapture.heldPresentation,
             rendererReadback: firstPassRun.firstPassCapture.rendererReadback ?? null,
+            compositorScreenshot: firstPassRun.firstPassCapture.compositorScreenshot ?? null,
             captureKind: firstPassRun.firstPassCapture.captureKind ?? "held-html",
             rendererReceiptScope: "renderer publication sample; does not prove physical scanout",
           };
