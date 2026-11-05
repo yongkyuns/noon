@@ -1,0 +1,75 @@
+name: Summarize frozen Bezier CPU profiles
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/2422-bezier-cpu-profile-summary
+    paths:
+      - .github/workflows/bezier-cpu-profile-summary.yml
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUN_ID: "42005151229"
+      ARTIFACT_ID: "13404372868"
+      ARTIFACT_NAME: bezier-worker-cpu-profiles-1
+      ARTIFACT_SHA256: ed7462d273aa111d5a3ab5b48051150985fc8cbb9d5fdbd442c6d7a3faa24c85
+      ARTIFACT_BYTES: "45999936"
+      DIAGNOSTIC_HEAD: 0c252dfd3ca4eaf3cdf3d760e54ae1b489805e76
+      PARSER_SHA256: 9ac9c48a3d9811c53bd2bac41d928c95040540772a55256cff6efd60f11feba7
+    steps:
+      - name: Checkout diagnostic parser
+        uses: actions/checkout@v7
+
+      - name: Verify artifact metadata and download the pinned read-only bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            -o "$RUNNER_TEMP/artifacts.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "artifacts.json"), encoding="utf-8") as f:
+              listing = json.load(f)
+          artifact = next((row for row in listing["artifacts"]
+                           if row["id"] == int(os.environ["ARTIFACT_ID"])), None)
+          assert artifact is not None and not artifact["expired"]
+          assert artifact["name"] == os.environ["ARTIFACT_NAME"]
+          assert artifact["size_in_bytes"] == int(os.environ["ARTIFACT_BYTES"])
+          assert artifact["digest"] == "sha256:" + os.environ["ARTIFACT_SHA256"]
+          assert artifact["workflow_run"]["id"] == int(os.environ["RUN_ID"])
+          assert artifact["workflow_run"]["head_sha"] == os.environ["DIAGNOSTIC_HEAD"]
+          PY
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            -o "$RUNNER_TEMP/profiles.zip"
+          test "$(wc -c < "$RUNNER_TEMP/profiles.zip" | tr -d ' ')" = "$ARTIFACT_BYTES"
+          echo "$ARTIFACT_SHA256  $RUNNER_TEMP/profiles.zip" | sha256sum -c -
+          echo "$PARSER_SHA256  scripts/summarize_cpu_profiles.py" | sha256sum -c -
+
+      - name: Summarize sampled worker stacks without rerunning the product
+        run: |
+          python3 -c 'compile(open("scripts/summarize_cpu_profiles.py", encoding="utf-8").read(), "summarize_cpu_profiles.py", "exec")'
+          python3 scripts/summarize_cpu_profiles.py "$RUNNER_TEMP/profiles.zip" "$RUNNER_TEMP/profile-summary.json"
+          cat "$RUNNER_TEMP/profile-summary.json"
+
+      - name: Upload bounded profile summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bezier-worker-cpu-profile-summary-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/profile-summary.json
+          if-no-files-found: warn
+          retention-days: 7
