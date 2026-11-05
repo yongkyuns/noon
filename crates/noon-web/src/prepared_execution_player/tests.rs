@@ -572,7 +572,7 @@ fn prepared_worker_unavailable_seek_is_atomic_and_buffered_wall_time_is_not_char
     let publication = f.player.playback.reader.publication_context();
     let clock = f.player.clock;
     assert!(f.player.seek_delta_json(1.0).is_err());
-    assert!(f.player.tick_delta_json(f64::INFINITY).is_err());
+    assert!(f.player.tick_delta_transport_json(f64::INFINITY).is_err());
     assert_eq!(f.player.clock, clock);
     assert_eq!(f.player.playback.reader.publication_context(), publication);
     assert!(f.player.tick_delta_json(1_500.0).unwrap().is_none());
@@ -615,6 +615,52 @@ fn prepared_worker_wire_carrier_preserves_exact_envelope_metadata() {
     receive(&mut mirror, body);
     assert_eq!(mirror.frame().unwrap(), f.player.playback.reader.frame());
     assert!(f.player.drain_delta_transport_json().unwrap().is_none());
+}
+
+#[test]
+fn prepared_tick_transport_preserves_the_tick_json_and_header_metadata() {
+    let mut json = Fixture::new(76);
+    let mut carrier = Fixture::new(76);
+    for fixture in [&mut json, &mut carrier] {
+        let (_, receipt) = ready(&mut fixture.player);
+        assert!(input(&mut fixture.player, "press", receipt, 1));
+        let batch = fixture.next(false);
+        fixture.deliver(batch);
+        assert!(input(&mut fixture.player, "release", receipt, 1));
+        fixture.player.set_prepared_playing(true);
+        fixture.player.execution_wake(1_000.0).unwrap();
+    }
+
+    let body = |packet: String| {
+        let (header, body) = packet.split_once('\n').unwrap();
+        assert!(header.len() <= 512);
+        let header: serde_json::Value = serde_json::from_str(header).unwrap();
+        let delta = decode(body);
+        assert_eq!(header["channel"], "noon.execution.retained");
+        assert_eq!(header["session"], delta.retained.session);
+        assert_eq!(header["sequence"], delta.retained.sequence);
+        assert_eq!(header["snapshot"], delta.retained.snapshot);
+        body.to_owned()
+    };
+    let expected = json.player.tick_delta_json(1_000.0).unwrap();
+    let actual = carrier
+        .player
+        .tick_delta_transport_json(1_000.0)
+        .unwrap()
+        .map(body);
+    assert_eq!(actual, expected);
+
+    let expected = json
+        .player
+        .tick_delta_json(1_250.0)
+        .unwrap()
+        .expect("active interaction should publish the later tick");
+    let actual = carrier
+        .player
+        .tick_delta_transport_json(1_250.0)
+        .unwrap()
+        .expect("carrier tick should preserve the active interaction publication");
+    assert_eq!(body(actual), expected);
 }
 
 #[test]

@@ -54,7 +54,8 @@ try {
         sent:preparedWorker.sent, presented:preparedWorker.presented, receipt:preparedWorker.receipt,
         errors:preparedWorker.errors, outcomes:preparedWorker.outcomes }));
       const click = () => page.mouse.click(320, 180);
-      const step = timestamp => page.evaluate(timestamp => preparedWorker.send(preparedWorker.player.tickDeltaJson(timestamp)), timestamp);
+      const step = timestamp => page.evaluate(timestamp =>
+        preparedWorker.send(preparedWorker.player.tickDeltaTransportJson(timestamp), true), timestamp);
       try {
         await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`);
         const ready = await page.evaluate(async ({mode, sourceKind, modules, pyodideUrl}) => {
@@ -63,7 +64,7 @@ try {
           const { attachBrowserPointerInput } = await import("./browser-pointer-input.js");
           const { replaceExecutionCanvas } = await import("./execution-canvas.js");
           const { SharedExecutionDeltaWriter, TransferableExecutionDeltaSender, createSharedExecutionMailbox,
-            executionDeltaMetadata } = await import("./execution-transport.js");
+            executionDeltaMetadata, prepareExecutionDeltaTransportForSend } = await import("./execution-transport.js");
           // Python mode uses the public canonical context factory, not a smoke
           // fixture, a second scene representation or a serialized prefix.
           const source = sourceKind === "python"
@@ -120,15 +121,17 @@ try {
           host.sender = mailbox ? new SharedExecutionDeltaWriter(mailbox) : new TransferableExecutionDeltaSender(host.port);
           if (mailbox) host.port.postMessage({ type:"transport_setup",mode,mailbox });
           host.port.postMessage({ type:"execution_wake", cadence:"idle",timerAfterMilliseconds:null });
-          host.send = async json => {
-            if (json == null) return null;
+          host.send = async (packet, workerCarrier = false) => {
+            if (packet == null) return null;
             if (host.errors.length) throw new Error(host.errors.join("\n"));
-            const metadata = executionDeltaMetadata(json);
+            const carrier = workerCarrier ? prepareExecutionDeltaTransportForSend(packet) : null;
+            const json = carrier?.json ?? packet;
+            const metadata = carrier?.metadata ?? executionDeltaMetadata(json);
             const promise = new Promise((resolve,reject) => {
               const timer = setTimeout(() => { host.pending.delete(metadata.sequence); reject(new Error("prepared worker presentation timeout")); }, 30_000);
               host.pending.set(metadata.sequence, { resolve:value => { clearTimeout(timer); resolve(value); }, reject:error => { clearTimeout(timer); reject(error); } });
             });
-            if (!host.sender.send(json)) throw new Error("fixture attempted drain while transport was backpressured");
+            if (!host.sender.send(json, metadata)) throw new Error("fixture attempted drain while transport was backpressured");
             host.sent++;
             if (mode === "shared") host.port.postMessage({type:"shared_delta"});
             return promise;

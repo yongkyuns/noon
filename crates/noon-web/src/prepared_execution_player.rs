@@ -462,6 +462,15 @@ impl PreparedExecutionPlayer {
         self.drain_delta_json()
     }
 
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickDeltaTransportJson))]
+    pub fn tick_delta_transport_json(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<Option<String>, String> {
+        self.tick(wall_time_ms)?;
+        self.drain_delta_transport_json()
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
     pub fn execution_wake(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
         let directive = self.observe_clock(wall_time_ms)?;

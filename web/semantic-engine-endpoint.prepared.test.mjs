@@ -55,6 +55,13 @@ function fixture(mode = "transferable", options = {}) {
       if (bufferOnTick) buffering = true;
       return tickDelta ? json() : null;
     },
+    tickDeltaTransportJson(wallTime) {
+      record("tick-carrier", wallTime);
+      const payload = this.tickDeltaJson(wallTime);
+      if (payload === null) return null;
+      const { channel, session, sequence, snapshot } = JSON.parse(payload);
+      return `${JSON.stringify({ channel, session, sequence, snapshot })}\n${payload}`;
+    },
     seekDeltaJson,
     preparedTime: () => time,
     takePreparedNoChangePresentationJson() {
@@ -212,6 +219,20 @@ for (const mode of ["transferable", "shared"]) {
       }
       assert.equal(transitions[0].publication.session, 7);
       assert.equal(transitions.length, 4, "paused buffering emits no active wait and unchanged reads do not duplicate transitions");
+    } finally { f.close(); }
+  });
+
+  test(`prepared ${mode} tick sends the exact worker carrier body`, { timeout: 3000 }, async () => {
+    const f = fixture(mode);
+    try {
+      await f.attach(); f.acknowledge(); await f.present();
+      f.publishOnTick(); f.tick();
+      await f.when(() => f.deltas.length === 2);
+      assert.equal(f.count("tick-carrier"), 1);
+      assert.deepEqual(f.deltas[1], {
+        channel: "noon.execution.retained", protocol_version: 18, session: 7,
+        sequence: 1, snapshot: false, time: 0, objects: [],
+      });
     } finally { f.close(); }
   });
 

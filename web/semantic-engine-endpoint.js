@@ -1567,9 +1567,9 @@ export async function attachSemanticEngine(
                 const wasBuffering = player.preparedBuffering();
                 const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
                 const mutationStartedAtEpochMs = hostEpochMs();
-                const delta = player.tickDeltaJson(sampledAt);
+                const delta = player.tickDeltaTransportJson(sampledAt);
                 observePreparedWaiting("tick", mutationStartedAtEpochMs);
-                send(delta);
+                send(delta, null, true);
                 if (hasAudio && wasBuffering !== player.preparedBuffering()) {
                   publishPreparedAudioState(sampledAt);
                 }
