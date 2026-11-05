@@ -93,15 +93,31 @@ async function captureHeldCompositedScreenshot(page, request, report) {
   }
 }
 
-export function decorateAuthoringRenderController(source, { holdStart, duration }) {
+export function decorateAuthoringRenderController(source, { holdStart, duration, diagnosticAckTrace = false }) {
   assert.equal(typeof source, "string");
   assert.ok(Number.isFinite(holdStart) && holdStart >= 0);
   assert.ok(Number.isFinite(duration) && duration > holdStart);
   for (const marker of [INITIAL_MARKER, ACK_MARKER, METRICS_MARKER]) {
     assert.equal(source.split(marker).length - 1, 1, `renderer readback marker must occur exactly once: ${marker}`);
   }
-  const initial = `${INITIAL_MARKER}\n  let __showcaseRendererReadback = null;`;
+  const initial = `${INITIAL_MARKER}
+  let __showcaseRendererReadback = null;${diagnosticAckTrace ? `
+  let __showcaseRendererAckOrdinal = 0;
+  let __showcaseRendererLastSample = null;
+  let __showcaseRendererTimeDecreases = 0;` : ""}`;
+  const ackTrace = diagnosticAckTrace ? `
+      const ackSample = latestPresentationSample;
+      if (ackSample !== null) {
+        __showcaseRendererAckOrdinal += 1;
+        if (__showcaseRendererLastSample !== null &&
+            __showcaseRendererLastSample.session === ackSample.session &&
+            ackSample.time < __showcaseRendererLastSample.time) {
+          __showcaseRendererTimeDecreases += 1;
+        }
+        __showcaseRendererLastSample = ackSample;
+      }` : "";
   const present = `${ACK_MARKER}
+      ${ackTrace}
       const readbackSample = latestPresentationSample;
       if (__showcaseRendererReadback === null && !rendererStartupPending && renderPort !== null &&
           displayed !== null && readbackSample !== null &&
@@ -111,6 +127,8 @@ export function decorateAuthoringRenderController(source, { holdStart, duration 
         const readback = __showcaseRendererReadback = {
           status: "pending", session: readbackSample.session, sequence: readbackSample.sequence,
           time: readbackSample.time, presentedAtMs: readbackSample.presentedAtMs,
+          ${diagnosticAckTrace ? `rendererAckOrdinal: __showcaseRendererAckOrdinal,
+          rendererTimeDecreases: __showcaseRendererTimeDecreases,` : ""}
           performanceTimeOriginMs: performance.timeOrigin,
           copyCalledAtEpochMs: performance.timeOrigin + performance.now(), objectCount: null, pngDataUrl: null, error: null,
         };
@@ -138,16 +156,22 @@ export function decorateAuthoringRenderController(source, { holdStart, duration 
           rejectReadback(error);
         }
       }`;
-  const metrics = `            if (__showcaseRendererReadback !== null && __showcaseRendererReadback.status !== "pending") {
+  const metrics = `            if (__showcaseRendererReadback !== null &&
+                (__showcaseRendererReadback.status !== "pending" || ${diagnosticAckTrace})) {
               metrics.showcaseRendererReadback = __showcaseRendererReadback;
-            }` + "\n" + METRICS_MARKER;
+            }${diagnosticAckTrace ? `
+            metrics.showcaseRendererAckDiagnostic = {
+              ordinal: __showcaseRendererAckOrdinal,
+              sameSessionTimeDecreases: __showcaseRendererTimeDecreases,
+              lastSample: __showcaseRendererLastSample,
+            };` : ""}` + "\n" + METRICS_MARKER;
   const instrumented = source.replace(INITIAL_MARKER, initial)
     .replace(ACK_MARKER, present)
     .replace(METRICS_MARKER, metrics);
   return { instrumented, sourceSha256: sha256(source), instrumentedSha256: sha256(instrumented) };
 }
 
-export async function installAuthoringRendererReadback(page, { holdStart, duration }) {
+export async function installAuthoringRendererReadback(page, { holdStart, duration, diagnosticAckTrace = false }) {
   let resolveServed;
   let rejectServed;
   const served = new Promise((resolve, reject) => { resolveServed = resolve; rejectServed = reject; });
@@ -162,7 +186,7 @@ export async function installAuthoringRendererReadback(page, { holdStart, durati
       const response = await route.fetch();
       assert.ok(response.ok(), `renderer controller request failed: ${response.status()}`);
       const source = await response.text();
-      const decorated = decorateAuthoringRenderController(source, { holdStart, duration });
+      const decorated = decorateAuthoringRenderController(source, { holdStart, duration, diagnosticAckTrace });
       report.sourceSha256 = decorated.sourceSha256;
       report.instrumentedSha256 = decorated.instrumentedSha256;
       resolveServed();
