@@ -93,6 +93,7 @@ add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
 _SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
 _CANONICAL_SCENE_FIELDS = frozenset("""
 _owner _binding_handles _object_keys _object_key_ids _next_object_id
+_canonical_authoring_context
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
@@ -282,6 +283,10 @@ def _finite_source_number(value):
         except OverflowError:
             return False
     return type(value) is float and math.isfinite(value)
+
+
+def _reserved_scene_field(name):
+    return name in _CANONICAL_SCENE_FIELDS or name.startswith("_noon_")
 
 
 def _numpy_numeric_expression(node, arrays, containers, module_literals, local=()):
@@ -4244,7 +4249,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                         or type(call.args[1].value) is not str
                         or not call.args[1].value.startswith("_")
                         or call.args[1].value.startswith("__")
-                        or call.args[1].value in writes | class_names | method_names | self.members | _CANONICAL_SCENE_FIELDS
+                        or call.args[1].value in writes | class_names | method_names | self.members
+                        or _reserved_scene_field(call.args[1].value)
                         or not isinstance(call.args[2], ast.Constant) or call.args[2].value is not None):
                     continue
                 assign = next((parent for parent in nodes
@@ -4339,7 +4345,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                         for child in ast.walk(member)
                         if isinstance(child, ast.Attribute) and isinstance(child.ctx, ast.Store)
                         and isinstance(child.value, ast.Name) and child.value.id == "self"}
-        if (owned_stores & (previous_members | declared_helpers | _CANONICAL_SCENE_FIELDS)
+        if (owned_stores & (previous_members | declared_helpers)
+                or any(_reserved_scene_field(name) for name in owned_stores)
                 or any(name.startswith("__") for name in owned_stores)):
             raise _OpaqueSource(node, "unsupported_class_contract")
         for member in node.body:

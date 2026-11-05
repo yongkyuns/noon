@@ -92,6 +92,17 @@ def tokens(value):
         for field in ("time", "declare_wait"):
             with self.subTest(field=field):
                 self.assertFalse(source_is_scene_only(optional.replace("'_listener'", repr(field))))
+        for field in ("_noon_portable_construct_mode", "_noon_async_continuation_pending",
+                      "_canonical_authoring_context"):
+            with self.subTest(runtime_field=field):
+                self.assertFalse(source_is_scene_only(optional.replace("'_listener'", repr(field))))
+        for field in ("_noon_async_continuation_mode", "_canonical_authoring_context"):
+            with self.subTest(runtime_write=field):
+                runtime_write = optional.replace(
+                    "        listener = getattr(self, '_listener', None)",
+                    f"        self.{field} = None\n"
+                    "        listener = getattr(self, '_listener', None)")
+                self.assertFalse(source_is_scene_only(runtime_write))
         wrapped = optional.replace(
             "listener = getattr(self, '_listener', None)",
             "listener = (getattr(self, '_listener', None),)")
