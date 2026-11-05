@@ -114,6 +114,23 @@ test("retired command completion cannot mutate a replacement's controls or error
   assert.deepEqual(f.errors, []);
 });
 
+test("the placeholder scrubber survives controls teardown and reinitialization", async () => {
+  const f = fixture();
+  const root = f.controls.element;
+  const scrubber = f.range;
+  assert.equal(f.preview.querySelector(".playback-live-status").textContent, "Loading playback state");
+  f.controls.destroy();
+  assert.equal(f.preview.querySelector(".playback-scrubber"), scrubber);
+  const replacement = new PlaygroundPlaybackControls(f.player, f.preview, { durationSeconds: 3 });
+  assert.equal(replacement.element, root);
+  assert.equal(f.preview.querySelector(".playback-scrubber"), scrubber);
+  scrubber.value = "1.25";
+  scrubber.dispatchEvent(new Event("input"));
+  await flush();
+  assert.equal(replacement.element.dataset.elapsedSeconds, "1.25");
+  assert.deepEqual(f.calls, ["seek"]);
+});
+
 test("source handoff suppresses an in-flight playback rejection and permits the next seek", async () => {
   const f = fixture(); let reject;
   f.player.seek = () => new Promise((_, fail) => { reject = fail; });

@@ -150,6 +150,22 @@ try {
   });
 
   await page.addInitScript(() => {
+    window.__playbackScrubberLifecycle = { initial: null, replaced: false, detached: false };
+    const captureScrubber = (records = []) => {
+      const lifecycle = window.__playbackScrubberLifecycle;
+      if (lifecycle.initial !== null && records.some(record =>
+        [...record.removedNodes].some(node => node === lifecycle.initial || node.contains?.(lifecycle.initial)))) {
+        lifecycle.detached = true;
+      }
+      const scrubber = document.querySelector(".playback-scrubber");
+      if (!scrubber) return;
+      if (lifecycle.initial === null) lifecycle.initial = scrubber;
+      else if (lifecycle.initial !== scrubber) lifecycle.replaced = true;
+    };
+    const scrubberObserver = new MutationObserver(captureScrubber);
+    scrubberObserver.observe(document, { childList: true, subtree: true });
+    captureScrubber();
+
     window.addEventListener("DOMContentLoaded", () => {
       const status = document.querySelector("#status");
       if (!status) return;
@@ -252,6 +268,15 @@ try {
   });
 
   const initial = await playbackSnapshot(page);
+  const scrubberLifecycle = await page.evaluate(() => ({
+    initialFound: window.__playbackScrubberLifecycle.initial !== null,
+    replaced: window.__playbackScrubberLifecycle.replaced,
+    detached: window.__playbackScrubberLifecycle.detached,
+    currentIsInitial: window.__playbackScrubberLifecycle.initial === document.querySelector(".playback-scrubber"),
+  }));
+  diagnostics.scrubberLifecycle = scrubberLifecycle;
+  assert.deepEqual(scrubberLifecycle, { initialFound: true, replaced: false, detached: false, currentIsInitial: true },
+    "runtime initialization must keep the original loading scrubber node attached");
   diagnostics.initial = initial;
   diagnostics.lifecycle = await page.evaluate(() => window.__noonPlaybackLifecycle);
   const preparedSamples = diagnostics.lifecycle.samples.filter(sample =>

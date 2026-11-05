@@ -57,6 +57,7 @@ export class PlaygroundPlaybackControls {
   #presentedSequence = null;
   #controlGeneration = 0;
   #destroyed = false;
+  #stateObserved = false;
 
   constructor(
     player,
@@ -77,7 +78,7 @@ export class PlaygroundPlaybackControls {
 
     installStyles();
 
-    this.#root = previewPane.querySelector(".playback-slot");
+    this.#root = previewPane.querySelector(".playback-slot, .playback-controls");
     if (!(this.#root instanceof HTMLElement)) {
       this.#root = document.createElement("section");
       previewPane.append(this.#root);
@@ -90,101 +91,37 @@ export class PlaygroundPlaybackControls {
     this.#root.addEventListener("keydown", this.#handleKeyboard);
     this.#root.addEventListener("keyup", this.#handleKeyboard);
     this.#root.dataset.undoSupport = String(this.#undoDragSupported);
-    this.#root.replaceChildren();
-
-    this.#playButton = document.createElement("button");
-    this.#playButton.type = "button";
-    this.#playButton.className = "playback-button playback-toggle";
+    const markup = ensurePlaybackMarkup(this.#root);
+    this.#playButton = markup.playButton;
     this.#playButton.addEventListener("click", this.#handleToggle);
-
-    this.#restartButton = document.createElement("button");
-    this.#restartButton.type = "button";
-    this.#restartButton.className = "playback-button playback-restart";
-    this.#restartButton.textContent = "↺";
-    this.#restartButton.setAttribute("aria-label", "Restart animation from the beginning");
-    this.#restartButton.title = "Restart";
+    this.#restartButton = markup.restartButton;
     this.#restartButton.addEventListener("click", this.#handleRestart);
-
-    this.#undoDragButton = document.createElement("button");
-    this.#undoDragButton.type = "button";
-    this.#undoDragButton.className = "playback-button playback-undo-drag";
-    this.#undoDragButton.textContent = "Undo drag";
-    this.#undoDragButton.setAttribute("aria-label", "Undo the most recent drag");
+    this.#undoDragButton = markup.undoDragButton;
     this.#undoDragButton.addEventListener("click", this.#handleUndoDrag);
     this.#undoDragButton.hidden = !this.#undoDragSupported;
-
-    const timeline = document.createElement("div");
-    timeline.className = "playback-timeline";
-
-    this.#scrubber = document.createElement("input");
-    this.#scrubber.type = "range";
-    this.#scrubber.className = "playback-scrubber";
-    this.#scrubber.min = "0";
+    this.#scrubber = markup.scrubber;
     // A millisecond step truncates endpoints such as 2.5999999999999996 to
     // 2.599 in the browser. Preserve the exact authored range and seek value.
     this.#scrubber.step = "any";
-    this.#scrubber.setAttribute("aria-label", "Animation playhead");
     this.#scrubber.addEventListener("input", this.#handleSeekInput);
     this.#scrubber.addEventListener("pointerdown", this.#handlePointerDown);
     this.#scrubber.addEventListener("pointerup", this.#handlePointerEnd);
     this.#scrubber.addEventListener("pointercancel", this.#handlePointerEnd);
-    this.#liveStatus = document.createElement("span");
-    this.#liveStatus.className = "playback-live-status";
-    this.#liveStatus.textContent = "Duration pending";
-    this.#liveStatus.setAttribute("role", "status");
-    this.#liveStatus.setAttribute("aria-live", "polite");
-    this.#sectionMarkers = document.createElement("fieldset");
-    this.#sectionMarkers.className = "playback-section-markers";
-    this.#sectionMarkers.setAttribute("aria-label", "Lesson key points");
-    timeline.append(this.#scrubber, this.#sectionMarkers, this.#liveStatus);
-
-    this.#timeOutput = document.createElement("output");
-    this.#timeOutput.className = "playback-time";
-    this.#timeOutput.setAttribute("aria-live", "off");
-    this.#timeOutput.setAttribute("aria-label", "Animation time");
-
-    this.#root.append(this.#playButton, this.#restartButton, this.#undoDragButton, timeline, this.#timeOutput);
-    this.#audioControls = document.createElement("div");
-    this.#audioControls.className = "playback-audio-controls";
-    this.#audioControls.hidden = true;
-    this.#previousSection = document.createElement("button");
-    this.#previousSection.type = "button";
-    this.#previousSection.className = "playback-button playback-previous-section";
-    this.#previousSection.textContent = "Previous";
-    this.#previousSection.setAttribute("aria-label", "Previous lesson section");
+    this.#liveStatus = markup.liveStatus;
+    this.#sectionMarkers = markup.sectionMarkers;
+    this.#timeOutput = markup.timeOutput;
+    this.#audioControls = markup.audioControls;
+    this.#previousSection = markup.previousSection;
     this.#previousSection.addEventListener("click", this.#handlePreviousSection);
-    this.#nextSection = document.createElement("button");
-    this.#nextSection.type = "button";
-    this.#nextSection.className = "playback-button playback-next-section";
-    this.#nextSection.textContent = "Next";
-    this.#nextSection.setAttribute("aria-label", "Next lesson section");
+    this.#nextSection = markup.nextSection;
     this.#nextSection.addEventListener("click", this.#handleNextSection);
-    this.#sectionNames = document.createElement("select");
-    this.#sectionNames.className = "playback-section-names";
-    this.#sectionNames.setAttribute("aria-label", "Jump to lesson key point");
+    this.#sectionNames = markup.sectionNames;
     this.#sectionNames.addEventListener("change", this.#handleSectionJump);
-    this.#sectionControls = document.createElement("div");
-    this.#sectionControls.className = "playback-section-controls";
-    this.#sectionControls.append(this.#previousSection, this.#nextSection, this.#sectionNames);
-    this.#root.append(this.#sectionControls);
-    this.#muteButton = document.createElement("button");
-    this.#muteButton.type = "button";
-    this.#muteButton.className = "playback-button playback-mute";
+    this.#sectionControls = markup.sectionControls;
+    this.#muteButton = markup.muteButton;
     this.#muteButton.addEventListener("click", this.#handleMute);
-    const volumeLabel = document.createElement("label");
-    volumeLabel.className = "playback-volume-label";
-    volumeLabel.textContent = "Music";
-    this.#volume = document.createElement("input");
-    this.#volume.type = "range";
-    this.#volume.min = "0";
-    this.#volume.max = "1";
-    this.#volume.step = "0.01";
-    this.#volume.value = "1";
-    this.#volume.setAttribute("aria-label", "Music volume");
+    this.#volume = markup.volume;
     this.#volume.addEventListener("input", this.#handleVolume);
-    volumeLabel.append(this.#volume);
-    this.#audioControls.append(this.#muteButton, volumeLabel);
-    this.#root.append(this.#audioControls);
     this.#render();
   }
 
@@ -225,6 +162,7 @@ export class PlaygroundPlaybackControls {
   // A read-only observation must not fight a user's in-flight scrub or command.
   observe(state) {
     if (this.#destroyed) return;
+    this.#stateObserved = true;
     if (this.#seekActive || this.#commandPending || this.#transportActive) {
       if (state.preparedPlayback === false || state.sourceExecution === "observed") {
         this.#invalidateCommands();
@@ -295,6 +233,7 @@ export class PlaygroundPlaybackControls {
   }
 
   sync(state) {
+    this.#stateObserved = true;
     const pendingPlaying = this.#commandPending ? this.#desiredPlaying : null;
     const pendingActivation = pendingPlaying === null ? null : this.#pendingActivation;
     const { time, playing, durationSeconds, canUndoTranslationDrag,
@@ -811,7 +750,8 @@ export class PlaygroundPlaybackControls {
     const status = this.#unavailableReason !== null ? "Replay unavailable"
       : this.#seekNotice !== null ? this.#seekNotice
         : open ? `${this.#buffering ? "Buffering · " : ""}Available history: ${range === null ? "none" : `${formatTime(range.start)}–${formatTime(range.end)} s`} · total unknown`
-          : range === null ? "Seeking unavailable" : "Duration pending";
+          : !this.#stateObserved ? "Loading playback state"
+            : range === null ? "Seeking unavailable" : "Duration pending";
     if (this.#liveStatus.textContent !== status) {
       this.#liveStatus.textContent = status;
       this.#liveStatus.title = status;
@@ -844,40 +784,99 @@ function renderPlaybackPlaceholder(root) {
   root.removeAttribute("title");
   root.setAttribute("aria-label", "Animation playback controls");
 
-  const playButton = document.createElement("button");
-  playButton.type = "button";
-  playButton.className = "playback-button playback-toggle";
+  const markup = ensurePlaybackMarkup(root);
+  const { playButton, restartButton, undoDragButton, scrubber, timeOutput,
+    liveStatus, sectionMarkers, previousSection, nextSection, sectionNames,
+    sectionControls, muteButton, volume, audioControls } = markup;
   playButton.textContent = "Play";
   playButton.disabled = true;
   playButton.setAttribute("aria-label", "Run the example to enable playback");
-
-  const restartButton = document.createElement("button");
-  restartButton.type = "button";
-  restartButton.className = "playback-button playback-restart";
   restartButton.textContent = "↺";
   restartButton.disabled = true;
   restartButton.setAttribute("aria-label", "Run the example to enable restart");
   restartButton.title = "Restart";
 
-  const timeline = document.createElement("label");
-  timeline.className = "playback-timeline";
-  const scrubber = document.createElement("input");
-  scrubber.type = "range";
-  scrubber.className = "playback-scrubber";
-  scrubber.min = "0";
   scrubber.max = "1";
   scrubber.value = "0";
   scrubber.disabled = true;
   scrubber.setAttribute("aria-label", "Animation playhead unavailable until Run");
-  timeline.append(scrubber);
-
-  const timeOutput = document.createElement("output");
-  timeOutput.className = "playback-time";
-  timeOutput.setAttribute("aria-live", "off");
   timeOutput.setAttribute("aria-label", "Animation time unavailable until Run");
   timeOutput.value = "0.00 / —";
+  undoDragButton.hidden = true;
+  liveStatus.textContent = "Loading playback state";
+  liveStatus.removeAttribute("title");
+  sectionMarkers.replaceChildren();
+  previousSection.disabled = true;
+  nextSection.disabled = true;
+  sectionNames.replaceChildren();
+  sectionNames.disabled = true;
+  sectionControls.hidden = true;
+  muteButton.disabled = true;
+  volume.disabled = true;
+  audioControls.hidden = true;
+}
 
-  root.replaceChildren(playButton, restartButton, timeline, timeOutput);
+function ensurePlaybackMarkup(root) {
+  const child = (parent, selector, tag, className) => {
+    let element = parent.querySelector(selector);
+    if (element === null) {
+      element = document.createElement(tag);
+      element.className = className;
+      parent.append(element);
+    }
+    return element;
+  };
+  const playButton = child(root, ".playback-toggle", "button", "playback-button playback-toggle");
+  playButton.type = "button";
+  const restartButton = child(root, ".playback-restart", "button", "playback-button playback-restart");
+  restartButton.type = "button";
+  restartButton.textContent = "↺";
+  restartButton.setAttribute("aria-label", "Restart animation from the beginning");
+  restartButton.title = "Restart";
+  const undoDragButton = child(root, ".playback-undo-drag", "button", "playback-button playback-undo-drag");
+  undoDragButton.type = "button";
+  undoDragButton.textContent = "Undo drag";
+  undoDragButton.setAttribute("aria-label", "Undo the most recent drag");
+  const timeline = child(root, ".playback-timeline", "div", "playback-timeline");
+  const scrubber = child(timeline, ".playback-scrubber", "input", "playback-scrubber");
+  scrubber.type = "range";
+  scrubber.min = "0";
+  scrubber.step = "any";
+  scrubber.setAttribute("aria-label", "Animation playhead");
+  const sectionMarkers = child(timeline, ".playback-section-markers", "fieldset", "playback-section-markers");
+  sectionMarkers.setAttribute("aria-label", "Lesson key points");
+  const liveStatus = child(timeline, ".playback-live-status", "span", "playback-live-status");
+  liveStatus.setAttribute("role", "status");
+  liveStatus.setAttribute("aria-live", "polite");
+  const timeOutput = child(root, ".playback-time", "output", "playback-time");
+  timeOutput.setAttribute("aria-live", "off");
+  timeOutput.setAttribute("aria-label", "Animation time");
+  const sectionControls = child(root, ".playback-section-controls", "div", "playback-section-controls");
+  const previousSection = child(sectionControls, ".playback-previous-section", "button", "playback-button playback-previous-section");
+  previousSection.type = "button";
+  previousSection.textContent = "Previous";
+  previousSection.setAttribute("aria-label", "Previous lesson section");
+  const nextSection = child(sectionControls, ".playback-next-section", "button", "playback-button playback-next-section");
+  nextSection.type = "button";
+  nextSection.textContent = "Next";
+  nextSection.setAttribute("aria-label", "Next lesson section");
+  const sectionNames = child(sectionControls, ".playback-section-names", "select", "playback-section-names");
+  sectionNames.setAttribute("aria-label", "Jump to lesson key point");
+  const audioControls = child(root, ".playback-audio-controls", "div", "playback-audio-controls");
+  const muteButton = child(audioControls, ".playback-mute", "button", "playback-button playback-mute");
+  muteButton.type = "button";
+  const volumeLabel = child(audioControls, ".playback-volume-label", "label", "playback-volume-label");
+  if (volumeLabel.children.length === 0) volumeLabel.textContent = "Music";
+  const volume = child(volumeLabel, "input", "input", "");
+  volume.type = "range";
+  volume.min = "0";
+  volume.max = "1";
+  volume.step = "0.01";
+  volume.value = "1";
+  volume.setAttribute("aria-label", "Music volume");
+  return { playButton, restartButton, undoDragButton, scrubber, timeOutput,
+    liveStatus, sectionMarkers, previousSection, nextSection, sectionNames,
+    sectionControls, muteButton, volume, audioControls };
 }
 
 function installStyles() {
