@@ -29,9 +29,9 @@ jobs:
       ANCHOR_ARCHIVE_SHA256: 094a17d4793bf64c71038bfc0ab41cfe157b0ce91a48092c3174198b351a0bbe
       ANCHOR_ARCHIVE_BYTES: "21347498"
       ANCHOR_SOURCE: 58135c4069a6f8d700dcaaee677d7c8c7a48d6c5
-      PROFILE_RUNNER_SHA256: fe75c514b6db8aebad071b90862ddf33b5fb54576c5216dd56acc89824b78fe6
-      PROFILE_HELPER_SHA256: 01c3bbdf8f67ea5d864f507fd5ee38ce9f308489b96bb13fa889f8789a78e0ee
-      PROFILE_TEST_SHA256: d5a15c7a8a6152240a2dd45fc90240e688169253914d8794722753d928a2abb3
+      PROFILE_RUNNER_SHA256: 2e34142ff17930b23bba78c323401d442ddc13c98ea8d569a946a3bd5bae46af
+      PROFILE_HELPER_SHA256: 0207095aabb1a1fbfb9621fdaf9346fc5fece84220728bd93161e11a4fada316
+      PROFILE_TEST_SHA256: 45b585c09bc2b7f3887136a447a90d6d2832a54665f20318c8f986fc3c15e074
     steps:
       - name: Checkout diagnostic workflow revision
         uses: actions/checkout@v7
@@ -181,7 +181,7 @@ jobs:
           find anchor/web -type f -print0 | sort -z | xargs -0 shasum -a 256 > "$RUNNER_TEMP/anchor-package-pre.sha256"
           git -C candidate status --porcelain --untracked-files=all > "$RUNNER_TEMP/candidate-source-pre.status"
 
-      - name: Capture one warm Bezier pass per package
+      - name: Capture the whole warm Bezier pass per package
         working-directory: candidate
         env:
           NOON_PRODUCT_EXAMPLE: showcase-bezier-paths
