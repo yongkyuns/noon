@@ -1,15 +1,28 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS, validateGalleryRuntimeBuildIdentity, validateShowcaseDiagnostics }
+  from "./playground-profile-expectations.mjs";
 
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PORT ?? "4185");
 const presentationProfile = process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PROFILE ?? "default";
 assert.ok(["default", "live"].includes(presentationProfile));
 const liveComparison = presentationProfile === "live";
+const externalBase = process.env.NOON_AUTHORING_RECOVERY_BASE ?? null;
+const externalRevision = process.env.NOON_AUTHORING_RECOVERY_REVISION ?? null;
+assert.equal(Boolean(externalBase), Boolean(externalRevision),
+  "external deployment checks require both NOON_AUTHORING_RECOVERY_BASE and NOON_AUTHORING_RECOVERY_REVISION");
+const externalRoot = externalBase ? new URL(externalBase) : null;
+assert.ok(!externalRoot || externalRoot.pathname.endsWith("/") && !externalRoot.search && !externalRoot.hash,
+  "NOON_AUTHORING_RECOVERY_BASE must be the deployed root URL ending in `/`");
+assert.ok(!externalRoot || !liveComparison,
+  "deployed navigation qualification uses the default prepared profile");
 const artifactDir = path.resolve(
   process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_ARTIFACTS ??
     "browser-smoke-artifacts/playground-authoring-recovery",
@@ -64,11 +77,35 @@ class TaintLibrary(Scene):
         self.add(Square())
 `,
 };
+const navigationCancellationSource = SOURCES.explicitRerun
+  .replace("ExplicitRerun", "CatalogNavigationCancellation")
+  .replace("run_time=3", "run_time=30");
 
 await mkdir(artifactDir, { recursive: true });
 
-const server = await serveRepository(path.resolve("."), port);
-const { baseUrl } = server;
+let server = null;
+let baseUrl = externalRoot?.href ?? null;
+const showcaseManifest = JSON.parse(readFileSync(
+  path.resolve("web/python/examples/noon_showcase_manifest.json"), "utf8"));
+const showcaseTitles = new Map(showcaseManifest.entries.map(entry => [entry.id, entry.title]));
+const showcaseProfiles = new Map(SHOWCASE_PROFILE_EXPECTATIONS.map(entry => [entry.id, entry]));
+
+async function readExternalIdentity() {
+  if (!externalRoot) return;
+  const read = async name => {
+    const response = await fetch(new URL(`${name}?stage=${Date.now()}`, externalRoot), {
+      headers: { "Cache-Control": "no-cache" },
+      signal: AbortSignal.timeout(20_000),
+    });
+    assert.ok(response.ok, `${name}: HTTP ${response.status}`);
+    return response.json();
+  };
+  const [build, runtime] = await Promise.all([read("build-info.json"), read("runtime-build-identity.json")]);
+  assert.equal(build.commit, externalRevision, "deployed Pages revision changed");
+  validateGalleryRuntimeBuildIdentity(runtime, { requireSourceRevision: true });
+  assert.equal(runtime.sourceRevision, externalRevision, "deployed runtime source revision changed");
+  return { build, runtime };
+}
 
 async function snapshot(page) {
   return page.evaluate(() => {
@@ -94,6 +131,7 @@ async function snapshot(page) {
       executionDiagnostics,
       interpreterGeneration: executionDiagnostics?.interpreterGeneration ?? null,
       runRequestId: executionDiagnostics?.runRequestId ?? null,
+      runInFlight: window.__noonExampleGallery?.runInFlight ?? null,
       authoringRunCount: window.__recoveryAuthoringRuns?.length ?? 0,
       objectCount: document.querySelector("#metric-objects")?.value ?? "",
       playhead: document.querySelector("#metric-time")?.value ?? "",
@@ -149,7 +187,8 @@ function assertRunEvidence(evidence, beforeCount, source, observed, previousRunG
     assert.equal(Number(observed.executionDiagnostics.context.runGeneration), Number(observed.runGeneration),
       "an adopted source trace must match the active Run generation");
   }
-  assert.equal(observed.executionDiagnostics.requestedProfile, run.preparedPlayback ? "incremental" : "observed");
+  assert.equal(observed.executionDiagnostics.requestedProfile,
+    run.preparedPlayback === null ? "incremental" : run.preparedPlayback ? "incremental" : "observed");
   assert.equal(Number(observed.interpreterGeneration) >= 0, true,
     "diagnostic trace must identify the interpreter generation");
   const messages = evidence.workers.filter(message => message.workerId === run.workerId &&
@@ -170,7 +209,8 @@ function assertRunEvidence(evidence, beforeCount, source, observed, previousRunG
 function captureRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration) {
   const { run, ready, proof } = assertRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration);
   return { run: { workerId: run.workerId, requestId: run.requestId,
-    sequence: run.sequence, sourceLength: run.source.length }, ready, proof };
+    sequence: run.sequence, sourceLength: run.source.length,
+    sourceSha256: createHash("sha256").update(run.source).digest("hex") }, ready, proof };
 }
 
 async function assertDraftOnly(page, before, expectedSource) {
@@ -374,7 +414,7 @@ async function runEditedSource(page, options) {
   return result;
 }
 
-async function selectGalleryExample(page, id, title) {
+async function selectGalleryExample(page, id, title, supersededRequestId = null) {
   const trigger = page.locator("#example-browser-trigger");
   if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click();
   const search = page.locator('.example-browser-layer input[type="search"]');
@@ -383,6 +423,11 @@ async function selectGalleryExample(page, id, title) {
   await card.waitFor({ state: "visible" });
   const before = await workerEvidence(page);
   const beforeState = await snapshot(page);
+  if (supersededRequestId !== null) {
+    assert.equal(beforeState.runInFlight, true, "the gallery selection must interrupt a still-active Run");
+    assert.equal(beforeState.runRequestId, supersededRequestId,
+      "the selection must supersede the exact accepted Run captured before it");
+  }
   await card.click();
   await page.waitForFunction(({ count, id }) =>
     (window.__recoveryAuthoringRuns?.length ?? 0) === count + 1 &&
@@ -395,12 +440,46 @@ async function selectGalleryExample(page, id, title) {
     document.querySelector("#patch-status")?.dataset.runGeneration ===
       String(window.__noonExampleGallery?.executionDiagnostics?.context?.runGeneration),
   String(beforeState.executionDiagnostics?.context?.runGeneration ?? 0), { timeout: 120_000 });
+  await page.waitForFunction(({ id, runIndex }) => {
+    const gallery = window.__noonExampleGallery;
+    const diagnostics = gallery?.executionDiagnostics;
+    const submitted = window.__recoveryAuthoringRuns?.[runIndex];
+    const patch = document.querySelector("#patch-status");
+    return patch?.dataset.state === "applied" && !gallery?.runInFlight &&
+      submitted && diagnostics?.runRequestId === submitted.requestId &&
+      diagnostics?.context?.exampleId === id && Array.isArray(diagnostics.events) &&
+      diagnostics.events.some(event => event.stage === "disposition");
+  }, { id, runIndex: before.runs.length }, { timeout: 180_000 });
   const result = await snapshot(page);
   const evidence = await workerEvidence(page);
   assert.equal(evidence.runs.length, before.runs.length + 1, "gallery Run must submit source exactly once");
   const source = await page.evaluate(() => document.querySelector("#python-scene-source").value);
   result.runEvidence = captureRunEvidence(evidence, before.runs.length, source, result,
     Number(beforeState.executionDiagnostics?.context?.runGeneration ?? 0));
+  return result;
+}
+
+async function selectShowcase(page, id, supersededRequestId = null) {
+  const title = showcaseTitles.get(id);
+  assert.ok(title, `showcase manifest has no title for ${id}`);
+  const selected = await selectGalleryExample(page, id, title, supersededRequestId);
+  const expected = showcaseProfiles.get(id);
+  assert.ok(expected, `profile ledger has no entry for ${id}`);
+  assert.equal(selected.runEvidence.run.sourceSha256, expected.sha256,
+    `${id}: selected catalog source bytes differ from the frozen profile ledger`);
+  if (!liveComparison) selected.showcaseProfile = validateShowcaseDiagnostics(
+    expected, selected.executionDiagnostics);
+  return selected;
+}
+
+function seededPermutation(values, seed) {
+  let state = seed >>> 0;
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index--) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    const other = state % (index + 1);
+    [result[index], result[other]] = [result[other], result[index]];
+  }
   return result;
 }
 
@@ -441,6 +520,13 @@ let context = null;
 let page = null;
 let phase = "startup";
 try {
+  if (!externalRoot) {
+    server = await serveRepository(path.resolve("."), port);
+    baseUrl = server.baseUrl;
+    diagnostics.testServer.baseUrl = baseUrl;
+  } else {
+    diagnostics.deployedIdentity = { before: await readExternalIdentity() };
+  }
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -468,6 +554,12 @@ try {
         const workerUrl = new URL(args[0], window.location.href).href;
         const worker = Reflect.construct(target, args, newTarget);
         const originalPostMessage = worker.postMessage.bind(worker);
+        const originalTerminate = worker.terminate.bind(worker);
+        worker.terminate = (...terminateArgs) => {
+          window.__recoveryWorkerEvents.push({ workerId: id, workerUrl: workerUrl.slice(0, 400),
+            type: "terminated", requestId: null, sequence: sequence++ });
+          return originalTerminate(...terminateArgs);
+        };
         worker.postMessage = (data, ...rest) => {
           if (data?.channel === "noon.authoring" && data.type === "run") {
             window.__recoveryAuthoringRuns.push({ workerId: id, requestId: data.requestId,
@@ -487,9 +579,10 @@ try {
     });
     window.__recoveryPreparedPlayback = preparedPlayback;
     window.__NOON_PLAYGROUND_TEST_HOOKS__ = {
-      authoringRunOptions: () => ({ preparedPlayback: window.__recoveryPreparedPlayback }),
+      authoringRunOptions: () => window.__recoveryPreparedPlayback === null
+        ? {} : ({ preparedPlayback: window.__recoveryPreparedPlayback }),
     };
-  }, { preparedPlayback: !liveComparison });
+  }, { preparedPlayback: externalRoot ? null : !liveComparison });
   page = await context.newPage();
   page.on("pageerror", (error) => diagnostics.pageErrors.push(String(error)));
   page.on("requestfailed", request => diagnostics.failedRequests.push({
@@ -500,7 +593,9 @@ try {
   });
 
   diagnostics.browser = await browser.version();
-  await page.goto(`${baseUrl}/web/index.html?example=parity-create-circle`, { waitUntil: "load" });
+  await page.goto(externalRoot
+    ? new URL("index.html?example=parity-create-circle", externalRoot).href
+    : `${baseUrl}/web/index.html?example=parity-create-circle`, { waitUntil: "load" });
   await waitForInitialScene(page);
   await waitForObjectCount(page, 1);
   await trackFullNavigations(page);
@@ -666,18 +761,32 @@ try {
   page.on("console", (message) => {
     if (message.type() === "error") diagnostics.consoleErrors.push({ phase, text: message.text() });
   });
-  await page.goto(`${baseUrl}/web/index.html?example=showcase-first-scene`, { waitUntil: "load" });
+  await page.goto(externalRoot
+    ? new URL("index.html?example=showcase-first-scene", externalRoot).href
+    : `${baseUrl}/web/index.html?example=showcase-first-scene`, { waitUntil: "load" });
   await waitForInitialScene(page);
   await trackFullNavigations(page);
-  diagnostics.snapshots.pixels = await selectGalleryExample(page, "showcase-raster-images", "Pixels in the scene");
+  diagnostics.snapshots.catalogAnchor = await snapshot(page);
+  const anchorRun = (await workerEvidence(page)).runs.at(-1);
+  assert.equal(diagnostics.snapshots.catalogAnchor.exampleId, "showcase-first-scene");
+  if (externalRoot) {
+    assert.equal(anchorRun?.preparedPlayback, null, "deployed startup must not override viewer policy");
+    assert.equal(diagnostics.snapshots.catalogAnchor.executionDiagnostics.requestedProfile, "incremental",
+      "deployed first-scene startup must use the default prepared profile");
+  }
+  diagnostics.snapshots.catalogAnchor.preparedPlaybackOverride = anchorRun?.preparedPlayback ?? null;
+  diagnostics.snapshots.pixels = await selectShowcase(page, "showcase-raster-images");
   assert.equal(diagnostics.snapshots.pixels.exampleId, "showcase-raster-images");
   const pixelProof = diagnostics.snapshots.pixels.runEvidence.proof;
   assert.equal(pixelProof.libraryTrust, "pristine",
     "qualified deterministic pixel generation must preserve interpreter trust");
   assert.equal(pixelProof.event.admitted, true);
   const pixelGeneration = diagnostics.snapshots.pixels.interpreterGeneration;
-  diagnostics.snapshots.firstSceneAfterPixels = await selectGalleryExample(page, "showcase-first-scene", "Your first scene");
+  diagnostics.snapshots.firstSceneAfterPixels = await selectShowcase(page, "showcase-first-scene");
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.exampleId, "showcase-first-scene");
+  assert.ok(Number(diagnostics.snapshots.firstSceneAfterPixels.executionDiagnostics.context.runGeneration) >
+    Number(diagnostics.snapshots.catalogAnchor.executionDiagnostics.context.runGeneration),
+  "same-page First scene → Pixels → First scene must apply a fresh final run");
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.interpreterGeneration, pixelGeneration,
     "same-page qualified Pixels → Your first scene reuses the healthy interpreter");
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.ready.libraryTrust, "pristine");
@@ -685,6 +794,77 @@ try {
   assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.proof.event.admitted, true);
   assert.ok(diagnostics.snapshots.firstSceneAfterPixels.executionDiagnostics.events.some(event =>
     event.stage === "attached" && event.profile === "incremental"));
+
+  if (!liveComparison) {
+    phase = "catalog-exception-to-first";
+    diagnostics.catalogTransitions = [];
+    for (const id of ["showcase-reactive-relationships", "showcase-camera-follows-path",
+      "showcase-always-redraw", "showcase-translation-drag"]) {
+      const exception = await selectShowcase(page, id);
+      const first = await selectShowcase(page, "showcase-first-scene");
+      diagnostics.catalogTransitions.push([id, exception.runEvidence.run,
+        exception.showcaseProfile, first.runEvidence.run]);
+    }
+
+    phase = "catalog-failed-to-first";
+    await selectShowcase(page, "showcase-group-slicing");
+    await setEditorSource(page, SOURCES.syntaxError);
+    diagnostics.snapshots.catalogFailedSource = await runEditedSource(page, { expectedState: "error" });
+    assert.equal(diagnostics.snapshots.catalogFailedSource.patchText, "Python raised SyntaxError");
+    diagnostics.snapshots.firstAfterCatalogFailure = await selectShowcase(page, "showcase-first-scene");
+    assert.equal(diagnostics.snapshots.firstAfterCatalogFailure.exampleId, "showcase-first-scene");
+
+    phase = "catalog-cancelled-to-first";
+    await selectShowcase(page, "showcase-transform-ownership");
+    await setEditorSource(page, navigationCancellationSource);
+    const beforeCancelledRun = await workerEvidence(page);
+    await page.locator("#replace-scene").click();
+    await page.waitForFunction(count => {
+      const pending = window.__recoveryAuthoringRuns?.[count];
+      const gallery = window.__noonExampleGallery;
+      return (window.__recoveryAuthoringRuns?.length ?? 0) === count + 1 && pending &&
+        gallery?.runInFlight && gallery.executionDiagnostics?.runRequestId === pending.requestId;
+    }, beforeCancelledRun.runs.length, { timeout: 30_000 });
+    const cancelledCandidate = (await workerEvidence(page)).runs[beforeCancelledRun.runs.length];
+    assert.equal(cancelledCandidate.source, navigationCancellationSource);
+    diagnostics.snapshots.cancelledCatalogRun = {
+      workerId: cancelledCandidate.workerId, requestId: cancelledCandidate.requestId,
+      sourceSha256: createHash("sha256").update(cancelledCandidate.source).digest("hex"),
+    };
+    const firstAfterCancellation = await selectShowcase(page, "showcase-first-scene",
+      cancelledCandidate.requestId);
+    diagnostics.snapshots.firstAfterCatalogCancellation = firstAfterCancellation;
+    assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.exampleId, "showcase-first-scene",
+      "the superseded Run must not replace the newer gallery selection");
+    assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.patchState, "applied");
+    assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.runRequestId,
+      firstAfterCancellation.runEvidence.run.requestId,
+    "the superseded edited Run cannot publish over the completed first-scene cycle");
+    const cancellationEvidence = await workerEvidence(page);
+    const cancelledMessage = cancellationEvidence.workers.some(message =>
+      message.workerId === cancelledCandidate.workerId && message.requestId === cancelledCandidate.requestId &&
+      message.type === "execution_diagnostic" && message.event?.stage === "cancelled");
+    const terminatedWorker = cancellationEvidence.workers.some(message =>
+      message.workerId === cancelledCandidate.workerId && message.type === "terminated" &&
+      firstAfterCancellation.runEvidence.run.workerId !== cancelledCandidate.workerId);
+    assert.ok(cancelledMessage || terminatedWorker,
+      "the superseded source must report cancellation or its owning worker must terminate");
+    diagnostics.snapshots.cancelledCatalogRun.resolution = cancelledMessage
+      ? "cancelled" : "worker-terminated";
+
+    phase = "catalog-seeded-permutations";
+    const permutationIds = ["showcase-timing", "showcase-bezier-paths", "showcase-ordered-reveal"];
+    diagnostics.seededCatalogOrders = [];
+    for (const seed of [0x2422, 0x2423]) {
+      const order = seededPermutation(permutationIds, seed);
+      const selected = [];
+      for (const id of order) {
+        const result = await selectShowcase(page, id);
+        selected.push({ id, run: result.runEvidence.run, profile: result.showcaseProfile });
+      }
+      diagnostics.seededCatalogOrders.push({ seed, order, selected });
+    }
+  }
 
   // Replaying a retained timeline does not rerun source. A later explicit Run
   // applies the latest draft once while the prior playback is active.
@@ -750,8 +930,11 @@ try {
   const syntaxConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "syntax-error");
   const runtimeConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "runtime-error");
   const rerunConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "explicit-rerun-error");
+  const catalogSyntaxConsole = diagnostics.consoleErrors.filter((entry) =>
+    entry.phase === "catalog-failed-to-first" && /SyntaxError|invalid syntax|expected ':'/i.test(entry.text));
   const unexpectedConsole = diagnostics.consoleErrors.filter(
-    (entry) => entry.phase !== "syntax-error" && entry.phase !== "runtime-error" && entry.phase !== "explicit-rerun-error",
+    entry => !["syntax-error", "runtime-error", "explicit-rerun-error"].includes(entry.phase) &&
+      !(entry.phase === "catalog-failed-to-first" && catalogSyntaxConsole.includes(entry)),
   );
   assert.ok(rerunConsole.some((entry) => /Intentional edited-draft failure/.test(entry.text)),
     `the explicit rerun should expose its actual exception: ${JSON.stringify(rerunConsole)}`);
@@ -763,9 +946,17 @@ try {
     runtimeConsole.some((entry) => /NameError|MissingShape|not defined/i.test(entry.text)),
     `runtime failure should be diagnostic in the console: ${JSON.stringify(runtimeConsole)}`,
   );
+  assert.ok(catalogSyntaxConsole.length > 0,
+    `catalog recovery should expose its expected SyntaxError: ${JSON.stringify(
+      diagnostics.consoleErrors.filter(entry => entry.phase === "catalog-failed-to-first"))}`);
   assert.deepEqual(unexpectedConsole, [], `valid runs emitted console errors: ${JSON.stringify(unexpectedConsole)}`);
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.equal(diagnostics.unexpectedNavigations, 0, "failure/recovery must not reload the Playground");
+  if (externalRoot) {
+    diagnostics.deployedIdentity.after = await readExternalIdentity();
+    assert.deepEqual(diagnostics.deployedIdentity.after, diagnostics.deployedIdentity.before,
+      "deployed package identity changed during navigation validation");
+  }
 
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
@@ -787,5 +978,5 @@ try {
 } finally {
   await context?.close().catch(() => {});
   await browser?.close().catch(() => {});
-  await server.close();
+  await server?.close();
 }
