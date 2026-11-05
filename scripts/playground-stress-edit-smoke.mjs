@@ -5,6 +5,7 @@ import path from "node:path";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { installStressObservation } from "./playground-stress-observation.mjs";
+import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_STRESS_EDIT_PORT ?? "0");
@@ -296,10 +297,19 @@ try {
   diagnostics.snapshots.rows7Rerun = await snapshot(page);
   assert.equal(diagnostics.snapshots.rows7Rerun.draftState, "applied");
 
-  const rows7ObjectCount = diagnostics.snapshots.rows7Rerun.objectCount;
+  // The authored fades change membership while playing. Compare draft output at
+  // one confirmed paused frame; the long-source edits above cover continued play.
+  const duration = Number(await page.locator(".playback-scrubber").getAttribute("max"));
+  const pausedTime = await seekPausedGallery(page, duration, 1);
+  const pausedFrame = await waitForPublishedGalleryFrame(page, pausedTime, duration);
+  await page.waitForFunction(count => document.querySelector("#metric-objects")?.value === String(count),
+    pausedFrame.metrics.objectCount);
+  diagnostics.snapshots.rows7Paused = await snapshot(page);
+  assert.equal(diagnostics.snapshots.rows7Paused.playbackPlaying, false);
+  const rows7ObjectCount = diagnostics.snapshots.rows7Paused.objectCount;
   diagnostics.snapshots.rows20Edited = await replaceSource(editor, page, rows20Source);
   assert.equal(diagnostics.snapshots.rows20Edited.objectCount, rows7ObjectCount);
-  await assertDraftOnlyEdit(page, diagnostics.snapshots.rows20Edited, diagnostics.snapshots.rows7Rerun,
+  await assertDraftOnlyEdit(page, diagnostics.snapshots.rows20Edited, diagnostics.snapshots.rows7Paused,
     "rows=20 edit");
   assert.equal(diagnostics.snapshots.rows20Edited.draftState, "unapplied");
   await page.keyboard.press(runShortcut);
