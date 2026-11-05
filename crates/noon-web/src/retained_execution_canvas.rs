@@ -1189,6 +1189,7 @@ mod wasm {
                 && !self.renderer.has_retained_effect_sources()
                 && self.renderer.effect_capture_texture_bytes() == 0
             {
+                self.renderer.reset_retained_effect_publication_context();
                 self.glow_transport_seen = false;
             }
             self.presentation_sequence = self.presentation_sequence.saturating_add(1);

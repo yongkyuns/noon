@@ -374,6 +374,13 @@ impl GpuRenderer {
         self.effect_programs = Default::default();
     }
 
+    /// Retire publication-relative indices when the transport returns to its
+    /// no-effect fast path, while keeping renderer-local shader programs warm.
+    pub fn reset_retained_effect_publication_context(&mut self) {
+        self.retained_effects = RetainedEffectPublication::default();
+        self.reset_effect_capture_publication();
+    }
+
     /// Add only effect-source indices to the execution-owned, painter-ordered
     /// visibility result. The usual retained preparer validates the candidate set.
     /// A source may be outside semantic bounds while its padded halo is visible.

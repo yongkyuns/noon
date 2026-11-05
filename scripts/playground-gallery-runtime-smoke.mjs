@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import playwright from 'playwright';
-import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports } from './playground-browser-support.mjs';
+import { disableAuthoringJspi, playgroundLaunchOptions, collectWebKitCrashReports, waitForBrowserObservation } from './playground-browser-support.mjs';
 import { captureAttemptedPage, createBrowserFailureTrace, createNativeWebKitEvidence } from './playground-browser-failure-evidence.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { serveRepository } from './browser-test-server.mjs';
@@ -543,6 +543,45 @@ try {
               result.profileGate.status = 'matched';
               delete result.profileGate.reason;
             }
+          }
+          if (entry.id === 'showcase-gpu-glow' && profileGateMode !== 'disabled') {
+            const sourceRun = result.executionDiagnostics;
+            assert.ok(Number.isSafeInteger(sourceRun?.runRequestId) &&
+              Number.isSafeInteger(sourceRun?.context?.runGeneration),
+            'Glow traversal lacks its completed source-run identity');
+            await waitForBrowserObservation(page, async ({ exampleId, runRequestId, runGeneration }) => {
+              const gallery = window.__noonExampleGallery;
+              const metrics = await gallery.executionMetrics();
+              const renderer = metrics?.metrics;
+              const playback = metrics?.engineMetrics?.preparedPlayback?.observation;
+              const diagnostics = gallery.executionDiagnostics;
+              const latest = renderer?.latestPresentationSample;
+              const afterEnrollment = (playback?.loopCount === 1 && renderer?.time >= 1.75 &&
+                latest?.time >= 1.75) ||
+                playback?.loopCount >= 2;
+              const receiptMatchesClock = latest && latest.time === renderer?.time &&
+                Number.isFinite(playback?.time) && latest.time <= playback.time +
+                  8 * Number.EPSILON * Math.max(1, Math.abs(playback.time));
+              if (gallery.selectedExampleId === exampleId && !gallery.runInFlight && afterEnrollment &&
+                  diagnostics?.runRequestId === runRequestId &&
+                  diagnostics?.context?.runGeneration === runGeneration &&
+                  receiptMatchesClock && latest.session === renderer.presentedSession &&
+                  Number.isSafeInteger(latest.sequence) && renderer.presentedFrames > 0) {
+                window.__galleryGlowSecondTraversal = {
+                  runRequestId, runGeneration, loopCount: playback.loopCount,
+                  playbackTime: playback.time,
+                  renderer: { time: renderer.time, objectCount: renderer.objectCount,
+                    presentedFrames: renderer.presentedFrames, presentedSession: renderer.presentedSession,
+                    latestPresentationSample: latest },
+                };
+                return true;
+              }
+              return false;
+            }, { exampleId: entry.id, runRequestId: sourceRun.runRequestId,
+              runGeneration: sourceRun.context.runGeneration }, { timeout: 30000 });
+            result.glowSecondTraversal = await page.evaluate(() => window.__galleryGlowSecondTraversal);
+            assert.ok(result.glowSecondTraversal,
+              'Glow second traversal did not retain a matching Rust state and renderer receipt');
           }
           if (profileGateMode !== 'disabled' && entry.id === 'showcase-triangle-light') {
             result.playbackHistory = await qualifyTriangleHistory(page, result.authoredDuration,

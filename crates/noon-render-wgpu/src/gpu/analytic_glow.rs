@@ -245,6 +245,15 @@ pub struct PublishedEffectCaptureRequest {
 }
 
 impl GpuRenderer {
+    pub(super) fn reset_effect_capture_publication(&mut self) {
+        if let Some(glows) = self.effect_captures.as_deref_mut() {
+            glows.scopes.clear();
+            glows.owners.clear();
+            glows.backdrops.retire_publication();
+            glows.bytes = 0;
+        }
+    }
+
     /// Consume an effective attachment from the same borrowed runtime publication as
     /// source geometry/paint. Invoke for initially resident or dirty rows; no
     /// unrelated scene scan or private effect clock is introduced here.
