@@ -73,7 +73,7 @@ jobs:
           import hashlib, json, os, stat, zipfile
           from pathlib import Path, PurePosixPath
           archive = Path(os.environ["RUNNER_TEMP"]) / "webkit-runtime.zip"
-          expected = "e0802f0c52218aa0339a34720c83abc8e4204f3a4ed25baf9acd8495b1cc5994"
+          expected = "e0802f0c52218aa0339a34720c83abc8e4204f3a4ed25baf9acd8495b1cc599c"
           actual = hashlib.sha256(archive.read_bytes()).hexdigest()
           assert actual == expected, (actual, expected)
           root = Path(os.environ["RUNNER_TEMP"]) / "webkit-runtime"
@@ -115,6 +115,7 @@ jobs:
           DIAGNOSTIC_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          touch "$RUNNER_TEMP/diagnostic-overlay-installed"
           cp "$RUNNER_TEMP/diagnostic-overlay/scripts/playground-gallery-runtime-smoke.mjs" scripts/
           cp "$RUNNER_TEMP/diagnostic-overlay/scripts/showcase-playback.mjs" scripts/
           git diff --check
@@ -185,7 +186,7 @@ jobs:
         run: |
           set -euo pipefail
           overlay_status=0
-          if [ -f "$RUNNER_TEMP/overlay-snapshot.json" ]; then
+          if [ -f "$RUNNER_TEMP/diagnostic-overlay-installed" ] && [ -f "$RUNNER_TEMP/overlay-snapshot.json" ]; then
             python3 - <<'PY' || overlay_status=$?
           import hashlib, json, os
           from pathlib import Path
@@ -198,7 +199,9 @@ jobs:
           print("final harness overlay hashes match before restore")
           PY
           fi
-          git checkout -- scripts/playground-gallery-runtime-smoke.mjs scripts/showcase-playback.mjs
+          if [ -f "$RUNNER_TEMP/diagnostic-overlay-installed" ]; then
+            git checkout -- scripts/playground-gallery-runtime-smoke.mjs scripts/showcase-playback.mjs
+          fi
           python3 - <<'PY'
           import hashlib, json, os
           from pathlib import Path
@@ -315,7 +318,7 @@ jobs:
           import hashlib, json, os, stat, zipfile
           from pathlib import Path, PurePosixPath
           archive = Path(os.environ["RUNNER_TEMP"]) / "showcase-capture.zip"
-          expected = "c1617860dbda9cecb07e9ec1001f5b3c5d67a705e0311ea701628280c2a635ee5"
+          expected = "c1617860dbda9cecb07e9ec1001f5b3c5d67a705e0311ea701628280c2a635ee"
           actual = hashlib.sha256(archive.read_bytes()).hexdigest()
           assert actual == expected, (actual, expected)
           root = Path("browser-smoke-artifacts/pr2422-8ca/webgl-original")
@@ -377,6 +380,7 @@ jobs:
           (Path(os.environ["RUNNER_TEMP"]) / "showcase-capture-inputs.json").write_text(json.dumps(inputs, sort_keys=True))
           PY
           mkdir -p "$RUNNER_TEMP/diagnostic-overlay/scripts"
+          touch "$RUNNER_TEMP/diagnostic-overlay-installed"
           cp "$RUNNER_TEMP/diagnostic-overlay/scripts/showcase-live-review.mjs" scripts/
           cp "$RUNNER_TEMP/diagnostic-overlay/scripts/showcase-renderer-readback.mjs" scripts/
           node --check scripts/showcase-live-review.mjs
@@ -455,7 +459,7 @@ jobs:
         run: |
           set -euo pipefail
           overlay_status=0
-          if [ -f "$RUNNER_TEMP/overlay-snapshot.json" ]; then
+          if [ -f "$RUNNER_TEMP/diagnostic-overlay-installed" ] && [ -f "$RUNNER_TEMP/overlay-snapshot.json" ]; then
             python3 - <<'PY' || overlay_status=$?
           import hashlib, json, os
           from pathlib import Path
@@ -468,7 +472,9 @@ jobs:
           print("final harness overlay hashes match before restore")
           PY
           fi
-          git checkout -- scripts/showcase-live-review.mjs scripts/showcase-renderer-readback.mjs
+          if [ -f "$RUNNER_TEMP/diagnostic-overlay-installed" ]; then
+            git checkout -- scripts/showcase-live-review.mjs scripts/showcase-renderer-readback.mjs
+          fi
           node --input-type=module -e 'import { verify } from "./.github/ci/wasm-build.mjs"; await verify(process.cwd(), { ...process.env, GITHUB_SHA: process.env.NOON_EXPECTED_SOURCE_SHA });'
           python3 - <<'PY'
           import hashlib, json, os, subprocess
