@@ -180,22 +180,42 @@ try {
         assert.deepEqual((await state()).events, ["start"]);
         entry.checks.push("real-production-workers", "initially-paused-lookahead", "satisfied-demand-sleeps");
 
-        const seekInput = page.locator(".playback-prepared-seek");
+        const seekInput = page.locator(".playback-scrubber");
         assert.equal(await seekInput.isVisible(), true);
         assert.equal(await seekInput.isEnabled(), true);
-        assert.equal(await page.locator(".playback-scrubber").isVisible(), false);
+        assert.ok(Number(await seekInput.getAttribute("max")) < initial.preparedFrontier,
+          "the open history slider must stop before its exclusive frontier");
         assert.equal(await page.locator(".playback-time").textContent(), "0.00 / — s");
-        await seekInput.fill("1");
-        await seekInput.press("Tab");
-        assert.match(await page.locator(".playback-live-status").textContent(), /before 1 s/);
-        const atOpenBoundary = await state();
-        assert.equal(atOpenBoundary.time, 0);
-        assert.deepEqual(atOpenBoundary.events, ["start"]);
-        assert.deepEqual(atOpenBoundary.errors, []);
-        entry.checks.push("shared-controls-open-history", "controls-refuse-open-boundary");
-        await seekInput.fill("0.5");
-        await seekInput.press("Tab");
+        const selectableEnd = Number(await seekInput.getAttribute("max"));
+        const rejectedFrontier = await page.evaluate(async frontier => {
+          const before = await preparedAuthoring.execution.state();
+          let error;
+          try { await preparedAuthoring.execution.seek(frontier); } catch (cause) { error = String(cause); }
+          return { before, after: await preparedAuthoring.execution.state(), error };
+        }, initial.preparedFrontier);
+        assert.ok(rejectedFrontier.error);
+        assert.equal(rejectedFrontier.after.time, rejectedFrontier.before.time);
+        // Chromium can serialize the range's next-down maximum as the frontier.
+        // The control must still submit and present Rust's exact selectable end.
+        await seekInput.evaluate(element => {
+          element.value = "1"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await page.waitForFunction(target => document.querySelector(".playback-controls")?.dataset.busy === "false" &&
+          Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) === target &&
+          !document.querySelector(".playback-live-status")?.textContent.includes("waiting for display"), selectableEnd);
+        // The admitted seek advances reader demand; the producer may refill
+        // lookahead while the paused picture stays at that historical target.
         await waitState(s => s.preparedFrontier === 2 && s.events.length === 2);
+        const atSelectableEnd = await state();
+        assert.equal(atSelectableEnd.time, selectableEnd);
+        assert.deepEqual(atSelectableEnd.events, ["start", "first"]);
+        assert.deepEqual(atSelectableEnd.errors, []);
+        entry.checks.push("shared-controls-open-history", "selectable-end-and-exclusive-frontier");
+        await seekInput.evaluate(element => {
+          element.value = "0.5"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false" &&
+          !document.querySelector(".playback-live-status")?.textContent.includes("waiting for display"));
         const baseline = await capture("historical");
         assert.equal((await state()).time, 0.5); assert.deepEqual((await state()).events, ["start", "first"]);
         const rect = await page.locator("#scene").boundingBox();
@@ -248,7 +268,7 @@ try {
         assert.equal(finished.outcome.result.duration, 4); assert.equal(finished.durationSeconds, 4);
         assert.equal(finished.outcome.result.semanticExecution.preparedPlayback, true);
         assert.deepEqual(finished.events, ["start", "first", "moved", 0, 1, 2, 3, 4, 5, 6, 7, "end"]);
-        assert.equal(await seekInput.isVisible(), false);
+        assert.equal(await seekInput.isVisible(), true);
         const slider = page.locator(".playback-scrubber");
         assert.equal(await slider.isVisible(), true);
         assert.equal(await slider.getAttribute("max"), "4");
@@ -353,12 +373,14 @@ try {
         const status = await page.evaluate(() => preparedAuthoring.execution.state());
         assert.equal(status.durationSeconds, null); assert.equal(status.preparedFrontier, 1);
         await page.evaluate(state => preparedAuthoring.controls.observe(state), status);
-        assert.equal(await page.locator(".playback-scrubber").isVisible(), false);
-        const seekInput = page.locator(".playback-prepared-seek");
+        const seekInput = page.locator(".playback-scrubber");
         assert.equal(await seekInput.isEnabled(), true);
-        await seekInput.fill("0.25");
-        await seekInput.press("Tab");
-        await page.waitForFunction(async () => (await preparedAuthoring.execution.state()).time === 0.25);
+        await seekInput.evaluate(element => {
+          element.value = "0.25"; element.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false" &&
+          document.querySelector(".playback-controls")?.dataset.elapsedSeconds === "0.25" &&
+          !document.querySelector(".playback-live-status")?.textContent.includes("waiting for display"));
         entry.checks.push("controls-retain-partial-history-after-source-error");
       }
       const reused = await page.evaluate(async () => {

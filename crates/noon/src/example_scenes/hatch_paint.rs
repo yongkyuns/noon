@@ -1,8 +1,8 @@
 //! A hatched surface uses ordinary fill targets and authored playback time.
 //! Paired with `web/python/examples/hatch_paint.py`.
 use crate::{
-    AnimationOptions, Color, ContinuationStep, HatchPaint, HatchPaintOptions, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    AnimationOptions, Color, ContinuationEffects, ContinuationStep, HatchPaint, HatchPaintOptions,
+    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
 };
 
 pub struct HatchedSurface {
@@ -34,6 +34,7 @@ fn paint(second: bool) -> Result<HatchPaint, String> {
 }
 
 impl LiveContinuation for HatchedSurface {
+    const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
         let segment = match self.stage {

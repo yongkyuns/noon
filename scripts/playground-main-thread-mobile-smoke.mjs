@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
-import { isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
+import { isSquareToCircleNaturalWrap, isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const { webkit, devices } = playwright;
@@ -158,7 +158,10 @@ try {
     let metrics;
     const samples = [];
     let liveIntermediate = null;
-    let reachedEndpoint = false;
+    let naturalFirstWrap = null;
+    let previousTime = null;
+    let madeForwardProgress = false;
+    let sourceRunIdentity = null;
     const sampleDeadline = Date.now() + 60_000;
     while (Date.now() < sampleDeadline) {
       // Retain wall-time samples for diagnostics. A busy browser is allowed to
@@ -170,25 +173,49 @@ try {
             patch?.dataset.exampleId !== "parity-square-to-circle") return null;
         if (patch.dataset.state === "error") return { error: patch.value };
         const result = await gallery.executionMetrics();
+        const sourceRun = gallery.runPhaseMetrics;
         return result?.metrics ? {
           time: result.metrics.time,
           backend: result.metrics.backend,
           objectCount: result.metrics.objectCount,
+          sourceRunExampleId: sourceRun?.exampleId ?? null,
+          sourceRunGeneration: sourceRun?.runGeneration ?? null,
+          sourceRunCompletedAtMs: sourceRun?.sourceRunCompletedAtMs ?? null,
         } : null;
       });
       if (samples.length < 1000) samples.push(sample);
       assert.ok(!sample?.error, sample?.error);
+      if (sample && sample.sourceRunGeneration !== null) {
+        sourceRunIdentity ??= { exampleId: sample.sourceRunExampleId, runGeneration: sample.sourceRunGeneration };
+        assert.deepEqual({ exampleId: sample.sourceRunExampleId, runGeneration: sample.sourceRunGeneration },
+          sourceRunIdentity, "first natural traversal changed Python run identity");
+      }
       if (isSquareToCircleTransformFrame(sample)) {
         liveIntermediate ??= sample;
       }
-      if (sample?.time >= 3 - 1e-6 && sample.objectCount === 0) {
-        reachedEndpoint = true;
+      if (sample && previousTime !== null && sample.time > previousTime) madeForwardProgress = true;
+      if (sample && previousTime !== null && sample.time < previousTime) {
+        assert.ok(isSquareToCircleNaturalWrap(previousTime, sample.time, madeForwardProgress),
+          `first observed Rust time decrease was not the authored endpoint wrap: ${previousTime} -> ${sample.time}`);
+        naturalFirstWrap = { beforeTime: previousTime, afterTime: sample.time,
+          sourceRunExampleId: sample.sourceRunExampleId, sourceRunGeneration: sample.sourceRunGeneration,
+          sourceRunCompletedAtMs: sample.sourceRunCompletedAtMs, backend: sample.backend };
         break;
       }
+      if (sample) previousTime = sample.time;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     await writeFile(path.join(artifactDir, `${variant.name}-samples.json`), JSON.stringify(samples, null, 2));
-    assert.ok(reachedEndpoint, "mobile live source did not complete FadeOut at its authored endpoint");
+    assert.ok(naturalFirstWrap, "mobile source did not naturally cross its first authored loop endpoint");
+    assert.ok(naturalFirstWrap.sourceRunCompletedAtMs !== null,
+      "natural loop wrap was not joined to a completed first source run");
+    assert.equal(naturalFirstWrap.sourceRunExampleId, "parity-square-to-circle");
+    assert.ok(Number.isSafeInteger(naturalFirstWrap.sourceRunGeneration),
+      "natural wrap is missing its Python source run generation");
+    assert.deepEqual({ exampleId: naturalFirstWrap.sourceRunExampleId,
+      runGeneration: naturalFirstWrap.sourceRunGeneration }, sourceRunIdentity,
+    "natural wrap does not belong to the first selected source run");
+    assert.ok(liveIntermediate, "natural first traversal did not report an intermediate Transform frame");
     if (variant.disableJspi) {
       assert.equal(
         await page.evaluate(() => window.__noonNoJspiWorkerWrapped),
@@ -198,6 +225,16 @@ try {
     }
     await waitForIdle(page);
     await assertApplied(page, "parity-square-to-circle");
+    // The live source loops, so its terminal picture is transient. Inspect the
+    // exact FadeOut endpoint through the normal paused control path after the
+    // natural first wrap; this is a paused replay checkpoint, not the natural
+    // first-pass terminal image.
+    await seekPausedGallery(page, 3, 3);
+    const terminalCheckpoint = await waitForPublishedGalleryFrame(page, 3, 3);
+    assert.equal(terminalCheckpoint?.metrics?.objectCount, 0,
+      "paused exact FadeOut endpoint must remove the object");
+    assert.ok(Math.abs(terminalCheckpoint.metrics.time - 3) < 1e-6,
+      "paused endpoint checkpoint missed the authored time");
     const final = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-final.png`), final);
     metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
@@ -212,7 +249,7 @@ try {
     // shape/pixel assertion or depending on host scheduling luck.
     const frames = new Map();
     let observation = null;
-    for (const [time, label] of [[1, "square"], [1.5, "intermediate"], [2, "circle"]]) {
+    for (const [time, label] of [[1, "square"], [1.5, "intermediate"], [2, "circle"], [2.5, "fadeout"]]) {
       await seekPausedGallery(page, 3, time);
       const replay = await waitForPublishedGalleryFrame(page, time, 3);
       assert.equal(replay?.metrics?.objectCount, 1, `${label} frame must retain the transforming object`);
@@ -295,7 +332,9 @@ try {
       variant,
       intermediate: observation,
       liveIntermediate,
-      reachedEndpoint,
+      naturalFirstWrap,
+      terminalCheckpoint: { kind: "paused-seek", time: terminalCheckpoint.metrics.time,
+        objectCount: terminalCheckpoint.metrics.objectCount },
       renderHost: metrics.renderHost,
       rendererBackend: metrics.metrics?.backend ?? null,
       presentedFrames: metrics.metrics?.presentedFrames ?? null,

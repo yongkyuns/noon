@@ -1018,6 +1018,9 @@ pub struct OrdinaryCompositionContinuation {
 
 impl LiveContinuation for OrdinaryCompositionContinuation {
     type Error = String;
+    // This paired composition only queries and mutates its owned scene and
+    // builds local requests; it performs no callbacks or external host work.
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
 
     fn resume(
         &mut self,
@@ -1807,6 +1810,9 @@ pub struct OrdinaryAffineLifecycleContinuation {
 
 impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
     type Error = String;
+    // This paired scene continuation only queries and mutates its owned scene;
+    // it performs no host I/O, callback dispatch, or external-time work.
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
 
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
         let options = AnimationOptions::new()

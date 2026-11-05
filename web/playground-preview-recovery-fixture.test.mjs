@@ -68,7 +68,7 @@ function fixture({ time = 3, playing = false, restartPlaying = false, deferredRe
         if (evaluate(predicate)) return;
         await flush();
         if (completeRestart !== null) {
-          assert.equal(toggle.disabled, true, "wait for the restart acknowledgement");
+          assert.equal(controls.element.dataset.busy, "true", "wait for the restart to settle");
           assert.deepEqual(calls, ["restartPlayback"], "resume must not race pending restart");
           const resolve = completeRestart; completeRestart = null; resolve();
         }

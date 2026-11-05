@@ -7,23 +7,43 @@ import { Element, dom, flush } from "./playground-dom-fixture.mjs";
 globalThis.HTMLElement = Element;
 globalThis.document = dom().document;
 const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
-const prepared = (overrides = {}) => ({
-  time: 0.5, playing: false, preparedPlayback: true, preparedFrontier: 2,
-  durationSeconds: null, buffering: false, replaySupported: true,
-  canUndoTranslationDrag: false, ...overrides,
-});
+function nextDown(value) {
+  if (value === 0) return -Number.MIN_VALUE;
+  const bits = new BigUint64Array(new Float64Array([value]).buffer);
+  bits[0] += value > 0 ? -1n : 1n;
+  return new Float64Array(bits.buffer)[0];
+}
+const prepared = (overrides = {}) => {
+  const frontier = Number(overrides.preparedFrontier ?? 2);
+  const duration = overrides.durationSeconds ?? null;
+  return {
+    time: 0.5, playing: false, preparedPlayback: true, preparedFrontier: 2,
+    durationSeconds: null, buffering: false, replaySupported: true,
+    seekRange: Object.hasOwn(overrides, "seekRange") ? overrides.seekRange :
+      { start: 0, end: duration === null ? nextDown(frontier) : duration },
+    presentationReceipt: { session: 1, sequence: 0, time: Number(overrides.time ?? 0.5) },
+    canUndoTranslationDrag: false, ...overrides,
+  };
+};
 function fixture(initial = prepared()) {
   const { document, preview } = dom();
   globalThis.document = document;
   let state = initial;
-  const calls = [], errors = [];
+  const calls = [], errors = [], activations = [];
+  let presentationSequence = 0;
   const player = {};
+  player.preparePlaybackActivation = () => {
+    activations.push("unlock");
+    return Promise.resolve({ session: 1 });
+  };
   for (const method of ["pause", "resume", "seek", "restartPlayback", "undoTranslationDrag"]) {
     player[method] = async (time) => {
       calls.push([method, time]);
       state = { ...state,
         time: method === "seek" ? time : method === "restartPlayback" ? 0 : state.time,
         playing: method === "pause" ? false : method === "resume" ? true : state.playing,
+        presentationReceipt: method === "seek"
+          ? { session: 1, sequence: ++presentationSequence, time } : undefined,
       };
       return state;
     };
@@ -33,12 +53,12 @@ function fixture(initial = prepared()) {
   });
   controls.observe(initial);
   const element = selector => preview.querySelector(selector);
-  return { document, preview, controls, player, calls, errors,
-    range: element(".playback-scrubber"), input: element(".playback-prepared-seek"),
+  return { document, preview, controls, player, calls, errors, activations,
+    range: element(".playback-scrubber"), input: element(".playback-scrubber"),
     output: element(".playback-time"), status: element(".playback-live-status"),
     toggle: element(".playback-toggle"), restart: element(".playback-restart"),
     setState(next) { state = next; controls.observe(next); },
-    seek(value) { this.input.value = String(value); this.input.dispatchEvent(new Event("change")); },
+    seek(value) { this.input.value = String(value); this.input.dispatchEvent(new Event("input")); },
   };
 }
 function deferred() {
@@ -54,28 +74,35 @@ test("completed observed replay retires open-prefix controls without inventing a
   assert.equal(f.controls.durationSeconds, 2);
   assert.equal(f.range.hidden, false);
   assert.equal(f.range.disabled, false);
-  assert.equal(f.input.hidden, true);
+  assert.equal(f.input, f.range);
   assert.equal(f.controls.element.dataset.buffering, "false");
   assert.deepEqual(f.errors, []);
 });
 
-test("open history permits controls without inventing a final duration or a percentage", async () => {
+test("open history uses the same rail and Rust's inclusive selectable endpoint", async () => {
   const f = fixture(prepared({ time: 3, preparedFrontier: 4 }));
   assert.equal(f.controls.durationSeconds, null);
   assert.equal(f.output.value, "3.00 / — s", "bootstrap duration must not clamp reader time");
-  assert.equal(f.range.hidden, true);
-  assert.equal(f.range.disabled, true);
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.range.disabled, false);
   assert.equal(f.input.hidden, false);
   assert.equal(f.input.disabled, false);
-  assert.equal(f.input.type, "number");
-  assert.equal(f.input.max, "4");
-  assert.match(f.status.textContent, /Prepared before 4 s · total unknown/);
+  assert.equal(f.input.type, "range");
+  assert.equal(f.input.max, String(nextDown(4)));
+  assert.match(f.status.textContent, /Available history: 0\.00–4\.00 s · total unknown/);
   assert.equal(f.status.title, f.status.textContent);
   assert.equal(f.controls.element.dataset.durationKnown, "false");
   assert.equal(f.toggle.textContent, "Play");
   f.seek(2.5); await flush();
   assert.deepEqual(f.calls, [["seek", 2.5]]);
   assert.equal(f.output.value, "2.50 / — s");
+});
+
+test("empty open history keeps the rail visible and unavailable", () => {
+  const f = fixture(prepared({ seekRange: null }));
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.range.disabled, true);
+  assert.match(f.status.textContent, /Available history: none/);
 });
 
 test("buffering is not a command lock and pausing preserves the observed time", async () => {
@@ -102,7 +129,7 @@ test("new history does not move the playhead, resume a pause or emit a command",
   assert.equal(f.output.value, "0.50 / — s");
   assert.equal(f.controls.element.dataset.buffering, "false");
   assert.equal(f.toggle.textContent, "Play");
-  assert.equal(f.input.max, "10");
+  assert.equal(f.input.max, String(nextDown(10)));
   assert.deepEqual(f.calls, []);
 });
 
@@ -122,20 +149,20 @@ test("observed source handoff retires history controls and preserves forward pau
   f.controls.setDuration(3); // No stale reader capability blocks later source updates.
 });
 
-test("open boundary and invalid input never send a guessed last-frame or queued future seek", async () => {
+test("open frontier and invalid input never send a future time or queue a refused seek", async () => {
   const f = fixture();
-  for (const value of [2, 3, -1, "", "NaN", "Infinity"]) {
+  for (const value of [2, 3, -1, "NaN", "Infinity"]) {
     f.seek(value); await flush();
     assert.equal(f.input.value, "0.5");
     assert.equal(f.output.value, "0.50 / — s");
-    assert.match(f.status.textContent, /before 2 s/);
+    assert.match(f.status.textContent, /Choose a time/);
   }
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.errors, []);
   f.setState(prepared({ preparedFrontier: 3 })); await flush();
-  assert.deepEqual(f.calls, [], "delivery cannot replay a previously refused request");
+  assert.deepEqual(f.calls, [], "delivery does not repeat an earlier refused request");
   f.seek(2); await flush();
-  assert.deepEqual(f.calls, [["seek", 2]], "a new explicit request uses the exact target");
+  assert.deepEqual(f.calls, [["seek", 2]], "a new explicit request uses its exact in-range target");
 });
 
 test("tiny positive prefixes still admit zero without inventing an epsilon endpoint", async () => {
@@ -146,18 +173,20 @@ test("tiny positive prefixes still admit zero without inventing an epsilon endpo
   assert.deepEqual(f.calls, [["seek", 0]]);
 });
 
-test("numeric editing survives observations and only committed edits request seeks", async () => {
+test("held pointer keeps its time mapping while new history is adopted", async () => {
   const f = fixture();
-  f.document.activeElement = f.input;
+  f.range.dispatchEvent(Object.assign(new Event("pointerdown"), { pointerId: 1, pointerType: "touch" }));
+  const originalMaximum = f.range.max;
   f.input.value = "1.25";
   f.input.dispatchEvent(new Event("input"));
   f.setState(prepared({ time: 0.75, preparedFrontier: 3 }));
   assert.equal(f.input.value, "1.25");
-  assert.equal(f.output.value, "0.75 / — s");
-  assert.deepEqual(f.calls, []);
-  f.input.dispatchEvent(new Event("change")); await flush();
-  assert.deepEqual(f.calls, [["seek", 1.25]]);
+  assert.equal(f.range.max, originalMaximum, "held pointer mapping remains frozen");
   assert.equal(f.output.value, "1.25 / — s");
+  assert.deepEqual(f.calls, [["seek", 1.25]]);
+  f.range.dispatchEvent(Object.assign(new Event("pointerup"), { pointerId: 1 })); await flush();
+  assert.equal(f.range.max, String(nextDown(3)));
+  assert.deepEqual(f.calls, [["seek", 1.25]]);
 });
 
 test("adopted terminal metadata alone enables the full slider and exact endpoint", async () => {
@@ -170,12 +199,56 @@ test("adopted terminal metadata alone enables the full slider and exact endpoint
   assert.equal(f.range.max, String(end));
   assert.equal(f.range.hidden, false);
   assert.equal(f.range.disabled, false);
-  assert.equal(f.input.hidden, true);
+  assert.equal(f.input, f.range);
   assert.equal(f.status.hidden, true);
   assert.deepEqual(f.calls, [], "terminal adoption does not seek or restart");
-  f.range.value = "2.6"; f.range.dispatchEvent(new Event("input")); await flush();
+  f.range.value = String(end); f.range.dispatchEvent(new Event("input")); await flush();
   assert.deepEqual(f.calls, [["seek", end]]);
   assert.equal(f.output.value, "2.60 / 2.60 s");
+});
+
+test("native range endpoint rounding maps to the authorized edge, not a future time", async () => {
+  const mockNativeEndpoint = (document, end, nativeEnd) => {
+    const createElement = document.createElement.bind(document);
+    document.createElement = tag => {
+      const element = createElement(tag);
+      if (tag === "input") {
+        let value = element.value;
+        Object.defineProperty(element, "value", {
+          get: () => value,
+          set: next => { value = Number(next) === end ? String(nativeEnd) : String(next); },
+        });
+      }
+      return element;
+    };
+  };
+
+  const end = 7.999999999999997;
+  const f = fixture(prepared({ time: 0.12, preparedFrontier: end, durationSeconds: end,
+    seekRange: { start: 0, end } }));
+  mockNativeEndpoint(f.document, end, 8);
+  assert.equal(f.range.max, String(end));
+  // Chromium and WebKit return 8 here although the max attribute remains exact.
+  f.input.value = "8";
+  f.input.dispatchEvent(new Event("input")); await flush();
+  assert.deepEqual(f.calls, [["seek", end]]);
+  assert.equal(f.range.max, String(end));
+  assert.equal(Number(f.controls.element.dataset.elapsedSeconds), end);
+  assert.equal(f.errors.length, 0);
+
+  const frontier = 4;
+  const openEnd = nextDown(frontier);
+  const open = fixture(prepared({ preparedFrontier: frontier,
+    seekRange: { start: 0, end: openEnd } }));
+  mockNativeEndpoint(open.document, openEnd, frontier);
+  assert.equal(open.range.max, String(openEnd));
+  open.input.value = String(frontier);
+  open.input.dispatchEvent(new Event("input")); await flush();
+  assert.deepEqual(open.calls, [["seek", openEnd]]);
+  assert.ok(open.calls[0][1] < frontier, "the exclusive frontier never reaches Rust");
+  open.input.value = String(frontier + Number.EPSILON * 4);
+  open.input.dispatchEvent(new Event("input")); await flush();
+  assert.deepEqual(open.calls, [["seek", openEnd]], "a value beyond the native edge is rejected");
 });
 
 test("static elapsed-time observation may equal the open boundary without authorizing that seek", async () => {
@@ -191,6 +264,7 @@ test("invalid prepared observations reject atomically without changing displayed
   for (const override of [
     { preparedPlayback: false }, { replaySupported: false }, { replaySupported: undefined },
     { preparedFrontier: NaN }, { preparedFrontier: Infinity }, { preparedFrontier: 0 },
+    { seekRange: { start: 0, end: 2 } }, { seekRange: { start: 0, end: 3 } },
     { time: 3 }, { time: NaN }, { time: -1 }, { playing: "true" },
     { durationSeconds: undefined }, { durationSeconds: NaN }, { durationSeconds: 1 },
     { buffering: undefined }, { buffering: "false" },
@@ -199,7 +273,7 @@ test("invalid prepared observations reject atomically without changing displayed
     assert.throws(() => f.controls.observe(prepared(override)), /state|boolean/);
     assert.equal(f.controls.durationSeconds, null);
     assert.equal(f.output.value, "0.50 / — s");
-    assert.equal(f.input.max, "2");
+    assert.equal(f.input.max, String(nextDown(2)));
     assert.equal(f.controls.element.dataset.buffering, "false");
     assert.equal(f.toggle.textContent, "Play");
   }
@@ -209,7 +283,7 @@ test("prepared controls do not accept an independent updateTime clock or lose re
   const f = fixture(prepared({ playing: true }));
   f.controls.updateTime(1.75);
   assert.equal(f.output.value, "0.50 / — s");
-  assert.throws(() => f.controls.observe({ time: 1, playing: true }), /reader frontier/);
+  assert.throws(() => f.controls.observe({ time: 1, playing: true }), /prepared playback state/);
   assert.equal(f.output.value, "0.50 / — s");
 });
 
@@ -243,13 +317,86 @@ test("coalesced seeks stay bounded and rejection restores the latest successful 
   f.seek(1); f.seek(1.5); f.seek(2);
   assert.deepEqual(f.calls, [["seek", 1]]);
   f.controls.observe(prepared({ time: 0.75 }));
-  assert.equal(f.output.value, "0.50 / — s");
+  assert.equal(f.output.value, "2.00 / — s", "the latest request remains visible while earlier work is pending");
   first.resolve(prepared({ time: 1, preparedFrontier: 4 })); await flush();
   assert.deepEqual(f.calls, [["seek", 1], ["seek", 2]]);
   second.reject(new Error("second seek failed")); await flush();
   assert.equal(f.output.value, "1.00 / — s");
   assert.equal(f.input.value, "1");
   assert.equal(f.errors.length, 1);
+});
+
+test("Pause intent survives a pending seek and runs after its displayed receipt", async () => {
+  const f = fixture(prepared({ playing: true })), delayed = deferred();
+  f.player.seek = target => { f.calls.push(["seek", target]); return delayed.promise; };
+  f.seek(1);
+  f.toggle.click();
+  assert.equal(f.toggle.textContent, "Play");
+  assert.deepEqual(f.calls, [["seek", 1]]);
+  delayed.resolve(prepared({ time: 1, playing: true,
+    presentationReceipt: { session: 1, sequence: 1, time: 1 } }));
+  await flush();
+  assert.deepEqual(f.calls, [["seek", 1], ["pause", undefined]]);
+  assert.equal(f.toggle.textContent, "Play");
+});
+
+test("a seek rejection does not discard a newer Pause intent", async () => {
+  const f = fixture(prepared({ playing: true })), delayed = deferred();
+  f.player.seek = target => { f.calls.push(["seek", target]); return delayed.promise; };
+  f.seek(1);
+  f.toggle.click();
+  delayed.reject(new Error("reader rejected seek"));
+  await flush();
+  assert.deepEqual(f.calls, [["seek", 1], ["pause", undefined]]);
+  assert.equal(f.errors.length, 1);
+});
+
+test("Play starts device unlock in the gesture turn while a seek is pending", async () => {
+  const f = fixture(), delayed = deferred();
+  f.player.seek = target => { f.calls.push(["seek", target]); return delayed.promise; };
+  f.seek(1);
+  f.toggle.click();
+  assert.deepEqual(f.activations, ["unlock"]);
+  assert.deepEqual(f.calls, [["seek", 1]]);
+  delayed.resolve(prepared({ time: 1,
+    presentationReceipt: { session: 1, sequence: 1, time: 1 } }));
+  await flush();
+  assert.deepEqual(f.calls.map(call => call[0]), ["seek", "resume"]);
+});
+
+test("an older renderer receipt cannot settle a newer seek", async () => {
+  const f = fixture();
+  let sequence = 2;
+  f.player.seek = async time => ({ ...prepared({ time }),
+    presentationReceipt: { session: 1, sequence: sequence--, time } });
+  f.seek(1); await flush();
+  assert.equal(f.status.textContent, "Available history: 0.00–2.00 s · total unknown");
+  f.seek(1.5); await flush();
+  assert.match(f.status.textContent, /Accepted at 1\.50 s · waiting for display/);
+  assert.equal(f.output.value, "1.50 / — s");
+});
+
+test("latest Play intent survives a pending Pause, then seek, without reordering", async () => {
+  const f = fixture(prepared({ playing: true })), pause = deferred();
+  f.player.pause = () => { f.calls.push(["pause"]); return pause.promise; };
+  f.toggle.click();
+  f.seek(0.25);
+  f.toggle.click();
+  assert.deepEqual(f.activations, ["unlock"]);
+  pause.resolve(prepared({ time: 0.5, playing: false }));
+  await flush();
+  assert.deepEqual(f.calls.map(call => call[0]), ["pause", "seek", "resume"]);
+});
+
+test("Play intent survives a pending Restart acknowledgement", async () => {
+  const f = fixture(prepared({ playing: false })), restart = deferred();
+  f.player.restartPlayback = () => { f.calls.push(["restartPlayback"]); return restart.promise; };
+  f.restart.click();
+  f.toggle.click();
+  assert.deepEqual(f.activations, ["unlock"]);
+  restart.resolve(prepared({ time: 0, playing: true }));
+  await flush();
+  assert.deepEqual(f.calls.map(call => call[0]), ["restartPlayback", "resume"]);
 });
 
 test("completed slider also restores the latest successful receipt when a later scrub rejects", async () => {
@@ -279,6 +426,20 @@ test("busy and capability retirement still invalidate pending prepared commands"
   assert.equal(f.output.value, "0.25 / — s");
   assert.deepEqual(f.errors, []);
   assert.equal(f.input.disabled, false);
+});
+
+test("observed owner replacement invalidates a pending prepared seek", async () => {
+  const f = fixture(), delayed = deferred();
+  f.player.seek = () => delayed.promise;
+  f.seek(1);
+  f.controls.observe({ preparedPlayback: false, sourceExecution: "observed",
+    replaySupported: false, time: 0.75, playing: false, durationSeconds: null });
+  delayed.resolve(prepared({ time: 1,
+    presentationReceipt: { session: 1, sequence: 1, time: 1 } }));
+  await flush();
+  assert.equal(f.output.value, "0.75 / — s");
+  assert.equal(f.controls.element.dataset.controllable, "false");
+  assert.deepEqual(f.errors, []);
 });
 
 test("destroyed prepared controls cannot mutate a replacement and remove readiness attributes", async () => {
@@ -318,7 +479,7 @@ test("admitting prepared history clears a previous scene's audio controls", () =
   assert.equal(audio.hidden, true);
   assert.equal(f.toggle.textContent, "Play");
   assert.equal(f.controls.durationSeconds, null);
-  assert.equal(f.input.hidden, false);
+  assert.equal(f.input, f.range);
   assert.deepEqual(f.calls, []);
 });
 
@@ -332,13 +493,13 @@ for (const preparedPlayback of [false, true]) test(`completed static ${preparedP
   assert.equal(f.toggle.disabled, true);
   assert.equal(f.range.max, "0");
   assert.equal(f.range.disabled, true);
-  assert.equal(f.input.hidden, true);
+  assert.equal(f.input, f.range);
   assert.equal(f.restart.disabled, false);
   f.restart.click(); await flush();
   assert.deepEqual(f.calls, [["restartPlayback", undefined]]);
   for (const invalid of [
     prepared({ time: 0, preparedFrontier: 0 }),
     prepared({ time: 0, preparedFrontier: 0, durationSeconds: 0, buffering: true }),
-  ]) assert.throws(() => f.controls.sync(invalid), /reader frontier/);
+  ]) assert.throws(() => f.controls.sync(invalid), /prepared playback state/);
   assert.equal(f.output.value, "0.00 / 0.00 s");
 });

@@ -176,22 +176,28 @@ fn adding_existing_empty_audio_scope_rejects_without_changing_membership() {
 }
 
 #[test]
-fn initial_audio_execution_rejects_all_authored_mutations_atomically() {
+fn initial_audio_allows_visual_tracks_but_freezes_the_schedule_after_playback_starts() {
     let (mut store, root, object, definition) = fixture();
+    let audio_resource = definition.resource();
+    let replacement_definition = AudioClipDefinition::new(
+        audio_resource,
+        store.audio_resources().get(audio_resource).unwrap(),
+        AudioClipOptions {
+            gain: 0.25,
+            ..AudioClipOptions::default()
+        },
+    )
+    .unwrap();
     let mut declaration = SemanticMutationTransaction::new();
-    let token = declaration.create_audio_clip(root, definition);
-    let clip = declaration
-        .apply(&mut store)
-        .unwrap()
-        .resolve(token)
-        .unwrap();
+    let clip_token = declaration.create_audio_clip(root, definition);
+    let second_token = declaration.create_audio_clip(root, definition);
+    let declared = declaration.apply(&mut store).unwrap();
+    let clip = declared.resolve(clip_token).unwrap();
+    let second_clip = declared.resolve(second_token).unwrap();
     let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+
     session.seek(0.5).unwrap();
     session.take_frame_changes();
-    let revision = store.scene_revision();
-    let publication = session.publication_context();
-    let frame = session.frame().clone();
-    let resources = store.audio_resources().stats();
 
     let mut property = SemanticMutationTransaction::new();
     property.set_property(
@@ -199,26 +205,61 @@ fn initial_audio_execution_rejects_all_authored_mutations_atomically() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(7.0, 0.0, 0.0),
     );
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, property)
+        .expect("unrelated visual tracks may share the retained audio scene");
+    let mut remove_visual = SemanticMutationTransaction::new();
+    remove_visual.remove_node(object);
+    session
+        .apply_semantic_transaction_at_root(&mut store, root, remove_visual)
+        .expect("removing a visual node does not alter the retained audio schedule");
+    assert_eq!(session.audio_playback().unwrap().count(), 2);
+    session.take_frame_changes();
+
+    let revision = store.scene_revision();
+    let publication = session.publication_context();
+    let frame = session.frame().clone();
+    let resources = store.audio_resources().stats();
+
+    let mut add_clip = SemanticMutationTransaction::new();
+    add_clip.create_audio_clip(root, definition);
+    let mut replace_clip = SemanticMutationTransaction::new();
+    replace_clip.replace_audio_clip(clip, replacement_definition);
     let mut remove_clip = SemanticMutationTransaction::new();
     remove_clip.remove_node(clip);
     let mut remove_scope = SemanticMutationTransaction::new();
     remove_scope.remove_node(root);
-    for transaction in [property, remove_clip, remove_scope] {
-        assert!(matches!(
-            session.apply_semantic_transaction_at_root(&mut store, root, transaction),
-            Err(ExecutionSessionPublicationError::AudioExecutionImmutable)
-        ));
+    let mut remove_second_clip = SemanticMutationTransaction::new();
+    remove_second_clip.remove_node(second_clip);
+    for (index, transaction) in [
+        add_clip,
+        replace_clip,
+        remove_clip,
+        remove_scope,
+        remove_second_clip,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let result = session.apply_semantic_transaction_at_root(&mut store, root, transaction);
+        assert!(
+            matches!(
+                &result,
+                Err(ExecutionSessionPublicationError::AudioExecutionImmutable)
+            ),
+            "audio mutation {index} returned {result:?}"
+        );
         assert_eq!(store.scene_revision(), revision);
         assert_eq!(store.audio_resources().stats(), resources);
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
         assert!(session.take_frame_changes().is_empty());
-        assert_eq!(session.audio_playback().unwrap().count(), 1);
+        assert_eq!(session.audio_playback().unwrap().count(), 2);
     }
 }
 
 #[test]
-fn initial_audio_seek_remains_available_without_live_history_retention() {
+fn initial_audio_seek_and_prefix_retention_preserve_immutable_schedule() {
     let (mut store, root, _, definition) = fixture();
     let mut declaration = SemanticMutationTransaction::new();
     declaration.create_audio_clip(root, definition);
@@ -229,9 +270,9 @@ fn initial_audio_seek_remains_available_without_live_history_retention() {
     let publication = session.publication_context();
     assert_eq!(
         session.begin_replay_retention(noon_runtime::ReplayLimits::default()),
-        Err(noon_runtime::ReplayError::UnsupportedDomain)
+        Ok(())
     );
-    assert!(!session.replay_scope_active());
+    assert!(session.replay_scope_active());
     assert_eq!(session.publication_context(), publication);
     for time in [0.75, 0.25, 1.0, 0.0] {
         session.seek(time).unwrap();

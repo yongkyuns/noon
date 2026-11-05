@@ -82,7 +82,9 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
   // before an opaque WASM abort. Keep a separate finite tail so verbose output
   // cannot evict lifecycle evidence. Never resolve console arguments or RPCs.
   const consoleMessages = [];
+  const consoleErrors = [];
   let consoleMessageCount = 0;
+  let consoleErrorCount = 0;
   const record = (kind, facts = {}) => {
     events.push({ atMs: now(), phase, kind, ...facts });
     if (events.length > maxEvents) events.shift();
@@ -108,13 +110,21 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
       const text = message.text();
       const location = message.location();
       consoleMessageCount++;
-      consoleMessages.push({
+      const messageEvidence = {
         atMs: now(), phase, type: short(message.type(), 32),
         text: short(text, 2048), textTruncated: text.length > 2048,
         url: short(location.url, 500),
         lineNumber: location.lineNumber, columnNumber: location.columnNumber,
-      });
+      };
+      consoleMessages.push(messageEvidence);
       if (consoleMessages.length > maxEvents) consoleMessages.shift();
+      // Later GPU warnings must not erase the phase/location of an earlier
+      // interpreter error. Retain a separately bounded error tail.
+      if (messageEvidence.type === "error") {
+        consoleErrorCount++;
+        consoleErrors.push(messageEvidence);
+        if (consoleErrors.length > maxEvents) consoleErrors.shift();
+      }
     });
     on(context, "requestfailed", request => record("request-failed", {
       url: short(request.url(), 500), error: short(request.failure()?.errorText),
@@ -145,6 +155,8 @@ export function createBrowserFailureTrace({ now = () => Date.now(), maxEvents = 
     phase, events: events.map(event => ({ ...event })),
     consoleMessageCount, consoleMessagesOmitted: consoleMessageCount - consoleMessages.length,
     consoleMessages: consoleMessages.map(message => ({ ...message })),
+    consoleErrorCount, consoleErrorsOmitted: consoleErrorCount - consoleErrors.length,
+    consoleErrors: consoleErrors.map(message => ({ ...message })),
   }) });
 }
 

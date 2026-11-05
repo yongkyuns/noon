@@ -44,11 +44,11 @@ fn semantic_runtime(with_signal: bool, bound: bool) -> SceneInstance {
     runtime
 }
 
-fn assert_unsupported<T: std::fmt::Debug>(result: Result<T, PrefixError>) {
+fn assert_unrecorded_input<T: std::fmt::Debug>(result: Result<T, PrefixError>) {
     assert!(
         matches!(
             result,
-            Err(PrefixError::Replay(ReplayError::UnsupportedDomain))
+            Err(PrefixError::Replay(ReplayError::UnrecordedInput))
         ),
         "{result:?}"
     );
@@ -71,19 +71,21 @@ fn empty_semantic_reactive_runtime_allows_bootstrap_and_quiet_extension() {
 }
 
 #[test]
-fn scoped_unbound_signal_is_not_mistaken_for_empty_reactive_scaffolding() {
+fn scoped_unbound_signal_preserves_the_scene_without_a_source_callback() {
     let source = semantic_runtime(true, false);
-    assert_unsupported(prefix_support::bootstrap(&source));
+    let (_, mut reader) = prefix_support::bootstrap(&source).unwrap();
+    assert_eq!(reader.seek(0.5).unwrap().objects, source.frame().objects);
 }
 
 #[test]
-fn property_binding_remains_outside_prefix_admission() {
+fn immutable_property_binding_is_preserved_by_the_reader() {
     let source = semantic_runtime(true, true);
-    assert_unsupported(prefix_support::bootstrap(&source));
+    let (_, mut reader) = prefix_support::bootstrap(&source).unwrap();
+    assert_eq!(reader.seek(0.5).unwrap().objects[0].style.opacity, 0.4);
 }
 
 #[test]
-fn later_single_signal_enrollment_blocks_extension_but_preserves_delivered_history() {
+fn later_unbound_enrollment_allows_extension_but_raw_input_preserves_old_history() {
     let mut source = semantic_runtime(false, false);
     let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let previous = reader.seek(0.5).unwrap().clone();
@@ -97,18 +99,24 @@ fn later_single_signal_enrollment_blocks_extension_but_preserves_delivered_histo
         Some(&ReactiveValue::Scalar(2.0))
     );
     source.advance_to(2.0).unwrap();
+    reader
+        .append(source.prepare_prefix_update(&mut publisher).unwrap())
+        .unwrap();
+    source
+        .set_reactive_input(signal, ReactiveValue::Scalar(3.0))
+        .unwrap();
     let source_frame = source.frame().clone();
     let source_publication = source.publication_context();
-    assert_unsupported(source.prepare_prefix_update(&mut publisher));
-    assert_unsupported(source.prepare_prefix_update(&mut publisher));
+    assert_unrecorded_input(source.prepare_prefix_update(&mut publisher));
+    assert_unrecorded_input(source.prepare_prefix_update(&mut publisher));
     assert_eq!(source.frame(), &source_frame);
     assert_eq!(source.publication_context(), source_publication);
-    assert_eq!(reader.frontier(), 1.0);
+    assert_eq!(reader.frontier(), 2.0);
     assert_eq!(reader.seek(0.5).unwrap(), &previous);
 }
 
 #[test]
-fn failed_and_empty_enrollment_leave_admission_open_but_committed_batch_closes_it() {
+fn enrollment_batches_preserve_admission_until_an_unrecorded_value_change() {
     let mut source = semantic_runtime(false, false);
     let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
     let signal = SignalId::new(200);
@@ -138,7 +146,13 @@ fn failed_and_empty_enrollment_leave_admission_open_but_committed_batch_closes_i
         Some(&ReactiveValue::Scalar(3.0))
     );
     source.advance_to(4.0).unwrap();
-    assert_unsupported(source.prepare_prefix_update(&mut publisher));
-    assert_eq!(reader.frontier(), 3.0);
+    reader
+        .append(source.prepare_prefix_update(&mut publisher).unwrap())
+        .unwrap();
+    source
+        .seek_with_reactive_inputs(4.0, &[(signal, ReactiveValue::Scalar(4.0))])
+        .unwrap();
+    assert_unrecorded_input(source.prepare_prefix_update(&mut publisher));
+    assert_eq!(reader.frontier(), 4.0);
     assert_eq!(reader.seek(1.5).unwrap(), &preserved);
 }

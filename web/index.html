@@ -289,6 +289,14 @@
         color: var(--danger);
       }
 
+      #draft-status {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--muted-2);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       .preview-pane {
         display: flex;
         height: 100%;
@@ -496,6 +504,7 @@
           </div>
 
           <footer class="editor-footer">
+            <output id="draft-status" aria-live="polite"></output>
             <output id="patch-status" aria-live="polite">Loading Python examples…</output>
             <details id="python-diagnostics" hidden>
               <summary>Python error details</summary>

@@ -1,7 +1,10 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
-use noon::{ExecutionSession, ImageMobjectOptions, ManimBecomeOptions, PrefixReader, Scene};
-use noon_runtime::ReplayLimits;
+use noon::{
+    ExecutionSession, ImageMobjectOptions, ImagePaintOptions, ManimBecomeOptions, PrefixReader,
+    Scene,
+};
+use noon_runtime::{PrefixError, ReplayLimits};
 
 fn fixture() -> (
     Scene,
@@ -30,6 +33,138 @@ fn image(color: [u8; 4]) -> ImageMobjectOptions {
     let mut options = ImageMobjectOptions::rgba8(2, 2, color.repeat(4)).unwrap();
     options.set_height(1.5).unwrap();
     options
+}
+
+fn image_paint(color: [u8; 4]) -> ImagePaintOptions {
+    ImagePaintOptions::rgba8(1, 1, color.to_vec()).unwrap()
+}
+
+fn image_paint_bytes(color: [u8; 4]) -> usize {
+    noon_core::RasterImageResource::from_rgba8(1, 1, color.to_vec())
+        .unwrap()
+        .retained_bytes()
+}
+
+fn displayed_paint_pixels(reader: &mut PrefixReader, time: f64) -> Vec<u8> {
+    reader.seek(time).unwrap();
+    let publication = reader.take_renderer_publication();
+    let paint = publication.frame().objects[0]
+        .fill_paint
+        .as_deref()
+        .and_then(noon_core::SemanticPaint::as_image)
+        .expect("historical image fill");
+    publication
+        .raster_image_resources()
+        .get(paint.resource())
+        .expect("historical image resource")
+        .rgba8()
+        .to_vec()
+}
+
+#[test]
+fn image_paint_replacement_keeps_old_pixels_and_future_append_paused() {
+    let first = [240, 20, 10, 255];
+    let second = [10, 30, 240, 255];
+    let bytes = image_paint_bytes(first);
+    let mut scene = Scene::new();
+    let mut panel = scene.rectangle(2.0, 1.0).unwrap();
+    panel.set_fill_image(image_paint(first), Some(1.0)).unwrap();
+    scene.add(&panel).unwrap();
+
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits {
+            revisions: 64,
+            payloads: 256,
+        })
+        .unwrap();
+    let boundary = source.wait_segment(1.0).unwrap();
+    source.advance_to(boundary.end_time()).unwrap();
+    let (mut publisher, mut reader) = source
+        .create_prepared_prefix_with_resource_budget(boundary, bytes * 2)
+        .unwrap();
+    assert_eq!(publisher.extracted_resource_bytes(), bytes);
+    assert_eq!(reader.retained_resource_bytes(), bytes);
+
+    assert_eq!(displayed_paint_pixels(&mut reader, 0.5), first);
+    let paused_time = reader.frame().time;
+    let paused_frame = reader.frame().clone();
+    scene
+        .live(&mut source)
+        .set_fill_image(&panel, image_paint(second), Some(1.0))
+        .unwrap();
+    let next = source.wait_segment(1.0).unwrap();
+    source.advance_to(next.end_time()).unwrap();
+    reader
+        .append(
+            source
+                .publish_prepared_prefix(next, &mut publisher)
+                .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(reader.frame().time, paused_time);
+    assert_eq!(
+        reader.frame(),
+        &paused_frame,
+        "future paint stays unpublished"
+    );
+    assert_eq!(reader.retained_resource_bytes(), bytes * 2);
+    assert_eq!(displayed_paint_pixels(&mut reader, 1.5), second);
+    assert_eq!(displayed_paint_pixels(&mut reader, 0.5), first);
+}
+
+#[test]
+fn image_paint_resource_budget_failure_keeps_suffix_cursor_and_reader_unchanged() {
+    let first = [240, 20, 10, 255];
+    let second = [10, 30, 240, 255];
+    let bytes = image_paint_bytes(first);
+    let mut scene = Scene::new();
+    let mut panel = scene.rectangle(2.0, 1.0).unwrap();
+    panel.set_fill_image(image_paint(first), Some(1.0)).unwrap();
+    scene.add(&panel).unwrap();
+
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits {
+            revisions: 64,
+            payloads: 256,
+        })
+        .unwrap();
+    let boundary = source.wait_segment(1.0).unwrap();
+    source.advance_to(boundary.end_time()).unwrap();
+    let (mut publisher, mut reader) = source
+        .create_prepared_prefix_with_resource_budget(boundary, bytes * 2 - 1)
+        .unwrap();
+    assert_eq!(publisher.extracted_resource_bytes(), bytes);
+    reader.seek(0.5).unwrap();
+    let before = reader.frame().clone();
+    scene
+        .live(&mut source)
+        .set_fill_image(&panel, image_paint(second), Some(1.0))
+        .unwrap();
+    let next = source.wait_segment(1.0).unwrap();
+    source.advance_to(next.end_time()).unwrap();
+
+    for _ in 0..2 {
+        assert!(matches!(
+            source.publish_prepared_prefix(next, &mut publisher),
+            Err(PrefixError::ResourceBudgetExceeded {
+                retained_bytes,
+                additional_bytes,
+                limit_bytes,
+            }) if retained_bytes == bytes && additional_bytes == bytes && limit_bytes == bytes * 2 - 1
+        ));
+        assert_eq!(publisher.frontier(), 1.0);
+        assert_eq!(publisher.extracted_resource_bytes(), bytes);
+        assert_eq!(reader.frontier(), 1.0);
+        assert_eq!(reader.retained_resource_bytes(), bytes);
+        assert_eq!(
+            reader.frame(),
+            &before,
+            "failed extraction preserves display"
+        );
+    }
 }
 
 #[test]

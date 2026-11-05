@@ -404,7 +404,8 @@ impl SceneInstance {
     ) -> Result<&FrameState, CompilePatchError> {
         self.require_replay_writable()?;
         self.compiled.preflight_execution_transaction(transaction)?;
-        let changed = self.apply_preflighted_transaction(transaction);
+        let final_writes = final_value_writes(transaction);
+        let changed = self.apply_preflighted_transaction(&final_writes);
         if changed {
             self.publish_execution_change();
         }
@@ -647,8 +648,9 @@ impl SceneInstance {
             self.preflight_prepared_frame_commit(frame, &empty)
                 .map_err(AuthoredPublicationError::PreparedFrame)?;
         }
-        let execution_changed = final_value_writes(transaction)
-            .into_iter()
+        let final_writes = final_value_writes(transaction);
+        let execution_changed = final_writes
+            .iter()
             .any(|patch| self.compiled.patch_changes_execution(patch));
         let next_execution = if execution_changed {
             Some(current.execution_revision().checked_next().ok_or(
@@ -724,7 +726,7 @@ impl SceneInstance {
             .collect::<Vec<_>>();
 
         self.compiled.merge_prepared_resources(resource_additions);
-        let applied_execution_change = self.apply_preflighted_transaction(transaction);
+        let applied_execution_change = self.apply_preflighted_transaction(&final_writes);
         debug_assert_eq!(applied_execution_change, execution_changed);
         if let Some(effective) = effective {
             for (object_index, write) in effective.writes {
@@ -771,17 +773,14 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
-    fn apply_preflighted_transaction(
-        &mut self,
-        transaction: &ExecutionMutationTransaction,
-    ) -> bool {
+    fn apply_preflighted_transaction(&mut self, final_writes: &[&ExecutionPatch]) -> bool {
         self.last_patch_stats = crate::RuntimePatchStats::default();
         // Intermediate value writes in an atomic batch are not observable. Keep
         // the last write per property, bounded by structural/timeline operations
         // that may change what a property write means. Full preflight above still
         // validates overwritten writes rather than hiding malformed input.
         let mut changed = false;
-        for patch in final_value_writes(transaction) {
+        for patch in final_writes.iter().copied() {
             if !self.compiled.patch_changes_execution(patch) {
                 continue;
             }

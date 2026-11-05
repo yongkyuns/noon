@@ -103,7 +103,7 @@ pub fn checker_rgba8() -> Vec<u8> {
     pixels
 }
 
-pub fn program() -> Result<LiveProgram<GlassLens>, String> {
+fn setup() -> Result<(Scene, GlassLens), String> {
     let mut scene = Scene::new();
     scene
         .camera_frame()
@@ -145,9 +145,12 @@ pub fn program() -> Result<LiveProgram<GlassLens>, String> {
     )
     .map_err(message)?;
     scene.add_many(&[(&card).into()]).map_err(message)?;
-    scene
-        .into_live_program(GlassLens { card, stage: 0 })
-        .map_err(message)
+    Ok((scene, GlassLens { card, stage: 0 }))
+}
+
+pub fn program() -> Result<LiveProgram<GlassLens>, String> {
+    let (scene, continuation) = setup()?;
+    scene.into_live_program(continuation).map_err(message)
 }
 
 #[cfg(test)]
@@ -217,5 +220,71 @@ mod tests {
             drive(&mut program, &mut callbacks, 8.5),
             LiveProgramStatus::Finished
         );
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    #[test]
+    fn prepared_prefix_adopts_glass_pixels_backdrop_and_dissolve_history() {
+        use noon_runtime::ReplayLimits;
+
+        let (scene, mut continuation) = setup().unwrap();
+        let mut source = scene.execution_session().unwrap();
+        source
+            .begin_replay_retention(ReplayLimits::default())
+            .unwrap();
+        let first = match continuation.resume(&mut scene.live(&mut source)).unwrap() {
+            ContinuationStep::Await(segment) => segment,
+            other => panic!("expected initial wait, got {other:?}"),
+        };
+        source.advance_to(first.end_time()).unwrap();
+        scene.live(&mut source).complete_segment(first).unwrap();
+        let (mut publisher, mut reader) = source.create_prepared_prefix(first).unwrap();
+        let paused = reader.frame().clone();
+        let image_handles = reader
+            .frame()
+            .objects
+            .iter()
+            .filter_map(|row| row.content.image())
+            .map(|image| image.resource())
+            .collect::<Vec<_>>();
+        let resources = reader.resource_publication();
+        assert_eq!(image_handles.len(), 2);
+        assert!(image_handles
+            .iter()
+            .all(|handle| resources.raster_image_resources().get(*handle).is_some()));
+        assert!(reader.retained_resource_bytes() > 0);
+
+        let mut last = first;
+        loop {
+            match continuation.resume(&mut scene.live(&mut source)).unwrap() {
+                ContinuationStep::Await(segment) => {
+                    source.advance_to(segment.end_time()).unwrap();
+                    scene.live(&mut source).complete_segment(segment).unwrap();
+                    let suffix = source
+                        .publish_prepared_prefix(segment, &mut publisher)
+                        .unwrap_or_else(|error| {
+                            panic!("glass suffix at {} failed: {error}", segment.end_time())
+                        });
+                    reader.preflight_append(&suffix).unwrap();
+                    reader.append(suffix).unwrap();
+                    assert_eq!(reader.frame(), &paused, "adoption stays paused");
+                    last = segment;
+                }
+                ContinuationStep::Finished => break,
+                ContinuationStep::Publish(_) => panic!("local glass resources need no host work"),
+            }
+        }
+        source.seal_replay().unwrap();
+        reader
+            .append(source.finish_prepared_prefix(last, &mut publisher).unwrap())
+            .unwrap();
+        for time in [
+            0.0, 0.25, 0.5, 1.25, 2.0, 2.25, 2.5, 3.25, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5,
+            8.0, 8.5,
+        ] {
+            source.seek(time).unwrap();
+            reader.seek(time).unwrap();
+            assert_eq!(reader.frame(), source.frame(), "at authored time {time}");
+        }
     }
 }

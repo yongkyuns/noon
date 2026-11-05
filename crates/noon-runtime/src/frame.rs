@@ -707,6 +707,31 @@ impl FrameChanges {
         self
     }
 
+    /// Preserve dirty coverage across accepted publications until presentation.
+    /// Indices must belong to the same stable frame; a full snapshot replaces
+    /// that domain and dominates all earlier partial changes.
+    pub fn accumulate(&mut self, mut next: Self) {
+        if self.all || next.is_empty() {
+            return;
+        }
+        if next.all || self.is_empty() {
+            *self = next;
+            return;
+        }
+        self.presentation_redraw |= next.presentation_redraw;
+        for (current, incoming) in [
+            (&mut self.object_indices, &mut next.object_indices),
+            (&mut self.added_indices, &mut next.added_indices),
+            (&mut self.removed_indices, &mut next.removed_indices),
+        ] {
+            current.append(incoming);
+            sort_dedup(current);
+        }
+        if let Some(range) = next.painter_order_range {
+            self.insert_painter_order_range(range);
+        }
+    }
+
     pub fn with_structure(
         mut object_indices: Vec<usize>,
         mut added_indices: Vec<usize>,
@@ -834,6 +859,36 @@ impl FrameChanges {
 #[cfg(test)]
 mod frame_changes_tests {
     use super::FrameChanges;
+
+    #[test]
+    fn unpresented_publications_keep_sparse_structural_and_painter_dirtiness() {
+        let mut pending = FrameChanges::objects(vec![2]).with_painter_order(1..3);
+        pending.accumulate(FrameChanges::structural(vec![4], vec![2]).with_painter_order(3..5));
+        pending.accumulate(FrameChanges::objects(vec![1, 4]));
+        pending.accumulate(FrameChanges::presentation_redraw());
+        assert_eq!(pending.object_indices(), &[1, 2, 4]);
+        assert_eq!(pending.added_indices(), &[4]);
+        assert_eq!(pending.removed_indices(), &[2]);
+        assert_eq!(pending.painter_order_range(), Some(1..5));
+        assert!(pending.requires_presentation_redraw());
+        pending.accumulate(FrameChanges::default());
+        assert_eq!(pending.object_indices(), &[1, 2, 4]);
+        pending.accumulate(FrameChanges::structural(vec![2], vec![4]));
+        assert_eq!(pending.added_indices(), &[2, 4]);
+        assert_eq!(pending.removed_indices(), &[2, 4]);
+    }
+
+    #[test]
+    fn unpresented_full_snapshot_dominates_partial_changes_in_either_order() {
+        for (mut pending, next) in [
+            (FrameChanges::all(), FrameChanges::objects(vec![1])),
+            (FrameChanges::objects(vec![1]), FrameChanges::all()),
+        ] {
+            pending.accumulate(next);
+            assert!(pending.is_all());
+            assert!(pending.object_indices().is_empty());
+        }
+    }
 
     #[test]
     fn presentation_redraw_is_non_full_non_structural_and_has_no_stable_rows() {

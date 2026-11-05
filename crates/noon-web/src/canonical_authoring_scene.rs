@@ -623,6 +623,11 @@ impl Default for CanonicalAuthoringScene {
 }
 
 impl CanonicalAuthoringScene {
+    #[allow(dead_code)] // Used by the wasm-only prepared authoring path.
+    pub(crate) fn section_navigation_snapshot(&self) -> noon::SceneSectionNavigation {
+        self.scene.section_navigation()
+    }
+
     pub fn with_store(
         semantics: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
     ) -> Self {
@@ -10382,13 +10387,25 @@ mod wasm {
         pub fn begin_observed_prepared_source(
             &mut self,
             scene_only_source: Option<bool>,
-        ) -> Result<bool, JsValue> {
+        ) -> Result<String, JsValue> {
             self.inner
                 .begin_observed_prepared_source(if scene_only_source == Some(true) {
                     noon::ContinuationEffects::SceneOnly
                 } else {
                     noon::ContinuationEffects::Opaque
                 })
+                .map(crate::prepared_execution_player::source::source_execution_requirement_json)
+                .map_err(typed_js_error)
+        }
+
+        /// Observe the current source requirement at an actual continuation
+        /// boundary without changing the active source or its playback policy.
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = observedSourceExecutionRequirementJson)]
+        pub fn observed_source_execution_requirement_json(&mut self) -> Result<String, JsValue> {
+            self.inner
+                .observed_source_execution_requirement()
+                .map(crate::prepared_execution_player::source::source_execution_requirement_json)
                 .map_err(typed_js_error)
         }
 
@@ -13106,6 +13123,46 @@ mod tests {
             context.lower_execution().unwrap().execution_object_id(id),
             execution.execution_object_id(id)
         );
+    }
+
+    #[test]
+    fn replacing_authoring_store_keeps_old_context_and_handles_alive() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let previous_store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
+        let mut previous_context = CanonicalAuthoringScene::with_store(Rc::clone(&previous_store));
+        let mut previous_handle = previous_context.scene.circle(1.0).unwrap();
+        let previous_nodes = previous_store.borrow().len();
+
+        let fresh_store = Rc::new(RefCell::new(noon_core::SemanticStore::new()));
+        let mut fresh_context = CanonicalAuthoringScene::with_store(Rc::clone(&fresh_store));
+        let _fresh_handle = fresh_context.scene.square(1.0).unwrap();
+        assert_eq!(previous_store.borrow().len(), previous_nodes);
+        assert_eq!(fresh_store.borrow().len(), 2);
+        assert!(!Rc::ptr_eq(
+            previous_context.scene.integration_store(),
+            fresh_context.scene.integration_store()
+        ));
+        let fresh_revision = fresh_context.scene.revision();
+        assert!(fresh_context
+            .bind_mobject(ObjectId::new(7), &previous_handle)
+            .is_err());
+        assert_eq!(fresh_context.scene.revision(), fresh_revision);
+
+        // This Rc is the authoring-store wrapper's owner. Scene contexts and
+        // typed handles retain their own shared store references after it drops.
+        let retired_arena = Rc::downgrade(&previous_store);
+        drop(previous_store);
+        previous_handle.shift(2.0, -1.0).unwrap();
+        previous_context.scene.square(0.5).unwrap();
+        assert_eq!(
+            previous_context.scene.integration_store().borrow().len(),
+            previous_nodes + 1
+        );
+        assert_eq!(fresh_store.borrow().len(), 2);
+        drop(previous_handle);
+        drop(previous_context);
+        assert!(retired_arena.upgrade().is_none());
     }
 
     #[test]

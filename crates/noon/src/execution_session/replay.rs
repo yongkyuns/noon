@@ -45,9 +45,10 @@ impl ExecutionSession {
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
-        // Immutable audio/control plans support direct seek. Live revision
-        // retention needs its own resource/binding history qualification (#2263).
-        if self.has_audio() || self.has_playback_controls() {
+        // Immutable audio schedules are retained with the original runtime;
+        // later audio schedule mutations still invalidate this history scope.
+        // Playback-control binding history remains outside this profile.
+        if self.has_playback_controls() {
             return Err(ReplayError::UnsupportedDomain);
         }
         if self.pending_segment_completion.is_some()
@@ -56,7 +57,10 @@ impl ExecutionSession {
         {
             return Err(ReplayError::Incomplete);
         }
-        self.runtime.begin_replay_retention(limits)?;
+        self.runtime.begin_replay_retention_with_initial_payloads(
+            limits,
+            self.signal_timeline.entry_count(),
+        )?;
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()
             || self.translation_drag.has_targets()
@@ -71,6 +75,16 @@ impl ExecutionSession {
     pub fn seal_replay(&mut self) -> Result<(), ReplayError> {
         self.ensure_replay_completion()?;
         self.runtime.seal_replay()
+    }
+
+    /// Seal only when the viewer may safely take over the still-live owner.
+    /// Explicit callers may seal a snapshot with declared input routes; later
+    /// input is then rejected by the sealed history scope as usual.
+    pub fn seal_replay_for_viewer(&mut self) -> Result<(), ReplayError> {
+        if self.reactive_projection.has_native_input_routes() {
+            return Err(ReplayError::UnrecordedInput);
+        }
+        self.seal_replay()
     }
 
     // Inspect the original session before any ownership/snapshot operation:
@@ -170,5 +184,5 @@ mod prefix;
 
 #[cfg(feature = "prepared-prefix")]
 pub use prefix::{PrefixReader, SourceExecutionRequirement};
-#[cfg(test)]
+#[cfg(all(test, feature = "prepared-prefix"))]
 mod playback_tests;

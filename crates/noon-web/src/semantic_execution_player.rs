@@ -24,6 +24,8 @@ mod numbers;
 mod pointer_input;
 #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
 mod prepared;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+pub(crate) use prepared::PreparedPrefixAdvance;
 mod provisional_geometry;
 #[cfg(any(target_arch = "wasm32", test))]
 mod sample_space;
@@ -36,6 +38,7 @@ mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;
+use crate::retained_family_execution_encoder::NoChangePresentation;
 use noon::integration::{
     CallbackAdvance, CallbackPhaseToken, EffectivePropertyBatch, EffectiveSemanticPropertyWrite,
     RuntimeIdentity,
@@ -161,6 +164,8 @@ pub struct SemanticExecutionPlayer {
     /// authoring-worker to render-worker boundary.
     resource_bundle: Vec<u8>,
     snapshot_sent: bool,
+    last_publication: Option<(u32, u64)>,
+    no_change_presentation: Option<NoChangePresentation>,
     /// Last emitted presentation only. The session remains selection authority;
     /// renderer acknowledgement and retry belong to the existing transport.
     last_sent_selection_overlay: Option<noon::integration::PointerSelectionPresentation>,
@@ -571,6 +576,8 @@ impl SemanticExecutionPlayer {
             encoder,
             resource_bundle,
             snapshot_sent: false,
+            last_publication: None,
+            no_change_presentation: None,
             last_sent_selection_overlay: None,
             pending_callback_phase: None,
             #[cfg(any(target_arch = "wasm32", test))]
@@ -715,6 +722,8 @@ impl SemanticExecutionPlayer {
         self.encoder = encoder;
         self.worker_pointer_presentation = Default::default();
         self.snapshot_sent = false;
+        self.last_publication = None;
+        self.no_change_presentation = None;
         // A transport recovery reuses this runtime but begins a new host lease.
         // Re-anchor the derived wall conversion at its next wake so elapsed wall
         // time while no endpoint owned the player cannot advance authored time.
@@ -4336,6 +4345,7 @@ impl SemanticExecutionPlayer {
         &mut self,
         snapshot: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
+        self.no_change_presentation = None;
         let presentation = self.session.pointer_selection_presentation();
         let overlay = presentation
             .as_ref()
@@ -4374,9 +4384,18 @@ impl SemanticExecutionPlayer {
                 || pointer_refresh,
         )?
         else {
+            self.no_change_presentation =
+                self.last_publication
+                    .map(|(session, sequence)| NoChangePresentation {
+                        session,
+                        sequence,
+                        time: publication.frame().time,
+                        publication_context: publication.context(),
+                    });
             return Ok(None);
         };
         self.snapshot_sent = true;
+        self.last_publication = Some((delta.retained.session, delta.retained.sequence));
         delta.retained.inset_2d_views = inset_2d_views;
         delta.selection_overlay = overlay;
         #[cfg(any(target_arch = "wasm32", test))]
@@ -5997,6 +6016,15 @@ impl SemanticExecutionPlayer {
         self.encoded_delta(false)
     }
 
+    /// Consume the last drain's Rust proof of unchanged renderer state. The
+    /// host must still join its identity to an actual renderer display receipt.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = takeNoChangePresentationJson))]
+    pub fn take_no_change_presentation_json(&mut self) -> Option<String> {
+        self.no_change_presentation
+            .take()
+            .map(|proof| serde_json::to_string(&proof).expect("presentation proof is serializable"))
+    }
+
     /// Atomically serialize one canonical worker publication and its bounded
     /// metadata header. The host forwards the body unchanged; the receiving
     /// transport still validates it. This avoids parsing every object in JS
@@ -6064,6 +6092,16 @@ impl SemanticExecutionPlayer {
     /// A failed capability leaves the final coherent frame and semantic scene intact.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplay))]
     pub fn seal_replay(&mut self) -> Result<(), String> {
+        self.seal_replay_with_policy(false)
+    }
+
+    /// Automatic viewer completion cannot take ownership from live native input.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sealReplayForViewer))]
+    pub fn seal_replay_for_viewer(&mut self) -> Result<(), String> {
+        self.seal_replay_with_policy(true)
+    }
+
+    fn seal_replay_with_policy(&mut self, viewer_completion: bool) -> Result<(), String> {
         if self.session.replay_scope_active() {
             // A wait has no animation completion barrier in the runtime, but its
             // live receipt still owns an unfinished authored interval.
@@ -6071,9 +6109,12 @@ impl SemanticExecutionPlayer {
             if self.has_pending_live_segment() {
                 return Err(noon_runtime::ReplayError::Incomplete.to_string());
             }
-            self.session
-                .seal_replay()
-                .map_err(|error| error.to_string())?;
+            if viewer_completion {
+                self.session.seal_replay_for_viewer()
+            } else {
+                self.session.seal_replay()
+            }
+            .map_err(|error| error.to_string())?;
             #[cfg(any(target_arch = "wasm32", test))]
             {
                 self.live_segment = None;
@@ -6147,6 +6188,7 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
+        self.no_change_presentation = None;
         if self.finite_audio_end.is_some_and(|end| time > end) {
             return Err("audio seek exceeds the finite timeline".into());
         }

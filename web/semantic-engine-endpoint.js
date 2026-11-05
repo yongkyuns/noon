@@ -10,6 +10,7 @@ import {
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
 export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
+const MAX_IN_FLIGHT_RENDER_PUBLICATIONS = 2;
 export const SEMANTIC_PACING_REALTIME = "realtime";
 export const SEMANTIC_PACING_EXTERNAL_SAMPLES = "external_samples";
 const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
@@ -30,7 +31,7 @@ const FINITE_EXPORT_CONTROLS = new Set([
   "finite_export_audio", "cancel_finite_export",
 ]);
 const PREPARED_PLAYBACK_CONTROLS = new Set([
-  "pause", "resume", "seek", "restart_playback", "browser_pointer_input",
+  "pause", "resume", "seek", "seek_section", "restart_playback", "set_loop_duration", "browser_pointer_input",
   "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
 ]);
 
@@ -48,6 +49,7 @@ export async function attachSemanticEngine(
   discardRequiredCallbackPhase = null,
   testOnlyTickTimestamp = null,
   prepared = null,
+  onExecutionDiagnostic = null,
 ) {
   const {
     controlPort,
@@ -92,9 +94,14 @@ export async function attachSemanticEngine(
   if (testOnlyTickTimestamp !== null && typeof testOnlyTickTimestamp !== "function") {
     throw new Error("test tick timestamp must be a function");
   }
+  if (onExecutionDiagnostic !== null && typeof onExecutionDiagnostic !== "function") {
+    throw new TypeError("execution diagnostic observer must be a function");
+  }
   let player = null;
   let replayUnavailable = null;
   let hasAudio = false;
+  let lastAudioAuthorizedUntil = null;
+  let lastAudioBuffering = null;
   let sections = [];
   // Live execution leases its existing source player. Prepared execution owns
   // an independent typed reader; the source player stays in its active context.
@@ -111,6 +118,8 @@ export async function attachSemanticEngine(
   let callbackFault = null;
   let lastSentPublication = null;
   let lastPresentedPublication = null;
+  let lastPresentedDeltaMetadata = null;
+  const sentPublicationMetadata = new Map();
   let preparedClockAdmitted = false;
   let pendingPresentation = null;
   let pendingPointerInvalidation = null;
@@ -133,7 +142,66 @@ export async function attachSemanticEngine(
   let externalInteractionTickTime = null;
   let pendingExternalContinuation = null;
   const controls = [];
-  const post = (payload, transfer = []) => controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
+  const controlEnqueueEpochMs = new WeakMap();
+  let diagnosticReady = false, diagnosticTerminal = false, diagnosticDisposition = false;
+  let diagnosticCapabilities = null;
+  let preparedWaiting = null;
+  const hostEpochMs = () => performance.timeOrigin + performance.now();
+  const samplePreparedWaiting = (includeTimestamp = false) => {
+    if (prepared === null || player === null || onExecutionDiagnostic === null) return null;
+    const playing = player.preparedPlaying();
+    const buffering = player.preparedBuffering();
+    return { playing, buffering, waiting: playing && buffering,
+      session, ...(includeTimestamp ? { observedAtEpochMs: hostEpochMs() } : {}) };
+  };
+  const observePreparedWaiting = (boundary, mutationStartedAtEpochMs = null, sample = null) => {
+    sample ??= samplePreparedWaiting();
+    if (sample === null) return;
+    const { playing, buffering, waiting } = sample;
+    const firstObservation = preparedWaiting === null;
+    if (firstObservation) {
+      preparedWaiting = waiting;
+      if (!waiting) return;
+    } else {
+      if (preparedWaiting === waiting) return;
+      preparedWaiting = waiting;
+    }
+    const leftCensored = firstObservation && waiting;
+    mutationStartedAtEpochMs ??= hostEpochMs();
+    const observedAtEpochMs = sample.observedAtEpochMs ?? hostEpochMs();
+    const time = player.preparedTime();
+    const preparedFrontier = player.preparedFrontier();
+    const end = player.preparedEndTime() ?? null;
+    onExecutionDiagnostic({
+      stage: "buffering-transition",
+      session,
+      waiting,
+      playing,
+      buffering,
+      boundary,
+      reason: waiting ? "open-history-frontier"
+        : boundary === "prefix-delivery" ? end === null ? "prefix-adopted" : "terminal-adopted"
+          : boundary,
+      ...(leftCensored ? { leftCensored: true } : {}),
+      mutationStartedAtEpochMs,
+      observedAtEpochMs,
+      time,
+      preparedFrontier,
+      durationSeconds: end,
+      publication: lastSentPublication,
+    });
+  };
+  const post = (payload, transfer = []) => {
+    controlPort.postMessage({ channel: "noon.engine", protocolVersion: 1, ...payload }, transfer);
+    if (payload.type === "ready") diagnosticReady = true;
+    if (diagnosticReady && Number.isFinite(payload.time)) {
+      const bufferingCapture = payload.type === "ready" ? samplePreparedWaiting(true) : null;
+      observeExecution(payload, payload.type === "ready", bufferingCapture);
+      if (bufferingCapture !== null) {
+        observePreparedWaiting("receiver-attached", bufferingCapture.observedAtEpochMs, bufferingCapture);
+      }
+    }
+  };
   function requestSourceHandoff() {
     if (stopped || receiverFailed || prepared === null || !preparedClockAdmitted || sourceHandoffRequested || !player.sourceExecutionReady()) return;
     sourceHandoffRequested = true;
@@ -166,21 +234,33 @@ export async function attachSemanticEngine(
     if (notePreparedTrap(error)) { stop(); return; }
     post({ type: "error", requestId, message: String(error?.message ?? error) });
   };
-  const writable = () => typeof transport.canSend === "function" ? transport.canSend() : transport.inFlight() < 2;
+  const writable = () => typeof transport.canSend === "function"
+    ? transport.canSend() : transport.inFlight() < MAX_IN_FLIGHT_RENDER_PUBLICATIONS;
   const send = (json, timing = null, workerCarrier = false) => {
     if (json == null) return null;
     try {
       const metadataStartedAtMs = timing === null ? 0 : performance.now();
       const carrier = workerCarrier ? prepareExecutionDeltaTransportForSend(json) : null;
-      const publication = carrier?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
+      const metadata = carrier?.metadata ?? prepareExecutionDeltaMetadataForSend(json);
+      const rustTime = prepared !== null ? player.preparedTime() : player?.time?.();
+      const publication = Number.isFinite(rustTime)
+        ? Object.freeze({ ...metadata, time: rustTime }) : metadata;
       if (carrier !== null) json = carrier.json;
       if (timing !== null) timing.deltaMetadataMs += performance.now() - metadataStartedAtMs;
       const transportStartedAtMs = timing === null ? 0 : performance.now();
-      if (!transport.send(json, publication)) {
+      if (!transport.send(json, metadata)) {
         throw new Error("semantic transport became backpressured after admission");
       }
       if (timing !== null) timing.deltaSendMs += performance.now() - transportStartedAtMs;
       lastSentPublication = publication;
+      sentPublicationMetadata.set(publication.sequence, publication);
+      const retainedSequences = new Set([...sentPublicationMetadata.keys()]
+        .sort((left, right) => right - left)
+        .slice(0, MAX_IN_FLIGHT_RENDER_PUBLICATIONS));
+      if (pendingPresentation !== null) retainedSequences.add(pendingPresentation.publication.sequence);
+      for (const sequence of sentPublicationMetadata.keys()) {
+        if (!retainedSequences.has(sequence)) sentPublicationMetadata.delete(sequence);
+      }
       if (transportMode === EXECUTION_TRANSPORT_SHARED) renderPort.postMessage({ type: "shared_delta" });
       return publication;
     } catch (error) {
@@ -263,8 +343,11 @@ export async function attachSemanticEngine(
     // publication may still be waiting for the surface. Reuse its transport
     // metadata as the barrier without retaining a scene or frame mirror.
     const requiredPublication = publication ?? lastSentPublication;
-    if (requiredPublication === null || publicationAlreadyPresented(requiredPublication)) {
-      return Promise.resolve();
+    if (requiredPublication === null) {
+      return Promise.resolve(null);
+    }
+    if (publicationAlreadyPresented(requiredPublication)) {
+      return Promise.resolve(lastPresentedDeltaMetadata);
     }
     if (pendingPresentation !== null) {
       // Resource preparation and continuation progression may retain the same
@@ -280,10 +363,60 @@ export async function attachSemanticEngine(
     pendingPresentation.promise = promise;
     return promise;
   };
+  const settlePreparedControlPresentation = async (publication, selectedTime, command = "control") => {
+    const noChangeProof = publication === null
+      ? JSON.parse(player.takePreparedNoChangePresentationJson() ?? "null") : null;
+    const proofMatches = publication !== null || (noChangeProof !== null &&
+      noChangeProof.session === lastSentPublication?.session &&
+      noChangeProof.sequence === lastSentPublication?.sequence &&
+      noChangeProof.time === selectedTime);
+    if (!proofMatches) {
+      throw new Error(`prepared no-change ${command} lacks a matching Rust presentation proof`);
+    }
+    const presented = await awaitPresentation(publication);
+    if (presented === null || !Number.isFinite(presented.time) ||
+        (publication !== null && presented.time !== selectedTime)) {
+      throw new Error(`prepared ${command} did not receive a matching displayed-time receipt`);
+    }
+    return {
+      session: presented.session, sequence: presented.sequence, time: selectedTime,
+      unchanged: publication === null,
+    };
+  };
+  const captureCommandPresentation = (publication) => {
+    if (publication !== null) {
+      const identity = { session: publication.session, sequence: publication.sequence,
+        time: publication.time ?? null };
+      if (!publicationAlreadyPresented(publication)) return { identity, receipt: null, settledEpochMs: null };
+      return {
+        identity,
+        receipt: { ...identity, unchanged: false },
+        settledEpochMs: performance.timeOrigin + performance.now(),
+      };
+    }
+    if (typeof player?.takeNoChangePresentationJson !== "function") return null;
+    const proof = JSON.parse(player.takeNoChangePresentationJson() ?? "null");
+    if (proof === null || !Number.isSafeInteger(proof.session) || !Number.isSafeInteger(proof.sequence) ||
+        !Number.isFinite(proof.time) || proof.publicationContext === null ||
+        typeof proof.publicationContext !== "object" ||
+        proof.session !== lastSentPublication?.session || proof.sequence !== lastSentPublication?.sequence) {
+      return null;
+    }
+    const identity = { session: proof.session, sequence: proof.sequence, time: proof.time };
+    if (!publicationAlreadyPresented(identity)) return { identity, receipt: null, settledEpochMs: null };
+    return {
+      identity,
+      receipt: { ...identity, unchanged: true },
+      settledEpochMs: performance.timeOrigin + performance.now(),
+    };
+  };
   const notePresentedPublication = (publication) => {
     if (!publication || !Number.isSafeInteger(publication.session) ||
         publication.session < 0 || !Number.isSafeInteger(publication.sequence) ||
-        publication.sequence < 0 || publication.session !== session ||
+        publication.sequence < 0 ||
+        (publication.objectCount !== undefined &&
+          (!Number.isSafeInteger(publication.objectCount) || publication.objectCount < 0)) ||
+        publication.session !== session ||
         lastSentPublication === null ||
         publication.session !== lastSentPublication.session ||
         publication.sequence > lastSentPublication.sequence) {
@@ -295,8 +428,27 @@ export async function attachSemanticEngine(
         publication.sequence < lastPresentedPublication.sequence) {
       return;
     }
+    const samePresentedPublication = lastPresentedPublication !== null &&
+      samePublication(lastPresentedPublication, publication);
+    const pendingMatch = pendingPresentation !== null &&
+      samePublication(pendingPresentation.publication, publication);
+    const presentedMetadata = sentPublicationMetadata.get(publication.sequence) ??
+      (pendingMatch ? pendingPresentation.publication : null) ??
+      (samePresentedPublication ? lastPresentedDeltaMetadata : null);
+    if (presentedMetadata === null) {
+      // A late receipt may outlive the bounded metadata window. It cannot
+      // settle a command or replace the last validated displayed publication.
+      return;
+    }
     const firstPresentation = lastPresentedPublication === null;
     lastPresentedPublication = publication;
+    lastPresentedDeltaMetadata = Object.freeze({
+      ...presentedMetadata,
+      ...(publication.objectCount === undefined ? {} : { objectCount: publication.objectCount }),
+    });
+    for (const sequence of sentPublicationMetadata.keys()) {
+      if (sequence <= publication.sequence) sentPublicationMetadata.delete(sequence);
+    }
     if (publication.pointerReceipt) {
       // The render port is ordered. An invalidation received before this repaint
       // must cancel the old gesture before the repaint can authorize any input.
@@ -310,7 +462,7 @@ export async function attachSemanticEngine(
         samePublication(pendingPresentation.publication, publication)) {
       const { resolve } = pendingPresentation;
       pendingPresentation = null;
-      resolve();
+      resolve(lastPresentedDeltaMetadata);
     }
     const admitsPreparedClock = prepared !== null && !preparedClockAdmitted &&
       samePublication(publication, lastSentPublication);
@@ -331,16 +483,32 @@ export async function attachSemanticEngine(
   };
   const state = (type) => {
     if (prepared !== null && player !== null) {
+      const observedAt = performance.now();
+      const observation = JSON.parse(player.preparedPlaybackStateJson(observedAt));
+      const time = type === "state" && preparedClockAdmitted
+        ? player.preparedPlaybackTimeAt(observedAt) : observation.time;
+      sections = JSON.parse(player.sectionsJson());
+      const presentationReceipt = !receiverFailed && samePublication(lastSentPublication, lastPresentedPublication) &&
+        samePublication(lastPresentedDeltaMetadata, lastPresentedPublication)
+        ? lastPresentedDeltaMetadata : null;
       return {
         type, preparedPlayback: true,
         // Cold initialization and command acknowledgements observe only the
         // coherent reader. Rust may project a sleeping wait after first display.
-        time: type === "state" && preparedClockAdmitted
-          ? player.preparedPlaybackTimeAt(performance.now()) : player.preparedTime(),
-        playing: player.preparedPlaying(),
-        preparedFrontier: player.preparedFrontier(),
-        durationSeconds: player.preparedEndTime() ?? null,
-        buffering: player.preparedBuffering(),
+        time,
+        sections,
+        sectionState: sections.length ? JSON.parse(player.sectionStateJson(time)) : null,
+        playing: observation.playing,
+        hasAudio,
+        preparedFrontier: observation.frontier,
+        seekRange: observation.seekRange,
+        durationSeconds: observation.end,
+        buffering: observation.buffering,
+        completed: observation.completed, advancing: observation.advancing,
+        loopDuration: observation.loopDuration, loopCount: observation.loopCount,
+        loopError: observation.loopError,
+        heldPresentation: preparedClockAdmitted ? observation.heldPresentation ?? null : null,
+        ...(presentationReceipt === null ? {} : { presentationReceipt }),
         replaySupported: true, replayUnavailable: null,
         canUndoTranslationDrag: false, nextPatchSequence: "0",
       };
@@ -355,6 +523,7 @@ export async function attachSemanticEngine(
       }
       return {
         type, time, playing: !sourceFinished && context.sourcePlaybackPlaying(), nextPatchSequence: "0", durationSeconds: null,
+        hasAudio: false,
         sourcePlaybackControllable: pacing === SEMANTIC_PACING_REALTIME && !sourceFinished,
         sourceExecution: "observed", replaySupported: false,
         replayUnavailable: "source execution is not retained for replay",
@@ -369,7 +538,8 @@ export async function attachSemanticEngine(
       sectionState: sections.length ? JSON.parse(player.sectionStateJson(time)) : null,
       playing: player.isPlaying(), nextPatchSequence: "0",
       sections,
-      ...(hasAudio ? { hasAudio, durationSeconds: player.finiteAudioDuration() } : {}),
+      hasAudio,
+      ...(hasAudio ? { durationSeconds: player.finiteAudioDuration() } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       ...(sourceFinished && continuation !== null
         ? { preparedPlayback: false, sourcePlaybackControllable: false,
@@ -383,6 +553,64 @@ export async function attachSemanticEngine(
           replayUnavailable: "source execution is not retained for replay" }),
     };
   };
+  const currentPlayerTime = () => prepared !== null ? player.preparedTime() : player.time();
+  const currentPlayerPlaying = () => prepared !== null ? player.preparedPlaying() : player.isPlaying();
+  // Observe admitted owners and command readiness, never the caller's desired
+  // profile. Emit lifecycle changes only; the trace does not retain frames.
+  function observeExecution(snapshot, attached = false, bufferingCapture = null) {
+    if (onExecutionDiagnostic === null) return;
+    const replay = snapshot.replaySupported === true;
+    const controllable = replay || snapshot.sourcePlaybackControllable === true;
+    const commands = controllable ? ["play", "pause"] : [];
+    if (replay) {
+      commands.push("seek", "restart");
+      if (!hasAudio && snapshot.durationSeconds !== 0) commands.push("loop");
+      if (sections.length) commands.push("sections");
+    }
+    const capabilities = { commands, replay, audio: hasAudio, sections: sections.length > 0 };
+    const facts = { time: snapshot.time, preparedFrontier: snapshot.preparedFrontier ?? null,
+      durationSeconds: snapshot.durationSeconds ?? null, publication: lastSentPublication, capabilities };
+    const signature = JSON.stringify(capabilities);
+    if (attached || signature !== diagnosticCapabilities) {
+      onExecutionDiagnostic({ stage: attached ? "attached" : "capabilities-changed", ...facts,
+        ...(attached && bufferingCapture !== null ? { bufferingCapture } : {}) });
+      diagnosticCapabilities = signature;
+    }
+    const terminal = prepared !== null ? snapshot.durationSeconds !== null
+      : continuation === null || sourceFinished;
+    if (terminal && !diagnosticTerminal) {
+      diagnosticTerminal = true;
+      onExecutionDiagnostic({ stage: "terminal-adopted", ...facts });
+    }
+    if (!terminal || diagnosticDisposition) return;
+    const disposition = prepared !== null
+      ? snapshot.loopCount > 0 ? "looped" : snapshot.completed ? "finite-complete" : null
+      : hasAudio ? !snapshot.playing && Number.isFinite(snapshot.durationSeconds) &&
+          snapshot.time >= snapshot.durationSeconds ? "finite-complete" : null
+        : sourceFinished ? "observed-complete" : null;
+    if (disposition !== null) {
+      diagnosticDisposition = true;
+      onExecutionDiagnostic({ stage: "disposition", disposition, ...facts,
+        ...(prepared !== null ? { loopCount: snapshot.loopCount } : {}) });
+    }
+  }
+  function publishPreparedAudioState(sampledAt = performance.now()) {
+    if (prepared === null || !hasAudio || typeof player.audioAnchorJsonAt !== "function") return;
+    const audioAnchor = JSON.parse(player.audioAnchorJsonAt(
+      sampledAt, performance.timeOrigin + sampledAt,
+    ));
+    if (typeof audioAnchor.buffering !== "boolean") {
+      throw new Error("prepared audio anchor is missing Rust buffering state");
+    }
+    const authorizationAdvanced = Number.isFinite(audioAnchor.authorizedUntil) &&
+      (lastAudioAuthorizedUntil === null || audioAnchor.authorizedUntil > lastAudioAuthorizedUntil);
+    const bufferingChanged = audioAnchor.buffering !== lastAudioBuffering;
+    if (!authorizationAdvanced && !bufferingChanged) return;
+    lastAudioAuthorizedUntil = Number.isFinite(audioAnchor.authorizedUntil)
+      ? audioAnchor.authorizedUntil : null;
+    lastAudioBuffering = audioAnchor.buffering;
+    post({ type: "audio_state", audioAnchor });
+  }
   const emitExecutionWake = (cadence, timerAfterMilliseconds, force = false) => {
     if (!force && cadence === "idle" && executionWakeCadence === "idle") return;
     executionWakeCadence = cadence;
@@ -968,12 +1196,22 @@ export async function attachSemanticEngine(
       }
       while (controls.length && writable()) {
       const message = controls.shift();
+      const enqueuedEpochMs = controlEnqueueEpochMs.get(message);
+      controlEnqueueEpochMs.delete(message);
+      const queueTiming = Number.isFinite(enqueuedEpochMs) ? {
+        enqueuedEpochMs,
+        dequeuedEpochMs: performance.timeOrigin + performance.now(),
+      } : null;
       let rendererObservation = null;
       let debugFrame;
       let sourceCompleted;
       let pointerInputAccepted;
       let sampleTiming = null;
+      let commandTiming = null;
+      let commandPublication = null;
       let audioAnchor;
+      let presentationReceipt = null;
+      let noTargetSectionQuery = false;
       let finiteExport;
       let audioBlock;
       try {
@@ -1013,9 +1251,19 @@ export async function attachSemanticEngine(
             latestTick = null;
             if (sourceFinished && (completedStaticSource || replayUnavailable !== null)) break;
             if (prepared !== null) {
+              const mutationStartedAtEpochMs = hostEpochMs();
               if (!preparedClockAdmitted) player.setPreparedPlaying(false);
               else player.pausePreparedAt(performance.now());
-              drainAndSendDelta();
+              observePreparedWaiting("pause", mutationStartedAtEpochMs);
+              const acceptedEpochMs = performance.timeOrigin + performance.now();
+              const publication = drainAndSendDelta();
+              presentationReceipt = await settlePreparedControlPresentation(
+                publication, player.preparedTime(),
+              );
+              commandTiming = {
+                acceptedEpochMs,
+                presentationSettledEpochMs: performance.timeOrigin + performance.now(),
+              };
               observeExecutionWake(performance.now(), true);
               break;
             }
@@ -1031,6 +1279,15 @@ export async function attachSemanticEngine(
               if (time > player.time()) await advanceToAuthoredTime(time);
             }
             player.pause();
+            const acceptedEpochMs = performance.timeOrigin + performance.now();
+            const evidence = captureCommandPresentation(drainAndSendDelta());
+            if (evidence !== null) {
+              commandPublication = evidence.identity;
+              if (evidence.receipt !== null) {
+                presentationReceipt = evidence.receipt;
+                commandTiming = { acceptedEpochMs, presentationSettledEpochMs: evidence.settledEpochMs };
+              } else commandTiming = { acceptedEpochMs };
+            } else commandTiming = { acceptedEpochMs };
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else observeExecutionWake(performance.now(), true);
             break;
@@ -1043,18 +1300,44 @@ export async function attachSemanticEngine(
             }
             if (hasAudio) {
               await awaitPresentation(null);
-              if (player.time() === player.finiteAudioDuration()) {
+              if (currentPlayerTime() === player.finiteAudioDuration()) {
                 await awaitPresentation(send(player.seekDeltaJson(0)));
               }
             }
-            if (prepared !== null) player.setPreparedPlaying(true);
+            if (prepared !== null) {
+              const mutationStartedAtEpochMs = hostEpochMs();
+              player.setPreparedPlaying(true);
+              observePreparedWaiting("resume", mutationStartedAtEpochMs);
+            }
             else player.resume();
+            const acceptedEpochMs = performance.timeOrigin + performance.now();
+            if (prepared !== null) {
+              const publication = drainAndSendDelta();
+              presentationReceipt = await settlePreparedControlPresentation(
+                publication, player.preparedTime(),
+              );
+              commandTiming = {
+                acceptedEpochMs,
+                presentationSettledEpochMs: performance.timeOrigin + performance.now(),
+              };
+            } else {
+              const evidence = captureCommandPresentation(drainAndSendDelta());
+              if (evidence !== null) {
+                commandPublication = evidence.identity;
+                if (evidence.receipt !== null) {
+                  presentationReceipt = evidence.receipt;
+                  commandTiming = { acceptedEpochMs, presentationSettledEpochMs: evidence.settledEpochMs };
+                } else commandTiming = { acceptedEpochMs };
+              } else commandTiming = { acceptedEpochMs };
+            }
             if (continuationActive) observeContinuationWake(performance.now(), true);
             else if (!hasAudio) observeExecutionWake(performance.now(), true);
             break;
           }
           case "set_loop_duration":
-            player.setLoopDuration(message.loopDurationSeconds);
+            if (prepared !== null) player.setPreparedLoopDuration(message.loopDurationSeconds);
+            else player.setLoopDuration(message.loopDurationSeconds);
+            if (prepared !== null) observePreparedWaiting("loop-policy");
             observeExecutionWake(performance.now());
             break;
           case "seek":
@@ -1064,18 +1347,66 @@ export async function attachSemanticEngine(
             // Static waits can advance the Rust clock without a new frame.
             // Select relative cues from that same observed playhead before pause.
             const sectionTime = message.type === "seek_section"
-              ? (pacing === SEMANTIC_PACING_REALTIME
-                ? player.playbackTimeAt(performance.now()) : player.time()) : null;
-            const playing = hasAudio && player.isPlaying();
-            if (hasAudio) player.pause();
+              ? (prepared !== null
+                ? player.preparedPlaybackTimeAt(performance.now())
+                : pacing === SEMANTIC_PACING_REALTIME
+                  ? player.playbackTimeAt(performance.now()) : player.time()) : null;
+            if (message.type === "seek_section" && prepared !== null) {
+              const navigation = JSON.parse(player.sectionStateJson(sectionTime));
+              noTargetSectionQuery = navigation[message.previous ? "previous" : "next"] == null;
+            }
+            const playing = hasAudio && currentPlayerPlaying();
+            if (hasAudio) {
+              if (prepared !== null) {
+                const mutationStartedAtEpochMs = hostEpochMs();
+                player.pausePreparedAt(performance.now());
+                observePreparedWaiting("pause-before-seek", mutationStartedAtEpochMs);
+              }
+              else player.pause();
+            }
+            const seekStartedAtEpochMs = prepared === null ? null : hostEpochMs();
             const delta = message.type === "seek_section"
               ? player.seekSectionDeltaJson(message.previous, sectionTime)
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
+            if (prepared !== null) observePreparedWaiting("seek", seekStartedAtEpochMs);
+            const acceptedEpochMs = performance.timeOrigin + performance.now();
             const publication = send(delta);
-            if (hasAudio) {
-              await awaitPresentation(publication);
+            const evidence = prepared === null ? captureCommandPresentation(publication) : null;
+            if (evidence !== null) commandPublication = evidence.identity;
+            commandTiming = { acceptedEpochMs };
+            if (prepared !== null) {
+              const selectedTime = player.preparedTime();
+              presentationReceipt = await settlePreparedControlPresentation(publication, selectedTime, "seek");
+              commandTiming = {
+                acceptedEpochMs,
+                presentationSettledEpochMs: performance.timeOrigin + performance.now(),
+              };
+              if (playing) {
+                const mutationStartedAtEpochMs = hostEpochMs();
+                player.setPreparedPlaying(true);
+                observePreparedWaiting("resume-after-seek", mutationStartedAtEpochMs);
+              }
+            } else if (hasAudio) {
+              const presented = await awaitPresentation(publication);
+              if (presented !== null && (publication !== null || evidence !== null)) {
+                presentationReceipt = publication !== null
+                  ? { session: presented.session, sequence: presented.sequence,
+                    time: presented.time, unchanged: false }
+                  : { ...evidence.identity, unchanged: true };
+                commandTiming = {
+                  acceptedEpochMs,
+                  presentationSettledEpochMs: performance.timeOrigin + performance.now(),
+                };
+              }
               if (playing) player.resume();
-            } else observeExecutionWake(performance.now());
+            } else {
+              if (evidence !== null && evidence.receipt !== null) {
+                presentationReceipt = evidence.receipt;
+                commandTiming = { acceptedEpochMs,
+                  presentationSettledEpochMs: evidence.settledEpochMs };
+              }
+              observeExecutionWake(performance.now());
+            }
             break;
           }
           case "undo_translation_drag": {
@@ -1090,7 +1421,7 @@ export async function attachSemanticEngine(
           case "advance_to": {
             if (callbackFault !== null) throw callbackFault;
             sampleTiming = createSampleTiming(message.collectTimings);
-            if (player.isPlaying()) {
+            if (currentPlayerPlaying()) {
               throw new Error(
                 "pause semantic execution before forward authored-time advancement",
               );
@@ -1174,18 +1505,40 @@ export async function attachSemanticEngine(
           // the runtime and no frontend cursor is retained.
           await awaitPresentation(null);
           const sampledAt = performance.now();
-          await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+          if (prepared === null) {
+            await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+          }
           observeExecutionWake(sampledAt, true);
-          audioAnchor = JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt));
+          audioAnchor = JSON.parse(prepared !== null && typeof player.audioAnchorJsonAt === "function"
+            ? player.audioAnchorJsonAt(sampledAt, performance.timeOrigin + sampledAt)
+            : player.audioAnchorJson(performance.timeOrigin + sampledAt));
+          lastAudioAuthorizedUntil = Number.isFinite(audioAnchor.authorizedUntil)
+            ? audioAnchor.authorizedUntil : null;
+          lastAudioBuffering = typeof audioAnchor.buffering === "boolean" ? audioAnchor.buffering : null;
+        }
+        const observedState = state(message.type);
+        if (noTargetSectionQuery && prepared !== null) {
+          // This was a logical no-op at the Rust-observed clock time. Keep its
+          // unchanged presentation receipt at the reader frame while reporting
+          // the current Rust playhead so controls do not jump backward to that
+          // older frame for one state update.
+          observedState.time = player.preparedPlaybackTimeAt(performance.now());
+          observedState.sectionState = JSON.parse(player.sectionStateJson(observedState.time));
         }
         post({
           requestId: message.requestId,
-          ...state(message.type),
+          ...observedState,
           ...(rendererObservation === null ? {} : { rendererObservation }),
           ...(debugFrame === undefined ? {} : { debugFrame }),
           ...(sourceCompleted === undefined ? {} : { sourceCompleted }),
           ...(sampleTiming === null ? {} : { sampleTiming }),
+          ...(commandTiming === null ? {} : { commandTiming: {
+            ...commandTiming,
+            ...(queueTiming === null ? {} : queueTiming),
+          } }),
           ...(audioAnchor === undefined ? {} : { audioAnchor }),
+          ...(commandPublication === null ? {} : { commandPublication }),
+          ...(presentationReceipt === null ? {} : { presentationReceipt }),
           ...(finiteExport === undefined ? {} : { finiteExport }),
           ...(audioBlock === undefined ? {} : { audioBlock }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
@@ -1211,8 +1564,15 @@ export async function attachSemanticEngine(
               // The render timestamp is a wake opportunity only. The prepared
               // reader maps this producing context's monotonic clock in Rust.
               if (preparedClockAdmitted) {
-                send(player.tickDeltaJson(testOnlyTickTimestamp === null
-                  ? performance.now() : testOnlyTickTimestamp()));
+                const wasBuffering = player.preparedBuffering();
+                const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
+                const mutationStartedAtEpochMs = hostEpochMs();
+                const delta = player.tickDeltaTransportJson(sampledAt);
+                observePreparedWaiting("tick", mutationStartedAtEpochMs);
+                send(delta, null, true);
+                if (hasAudio && wasBuffering !== player.preparedBuffering()) {
+                  publishPreparedAudioState(sampledAt);
+                }
                 observeExecutionWake(performance.now());
                 prepared.wakeSource();
                 requestSourceHandoff();
@@ -1243,10 +1603,10 @@ export async function attachSemanticEngine(
               // monotonic clock for authored-time conversion and wake projection.
               // Qualification may supply deterministic worker tick timestamps
               // without replacing the worker's global clock or its scheduler.
-              const wasPlaying = player.isPlaying();
+              const wasPlaying = currentPlayerPlaying();
               const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
               await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
-              if (hasAudio && wasPlaying && !player.isPlaying()) {
+              if (hasAudio && wasPlaying && !currentPlayerPlaying()) {
                 post({ type: "audio_state", audioAnchor: JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt)) });
               }
               observeExecutionWake(performance.now());
@@ -1375,10 +1735,10 @@ export async function attachSemanticEngine(
     }
     if (prepared === null) player = context.createExecutionPlayer(loopDurationSeconds, session);
     hasAudio = typeof player.hasAudio === "function" && player.hasAudio();
-    sections = prepared === null ? JSON.parse(player.sectionsJson()) : [];
+    sections = JSON.parse(player.sectionsJson());
     if ((continuation === null || sourceFinished) && prepared === null && !completedStaticSource) {
-      if (typeof player.sealReplay !== "function") throw new Error("semantic execution requires replay admission support");
-      try { player.sealReplay(); }
+      if (typeof player.sealReplayForViewer !== "function") throw new Error("semantic execution requires viewer replay admission support");
+      try { player.sealReplayForViewer(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
     }
     if (continuation !== null && !sourceFinished && pacing === SEMANTIC_PACING_REALTIME && !initiallyPaused) player.resume();
@@ -1399,7 +1759,18 @@ export async function attachSemanticEngine(
         if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) throw new Error("invalid engine request ID");
         if (message.type === "state") { post({ requestId: message.requestId, ...state("state"), sceneJson: null }); return; }
         if (message.type === "metrics") {
-          post({ requestId: message.requestId, type: "metrics", metrics: { host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 } } });
+          const preparedPlayback = prepared === null || !preparedClockAdmitted ? null : (() => {
+            const observedAt = performance.now();
+            const observation = JSON.parse(player.preparedPlaybackStateJson(observedAt));
+            return { observation, observedTime: player.preparedPlaybackTimeAt(observedAt) };
+          })();
+          post({ requestId: message.requestId, type: "metrics", metrics: {
+            host: { enabled: false, missedDeadlines: 0, droppedLateResults: 0 },
+            ...(prepared === null ? {} : {
+              ...(preparedPlayback === null ? {} : { preparedPlayback }),
+              preparedRetention: JSON.parse(player.preparedRetentionMetricsJson()),
+            }),
+          } });
           return;
         }
         if (receiverFailed) throw new Error("prepared receiver failed; replace the receiver before further controls");
@@ -1469,6 +1840,7 @@ export async function attachSemanticEngine(
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
           throw new Error("semantic control queue is full; wait for pending commands before retrying");
         }
+        controlEnqueueEpochMs.set(message, performance.timeOrigin + performance.now());
         controls.push(message);
         if (message.type === "sample_to_authored_time") lastExternalSampleTime = message.time;
         void drain();
@@ -1530,8 +1902,10 @@ export async function attachSemanticEngine(
               // A sleeping static wait can have observed elapsed time beyond
               // its last evaluated frame. Commit it through Rust before resetting
               // the wake epoch, preserving intent without publishing to a lost GPU.
+              const mutationStartedAtEpochMs = hostEpochMs();
               player.pausePreparedAt(performance.now());
               player.setPreparedPlaying(true);
+              observePreparedWaiting("recovery", mutationStartedAtEpochMs);
             }
           } catch (error) { terminateProgression(error); return; }
           receiverFailed = true;
@@ -1602,6 +1976,11 @@ export async function attachSemanticEngine(
       // History adoption alone neither selects another frame nor drains a
       // renderer delta. It may release Rust buffering/demand and wake sleepers.
       try {
+        observePreparedWaiting("prefix-delivery");
+        if (hasAudio && currentPlayerPlaying() && typeof player.audioAnchorJsonAt === "function") {
+          publishPreparedAudioState();
+        }
+        if (diagnosticReady) observeExecution(state("state"));
         observeExecutionWake(performance.now());
         prepared.wakeSource();
       } catch (error) {
@@ -1610,8 +1989,11 @@ export async function attachSemanticEngine(
       }
     },
     async prepareSourceEffects(generation, staged) {
-      if (stopped || continuation === null || continuationActive || player !== null ||
-          generation !== continuation.generation || pendingEffectPreparation !== null) {
+      const preparedSource = () => prepared !== null && player === prepared.player &&
+        prepared.generation === generation && !sourceHandoffRequested;
+      const observedSource = () => continuation !== null && !continuationActive && player === null &&
+        generation === continuation.generation;
+      if (stopped || (!preparedSource() && !observedSource()) || pendingEffectPreparation !== null) {
         throw new Error("resource preparation requires the current returned source lease");
       }
       const id = nextEffectPreparation++;
@@ -1624,10 +2006,14 @@ export async function attachSemanticEngine(
         const bytes = Uint8Array.from(context.effectPreparationResources(staged));
         renderPort.postMessage({ type: "prepare_effect_programs", session, requestId: id, bytes }, [bytes.buffer]);
         await ready;
-        if (stopped || generation !== continuation.generation || continuationActive || player !== null) {
+        if (stopped || (!preparedSource() && !observedSource())) {
           throw new Error("source changed during effect preparation");
         }
         context.publishPreparedEffects(staged);
+        // Prepared interpreter source owns a future semantic suffix. Its GPU
+        // work is validated here, while the current reader remains the only
+        // presentation authority; PrefixReader adopts the source edit later.
+        if (preparedSource()) return;
         const publication = startsSegment
           ? this.startContinuation(generation)
           : send(context.drainReturnedPublicationJson());
@@ -1652,7 +2038,7 @@ export async function attachSemanticEngine(
       player = context.completeSourcePlayback();
       sourceFinished = true;
       sections = JSON.parse(player.sectionsJson());
-      try { player.sealReplay(); }
+      try { player.sealReplayForViewer(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
       if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
       applyPointerInvalidation();
@@ -1662,6 +2048,7 @@ export async function attachSemanticEngine(
       const tail = drainAndSendDelta();
       observeExecutionWake(performance.now(), true);
       await awaitPresentation(tail);
+      observeExecution(state("state"));
       if (pendingExternalContinuation !== null) {
         const { resolve } = pendingExternalContinuation;
         pendingExternalContinuation = null;

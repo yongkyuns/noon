@@ -2,7 +2,11 @@
 //! One execution bootstrap is followed by changed-payload batches, not snapshots.
 //! The reader accepts future revisions without seeking to the producer frontier.
 use super::{ReplayError, ReplayLimits, Revision};
-use crate::{EvaluationError, PreparedTransientAnimation, RuntimeIdentity, SceneInstance};
+use crate::signal_timeline::SignalTimelineCursor;
+use crate::{
+    EvaluationError, PreparedTransientAnimation, RuntimeIdentity, SceneInstance,
+    SignalTimelineAppendError, SignalTimelineSchedule,
+};
 use noon_compile::{
     CompiledFamilyAnimationChannel, CompiledObject, CompiledResourceError, CompiledResources,
 };
@@ -35,6 +39,7 @@ mod resource_budget_tests;
 pub enum PrefixError {
     Replay(ReplayError),
     Evaluation(EvaluationError),
+    ScalarTimeline(SignalTimelineAppendError),
     SourceChanged,
     ReaderChanged,
     Slots(crate::ExecutionSlotError),
@@ -106,6 +111,11 @@ impl From<EvaluationError> for PrefixError {
         Self::Evaluation(error)
     }
 }
+impl From<SignalTimelineAppendError> for PrefixError {
+    fn from(error: SignalTimelineAppendError) -> Self {
+        Self::ScalarTimeline(error)
+    }
+}
 
 impl From<CompiledResourceError> for PrefixError {
     fn from(error: CompiledResourceError) -> Self {
@@ -143,9 +153,17 @@ pub struct PrefixPublisher {
     resource_budget: ResourceBudget,
     history_payload_budget: HistoryPayloadBudget,
     object_vector_budget_bytes: usize,
+    scalar_timeline_cursor: SignalTimelineCursor,
 }
 
 impl PrefixPublisher {
+    /// Bind the publisher's starting cursor to the source-owned scalar schedule.
+    /// This is called once when its matching ExecutionSession bootstraps a reader.
+    #[doc(hidden)]
+    pub fn initialize_scalar_timeline(&mut self, schedule: &SignalTimelineSchedule) {
+        self.scalar_timeline_cursor = schedule.cursor();
+    }
+
     /// Saved vectors and logical inline geometry extracted, including pending batches.
     /// Not total history/heap memory; see the compiler-owned accounting contract.
     pub fn extracted_history_payload_bytes(&self) -> usize {
@@ -186,6 +204,7 @@ pub struct PrefixBatch {
     resources: CompiledResources,
     resource_bytes: usize,
     history_payload_bytes: usize,
+    scalar_timeline_entries: Vec<noon_compile::CompiledScalarSignalTimelineEntry>,
 }
 impl PrefixBatch {
     /// Saved vector backing and both-side logical inline geometry charged to the reader.
@@ -265,6 +284,9 @@ impl PrefixReceiver {
     pub fn retained_history_payload_bytes(&self) -> usize {
         self.history_payload_budget.bytes()
     }
+    pub fn history_payload_budget_bytes(&self) -> usize {
+        self.history_payload_budget.limit()
+    }
 
     /// Logical immutable-resource bytes pinned by the adopted history, not heap/VRAM.
     /// Future resources remain charged even while an older frame is displayed.
@@ -332,6 +354,31 @@ impl PrefixReceiver {
     /// Read-only readiness over the same admission used by seek and advance.
     pub fn contains_time(&self, time: f64) -> bool {
         self.validate_time(time).is_ok()
+    }
+
+    /// Inclusive endpoints suitable for a timeline control. The open endpoint
+    /// is the last representable timestamp admitted by this receiver, not a
+    /// guessed frame time. Runtime identity and complete retained history are
+    /// checked before exposing the bounds.
+    pub fn selectable_time_bounds(
+        &self,
+        runtime: &SceneInstance,
+    ) -> Result<Option<(f64, f64)>, PrefixError> {
+        self.validate_runtime(runtime)?;
+        let end = if self.finished {
+            self.frontier
+        } else {
+            if self.frontier <= self.start {
+                return Ok(None);
+            }
+            // The immediate predecessor keeps the exclusive frontier itself
+            // out of the inclusive UI range without inventing a time step.
+            self.frontier.next_down()
+        };
+        if end < self.start || !self.contains_time(end) {
+            return Ok(None);
+        }
+        Ok(Some((self.start, end)))
     }
 
     fn validate_time(&self, time: f64) -> Result<(), PrefixError> {
@@ -436,7 +483,27 @@ impl PrefixReceiver {
         runtime: &SceneInstance,
         batch: &PrefixBatch,
     ) -> Result<PrefixBatchStats, PrefixError> {
+        if !batch.scalar_timeline_entries.is_empty() {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
         self.validate_append(runtime, batch).map(|_| batch.stats)
+    }
+
+    /// Preflight the ordered scalar suffix against this reader's current
+    /// schedule cursor without moving either the history or the display.
+    #[doc(hidden)]
+    pub fn preflight_append_with_scalar_timeline(
+        &self,
+        runtime: &SceneInstance,
+        batch: &PrefixBatch,
+        schedule: &SignalTimelineSchedule,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        self.validate_append(runtime, batch)?;
+        schedule.prepare_append_batch(
+            batch.scalar_timeline_entries.iter().cloned(),
+            runtime.frame().time,
+        )?;
+        Ok(batch.stats)
     }
 
     fn validate_append(
@@ -516,8 +583,48 @@ impl PrefixReceiver {
         runtime: &mut SceneInstance,
         batch: PrefixBatch,
     ) -> Result<PrefixBatchStats, PrefixError> {
+        if !batch.scalar_timeline_entries.is_empty() {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
         let (count, payloads, resource_budget, history_payload_budget) =
             self.validate_append(runtime, &batch)?;
+        self.install_validated_batch(
+            runtime,
+            batch,
+            (count, payloads, resource_budget, history_payload_budget),
+        )
+    }
+
+    /// Atomically adopt a validated runtime suffix and its matching scalar
+    /// schedule extension, preserving the reader's current event cursor.
+    #[doc(hidden)]
+    pub fn append_with_scalar_timeline(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: PrefixBatch,
+        schedule: &mut SignalTimelineSchedule,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        let timeline = schedule.prepare_append_batch(
+            batch.scalar_timeline_entries.iter().cloned(),
+            runtime.frame().time,
+        )?;
+        let validated = self.validate_append(runtime, &batch)?;
+        let stats = self.install_validated_batch(runtime, batch, validated)?;
+        schedule.commit_append(timeline);
+        Ok(stats)
+    }
+
+    fn install_validated_batch(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: PrefixBatch,
+        (count, payloads, resource_budget, history_payload_budget): (
+            usize,
+            usize,
+            ResourceBudget,
+            HistoryPayloadBudget,
+        ),
+    ) -> Result<PrefixBatchStats, PrefixError> {
         let history = runtime
             .replay_history
             .as_mut()
@@ -570,8 +677,8 @@ impl SceneInstance {
 
     /// Low-level bootstrap. The owning ExecutionSession must additionally prove
     /// its source segment and callback completion BEFORE invoking this method.
-    /// This experimental path excludes native-reactive bindings and external
-    /// input. It copies the existing execution projection exactly once.
+    /// This experimental path copies the existing execution projection once;
+    /// its source owner separately excludes causal native input routes.
     #[doc(hidden)]
     pub fn create_prefix_projection(
         &self,
@@ -677,13 +784,6 @@ impl SceneInstance {
         if !ready || history.applied != history.revisions.len() {
             return Err(PrefixError::NotReady);
         }
-        if self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| !reactive.is_empty())
-        {
-            return Err(ReplayError::UnsupportedDomain.into());
-        }
         // Initial cloning includes retained inverse revisions. Checking only
         // active relations would admit an inset added and removed before this
         // boundary, then silently omit that view when the reader rewinds.
@@ -712,15 +812,26 @@ impl SceneInstance {
             .ok_or(ReplayError::RetentionLimit)?;
         let resource_budget =
             ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
-        let history_payload_budget = HistoryPayloadBudget::new(history_payload_budget_bytes);
+        let history_payload_budget = HistoryPayloadBudget::new(history_payload_budget_bytes)
+            .with_additional(
+                self.compiled
+                    .prefix_effect_payload_bytes()
+                    .ok_or(ReplayError::RetentionLimit)?,
+            )?;
+        let history_payload_budget = history_payload_budget.with_additional(
+            self.compiled
+                .prefix_composed_payload_bytes()
+                .ok_or(ReplayError::RetentionLimit)?,
+        )?;
         // Check the requested nested-vector storage before cloning the runtime.
         // Source spare capacity is not copied, so this pass uses occupied lengths.
-        history_payload_budget.with_additional(history_payload_budget::clone_bytes(
-            history
-                .revisions
-                .iter()
-                .filter_map(|revision| revision.inverse.as_ref()),
-        )?)?;
+        let history_payload_budget =
+            history_payload_budget.with_additional(history_payload_budget::clone_bytes(
+                history
+                    .revisions
+                    .iter()
+                    .filter_map(|revision| revision.inverse.as_ref()),
+            )?)?;
         let stream = Arc::new(());
         let mut runtime = self.clone();
         // Reserve every historical row, including inactive order slots, once.
@@ -770,6 +881,7 @@ impl SceneInstance {
             resource_budget,
             history_payload_budget,
             object_vector_budget_bytes,
+            scalar_timeline_cursor: SignalTimelineCursor::default(),
         };
         let receiver = PrefixReceiver {
             runtime: runtime.runtime_identity(),
@@ -799,7 +911,18 @@ impl SceneInstance {
         &self,
         publisher: &mut PrefixPublisher,
     ) -> Result<PrefixBatch, PrefixError> {
-        self.prepare_prefix_batch(publisher, false)
+        self.prepare_prefix_batch(publisher, false, None)
+    }
+
+    /// Prepare an extension and transfer only scalar timeline entries appended
+    /// since this publisher's last frontier. The schedule remains session-owned.
+    #[doc(hidden)]
+    pub fn prepare_prefix_update_with_scalar_timeline(
+        &self,
+        publisher: &mut PrefixPublisher,
+        schedule: &SignalTimelineSchedule,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, false, Some(schedule))
     }
 
     /// Publish the final suffix from a sealed source at its actual endpoint.
@@ -812,7 +935,17 @@ impl SceneInstance {
         &self,
         publisher: &mut PrefixPublisher,
     ) -> Result<PrefixBatch, PrefixError> {
-        self.prepare_prefix_batch(publisher, true)
+        self.prepare_prefix_batch(publisher, true, None)
+    }
+
+    /// Seal a terminal batch with the source-owned scalar timeline suffix.
+    #[doc(hidden)]
+    pub fn prepare_prefix_finish_with_scalar_timeline(
+        &self,
+        publisher: &mut PrefixPublisher,
+        schedule: &SignalTimelineSchedule,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, true, Some(schedule))
     }
 
     /// Validate source provenance before an interpreter advances or seals it.
@@ -886,6 +1019,7 @@ impl SceneInstance {
         &self,
         publisher: &mut PrefixPublisher,
         terminal: bool,
+        scalar_timeline: Option<&SignalTimelineSchedule>,
     ) -> Result<PrefixBatch, PrefixError> {
         let history = self
             .replay_history
@@ -903,18 +1037,12 @@ impl SceneInstance {
         if publisher.finished || history.applied != history.revisions.len() || !ready {
             return Err(PrefixError::NotReady);
         }
-        if self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| !reactive.is_empty())
-        {
-            return Err(ReplayError::UnsupportedDomain.into());
-        }
         let suffix = history
             .revisions
             .get(publisher.next_revision..)
             .ok_or(PrefixError::SourceChanged)?;
         let mut inverse = Vec::with_capacity(suffix.len());
+        let mut scalar_timeline_count = 0usize;
         let mut stats = PrefixBatchStats {
             revisions: suffix.len(),
             ..Default::default()
@@ -923,16 +1051,33 @@ impl SceneInstance {
             if revision.time < publisher.frontier || revision.time > self.frame.time {
                 return Err(PrefixError::SourceChanged);
             }
-            let saved = revision
-                .inverse
-                .as_ref()
-                .ok_or(ReplayError::UnsupportedDomain)?;
-            stats.payloads = stats
-                .payloads
-                .checked_add(saved.retention_cost())
-                .ok_or(ReplayError::RetentionLimit)?;
-            stats.row_payloads += saved.object_indices().count();
-            inverse.push(saved);
+            if let Some(saved) = revision.inverse.as_ref() {
+                stats.payloads = stats
+                    .payloads
+                    .checked_add(saved.retention_cost())
+                    .ok_or(ReplayError::RetentionLimit)?;
+                stats.row_payloads += saved.object_indices().count();
+                inverse.push(saved);
+            } else if revision.scalar_timeline_entries > 0 {
+                scalar_timeline_count = scalar_timeline_count
+                    .checked_add(revision.scalar_timeline_entries)
+                    .ok_or(ReplayError::RetentionLimit)?;
+                stats.payloads = stats
+                    .payloads
+                    .checked_add(revision.scalar_timeline_entries)
+                    .ok_or(ReplayError::RetentionLimit)?;
+            } else {
+                return Err(ReplayError::UnsupportedDomain.into());
+            }
+        }
+        let (scalar_timeline_entries, next_scalar_timeline_cursor) = match scalar_timeline {
+            Some(schedule) => schedule
+                .appended_since(&publisher.scalar_timeline_cursor)
+                .ok_or(PrefixError::SourceChanged)?,
+            None => (Vec::new(), publisher.scalar_timeline_cursor.clone()),
+        };
+        if scalar_timeline_entries.len() != scalar_timeline_count {
+            return Err(ReplayError::UnsupportedDomain.into());
         }
         let new_objects = self
             .compiled
@@ -969,10 +1114,13 @@ impl SceneInstance {
             .with_additional(history_payload_budget::clone_bytes(
                 inverse.iter().copied(),
             )?)?;
-        let forward = self
-            .compiled
-            .forward_prefix_revisions(&inverse)
-            .ok_or(ReplayError::UnsupportedDomain)?;
+        let forward = if inverse.is_empty() {
+            Vec::new()
+        } else {
+            self.compiled
+                .forward_prefix_revisions(&inverse)
+                .ok_or(ReplayError::UnsupportedDomain)?
+        };
         let history_payload_bytes = history_payload_budget::retained_bytes(forward.iter())?;
         let history_payload_budget = publisher
             .history_payload_budget
@@ -1005,12 +1153,17 @@ impl SceneInstance {
         if extracted_payloads > history.limits.payloads {
             return Err(ReplayError::RetentionLimit.into());
         }
+        let mut forward = forward.into_iter();
         let revisions = suffix
             .iter()
-            .zip(forward)
-            .map(|(source, forward)| Revision {
+            .map(|source| Revision {
                 time: source.time,
-                inverse: Some(forward),
+                inverse: source.inverse.as_ref().map(|_| {
+                    forward
+                        .next()
+                        .expect("each inverse has one forward revision")
+                }),
+                scalar_timeline_entries: source.scalar_timeline_entries,
             })
             .collect();
         let batch = PrefixBatch {
@@ -1030,6 +1183,7 @@ impl SceneInstance {
             resources,
             resource_bytes,
             history_payload_bytes,
+            scalar_timeline_entries,
         };
         publisher
             .resources
@@ -1040,6 +1194,7 @@ impl SceneInstance {
         publisher.object_slots = self.compiled.objects().len();
         publisher.family_animations = self.compiled.family_animations().len();
         publisher.next_revision = history.revisions.len();
+        publisher.scalar_timeline_cursor = next_scalar_timeline_cursor;
         publisher.frontier = self.frame.time;
         publisher.finished = terminal;
         Ok(batch)

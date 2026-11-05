@@ -54,6 +54,13 @@ try {
           // Registering a logical view can require a fresh receipt.
           direct.wake();
           globalThis.autoCanvas = { source, renderer, errors, direct, detach, pump: null, samples,
+            highlightPresentationSnapshot() {
+              const playback = JSON.parse(renderer.debugPreparedPlaybackJson());
+              const pointer = JSON.parse(renderer.debugPointerPresentationJson());
+              return { atMs: performance.now(), interactions: playback.interactions,
+                current: pointer.current, presented: pointer.presented,
+                presentedFrames: direct.stats().presentedFrames };
+            },
             bufferedWakes: () => bufferedWakes,
             start() {
               const ahead = scenario === "bounded" ? 1 : scenario === "starved" ? 0.125 : 60;
@@ -89,7 +96,18 @@ try {
             const rect = await page.locator("#scene").boundingBox();
             await page.mouse.click(rect.x + 320, rect.y + 180);
             await page.waitForFunction(() => JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions);
-            await page.waitForTimeout(100);
+            result.highlightPresentation = { afterActivation: await page.evaluate(() => autoCanvas.highlightPresentationSnapshot()) };
+            const activationReceipt = result.highlightPresentation.afterActivation;
+            assert.equal(activationReceipt.interactions, true);
+            const receipt = await page.waitForFunction(previousEpoch => {
+              const sample = autoCanvas.highlightPresentationSnapshot();
+              return !sample.interactions || (sample.presented !== null
+                && sample.current === sample.presented && sample.presented !== previousEpoch) ? sample : false;
+            }, activationReceipt.presented);
+            result.highlightPresentation.afterReceiptOrExpiry = await receipt.jsonValue();
+            await receipt.dispose();
+            assert.equal(result.highlightPresentation.afterReceiptOrExpiry.interactions, true,
+              "interaction expired before a newer matching presentation receipt");
             assert.ok(!equalPixels(baseline, await capture("capped-highlight")));
             assert.equal((await state()).calls, capped.calls);
             await page.waitForFunction(() => !JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions && autoCanvas.direct.stats().idle && autoCanvas.pump.stats().waiting);
@@ -177,7 +195,16 @@ try {
         assert.deepEqual(errors, []);
         result.status = "passed";
         console.log(`[PASS] cooperative ${backend}/${scenario}: ${result.checks.join(", ")}`);
-      } catch (error) { result.status = "failed"; result.error = String(error); result.pageErrors = errors; throw error; }
+      } catch (error) {
+        result.status = "failed"; result.error = String(error); result.pageErrors = errors;
+        if (scenario === "bounded") {
+          try {
+            result.highlightPresentation ??= {};
+            result.highlightPresentation.atFailure = await page.evaluate(() => globalThis.autoCanvas?.highlightPresentationSnapshot?.() ?? null);
+          } catch (traceError) { result.highlightPresentationError = String(traceError); }
+        }
+        throw error;
+      }
       finally { await page.close(); }
     }
     await browser.close(); browser = null;

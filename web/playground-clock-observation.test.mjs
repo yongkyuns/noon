@@ -207,7 +207,8 @@ for (const [label, state, phase, warmup] of [
   ["cached playback after failure", preparedState({}), "playing", "failed"],
   ["paused history after failure", preparedState({ playing: false, buffering: true }), "paused", "failed"],
   ["prepared paused while buffering", preparedState({ playing: false, buffering: true }), "paused"],
-  ["prepared exact terminal", preparedState({ time: 4, durationSeconds: 4 }), "finished"],
+  ["prepared finite completion", preparedState({ time: 4, durationSeconds: 4, completed: true, playing: false }), "finished"],
+  ["prepared looping hold", preparedState({ time: 4, durationSeconds: 4, completed: false }), "playing"],
 ]) {
   test(`${label} publishes the actual phase before delayed renderer telemetry`, async () => {
     const f = fixture();
@@ -234,7 +235,7 @@ for (const [label, state, phase, warmup] of [
 for (const [phase, state] of [
   ["paused", preparedState({ playing: false })],
   ["buffering", preparedState({ buffering: true })],
-  ["finished", preparedState({ time: 4, durationSeconds: 4 })],
+  ["finished", preparedState({ time: 4, durationSeconds: 4, completed: true, playing: false })],
 ]) {
   test(`late renderer telemetry cannot restore a rate after prepared playback is ${phase}`, async () => {
     const f = fixture();

@@ -43,6 +43,8 @@ for (const loadGalleryManifest of [
     installPreviewFullscreen: () => () => {},
     PresentationRate: class { reset() {} },
     loadGalleryManifest,
+    AuthoringWorkerGeneration: class {},
+    PythonAuthoringClient: class {},
   };
   let failure;
   try {
@@ -150,7 +152,7 @@ assert.match(
   "runtime startup must expose its on-demand state for browser diagnostics",
 );
 
-const runSceneStart = main.indexOf("async function runScene()");
+const runSceneStart = main.indexOf("async function runScene(");
 const selectExampleStart = main.indexOf("async function selectExample(", runSceneStart);
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);
@@ -221,7 +223,7 @@ assert.match(
 );
 assert.doesNotMatch(
   bootBody,
-  /ensureAuthoringClient\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
+  /authoringWorkers\.clientForRun\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
   "initial main boot must not synchronously create Python or GPU runtime resources before the post-paint preload",
 );
 assert.doesNotMatch(
@@ -305,7 +307,7 @@ assert.match(
 );
 assert.match(
   bootBody,
-  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringClient\?\.terminate\(\)[\s\S]*preparation\.candidate\.terminate\(\)[\s\S]*discardEarlyContinuationRuntime\(player\)/,
+  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringWorkers\.activeClient[\s\S]*authoringWorkers\.retire\(activeAuthoringClient\)[\s\S]*preparation\.candidate\.terminate\(\)[\s\S]*discardEarlyContinuationRuntime\(player\)/,
   "page teardown must release metrics, Python, unpublished preparation, and execution resources",
 );
 

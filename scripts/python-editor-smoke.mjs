@@ -213,6 +213,7 @@ try {
     window.__noonEditorSmokeView = document.querySelector("#python-scene-source").editorView;
     return {
       runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+      runRequestId: window.__noonExampleGallery?.executionDiagnostics?.runRequestId ?? null,
     };
   });
 
@@ -226,10 +227,16 @@ try {
   assert.ok(lintRanges >= 1, "Ruff should report inline Python diagnostics after real editor input");
   assert.ok(ruffRequests.length >= 1, "the first real editor input should load Ruff on demand");
 
-  // Lint loading can outlast the edit debounce. Observe the eventual result,
-  // not a transient footer string, and do not click Run: real editor input must
-  // restart the preview by itself with the new source.
-  await waitForAppliedScene(page, errors, "automatic restart after lint edit", "2 objects");
+  const draft = await page.evaluate(() => ({
+    runGeneration: window.__noonExampleGallery.generationDiagnostics.runGeneration,
+    runRequestId: window.__noonExampleGallery.executionDiagnostics.runRequestId,
+    state: document.querySelector("#draft-status")?.dataset.state,
+  }));
+  assert.equal(draft.runGeneration, editorBaseline.runGeneration, "linting must preserve the active Run");
+  assert.equal(draft.runRequestId, editorBaseline.runRequestId, "editing must not execute Python");
+  assert.equal(draft.state, "unapplied");
+  await page.locator("#replace-scene").click();
+  await waitForAppliedScene(page, errors, "explicit Run after lint edit", "2 objects");
   const appliedEdit = await page.evaluate(() => ({
     runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
     patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
@@ -237,11 +244,11 @@ try {
     runInFlight: window.__noonExampleGallery?.runInFlight ?? true,
     canvasCount: document.querySelectorAll("canvas").length,
   }));
-  assert.ok(appliedEdit.runGeneration > editorBaseline.runGeneration, "editing must automatically apply the newest source");
+  assert.ok(appliedEdit.runGeneration > editorBaseline.runGeneration, "Run must apply the newest editor source");
   assert.equal(appliedEdit.patchRunGeneration, String(appliedEdit.runGeneration));
   assert.equal(appliedEdit.editorPreserved, true, "restart must preserve the editor, cursor and undo history");
   assert.equal(appliedEdit.runInFlight, false, "the applied source must have completed its first pass");
-  assert.equal(appliedEdit.canvasCount, 1, "automatic restart must leave exactly one canvas");
+  assert.equal(appliedEdit.canvasCount, 1, "Run must leave exactly one canvas");
 
   assert.deepEqual(errors, [], `browser errors while loading Python editor:\n${errors.join("\n")}`);
   await page.close();
@@ -301,13 +308,21 @@ try {
     "WebGL2",
   );
 
+  const fallbackGeneration = await fallbackPage.evaluate(() =>
+    window.__noonExampleGallery.generationDiagnostics.runGeneration);
   await fallbackPage.locator("#python-scene-source").fill(
     "from noon import *\n\nclass FallbackScene(Scene):\n    def construct(self):\n        self.add(Square())\n        self.add(Circle().shift(RIGHT * 2))\n",
   );
+  // Observe beyond the former 500 ms edit debounce before requesting Run.
+  await fallbackPage.waitForTimeout(750);
+  assert.equal(await fallbackPage.evaluate(() => window.__noonExampleGallery.generationDiagnostics.runGeneration),
+    fallbackGeneration, "textarea edits must preserve the active Run");
+  assert.equal(await fallbackPage.locator("#draft-status").getAttribute("data-state"), "unapplied");
+  await fallbackPage.locator("#replace-scene").click();
   await waitForAppliedScene(
     fallbackPage,
     fallbackErrors,
-    "automatic restart from edited textarea fallback",
+    "explicit Run from edited textarea fallback",
     "2 objects",
   );
   assert.ok(
@@ -322,7 +337,7 @@ try {
   await fallbackContext.close();
 
   console.log(
-    `Python editor smoke passed: automatic startup + one visible CodeMirror + automatic restart after deferred Ruff (${lintRanges} diagnostic(s)) + CDN-blocked textarea fallback with a fresh two-object render.`,
+    `Python editor smoke passed: automatic startup + one visible CodeMirror + draft linting (${lintRanges} diagnostic(s)) + explicit Run in enhanced and fallback editors.`,
   );
 } finally {
   await browser?.close();

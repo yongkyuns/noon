@@ -138,7 +138,7 @@ impl LiveContinuation for StageAttachment {
 }
 
 #[test]
-fn staged_publication_survives_transfer_and_keeps_its_original_admission_barrier() {
+fn staged_source_resources_resume_on_the_same_prepared_owner() {
     let mut scene = Scene::new();
     let target = scene.circle(0.5).unwrap();
     scene.add(&target).unwrap();
@@ -156,28 +156,41 @@ fn staged_publication_survives_transfer_and_keeps_its_original_admission_barrier
     let mut reader = source.take_reader().unwrap();
     reader.seek(0.5).unwrap();
     let baseline = reader.frame().clone();
-    let required =
-        PreparedSourceStatus::ExecutionRequired(SourceExecutionRequirement::ExternalResources);
-    assert_eq!(source.prepare_next().unwrap(), required);
-    assert_eq!(source.prepare_next().unwrap(), required);
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::PreparingResources
+    );
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::PreparingResources
+    );
     assert_eq!(calls.get(), 2);
-    let mut program = source.take_execution_program().unwrap();
-    assert_eq!(program.status(), LiveProgramStatus::PreparingResources);
-    assert!(program.pending_effect_programs().is_some());
-    assert!(program.session().frame().objects[0].effects.is_none());
-    assert!(program.resume().is_err());
-    let LiveProgramStatus::PublicationPending(context) =
-        program.publish_prepared_effects().unwrap()
-    else {
-        panic!("staged attachment needs the ordinary publication barrier");
-    };
-    assert!(program.session().frame().objects[0].effects.is_some());
-    assert!(program.resume().is_err());
-    assert_eq!(program.take_renderer_publication().context(), context);
-    program.admit_publication(context).unwrap();
-    assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    assert!(source.pending_effect_programs().is_some());
+    assert!(
+        source.program.as_ref().unwrap().session().frame().objects[0]
+            .effects
+            .is_none()
+    );
+    source.publish_prepared_effects().unwrap();
+    let publication = source.take_effect_resource_publication().unwrap();
+    let context = publication.context();
+    drop(publication);
+    assert!(source
+        .admit_effect_resource_publication(Default::default())
+        .is_err());
+    source.admit_effect_resource_publication(context).unwrap();
+    assert!(
+        source.program.as_ref().unwrap().session().frame().objects[0]
+            .effects
+            .is_some()
+    );
+    assert_eq!(
+        source.prepare_next().unwrap(),
+        PreparedSourceStatus::BatchReady
+    );
+    assert!(source.take_batch().is_some());
+    assert_eq!(source.status(), PreparedSourceStatus::Finished);
     assert_eq!(calls.get(), 3);
-    drop(program);
     assert_eq!(reader.frame(), &baseline);
     assert_eq!(reader.frontier(), 1.0);
     assert_eq!(reader.end_time(), None);

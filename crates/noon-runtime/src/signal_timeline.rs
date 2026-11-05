@@ -7,6 +7,10 @@ use crate::{RuntimeIdentity, TimelineWakeState};
 use noon_compile::{CompiledScalarSignalTimelineEntry, CompiledScalarSignalTrack};
 use noon_core::{evaluate_scalar_track, ReactiveValue, SemanticNodeId, SignalId};
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg(feature = "prepared-prefix")]
+pub(crate) struct SignalTimelineCursor(HashMap<SemanticNodeId, usize>);
+
 #[derive(Clone, Debug)]
 struct SignalTimelineGroup {
     semantic: SemanticNodeId,
@@ -188,6 +192,44 @@ impl SignalTimelineSchedule {
 
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn cursor(&self) -> SignalTimelineCursor {
+        SignalTimelineCursor(
+            self.groups
+                .iter()
+                .map(|group| (group.semantic, group.entries.len()))
+                .collect(),
+        )
+    }
+
+    /// Return only entries appended after a source-bound per-signal cursor.
+    /// Independent signal groups need no global ordering; each group's append
+    /// order is the authored order validated by `prepare_append_batch`.
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn appended_since(
+        &self,
+        cursor: &SignalTimelineCursor,
+    ) -> Option<(Vec<CompiledScalarSignalTimelineEntry>, SignalTimelineCursor)> {
+        let mut entries = Vec::new();
+        let mut next = HashMap::with_capacity(self.groups.len());
+        for group in &self.groups {
+            let start = cursor.0.get(&group.semantic).copied().unwrap_or(0);
+            if start > group.entries.len() {
+                return None;
+            }
+            entries.extend(group.entries[start..].iter().cloned());
+            next.insert(group.semantic, group.entries.len());
+        }
+        if cursor
+            .0
+            .keys()
+            .any(|signal| !self.group_by_signal.contains_key(signal))
+        {
+            return None;
+        }
+        Some((entries, SignalTimelineCursor(next)))
     }
 
     /// Finite endpoint of the existing immutable scalar schedule. Hosts query
@@ -600,6 +642,7 @@ impl crate::SceneInstance {
             .prepare_input_batch(preview.inputs())
             .map_err(crate::EvaluationError::Reactive)?;
         let changed = !prepared.is_empty();
+        let property_changes = prepared.property_changes().to_vec();
         if self.publication.frame_epoch().checked_next().is_none() {
             return Err(crate::EvaluationError::FrameEpochExhausted(
                 self.publication.frame_epoch(),
@@ -615,6 +658,7 @@ impl crate::SceneInstance {
             self.seek(preview.time)?;
         } else {
             self.advance_to(preview.time)?;
+            self.apply_retained_scalar_reactive_changes(&property_changes);
         }
         self.last_reactive_stats = stats;
         if changed && self.publication == publication {

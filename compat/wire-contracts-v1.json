@@ -1,8 +1,8 @@
 {
   "manifest_version": 1,
-  "authoring_protocol": {"channel": "noon.authoring", "version": 7},
+  "authoring_protocol": {"channel": "noon.authoring", "version": 8},
   "contracts": [
-    {"name":"authoring_envelope","version_domain":"authoring_protocol","required":["channel","protocolVersion","type"],"optional":["requestId","source","context","resultJson","message"],"unknown_fields":"ignored by the current client after envelope validation"},
+    {"name":"authoring_envelope","version_domain":"authoring_protocol","required":["channel","protocolVersion","type"],"optional":["requestId","source","context","resultJson","message","libraryTrust","event"],"unknown_fields":"ignored by the current client after envelope validation"},
     {"name":"authoring_result","version_domain":"authoring_protocol","required":["kind","duration","semantic_execution"],"optional":[],"notes":"Authoring returns a semantic_scene descriptor for shared execution; document exports are not authoring results."}
   ],
   "numeric_contract": {

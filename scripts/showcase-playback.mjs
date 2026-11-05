@@ -1,11 +1,12 @@
 // Browser UI automation only. The production player still owns playback and seek.
 import assert from "node:assert/strict";
+import { waitForBrowserObservation } from "./playground-browser-support.mjs";
 
 export async function waitForPublishedGalleryFrame(page, targetTime, storyboardDuration) {
   assert.ok(Number.isFinite(targetTime) && targetTime >= 0);
   assert.ok(Number.isFinite(storyboardDuration) && storyboardDuration > 0);
   const tolerance = 8 * Number.EPSILON * Math.max(1, storyboardDuration);
-  await page.waitForFunction(async ({ targetTime, tolerance }) => {
+  await waitForBrowserObservation(page, async ({ targetTime, tolerance }) => {
     const gallery = window.__noonExampleGallery;
     if (!gallery) return false;
     const report = await gallery.executionMetrics();
@@ -30,9 +31,10 @@ export async function seekPausedGallery(page, storyboardDuration, sampleTime = n
       }
       const toggle = controls.querySelector(".playback-toggle");
       return controls.dataset.busy === "false" &&
-        (!paused || toggle?.getAttribute("aria-label") === "Play animation") &&
+        (!paused || (controls.dataset.playing === "false" &&
+          toggle?.getAttribute("aria-label") === "Play animation")) &&
         (expectedTime === null || Math.abs(Number(controls.dataset.elapsedSeconds) - expectedTime) < 1e-7);
-    }, { expectedTime, paused });
+    }, { expectedTime, paused }, { polling: 50 });
   };
 
   await waitReady();
@@ -67,15 +69,24 @@ export async function qualifyPlayheadEndpoints(page, controlsModule = "./playgro
   return page.evaluate(async (moduleUrl) => {
     const { PlaygroundPlaybackControls } = await import(moduleUrl);
     const cases = [];
-    for (const duration of [2.5999999999999996, 2.6, 2.6000000000000005, 7.999999999999999, 8, 0.0004]) {
+    for (const duration of [2.5999999999999996, 2.6, 2.6000000000000005,
+      7.999999999999997, 7.999999999999999, 8, 0.0004]) {
       const pane = document.createElement("section");
       document.body.append(pane);
-      const calls = [], errors = [];
+      const calls = [], presentations = [], errors = [];
       const player = {
         pause: async () => ({ time: 0, playing: false }),
         resume: async () => ({ time: 0, playing: true }),
         restartPlayback: async () => ({ time: 0, playing: true }),
-        seek: async (time) => { calls.push(time); return { time, playing: false }; },
+        seek: (time) => {
+          calls.push(time);
+          const sequence = calls.length;
+          return new Promise(resolve => requestAnimationFrame(() => {
+            const receipt = { session: 1, sequence, time, unchanged: false };
+            presentations.push(receipt);
+            resolve({ time, playing: false, presentationReceipt: receipt });
+          }));
+        },
       };
       const controls = new PlaygroundPlaybackControls(player, pane, {
         durationSeconds: duration, onError: (error) => errors.push(String(error)),
@@ -87,16 +98,18 @@ export async function qualifyPlayheadEndpoints(page, controlsModule = "./playgro
           slider.value = String(requested);
           const actualInput = Number(slider.value);
           slider.dispatchEvent(new Event("input", { bubbles: true }));
-          await Promise.resolve();
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          await new Promise(resolve => requestAnimationFrame(resolve));
           const expected = requested === duration ? duration : actualInput;
           if (Math.abs(actualInput - requested) > 8 * Number.EPSILON * duration ||
               calls.at(-1) !== expected || errors.length ||
+              presentations.at(-1)?.time !== expected ||
               Number(controls.element.dataset.elapsedSeconds) !== expected ||
               controls.element.dataset.busy !== "false" || controls.durationSeconds !== duration ||
               Number(slider.max) !== duration) {
             throw new Error(`Playhead changed an authored time: ${JSON.stringify({ duration, requested, actualInput, calls, errors })}`);
           }
-          cases.push({ duration, requested, actualInput, forwarded: calls.at(-1) });
+          cases.push({ duration, requested, actualInput, forwarded: calls.at(-1), receipt: presentations.at(-1) });
         }
       } finally {
         controls.destroy();

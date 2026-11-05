@@ -1,14 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { seekPausedGallery } from "./showcase-playback.mjs";
+import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
+
+test("published-frame polling awaits asynchronous observations before accepting the endpoint", async () => {
+  let time = 1, polls = 0;
+  const window = { __noonExampleGallery: { executionMetrics: async () => ({ metrics: { time } }) } };
+  const page = {
+    evaluate: (fn, args) => runInNewContext(`(${fn})(args)`, { window, args }),
+    async waitForTimeout() { polls++; time = 2.6; },
+  };
+  const result = await waitForPublishedGalleryFrame(page, 2.6, 2.6);
+  assert.equal(polls, 1);
+  assert.equal(result.metrics.time, 2.6);
+});
 
 function gallery({ playing = true, duration = 2.5999999999999996, controllable = true,
-  error = null, pauseFailure = false, seekFailure = false, staleSeek = false } = {}) {
+  error = null, pauseFailure = false, seekFailure = false, staleSeek = false, stalePlaying = false } = {}) {
   const calls = [];
   const patch = { dataset: { state: error ? "error" : "applied" }, value: error };
   const controls = {
-    dataset: { busy: "false", controllable: String(controllable), elapsedSeconds: "0" },
+    dataset: { busy: "false", controllable: String(controllable), playing: String(playing), elapsedSeconds: "0" },
     title: controllable ? "" : "Replay unavailable: History not retained",
     querySelector: () => ({ getAttribute: () => playing ? "Pause animation" : "Play animation" }),
   };
@@ -36,6 +48,7 @@ function gallery({ playing = true, duration = 2.5999999999999996, controllable =
           calls.push("pause");
           if (pauseFailure) throw new Error("pause rejected");
           playing = false;
+          if (!stalePlaying) controls.dataset.playing = "false";
         },
       };
     },
@@ -76,6 +89,12 @@ test("a materially different duration is not silently substituted", async () => 
 test("pause failure prevents seeking", async () => {
   const { page, calls } = gallery({ pauseFailure: true });
   await assert.rejects(seekPausedGallery(page, 2.6), /pause rejected/);
+  assert.ok(!calls.includes("seek"));
+});
+
+test("a paused label cannot conceal a still-playing transport state", async () => {
+  const { page, calls } = gallery({ stalePlaying: true });
+  await assert.rejects(seekPausedGallery(page, 2.6), /stable frame/);
   assert.ok(!calls.includes("seek"));
 });
 

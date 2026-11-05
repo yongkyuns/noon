@@ -88,7 +88,7 @@ assert.match(
   "failed attachment must retire its candidate but only a current or unscoped run may adopt its canvas",
 );
 
-const runSceneStart = main.indexOf("async function runScene()");
+const runSceneStart = main.indexOf("async function runScene(");
 const selectExampleStart = main.indexOf("async function selectExample(", runSceneStart);
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);

@@ -1,6 +1,13 @@
 // Installed only by this harness, before the unmodified product page loads.
 export function observeAudio({ sampleRate } = {}) {
   const NativeAudioContext = window.AudioContext;
+  let currentTimeDescriptor;
+  for (let prototype = NativeAudioContext.prototype; prototype && !currentTimeDescriptor;
+       prototype = Object.getPrototypeOf(prototype)) {
+    currentTimeDescriptor = Object.getOwnPropertyDescriptor(prototype, "currentTime");
+  }
+  if (typeof currentTimeDescriptor?.get !== "function") throw new Error("native AudioContext clock is unavailable");
+  const clockBias = new WeakMap();
   let eventOrder = 0;
   const contexts = [], starts = [], stops = [], buffers = [], parameters = [];
   const nodes = [], connections = [], disconnects = [], ended = [], parameterRefs = [];
@@ -106,6 +113,9 @@ export function observeAudio({ sampleRate } = {}) {
       contexts.push(record);
       this.addEventListener("statechange", () => record.states.push(this.state));
     }
+    get currentTime() {
+      return currentTimeDescriptor.get.call(this) + (clockBias.get(this) ?? 0);
+    }
     createBuffer(...args) {
       const buffer = super.createBuffer(...args);
       bufferIds.set(buffer, buffers.length);
@@ -140,6 +150,10 @@ export function observeAudio({ sampleRate } = {}) {
     contexts, starts, stops, buffers, parameters, pendingResumes,
     nodes, connections, disconnects, ended,
     holdNextResume: false, renderer: null,
+    ageContextsBy(seconds) {
+      if (!Number.isFinite(seconds) || seconds < 0) throw new TypeError("invalid test clock offset");
+      for (const { context } of contexts) clockBias.set(context, seconds);
+    },
     parameterValue(id) { return parameterRefs[id].value; },
     sample() {
       return contexts.map(({ context, analyser, states }) => {

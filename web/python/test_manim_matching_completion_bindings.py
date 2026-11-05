@@ -130,6 +130,7 @@ class MatchingCompletionBindingTests(unittest.TestCase):
             '_reconcile_completed_family_bindings', '_canonical_scene_mobjects',
             '_play_canonical_composition', '_canonical_indicate_animation',
             '_build_canonical_composition_candidate',
+            '_build_canonical_composition_candidate_steps',
         }
         tree = ast.parse(Path(__file__).with_name('_manim_scene.py').read_text())
         selected = [node for node in tree.body if getattr(node, 'name', None) in names]

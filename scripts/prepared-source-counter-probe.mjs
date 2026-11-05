@@ -12,11 +12,11 @@ export async function installPreparedSourceCounterProbe(context, channel, eviden
     const begin = original.indexOf("async function runAuthoringSource("), end = original.indexOf("async function runCanonicalCallbackPhase", begin);
     assert.ok(begin >= 0 && end > begin);
     const section = original.slice(begin, end);
-    const needle = "return pyodide.runPythonAsync(";
+    const needle = "return await pyodide.runPythonAsync(";
     const ending = "`), { globals });";
     assert.equal(section.split(needle).length, 2);
     assert.equal(section.split(ending).length, 2);
-    const observed = section.replace(needle, "return observeQualificationRun(globals, () => pyodide.runPythonAsync(")
+    const observed = section.replace(needle, "return await observeQualificationRun(globals, () => pyodide.runPythonAsync(")
       .replace(ending, "`), { globals }));");
     const ready = "  const bindingsReadyAt = performance.now();";
     assert.equal(original.split(ready).length, 2);

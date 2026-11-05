@@ -8,7 +8,7 @@ use noon_compile::{
 use noon_core::{
     PreparedSemanticMutationTransaction, PublicationContext, SceneRevision, SemanticMutation,
     SemanticMutationTransaction, SemanticMutationTransactionError,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticStore,
 };
 use noon_runtime::{
     preflight_execution_slot_membership_shape, AuthoredPublicationError, ExecutionSlotError,
@@ -230,12 +230,6 @@ impl ExecutionSession {
         &self,
         purpose: SemanticPublicationPurpose,
     ) -> Result<(), ExecutionSessionPublicationError> {
-        // Until audio participates in live structural/history publication, a
-        // scope detach or removal must not leave an obsolete audible plan alive.
-        // Reject the whole batch before resource admission or semantic staging.
-        if self.runtime.has_audio() {
-            return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
-        }
         if self.has_playback_controls() {
             return Err(ExecutionSessionPublicationError::PlaybackControlsExecutionImmutable);
         }
@@ -272,6 +266,37 @@ impl ExecutionSession {
             {
                 return Err(ExecutionSessionPublicationError::TranslationDragActive);
             }
+        }
+        Ok(())
+    }
+
+    fn require_audio_schedule_unchanged<'a>(
+        &self,
+        store: &SemanticStore,
+        mutations: impl IntoIterator<Item = &'a SemanticMutation>,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        // The authored audio list is complete when this runtime is created. It
+        // stays fixed across seeks and unrelated visual publication, including
+        // after a rewind to zero.
+        if !self.runtime.has_audio() {
+            return Ok(());
+        }
+        let changes_audio = mutations.into_iter().any(|mutation| match mutation {
+            SemanticMutation::ReplaceAudioClip { .. }
+            | SemanticMutation::AddNode {
+                creation: SemanticNodeCreation::AudioClip { .. },
+                ..
+            } => true,
+            SemanticMutation::RemoveNode { node } => node.existing().is_some_and(|id| {
+                store.node(id).is_some_and(|node| {
+                    matches!(node.kind(), noon_core::SemanticNodeKind::AudioClip(_))
+                        || node.has_scoped_audio_clips()
+                })
+            }),
+            _ => false,
+        });
+        if changes_audio {
+            return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
         }
         Ok(())
     }
@@ -330,6 +355,7 @@ impl ExecutionSession {
         root: SemanticNodeId,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.require_audio_schedule_unchanged(store, transaction.mutations())?;
         self.require_published_store(store)?;
         if !is_semantic_updater_publication(transaction.mutations()) {
             validate_semantic_publication(&transaction)
@@ -366,6 +392,7 @@ impl ExecutionSession {
         } else {
             purpose
         };
+        self.require_audio_schedule_unchanged(store, transaction.mutations())?;
         self.require_publication_ready(admission)?;
         self.require_published_store(store)?;
         if !is_semantic_updater_publication(transaction.mutations()) {
@@ -501,6 +528,7 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
+        self.require_audio_schedule_unchanged(prepared.store(), prepared.candidate_mutations())?;
         let pulse_edit = if purpose == SemanticPublicationPurpose::AuthoredMutation
             && self.pending_segment_completion.is_some()
         {
@@ -721,7 +749,6 @@ impl ExecutionSession {
                 declaration: entry.declaration,
             })
             .collect::<Vec<_>>();
-        let numeric_transaction = conservative.clone();
         let mut pending_numeric_signals = scalar
             .as_ref()
             .and_then(|scalar| scalar.reactive_enrollment.as_ref())
@@ -745,7 +772,7 @@ impl ExecutionSession {
         let prepared_numeric = self
             .runtime
             .prepare_numeric_text_driver_revision(
-                &numeric_transaction,
+                &conservative,
                 numeric_entries,
                 prepared.store().text_resources(),
                 &pending_numeric_signals,

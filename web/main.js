@@ -1,5 +1,6 @@
 import { AuthoringExecutionClient } from "./authoring-execution-client.js";
 import { PythonAuthoringClient } from "./authoring-client.js";
+import { AuthoringWorkerGeneration } from "./authoring-worker-generation.js";
 import { createPlaygroundPreview } from "./playground-preview.js";
 import { createPlaygroundDiagnostics } from "./playground-diagnostics.js";
 import { authoringSourceDocument } from "./authoring-diagnostic-runtime.js";
@@ -7,7 +8,6 @@ import { PlaygroundGeneration } from "./playground-generation.js";
 import { PresentationRate } from "./frame-metrics.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
-import { createSourceRestart } from "./playground-source-restart.js";
 import { installPreviewFullscreen } from "./playground-fullscreen.js";
 import {
   exampleUrl,
@@ -22,6 +22,7 @@ let canvas = document.querySelector("#scene");
 const previousPreview = createPlaygroundPreview(canvas.parentElement);
 const status = document.querySelector("#status");
 const statusText = document.querySelector("#status-text");
+const draftStatus = document.querySelector("#draft-status");
 const sceneButton = document.querySelector("#replace-scene");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
@@ -364,7 +365,10 @@ toolbarActions.prepend(resetButton);
 
 let selectedExampleId = null;
 let canonicalSource = "";
-let authoringClient = null;
+const authoringWorkers = new AuthoringWorkerGeneration({
+  createClient: () => new PythonAuthoringClient(),
+  isCurrentRun: (token) => isCurrentRun(token),
+});
 const drafts = new Map();
 const sourceCache = new Map();
 const generations = new PlaygroundGeneration();
@@ -379,6 +383,7 @@ let sceneRunPromise = null;
 let latestRunPhaseMetrics = null;
 let activeSourceContinuation = null;
 let activeRunRequest = null;
+let activeRunIdentity = null;
 let runtimeStartPromise = null;
 let runtimePreparation = null;
 let playerNeedsRestart = false;
@@ -394,6 +399,43 @@ let metricsEpoch = 0;
 
 function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
+}
+
+function updateDraftStatus(example = currentExample()) {
+  if (example === null) {
+    draftStatus.value = "";
+    draftStatus.dataset.state = "empty";
+    return;
+  }
+  const matchesActiveRun = activeRunIdentity?.exampleId === example.id &&
+    activeRunIdentity.source === sceneSourceEditor.value;
+  draftStatus.dataset.exampleId = example.id;
+  draftStatus.dataset.activeExampleId = activeRunIdentity?.exampleId ?? "";
+  draftStatus.dataset.activeRunGeneration = activeRunIdentity === null
+    ? "" : String(activeRunIdentity.token.runGeneration);
+  draftStatus.dataset.state = matchesActiveRun ? "applied" : "unapplied";
+  if (matchesActiveRun) {
+    const outcome = activeRunIdentity.outcome === "error" ? "failed Run"
+      : activeRunIdentity.outcome === "complete" ? "last Run" : "current Run";
+    draftStatus.value = `${example.title} draft matches the ${outcome}`;
+  } else if (activeRunIdentity !== null) {
+    draftStatus.value = `${example.title} draft not applied · ${activeRunIdentity.title} remains active · Run to apply`;
+  } else {
+    draftStatus.value = `${example.title} draft ready · Run to preview`;
+  }
+}
+
+function setRunPatchStatus(runToken, message, state) {
+  if (!isCurrentRun(runToken) || activeRunIdentity?.token !== runToken) return;
+  if (activeRunIdentity.exampleId !== selectedExampleId ||
+      activeRunIdentity.source !== sceneSourceEditor.value) {
+    updateDraftStatus();
+    return;
+  }
+  patchStatus.value = message;
+  patchStatus.dataset.state = state;
+  patchStatus.dataset.exampleId = activeRunIdentity.exampleId;
+  patchStatus.dataset.runGeneration = String(runToken.runGeneration);
 }
 
 async function applyExampleInteraction(example, target = player) {
@@ -422,8 +464,7 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
   const time = playbackState?.time;
   const playing = playbackState?.playing === true;
   if (playbackState?.preparedPlayback === true) {
-    const end = playbackState.durationSeconds;
-    if (Number.isFinite(end) && time >= end) return { label: "Finished", state: "ready" };
+    if (playbackState.completed === true) return { label: "Finished", state: "ready" };
     if (!playing) return { label: "Paused", state: "ready" };
     if (playbackState.buffering) return { label: "Buffering", state: "running" };
     return { label: "Playing", state: "running" };
@@ -545,14 +586,6 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-function ensureAuthoringClient() {
-  if (authoringClient?.terminated) {
-    authoringClient = null;
-  }
-  authoringClient ??= new PythonAuthoringClient();
-  return authoringClient;
-}
-
 function adoptRuntimeCanvas(candidate) {
   if (canvas !== candidate.canvas) {
     canvas = candidate.canvas;
@@ -565,14 +598,14 @@ function createRuntimeClient() {
   candidate = new AuthoringExecutionClient(canvas, {
     onError(error) {
       if (player !== candidate) return;
-      if (editStopPromise !== null) return;
+      if (runReplacementPromise !== null) return;
       playerNeedsRestart = true;
       runtimeFailureRevision++;
       showError(error);
       updatePreviewRecoveryControl();
     },
     onRecoverableError(error) {
-      if (editStopPromise !== null) return;
+      if (runReplacementPromise !== null) return;
       if (player !== candidate && runtimePreparation?.candidate !== candidate) return;
       showRecoverableSceneError(error);
     },
@@ -930,7 +963,7 @@ function renderGallery({ keepSelectedVisible = false } = {}) {
 }
 
 function isCurrentRun(runToken) {
-  return generations.isRunCurrent(runToken, selectedExampleId);
+  return generations.isRunCurrent(runToken);
 }
 
 async function discardSemanticExecution(authored, client) {
@@ -962,14 +995,14 @@ async function supersedeActiveSourceContinuation() {
   const continuation = activeSourceContinuation;
   if (continuation === null) {
     if (sceneRunPromise === null) return false;
-    await stopForSourceEdit();
+    await retireActiveRunForReplacement();
     return true;
   }
 
   previousPreview.hold(canvas);
   playbackControls?.setControllable(false);
   generations.invalidateRun();
-  patchStatus.value = "Restarting with edited Python…";
+  patchStatus.value = "Replacing the active Run…";
   patchStatus.dataset.state = "running";
   try {
     await continuation.client.cancelSemanticContinuation(
@@ -983,9 +1016,7 @@ async function supersedeActiveSourceContinuation() {
     if (!continuation.client.terminated) {
       continuation.client.terminate();
     }
-    if (authoringClient === continuation.client) {
-      authoringClient = null;
-    }
+    authoringWorkers.retire(continuation.client);
   }
 
   if (activeSourceContinuation === continuation) {
@@ -995,17 +1026,16 @@ async function supersedeActiveSourceContinuation() {
   return true;
 }
 
-// Cancel a source-owned run cooperatively when possible so ordinary edits keep
-// the warm Python interpreter. A stuck Python loop cannot receive cancellation;
-// retire its worker after a bounded grace period. Rendering is stopped at once.
-let editStopPromise = null;
-function stopForSourceEdit() {
-  if (editStopPromise !== null) return editStopPromise;
+// A new explicit Run replaces the prior source run. Cancel it cooperatively
+// when possible; retire its worker after a bounded grace period if it is stuck.
+let runReplacementPromise = null;
+function retireActiveRunForReplacement() {
+  if (runReplacementPromise !== null) return runReplacementPromise;
   previousPreview.hold(canvas);
   playbackControls?.setControllable(false);
   generations.invalidateRun();
   const priorRun = sceneRunPromise;
-  const client = authoringClient;
+  const client = authoringWorkers.activeClient;
   const continuation = activeSourceContinuation;
   let cancellation = continuation === null ? null : supersedeActiveSourceContinuation();
   if (continuation === null && priorRun === null && player !== null && !playerNeedsRestart) {
@@ -1037,8 +1067,8 @@ function stopForSourceEdit() {
   }
   let watchdog = null;
   const retireAuthoring = () => {
-    client?.terminate();
-    if (authoringClient === client) authoringClient = null;
+    if (client !== null) authoringWorkers.retire(client);
+    authoringWorkers.retireCandidate();
   };
   if (priorRun !== null) {
     if (continuation === null) retireAuthoring();
@@ -1046,9 +1076,9 @@ function stopForSourceEdit() {
   }
   const task = Promise.all([cancellation, priorRun]).finally(() => {
     if (watchdog !== null) clearTimeout(watchdog);
-    if (editStopPromise === task) editStopPromise = null;
+    if (runReplacementPromise === task) runReplacementPromise = null;
   });
-  editStopPromise = task;
+  runReplacementPromise = task;
   status.dataset.playbackControls = "unavailable";
   status.dataset.playbackPhase = "stopped";
   status.dataset.playbackPlaying = "false";
@@ -1062,17 +1092,22 @@ function sameSemanticContinuation(left, right) {
     left?.continuationGeneration === right?.continuationGeneration;
 }
 
-async function runScene() {
+async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSnapshot) {
   if (sceneRunPromise !== null) return sceneRunPromise;
-  const example = currentExample();
+  const exampleId = exampleIdSnapshot ?? selectedExampleId;
+  const example = SCENE_EXAMPLES.find((candidate) => candidate.id === exampleId) ?? null;
   if (!example) return null;
 
   resetPresentationRate();
-  const runToken = generations.beginRun(example.id);
+  const runToken = generations.beginRun(
+    example.id,
+    selectionGenerationSnapshot ?? generations.diagnostics?.selectionGeneration ?? 0,
+  );
   const runPhaseMetrics = {
     exampleId: example.id,
     selectionGeneration: runToken.selectionGeneration,
     runGeneration: runToken.runGeneration,
+    runAcceptedAtMs: performance.now(),
     sourceRunStartedAtMs: null,
     sourceRunCompletedAtMs: null,
     pythonWorkerRunTiming: null,
@@ -1095,9 +1130,10 @@ async function runScene() {
       });
     }
   };
-  const source = sceneSourceEditor.value;
-  const runRequest = { token: runToken, source };
+  const source = sourceSnapshot ?? sceneSourceEditor.value;
+  const runRequest = { token: runToken, source, exampleId: example.id };
   activeRunRequest = runRequest;
+  updateDraftStatus();
   const releaseBusy = beginBusy();
   const task = (async () => {
     let earlyContinuation = null;
@@ -1110,13 +1146,14 @@ async function runScene() {
       } }), source);
       // Rust admits incremental playback or preserves the original source path.
       // The hook keeps live/prepared comparisons on this same viewer lifecycle.
-      const { preparedPlayback = true, preparationLookaheadSeconds = 1 } =
+      const { preparedPlayback = true, preparationLookaheadSeconds = 1, diagnosticPreparationTiming = false } =
         await runPlaygroundTestHook("authoringRunOptions", {
           exampleId: example.id, runGeneration: runToken.runGeneration,
         }) ?? {};
       if (!isCurrentRun(runToken)) return recordStale(runToken, "before-authoring-options");
       if (typeof preparedPlayback !== "boolean" ||
-          !Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0) {
+          !Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0 ||
+          typeof diagnosticPreparationTiming !== "boolean" || (diagnosticPreparationTiming && !preparedPlayback)) {
         throw new TypeError("invalid prepared source run options");
       }
       previousPreview.hold(canvas, "Building edited source");
@@ -1145,10 +1182,16 @@ async function runScene() {
         status.dataset.playbackControls = "unavailable";
       }
       setRuntimeStatus("Building Python scene…", "running");
-      patchStatus.value = `Building ${example.title} in the Python worker…`;
-      patchStatus.dataset.state = "running";
+      setRunPatchStatus(runToken, `Building ${example.title} in the Python worker…`, "running");
       const preparation = player === null ? ensureRuntimePreparation() : null;
-      const client = ensureAuthoringClient();
+      const client = await authoringWorkers.clientForRun(runToken, {
+        // Explicit qualification arms may request the original observed path.
+        // The product default always starts proof in a pristine interpreter.
+        requirePristine: preparedPlayback,
+      });
+      if (client === null || !isCurrentRun(runToken)) {
+        return recordStale(runToken, "before-authoring-worker");
+      }
       status.dataset.authoringWarmup = "started";
       let authored;
       try {
@@ -1162,6 +1205,7 @@ async function runScene() {
         }, {
           preparedPlayback,
           preparationLookaheadSeconds,
+          diagnosticPreparationTiming,
           async onSemanticContinuation(registration) {
             if (earlyContinuation !== null) {
               throw new Error("Python source registered more than one semantic continuation");
@@ -1200,6 +1244,10 @@ async function runScene() {
               throw new Error("Python semantic continuation was superseded during startup");
             }
             adoptRuntimeCanvas(attachedPlayer);
+            activeRunIdentity = {
+              token: runToken, source, exampleId: example.id, title: example.title, outcome: "running",
+            };
+            updateDraftStatus();
             previousPreview.showLive();
             startMetricsPolling();
             updatePlaybackControls({
@@ -1210,6 +1258,9 @@ async function runScene() {
             });
             earlyContinuation = { registration, attachedPlayer, result, client, runToken };
             activeSourceContinuation = earlyContinuation;
+            if (preparedPlayback && client.libraryTrust === "tainted") {
+              authoringWorkers.prepareReplacement(client);
+            }
             if (result.preparedPlayback === true || result.sourcePlaybackControllable === true) {
               // Only startup owns this busy ticket. Source demand can remain
               // suspended indefinitely while controls and gallery stay usable.
@@ -1226,8 +1277,7 @@ async function runScene() {
               result,
               `${example.title} · Python source continuing`,
             );
-            patchStatus.value = `Playing ${example.title} · edits restart automatically…`;
-            patchStatus.dataset.state = "running";
+            setRunPatchStatus(runToken, `Playing ${example.title}`, "running");
           },
         });
         runPhaseMetrics.sourceRunCompletedAtMs = performance.now();
@@ -1237,9 +1287,7 @@ async function runScene() {
       } catch (error) {
         authoringFailed = true;
         if (isCurrentRun(runToken)) status.dataset.authoringWarmup = "failed";
-        if (client.terminated && authoringClient === client) {
-          authoringClient = null;
-        }
+        if (client.terminated) authoringWorkers.retire(client);
         throw error;
       }
 
@@ -1358,6 +1406,9 @@ async function runScene() {
       const report = await player.metrics();
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-metrics");
       adoptRuntimeCanvas(player);
+      activeRunIdentity = {
+        token: runToken, source, exampleId: example.id, title: example.title, outcome: "running",
+      };
       startMetricsPolling();
 
       const operation = result.preparedPlayback === true ? "Prepared history retained"
@@ -1366,18 +1417,21 @@ async function runScene() {
         result,
         `${report.metrics.objectCount} objects · ${rendererBackend} ${player.mode} worker`,
       );
-      patchStatus.value = result.replaySupported === false
+      const completionMessage = result.replaySupported === false
         ? `Completed · ${example.title} · replay unavailable: ${result.replayUnavailable}`
         : `${phase.label} · ${example.title} · ${report.metrics.objectCount} objects · timeline ready`;
-      patchStatus.dataset.state = "applied";
-      patchStatus.dataset.exampleId = example.id;
-      patchStatus.dataset.parityStatus = example.parityStatus;
-      patchStatus.dataset.sequence = String(result.nextPatchSequence);
-      patchStatus.dataset.runGeneration = String(runToken.runGeneration);
-      patchStatus.dataset.operation = operation;
+      activeRunIdentity.outcome = "complete";
+      setRunPatchStatus(runToken, completionMessage, "applied");
+      if (activeRunIdentity?.token === runToken && example.id === selectedExampleId && source === sceneSourceEditor.value) {
+        patchStatus.dataset.parityStatus = example.parityStatus;
+        patchStatus.dataset.sequence = String(result.nextPatchSequence);
+        patchStatus.dataset.operation = operation;
+      }
+      updateDraftStatus();
       previousPreview.accept(canvas, { exampleId: example.id, runGeneration: runToken.runGeneration });
       return { stale: false, result };
     } catch (error) {
+      if (activeRunIdentity?.token === runToken) activeRunIdentity.outcome = "error";
       if (activeSourceContinuation?.runToken === runToken) {
         activeSourceContinuation = null;
       }
@@ -1400,6 +1454,7 @@ async function runScene() {
             startMetricsPolling();
             setPlaybackRuntimeStatus(partial, "Partial history retained · source failed");
             showSceneError(error);
+            updateDraftStatus();
             return { stale: false, error, retainedPreparedHistory: true };
           }
         } catch (observationError) {
@@ -1411,6 +1466,7 @@ async function runScene() {
         return recordStale(runToken, "error");
       }
       previousPreview.hold(canvas, "Edited source failed");
+      updateDraftStatus();
       playbackControls?.setControllable(false);
       if (authoringFailed) {
         setRuntimeStatus("Scene error · see details below", "ready");
@@ -1443,11 +1499,13 @@ async function runScene() {
 
 const runRequestRouter = createRunRequestRouter({
   currentSource: () => sceneSourceEditor.value,
+  currentSelection: () => selectedExampleId,
+  currentSelectionGeneration: () => generations.diagnostics.selectionGeneration,
   currentRun: () => sceneRunPromise,
   activeSourceContinuation: () => activeSourceContinuation,
   activeRunRequest: () => activeRunRequest,
   isActiveRunCurrent: (token) => token !== undefined && isCurrentRun(token),
-  run: runScene,
+  run: (source, exampleId, selectionGeneration) => runScene(source, exampleId, selectionGeneration),
   supersede: supersedeActiveSourceContinuation,
   onQueued() {
     patchStatus.value = "Run queued until the current Python build reaches an execution boundary…";
@@ -1455,15 +1513,8 @@ const runRequestRouter = createRunRequestRouter({
   },
 });
 
-const sourceRestart = createSourceRestart({
-  stop: stopForSourceEdit,
-  run: (isCurrent) => runRequestRouter.request(isCurrent),
-  currentSelection: () => selectedExampleId,
-  onError: showSceneError,
-});
-
 function requestSceneRun() {
-  return sourceRestart.runNow();
+  return runRequestRouter.request();
 }
 
 async function selectExample(
@@ -1475,8 +1526,6 @@ async function selectExample(
     throw new Error(`Unknown example ${id}`);
   }
 
-  sourceRestart.cancel();
-  const retirement = stopForSourceEdit();
   const requestToken = generations.beginSelectionRequest(id);
   const releaseBusy = beginBusy();
   let selectionToken = null;
@@ -1491,10 +1540,6 @@ async function selectExample(
       return recordStale(requestToken, "before-selection-commit");
     }
 
-    // If the prior scene has already entered reconciliation, let it settle while
-    // the prior selection is still the visible/active one. The generation bump
-    // above prevents authoring that has not reconciled yet from committing at all.
-    await retirement;
     if (
       !generations.isSelectionRequestCurrent(requestToken) ||
       !generations.isSelectionCurrent(selectionToken)
@@ -1505,17 +1550,13 @@ async function selectExample(
     if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
       drafts.set(selectedExampleId, sceneSourceEditor.value);
     }
-    if (selectedExampleId !== id) previousPreview.clear();
     selectedExampleId = id;
     canonicalSource = source;
     sceneSourceEditor.value = drafts.get(id) ?? source;
     resetButton.disabled = sceneSourceEditor.value === canonicalSource;
     renderSelectedMetadata();
     renderGallery({ keepSelectedVisible: true });
-    patchStatus.value = `${example.title} loaded · ${parityLabel(example.parityStatus)}`;
-    patchStatus.dataset.state = "ready";
-    patchStatus.dataset.exampleId = example.id;
-    patchStatus.dataset.parityStatus = example.parityStatus;
+    updateDraftStatus(example);
     if (updateUrl) {
       history.pushState({ example: id }, "", exampleUrl(id));
     }
@@ -1569,9 +1610,7 @@ resetButton.addEventListener("click", () => {
   drafts.delete(example.id);
   sceneSourceEditor.value = canonicalSource;
   resetButton.disabled = true;
-  patchStatus.value = `${example.title} reset · restarting preview…`;
-  patchStatus.dataset.state = "ready";
-  sourceRestart.edited();
+  updateDraftStatus(example);
 });
 sceneSourceEditor.addEventListener(
   "focus",
@@ -1584,16 +1623,14 @@ let sourceComposing = false;
 sceneSourceEditor.addEventListener("compositionstart", () => { sourceComposing = true; });
 sceneSourceEditor.addEventListener("compositionend", () => {
   sourceComposing = false;
-  sourceRestart.edited();
+  updateDraftStatus();
 });
 sceneSourceEditor.addEventListener("input", (event) => {
   const example = currentExample();
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
   if (example) {
-    patchStatus.value = `${example.title} modified · restarting after typing…`;
-    patchStatus.dataset.state = "ready";
-    sourceRestart.edited({ composing: sourceComposing || event.isComposing === true });
+    updateDraftStatus(example);
   }
 });
 window.addEventListener("popstate", () => {
@@ -1778,11 +1815,17 @@ try {
     async executionMetrics(options) {
       return player?.metrics(options) ?? null;
     },
+    async executionState() {
+      return player?.state() ?? null;
+    },
     get generationDiagnostics() {
       return generations.diagnostics;
     },
     get runPhaseMetrics() {
       return latestRunPhaseMetrics;
+    },
+    get executionDiagnostics() {
+      return authoringWorkers.activeClient?.executionDiagnostics ?? null;
     },
     async select(id) {
       return selectExample(id, { run: true, updateUrl: true });
@@ -1802,9 +1845,7 @@ try {
       activeSourceContinuation = null;
       diagnosticPanel.invalidate();
       previousPreview.clear();
-      sourceRestart.cancel();
       if (!event.persisted) {
-        sourceRestart.dispose();
         diagnosticPanel.dispose();
         previousPreview.dispose();
         disposeFullscreen();
@@ -1812,8 +1853,9 @@ try {
       stopMetricsPolling();
       playbackControls?.destroy();
       playbackControls = null;
-      authoringClient?.terminate();
-      authoringClient = null;
+      const activeAuthoringClient = authoringWorkers.activeClient;
+      if (activeAuthoringClient !== null) authoringWorkers.retire(activeAuthoringClient);
+      if (!event.persisted) authoringWorkers.dispose();
       const preparation = runtimePreparation;
       runtimePreparation = null;
       if (preparation !== null) {

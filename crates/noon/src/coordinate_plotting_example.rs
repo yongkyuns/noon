@@ -2,9 +2,10 @@
 //! Samples are illustrative, not navigation simulation results.
 
 use crate::{
-    AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, ManimAxes, ManimAxesOptions, Mobject, RateFunction, Scene,
-    SceneExecution, SemanticAnimationCompositionKind as Kind, Text, BLUE, YELLOW,
+    AnimationCompositionRequest as Request, AnimationOptions, ContinuationEffects,
+    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, ManimAxes, ManimAxesOptions,
+    Mobject, RateFunction, Scene, SceneExecution, SemanticAnimationCompositionKind as Kind, Text,
+    BLUE, YELLOW,
 };
 
 struct PlotObjects {
@@ -84,6 +85,7 @@ pub struct CoordinatePlayback {
 }
 
 impl LiveContinuation for CoordinatePlayback {
+    const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
 
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
@@ -158,5 +160,63 @@ mod tests {
         session.seek(0.75).unwrap();
         assert_eq!(session.frame().objects.len(), object_count);
         assert_eq!(scene.revision(), revision);
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    #[test]
+    fn prepared_plot_retains_curve_reveal_and_paused_history_across_completion() {
+        use crate::PreparedSourceStatus;
+        use noon_runtime::ReplayLimits;
+
+        fn append(
+            source: &mut crate::PreparedSource<CoordinatePlayback>,
+            reader: &mut crate::PrefixReader,
+        ) {
+            assert_eq!(
+                source.prepare_next().unwrap(),
+                PreparedSourceStatus::BatchReady
+            );
+            let batch = source.pending_batch().unwrap();
+            reader.reserve_append_capacity(batch).unwrap();
+            reader.preflight_append(batch).unwrap();
+            reader.append(source.take_batch().unwrap()).unwrap();
+        }
+
+        let mut source = program()
+            .unwrap()
+            .into_prepared_source(ReplayLimits::default())
+            .unwrap();
+        assert_eq!(
+            source.prepare_next().unwrap(),
+            PreparedSourceStatus::ReaderReady
+        );
+        let mut reader = source.take_reader().unwrap();
+        while reader.frontier() < 3.3 {
+            append(&mut source, &mut reader);
+        }
+        reader.seek(2.3).unwrap();
+        let midpoint = reader.frame().clone();
+        let curve = midpoint
+            .objects
+            .iter()
+            .position(|object| object.style.stroke == Some(BLUE))
+            .unwrap();
+        assert!((midpoint.reveal(curve) - 0.5).abs() < 1e-6);
+        let publication = reader.publication_context();
+        while reader.end_time().is_none() {
+            append(&mut source, &mut reader);
+            assert_eq!(reader.frame(), &midpoint);
+            assert_eq!(reader.publication_context(), publication);
+        }
+        reader.seek(RUN_TIME).unwrap();
+        assert_eq!(reader.frame().reveal(curve), 1.0);
+        reader.seek(2.3).unwrap();
+        let frame = reader.frame();
+        let retained = midpoint.objects.len();
+        assert_eq!(frame.time, midpoint.time);
+        assert_eq!(&frame.objects[..retained], midpoint.objects);
+        assert_eq!(&frame.presences[..retained], midpoint.presences);
+        assert_eq!(&frame.reveals[..retained], midpoint.reveals);
+        assert!(frame.presences[retained..].iter().all(|present| !present));
     }
 }

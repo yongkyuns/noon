@@ -184,6 +184,10 @@ try {
         const editStarted = monotonicNow();
         const editStartedEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
         await submitMeasuredSourceEdit(page, "# C6 first edit without preload");
+        assert.equal(await page.evaluate(() =>
+          window.__noonExampleGallery.generationDiagnostics.runGeneration), previousGeneration,
+        "draft editing must preserve the current execution generation");
+        await page.locator("#replace-scene").click();
         await waitForCompletedRun(page, previousGeneration);
         const firstRunPhases = await page.evaluate(() => window.__noonExampleGallery.runPhaseMetrics);
         assert.ok(firstRunPhases?.runGeneration > previousGeneration,
@@ -381,8 +385,8 @@ try {
         draws: Number(document.querySelector("#metric-draws")?.value),
         uploadBytes: Number(document.querySelector("#metric-upload")?.value),
       }));
-      // The source edit travels through the normal debounce/authoring/reconcile
-      // path. Completion is an explicit endpoint, not a claim about first pixels.
+      // Commit the draft, then use the normal explicit Run/reconcile path.
+      // Source completion and first presented pixels remain separate milestones.
       await waitForCompletedRun(page);
       const noonWasmInstantiation = wasmAccountingEnabled
         ? await collectNoonWasmInstantiations(workerHandles, { preloadEditRaceEnabled })
@@ -400,6 +404,10 @@ try {
       const editStarted = monotonicNow();
       const editStartedEpochMs = await page.evaluate(() => performance.timeOrigin + performance.now());
       await submitMeasuredSourceEdit(page, "# C6 warm source rerun");
+      assert.equal(await page.evaluate(() =>
+        window.__noonExampleGallery.generationDiagnostics.runGeneration), beforeGeneration,
+      "draft editing must preserve the active execution");
+      await page.locator("#replace-scene").click();
       await waitForCompletedRun(page, beforeGeneration);
       const editCompleted = monotonicNow();
       const warmPresentation = await waitForSessionFirstPresented(page, previousPresentationSession);
@@ -702,7 +710,7 @@ try {
         : null,
     },
     note:
-    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. startupPreparationOverlap intersects the page-side render preparation interval with both the page-observed client.run and the Python worker run interval after converting each performance clock to epoch time. These are wall-clock intervals: required source continuations can await render preparation, so positive overlap does not prove independent CPU work ran concurrently or quantify saved startup time. The opt-in edit-race arm records the overlap measurement as unavailable because it supersedes the initial source run. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures the normal debounced source edit through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session's first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling applied to the page target; each case records a paired JavaScript worker-loop response to page-target rates 1x and 4x, but no dedicated authoring-worker throttle is configured, the trace does not calibrate Python CPU time, and these results are not physical iPhone measurements.",
+    "firstMetrics is the first page metrics sample reporting positive object/draw counts. firstPresented is the first successful render for the exact retained transport session that reconciled the authored scene, converted to epoch with that render worker's performance.timeOrigin; a blank/prepared-canvas frame is not treated as a scene presentation. This remains a renderer milestone, not physical display scanout. rendererReady records renderer/device creation after GPU setup. startupPreparationOverlap intersects the page-side render preparation interval with both the page-observed client.run and the Python worker run interval after converting each performance clock to epoch time. These are wall-clock intervals: required source continuations can await render preparation, so positive overlap does not prove independent CPU work ran concurrently or quantify saved startup time. The opt-in edit-race arm records the overlap measurement as unavailable because it supersedes the initial source run. Session presentation, host observation and poll lag are separately recorded. Source-ready is marked once the selected source and public gallery API exist; the automatic preload-start mark is after the existing two-animation-frame paint gate. The off arm replaces only the live-authoring preload bootstrap with an empty test module and submits the same source edit after that gate. Its pythonWorkerExecution is measured in the Python worker around runAuthoringSource using the worker's own performance clock; it includes work and any awaited source continuations, excludes response handling/continuation publication and does not claim pure interpreter CPU time. initialEngineStart is measured on the page around the initial startSemanticExecution call, excluding the prepared-renderer wait and later rendering while including the call's semantic-engine attachment/setup. These clocks are reported separately and are not additive. The opt-in preload edit race dispatches two distinct full-source editor inputs in one page task while live authoring is still preloading; it reports sampled session observations only. Deterministic stale-run rejection is separately verified by playground-race-smoke. authoringStartup timestamps use the authoring worker's performance.timeOrigin and include first canonical Scene-context creation after the initial authoring run. resourceFootprint is collected from PerformanceResourceTiming on the page and every worker still evaluable after first metrics; retired workers in the opt-in race are reported separately. Disposable capability-probe workers remain in topology counts but are excluded because they intentionally terminate before measurement. Browser transferSize may be zero for cached or cross-origin entries; encodedBodySize/decodedBodySize are reported separately. Non-finite resource duration values are normalized to zero because duration is diagnostic-only and is not used in byte accounting. packageBytesAcrossObservedOwners multiplies the built noon_web_bg.wasm file size by workers that independently report that WASM resource; it is a package-footprint proxy, not a claim about resident WebAssembly memory. warmRerun measures a draft edit followed by explicit Run through completed authoring/reconciliation, including authored scene duration where applicable. Warm edit first-present uses the new retained transport session attached by successful semantic reconciliation and records that session's first successful render; it does not infer a run from global frame counts or UI generation. The mobile-class profile is Chromium viewport/DPR emulation with 4x CPU throttling applied to the page target; each case records a paired JavaScript worker-loop response to page-target rates 1x and 4x, but no dedicated authoring-worker throttle is configured, the trace does not calibrate Python CPU time, and these results are not physical iPhone measurements.",
     cases,
   };
   await mkdir(path.dirname(artifactPath), { recursive: true });
@@ -880,8 +888,7 @@ async function runPreloadEditRace(page) {
       };
     };
     const first = submit(superseded);
-    // Dispatch the newer full-source edit in the same page task: the ordinary
-    // 500 ms source debounce cannot start the obsolete source between edits.
+    // Both drafts precede the one explicit Run that accepts the newest source.
     const latest = submit(newest);
     return {
       first,
@@ -894,13 +901,14 @@ async function runPreloadEditRace(page) {
     "first source edit must land during automatic preload");
   assert.equal(editReceipts.latest.liveAuthoring, "preloading",
     "newest source edit must also land before the automatic preload reports ready");
-  assert.ok(editReceipts.first.generation > startingGeneration &&
-    editReceipts.latest.generation >= editReceipts.first.generation,
-  "source edits must invalidate the active run and retain the newest editor value");
+  assert.equal(editReceipts.first.generation, startingGeneration);
+  assert.equal(editReceipts.latest.generation, startingGeneration,
+    "draft edits must preserve the active preload run");
   assert.equal(editReceipts.source, NEWEST_SOURCE);
   assert.equal(editReceipts.runInFlightAfterBoth, true);
   const newestEditStartedEpochMs = editReceipts.latest.submittedAtEpochMs;
   const newestInputGeneration = editReceipts.latest.generation;
+  await page.locator("#replace-scene").click();
 
   const sampledSessions = new Map();
   const obsoleteSourceSamples = [];
@@ -979,9 +987,9 @@ async function runPreloadEditRace(page) {
     firstEdit: {
       sha256: sha256(SUPERSEDED_SOURCE),
       submittedAtEpochMs: editReceipts.first.submittedAtEpochMs,
-      invalidationGeneration: editReceipts.first.generation,
+      observedRunGeneration: editReceipts.first.generation,
       oneObjectScene: true,
-      supersededBeforeDebouncedRun: true,
+      supersededBeforeExplicitRun: true,
     },
     newestEdit: {
       sha256: sha256(NEWEST_SOURCE),

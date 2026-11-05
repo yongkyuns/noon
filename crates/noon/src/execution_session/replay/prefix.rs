@@ -44,6 +44,37 @@ fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
     assert!(source.validate_prepared_publisher(&publisher).is_err());
 }
 
+#[cfg(test)]
+#[test]
+fn opaque_continuation_reports_callbacks_only_when_the_schedule_exists() {
+    use crate::Scene;
+    use noon_core::{HostCallbackId, SemanticMutationTransaction};
+
+    let mut scene = Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    scene.add(&target).unwrap();
+    let mut source = scene.execution_session().unwrap();
+    assert_eq!(
+        source.continuation_execution_requirement(crate::ContinuationEffects::Opaque),
+        Some(SourceExecutionRequirement::HostEffects)
+    );
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(target.node_id(), HostCallbackId::new(72), 1.0, None);
+    scene.live(&mut source).apply(transaction).unwrap();
+    assert_eq!(
+        source.continuation_execution_requirement(crate::ContinuationEffects::Opaque),
+        Some(SourceExecutionRequirement::HostCallbacks)
+    );
+}
+
+#[cfg(all(test, feature = "native-text", feature = "bundled-fonts"))]
+mod backdrop_tests;
+#[cfg(all(test, feature = "native-text", feature = "bundled-fonts"))]
+mod camera_prefix_tests;
+#[cfg(all(test, feature = "typst", feature = "bundled-fonts"))]
+mod spatial_prefix_tests;
+
 /// Shared engine reasons why the current source needs observed execution.
 /// These are capability metadata, not permission to speculate callback/input work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +98,9 @@ impl ExecutionSession {
         &self,
         effects: crate::ContinuationEffects,
     ) -> Option<SourceExecutionRequirement> {
+        if !self.callback_schedule.is_empty() {
+            return Some(SourceExecutionRequirement::HostCallbacks);
+        }
         match effects {
             crate::ContinuationEffects::Opaque => Some(SourceExecutionRequirement::HostEffects),
             crate::ContinuationEffects::SceneOnly => self.source_execution_requirement(),
@@ -86,9 +120,7 @@ impl ExecutionSession {
             || self.reactive_projection.has_native_input_routes()
         {
             Some(SourceExecutionRequirement::NativeInput)
-        } else if !self.signal_timeline.is_empty() || !self.reactive_projection.is_empty() {
-            Some(SourceExecutionRequirement::Signals)
-        } else if self.runtime.inset_2d_views().next().is_some() || self.has_audio() {
+        } else if self.runtime.inset_2d_views().next().is_some() {
             Some(SourceExecutionRequirement::ReplayUnavailable(
                 noon_runtime::ReplayError::UnsupportedDomain,
             ))
@@ -228,9 +260,10 @@ impl ExecutionSession {
         resource_budget_bytes: usize,
     ) -> Result<(PrefixPublisher, PrefixReader), PrefixError> {
         self.ensure_prefix_boundary(boundary)?;
-        let (publisher, runtime, receiver) = self
+        let (mut publisher, runtime, receiver) = self
             .runtime
             .create_prefix_projection_with_resource_budget(resource_budget_bytes)?;
+        publisher.initialize_scalar_timeline(&self.signal_timeline);
         Ok((publisher, self.prepared_reader(runtime, receiver)?))
     }
 
@@ -268,17 +301,25 @@ impl ExecutionSession {
         for row in &runtime.frame().objects {
             slots.insert_object(row.id).map_err(PrefixError::Slots)?;
         }
-        let session = Self::from_runtime_projection(
+        let mut session = Self::from_runtime_projection(
             self.store_identity.clone(),
             Default::default(),
             Default::default(),
             slots,
-            Default::default(),
+            self.reactive_projection.clone(),
             runtime,
             self.camera_object,
             None,
             super::super::callback::CallbackSchedule::new(Default::default()),
         );
+        session.signal_timeline = self
+            .signal_timeline
+            .clone_for_runtime(session.runtime_identity());
+        let schedule_at_reader_time = session.signal_timeline.preview_seek(session.frame().time);
+        session
+            .runtime
+            .seek_with_scalar_timeline(&schedule_at_reader_time)?;
+        session.signal_timeline.commit(schedule_at_reader_time);
         Ok(PrefixReader::new(session, receiver))
     }
 
@@ -290,7 +331,8 @@ impl ExecutionSession {
         publisher: &mut PrefixPublisher,
     ) -> Result<PrefixBatch, PrefixError> {
         self.ensure_prefix_boundary(boundary)?;
-        self.runtime.prepare_prefix_update(publisher)
+        self.runtime
+            .prepare_prefix_update_with_scalar_timeline(publisher, &self.signal_timeline)
     }
 
     /// Publish the exact endpoint after the source has explicitly sealed replay.
@@ -308,6 +350,7 @@ impl ExecutionSession {
         publisher: &mut PrefixPublisher,
     ) -> Result<PrefixBatch, PrefixError> {
         self.ensure_prefix_boundary(boundary)?;
-        self.runtime.prepare_prefix_finish(publisher)
+        self.runtime
+            .prepare_prefix_finish_with_scalar_timeline(publisher, &self.signal_timeline)
     }
 }

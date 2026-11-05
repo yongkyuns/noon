@@ -1,8 +1,9 @@
 use super::*;
 use noon_core::{
-    FontResource, FontResourceHandle, FontResourceId, GeometryResource, GeometryResourceArena,
-    RasterImageResource, RasterImageResourceHandle, RasterImageResourceId, Rect, TextResource,
-    TextResourceHandle, TextResourceId, TextSourceKind, Vec2, VectorPath,
+    AudioResource, AudioResourceHandle, AudioResourceId, FontResource, FontResourceHandle,
+    FontResourceId, GeometryResource, GeometryResourceArena, RasterImageResource,
+    RasterImageResourceHandle, RasterImageResourceId, Rect, TextResource, TextResourceHandle,
+    TextResourceId, TextSourceKind, Vec2, VectorPath,
 };
 use std::sync::Arc;
 
@@ -46,6 +47,35 @@ fn payload_size_not_entry_count_controls_resource_byte_charge() {
         Some(large.retained_bytes())
     );
     assert_eq!(large.retained_bytes() - small.retained_bytes(), 4092);
+}
+
+#[test]
+fn initial_audio_closure_is_charged_once_per_handle() {
+    let handle = AudioResourceHandle {
+        arena: 7,
+        id: AudioResourceId::new(3),
+        version: 0,
+    };
+    let resource =
+        Arc::new(AudioResource::from_interleaved(8_000, 1, vec![0.25; 16], 1024).unwrap());
+    let mut resources = CompiledResources::default();
+    resources.audio.insert(handle, resource.clone());
+    assert_eq!(resources.prefix_payload_count(), 1);
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        Some(resource.retained_bytes())
+    );
+
+    let second_handle = AudioResourceHandle {
+        id: AudioResourceId::new(4),
+        ..handle
+    };
+    resources.audio.insert(second_handle, resource.clone());
+    assert_eq!(resources.prefix_payload_count(), 2);
+    assert_eq!(
+        resources.prefix_resource_bytes(),
+        resource.retained_bytes().checked_mul(2)
+    );
 }
 
 #[test]
