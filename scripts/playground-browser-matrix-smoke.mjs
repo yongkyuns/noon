@@ -55,10 +55,190 @@ async function baselineCapabilities(page) {
     blob: typeof Blob === "function",
     objectUrl: typeof URL.createObjectURL === "function",
     webgpu: typeof navigator.gpu !== "undefined",
+    jspi: { Function: typeof WebAssembly.Function, Suspending: typeof WebAssembly.Suspending,
+      promising: typeof WebAssembly.promising, exception: typeof WebAssembly.Exception },
     userAgent: navigator.userAgent,
     devicePixelRatio: window.devicePixelRatio,
     viewport: { width: window.innerWidth, height: window.innerHeight },
   }));
+}
+
+async function installPassiveWorkerTrace(context) {
+  await context.addInitScript(() => {
+    const trace = { events: [], omitted: 0, errorContexts: [], errorContextsOmitted: 0,
+      recordingErrors: 0, created: 0 };
+    const activeErrors = [];
+    const record = event => {
+      try {
+        const item = { at: performance.now(), epochMs: Date.now(), ...event };
+        trace.events.push(item);
+        if (trace.events.length > 96) { trace.events.shift(); trace.omitted++; }
+        for (const error of activeErrors.slice()) {
+          if (error.after.length < 24) error.after.push(item);
+          if (error.after.length >= 24) activeErrors.splice(activeErrors.indexOf(error), 1);
+        }
+        return item;
+      } catch { trace.recordingErrors++; return null; }
+    };
+    const field = (object, key) => { try { return object?.[key]; } catch { return undefined; } };
+    const boundedString = (value, max) => {
+      try { return typeof value === "string" ? value.slice(0, max) : null; } catch { return null; }
+    };
+    const safeText = value => {
+      try { return String(field(value, "message") ?? value).slice(0, 500); }
+      catch { return "diagnostic-error-capture-failed"; }
+    };
+    const summary = data => {
+      const ctx = field(data, "context"), playground = field(ctx, "playground");
+      const example = field(data, "exampleId") ?? field(playground, "example_id");
+      const selection = field(data, "selectionGeneration") ?? field(playground, "selection_generation");
+      const run = field(data, "runGeneration") ?? field(playground, "run_generation");
+      const number = key => Number.isSafeInteger(field(data, key)) ? field(data, key) : null;
+      return {
+        channel: boundedString(field(data, "channel"), 80), type: boundedString(field(data, "type"), 80),
+        requestId: number("requestId"), exampleId: boundedString(example, 100),
+        runRequestId: number("runRequestId"),
+        selectionGeneration: Number.isSafeInteger(selection) ? selection : null,
+        runGeneration: Number.isSafeInteger(run) ? run : null,
+        interpreterGeneration: number("interpreterGeneration"),
+        continuationGeneration: number("continuationGeneration"),
+        continuationRunRequestId: number("continuationRunRequestId"),
+        contextId: boundedString(field(data, "contextId"), 100),
+        cancelActiveSource: typeof field(data, "cancelActiveSource") === "boolean" ? field(data, "cancelActiveSource") : null,
+        reason: boundedString(field(data, "reason"), 160),
+        command: boundedString(field(data, "command"), 80), operation: boundedString(field(data, "operation"), 80),
+      };
+    };
+    const recordError = event => {
+      const before = trace.events.slice(-24);
+      const item = record(event);
+      const context = { event: item, before, after: [] };
+      trace.errorContexts.push(context);
+      activeErrors.push(context);
+      if (trace.errorContexts.length > 16) {
+        const removed = trace.errorContexts.shift(), index = activeErrors.indexOf(removed);
+        trace.errorContextsOmitted++;
+        if (index >= 0) activeErrors.splice(index, 1);
+      }
+      if (activeErrors.length > 16) activeErrors.shift();
+    };
+    trace.record = record;
+    trace.markError = event => recordError({ kind: "external-error", text: boundedString(field(event, "text"), 1200) });
+    trace.read = () => ({ events: trace.events, omitted: trace.omitted, errorContexts: trace.errorContexts,
+      errorContextsOmitted: trace.errorContextsOmitted, recordingErrors: trace.recordingErrors, created: trace.created,
+      performanceTimeOriginMs: trace.performanceTimeOriginMs, jspi: trace.jspi });
+    trace.performanceTimeOriginMs = performance.timeOrigin;
+    trace.jspi = { Function: typeof WebAssembly.Function, Suspending: typeof WebAssembly.Suspending,
+      promising: typeof WebAssembly.promising, exception: typeof WebAssembly.Exception };
+    window.__noonPassiveWorkerTrace = trace;
+    record({ kind: "trace-installed" });
+    addEventListener("error", event => {
+      try { recordError({ kind: "window-error",
+        message: String(event.message ?? "").slice(0, 800),
+        filename: String(event.filename ?? "").slice(0, 500),
+        line: event.lineno ?? null, column: event.colno ?? null }); }
+      catch { recordError({ kind: "window-error-capture-error" }); }
+    });
+    addEventListener("unhandledrejection", event => {
+      let reason;
+      try { reason = event.reason instanceof Error
+        ? { name: event.reason.name, message: event.reason.message, stack: String(event.reason.stack ?? "").slice(0, 1600) }
+        : { type: Object.prototype.toString.call(event.reason), value: String(event.reason).slice(0, 800) }; }
+      catch { reason = { captureError: true }; }
+      recordError({ kind: "window-unhandledrejection", reason });
+    });
+    const NativeWorker = window.Worker;
+    if (typeof NativeWorker !== "function") { record({ kind: "worker-api-unavailable" }); return; }
+    window.Worker = new Proxy(NativeWorker, {
+      construct(target, args, newTarget) {
+        const worker = Reflect.construct(target, args, newTarget);
+        const id = ++trace.created;
+        const url = (() => { try { return new URL(args[0], location.href).href.slice(0, 500); }
+          catch { return String(args[0]).slice(0, 500); } })();
+        record({ kind: "worker-created", id, url });
+        try {
+          worker.addEventListener("message", event => {
+            try { record({ kind: "worker-response", id, ...summary(event.data) }); }
+            catch { record({ kind: "worker-response-capture-error", id }); }
+          });
+          worker.addEventListener("messageerror", () => recordError({ kind: "worker-messageerror", id }));
+          worker.addEventListener("error", event => {
+            try { recordError({ kind: "worker-error", id,
+              message: String(event.message ?? "").slice(0, 800),
+              filename: String(event.filename ?? "").slice(0, 500),
+              line: event.lineno ?? null, column: event.colno ?? null,
+              errorName: event.error?.name ?? null,
+              errorMessage: String(event.error?.message ?? "").slice(0, 800),
+              errorStack: String(event.error?.stack ?? "").slice(0, 1600) }); }
+            catch { record({ kind: "worker-error-capture-error", id }); }
+          });
+          const postMessage = worker.postMessage;
+          Object.defineProperty(worker, "postMessage", { configurable: true, writable: true,
+            value: function (...messageArgs) {
+              record({ kind: "worker-request", id, ...summary(messageArgs[0]) });
+              return Reflect.apply(postMessage, worker, messageArgs);
+            } });
+          const terminate = worker.terminate;
+          Object.defineProperty(worker, "terminate", { configurable: true, writable: true,
+            value: function (...terminateArgs) {
+              record({ kind: "worker-terminate", id });
+              return Reflect.apply(terminate, worker, terminateArgs);
+            } });
+        } catch (error) {
+          recordError({ kind: "worker-observer-install-error", id,
+            message: safeText(error) });
+        }
+        return worker;
+      },
+    });
+  });
+}
+
+async function readPassiveWorkerTrace(page) {
+  if (!page) return null;
+  try {
+    await Promise.race([
+      Promise.allSettled(pendingWorkerTraceMarks),
+      new Promise(resolve => setTimeout(resolve, 500)),
+    ]);
+    const snapshot = await Promise.race([
+      page.evaluate(() => window.__noonPassiveWorkerTrace?.read() ?? null),
+      new Promise(resolve => setTimeout(() => resolve({ state: "page-evaluation-timeout" }), 500)),
+    ]);
+    return snapshot && typeof snapshot === "object"
+      ? { ...snapshot, nodeErrorMarkOmitted: pendingWorkerTraceMarksOmitted } : snapshot;
+  } catch (error) { return { state: "page-evaluation-error", message: String(error).slice(0, 500) }; }
+}
+
+async function installExecutionLifecycleTrace(page) {
+  await page.evaluate(async () => {
+    const trace = window.__noonPassiveWorkerTrace;
+    const { ExecutionWorkerClient } = await import("./execution-worker-client.js");
+    for (const method of ["retireExecutionSource", "terminate"]) {
+      const original = ExecutionWorkerClient.prototype[method];
+      if (typeof original !== "function") continue;
+      ExecutionWorkerClient.prototype[method] = function (...args) {
+        const id = (trace.nextLifecycleId ?? 0) + 1;
+        trace.nextLifecycleId = id;
+        trace.record({ kind: "client-lifecycle-entered", method, id });
+        let pending;
+        try { pending = original.apply(this, args); }
+        catch (error) {
+          trace.record({ kind: "client-lifecycle-rejected-sync", method, id,
+            error: { name: error?.name ?? "Error", message: String(error).slice(0, 500) } });
+          throw error;
+        }
+        if (pending && typeof pending.then === "function") {
+          pending.then(() => trace.record({ kind: "client-lifecycle-resolved", method, id }),
+            error => trace.record({ kind: "client-lifecycle-rejected", method, id,
+              error: { name: error?.name ?? "Error", message: String(error).slice(0, 500) } }));
+        } else {
+          trace.record({ kind: "client-lifecycle-resolved", method, id });
+        }
+        return pending;
+      };
+    }
+  });
 }
 
 function missingBaseCapabilities(capabilities) {
@@ -564,9 +744,29 @@ let page = null;
 let lastCompletedRuntime = null;
 const pageErrors = [];
 const consoleErrors = [];
+const pageErrorEvents = [];
+const consoleErrorEvents = [];
+let pageErrorEventsOmitted = 0;
+let consoleErrorEventsOmitted = 0;
+const keepEvent = (events, value, kind) => {
+  events.push(value);
+  if (events.length > 32) {
+    events.shift();
+    if (kind === "page") pageErrorEventsOmitted++;
+    else consoleErrorEventsOmitted++;
+  }
+};
 let capabilities = null;
 let runtimeSupported = null;
 let finalRuntime = null;
+const pendingWorkerTraceMarks = [];
+let pendingWorkerTraceMarksOmitted = 0;
+const markPassiveWorkerError = event => {
+  if (!page) return;
+  if (pendingWorkerTraceMarks.length >= 16) { pendingWorkerTraceMarksOmitted++; return; }
+  pendingWorkerTraceMarks.push(page.evaluate(value =>
+    window.__noonPassiveWorkerTrace?.markError(value), event).catch(() => null));
+};
 
 try {
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
@@ -574,13 +774,24 @@ try {
     viewport: profile.viewport,
     deviceScaleFactor: profile.deviceScaleFactor,
   });
+  await installPassiveWorkerTrace(context);
   page = await context.newPage();
   trace.attach(browser, context, page);
   trace.setPhase("initial-navigation");
   await native.observe("initial-page-created");
-  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  page.on("pageerror", (error) => {
+    pageErrors.push(String(error));
+    keepEvent(pageErrorEvents, { at: performance.now(), epochMs: Date.now(),
+      message: String(error).slice(0, 1200), stack: String(error?.stack ?? "").slice(0, 2500) }, "page");
+    markPassiveWorkerError({ kind: "pageerror", text: String(error).slice(0, 1200) });
+  });
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "error") {
+      consoleErrors.push(message.text());
+      keepEvent(consoleErrorEvents, { at: performance.now(), epochMs: Date.now(),
+        text: message.text().slice(0, 1200), location: message.location() }, "console");
+      markPassiveWorkerError({ kind: "console-error", text: message.text().slice(0, 1200) });
+    }
   });
 
   await page.goto(`${baseUrl}/web/index.html?example=parity-square-and-circle`, {
@@ -590,6 +801,7 @@ try {
   const initialShell = await shellSnapshot(page);
   assertShell(initialShell, `${browserName}/${profileName}`);
   finalRuntime = await assertDeferredRuntime(page);
+  await installExecutionLifecycleTrace(page);
 
   capabilities = await baselineCapabilities(page);
   assert.equal(
@@ -721,6 +933,11 @@ ${consoleErrors.join("\n")}`,
       lifecycle: trace.snapshot(),
       pageErrors,
       consoleErrors,
+      pageErrorEvents,
+      pageErrorEventsOmitted,
+      consoleErrorEvents,
+      consoleErrorEventsOmitted,
+      passiveWorkerTrace: await readPassiveWorkerTrace(page),
     });
     console.log(
       `✓ ${browserName}/${profileName}: ${finalRuntime.renderHost}/${finalRuntime.rendererBackend} deferred load + public UI select/edit/rerun + resize + 600-shape showcase playback`,
@@ -749,6 +966,11 @@ ${consoleErrors.join("\n")}`,
     nativeCrashReports,
     pageErrors,
     consoleErrors,
+    pageErrorEvents,
+    pageErrorEventsOmitted,
+    consoleErrorEvents,
+    consoleErrorEventsOmitted,
+    passiveWorkerTrace: await readPassiveWorkerTrace(page),
     error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
     testServer: { baseUrl, host: "shared-node-file-server" },
   });
