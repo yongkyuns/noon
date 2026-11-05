@@ -355,10 +355,10 @@ impl SceneInstance {
             let mut row = FrameRowState::from_frame(&self.frame, object_index);
             let base_content = &self.frame.objects[object_index].content;
             for channel in evaluation_object_channels(&self.compiled, object_index as u32) {
-                let tracks = self.compiled.channel_tracks(channel);
                 let Some(group) = self.groups.get(&channel) else {
                     continue;
                 };
+                let tracks = self.compiled.channel_tracks(channel);
                 let cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
                 let prepared_group = TrackGroup {
                     channel,
@@ -387,10 +387,10 @@ impl SceneInstance {
             if self.effective_driver_rows.contains(&object_index) {
                 continue;
             }
-            let tracks = self.compiled.channel_tracks(channel);
             let Some(group) = self.groups.get(&channel) else {
                 continue;
             };
+            let tracks = self.compiled.channel_tracks(channel);
             let mut cursor = group.cursor;
             while cursor < tracks.len() && tracks[cursor].timing.start_time <= time {
                 cursor += 1;
