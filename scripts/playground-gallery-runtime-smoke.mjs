@@ -295,9 +295,17 @@ setTimeout(() => __galleryRouteEmit({ kind: 'hook-status', at: performance.now()
     await context.route('**/authoring-render-controller.js', async route => {
       const response = await route.fetch();
       const original = await response.text();
+      const functionStart = '  function consumeDelta(json, publication = null) {';
+      const functionEnd = '\n  function commitRendererTransition(';
+      assert.equal(original.split(functionStart).length - 1, 1, 'unexpected consumeDelta function start');
+      assert.equal(original.split(functionEnd).length - 1, 1, 'unexpected consumeDelta function end');
+      const start = original.indexOf(functionStart);
+      const end = original.indexOf(functionEnd, start);
+      assert.ok(end > start, 'consumeDelta function boundaries are reversed');
+      const consumer = original.slice(start, end);
       const marker = '    const applied = applyRendererDelta(json);';
-      assert.equal(original.split(marker).length - 1, 1, 'unexpected delta-consumer location');
-      const instrumented = original.replace(marker, `${marker}
+      assert.equal(consumer.split(marker).length - 1, 1, 'unexpected consumeDelta marker');
+      const instrumentedConsumer = consumer.replace(marker, `${marker}
     try {
       const at = performance.now();
       if (globalThis.__galleryRouteSampled?.('delta-consume', 250)) globalThis.postMessage({ __galleryRouteObservation: {
@@ -306,6 +314,7 @@ setTimeout(() => __galleryRouteEmit({ kind: 'hook-status', at: performance.now()
         sequence: Number.isSafeInteger(publication?.sequence) ? publication.sequence : null,
       } });
     } catch {}`);
+      const instrumented = original.slice(0, start) + instrumentedConsumer + original.slice(end);
       const headers = { ...response.headers(), 'content-type': 'text/javascript; charset=utf-8' };
       delete headers['content-length'];
       delete headers['content-encoding'];
