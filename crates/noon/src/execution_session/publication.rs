@@ -749,7 +749,6 @@ impl ExecutionSession {
                 declaration: entry.declaration,
             })
             .collect::<Vec<_>>();
-        let numeric_transaction = conservative.clone();
         let mut pending_numeric_signals = scalar
             .as_ref()
             .and_then(|scalar| scalar.reactive_enrollment.as_ref())
@@ -773,7 +772,7 @@ impl ExecutionSession {
         let prepared_numeric = self
             .runtime
             .prepare_numeric_text_driver_revision(
-                &numeric_transaction,
+                &conservative,
                 numeric_entries,
                 prepared.store().text_resources(),
                 &pending_numeric_signals,
