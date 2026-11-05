@@ -33,12 +33,17 @@ jobs:
         id: source
         env:
           DIAGNOSTIC_SHA: ${{ github.sha }}
-          GITHUB_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          NOON_EXPECTED_SOURCE_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^{tree})" = "0ac6518799955a9a39b39820f0a2857f62144385"
-          test -z "$(git status --porcelain)"
+          actual_head=$(git rev-parse HEAD)
+          actual_tree=$(git rev-parse 'HEAD^{tree}')
+          actual_status=$(git status --porcelain)
+          printf 'event GITHUB_SHA=%s expected source=%s HEAD=%s tree=%s status=%q diagnostic commit=%s\n' \
+            "$GITHUB_SHA" "$NOON_EXPECTED_SOURCE_SHA" "$actual_head" "$actual_tree" "$actual_status" "$DIAGNOSTIC_SHA"
+          test "$actual_head" = "$NOON_EXPECTED_SOURCE_SHA"
+          test "$actual_tree" = "0ac6518799955a9a39b39820f0a2857f62144385"
+          test -z "$actual_status"
           git fetch --no-tags --depth=1 origin "$DIAGNOSTIC_SHA"
           test "$(git rev-parse FETCH_HEAD)" = "$DIAGNOSTIC_SHA"
           mkdir -p "$RUNNER_TEMP/diagnostic-overlay/scripts"
@@ -53,7 +58,7 @@ jobs:
           snapshot = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files}
           (Path(os.environ["RUNNER_TEMP"]) / "overlay-snapshot.json").write_text(json.dumps(snapshot, sort_keys=True))
           PY
-          printf 'Pinned source %s; diagnostic commit %s\n' "$GITHUB_SHA" "$DIAGNOSTIC_SHA"
+          printf 'Pinned source %s; diagnostic commit %s\n' "$NOON_EXPECTED_SOURCE_SHA" "$DIAGNOSTIC_SHA"
       - name: Download and verify the exact WebKit runtime artifact
         id: runtime
         env:
@@ -176,7 +181,7 @@ jobs:
       - name: Restore harness scripts and verify runtime and source are unchanged
         if: always() && steps.runtime.outcome == 'success'
         env:
-          GITHUB_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          NOON_EXPECTED_SOURCE_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
         run: |
           set -euo pipefail
           overlay_status=0
@@ -229,12 +234,17 @@ jobs:
         id: source
         env:
           DIAGNOSTIC_SHA: ${{ github.sha }}
-          GITHUB_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          NOON_EXPECTED_SOURCE_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^{tree})" = "0ac6518799955a9a39b39820f0a2857f62144385"
-          test -z "$(git status --porcelain)"
+          actual_head=$(git rev-parse HEAD)
+          actual_tree=$(git rev-parse 'HEAD^{tree}')
+          actual_status=$(git status --porcelain)
+          printf 'event GITHUB_SHA=%s expected source=%s HEAD=%s tree=%s status=%q diagnostic commit=%s\n' \
+            "$GITHUB_SHA" "$NOON_EXPECTED_SOURCE_SHA" "$actual_head" "$actual_tree" "$actual_status" "$DIAGNOSTIC_SHA"
+          test "$actual_head" = "$NOON_EXPECTED_SOURCE_SHA"
+          test "$actual_tree" = "0ac6518799955a9a39b39820f0a2857f62144385"
+          test -z "$actual_status"
           git fetch --no-tags --depth=1 origin "$DIAGNOSTIC_SHA"
           test "$(git rev-parse FETCH_HEAD)" = "$DIAGNOSTIC_SHA"
           mkdir -p "$RUNNER_TEMP/diagnostic-overlay/scripts"
@@ -249,12 +259,12 @@ jobs:
           snapshot = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files}
           (Path(os.environ["RUNNER_TEMP"]) / "overlay-snapshot.json").write_text(json.dumps(snapshot, sort_keys=True))
           PY
-          printf 'Pinned source %s; diagnostic commit %s\n' "$GITHUB_SHA" "$DIAGNOSTIC_SHA"
+          printf 'Pinned source %s; diagnostic commit %s\n' "$NOON_EXPECTED_SOURCE_SHA" "$DIAGNOSTIC_SHA"
       - name: Download, verify and install exact runtime package
         id: runtime
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          NOON_EXPECTED_SOURCE_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
         run: |
           set -euo pipefail
           curl --fail --location --silent --show-error \
@@ -290,7 +300,7 @@ jobs:
                             "buildId": identity["buildId"], "files": len(inventory)}))
           PY
           cp -R "$RUNNER_TEMP/showcase-runtime/." web/
-          node .github/ci/wasm-build.mjs verify
+          node --input-type=module -e 'import { verify } from "./.github/ci/wasm-build.mjs"; await verify(process.cwd(), { ...process.env, GITHUB_SHA: process.env.NOON_EXPECTED_SOURCE_SHA });'
       - name: Download exact original WebGL direct-capture and oracle archive
         id: capture_archive
         env:
@@ -441,7 +451,7 @@ jobs:
       - name: Restore harness scripts and verify packages and original capture inputs
         if: always() && steps.runtime.outcome == 'success'
         env:
-          GITHUB_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
+          NOON_EXPECTED_SOURCE_SHA: be814def71f9d34d9d28d106631544ca5a8eb3f8
         run: |
           set -euo pipefail
           overlay_status=0
@@ -459,7 +469,7 @@ jobs:
           PY
           fi
           git checkout -- scripts/showcase-live-review.mjs scripts/showcase-renderer-readback.mjs
-          node .github/ci/wasm-build.mjs verify
+          node --input-type=module -e 'import { verify } from "./.github/ci/wasm-build.mjs"; await verify(process.cwd(), { ...process.env, GITHUB_SHA: process.env.NOON_EXPECTED_SOURCE_SHA });'
           python3 - <<'PY'
           import hashlib, json, os, subprocess
           from pathlib import Path
@@ -491,133 +501,5 @@ jobs:
         with:
           name: pr2422-8ca-webgl-live-diagnostic
           path: browser-smoke-artifacts/pr2422-8ca
-          if-no-files-found: warn
-          retention-days: 3
-
-  product-evidence-summary:
-    name: Summarize current and D7 cumulative product evidence
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: be814def71f9d34d9d28d106631544ca5a8eb3f8
-      - name: Download and authenticate pinned evidence and normal candidate packages
-        id: artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p browser-smoke-artifacts/pr2422-8ca/product/{current-evidence,current-package,d7-evidence,d7-package}
-          fetch_artifact() {
-            local id="$1" digest="$2" output="$3"
-            curl --fail --location --silent --show-error \
-              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/yongkyuns/noon/actions/artifacts/$id/zip" -o "$output.zip"
-            python3 - "$output.zip" "$digest" "$output" <<'PY'
-          import hashlib, os, stat, sys, zipfile
-          from pathlib import Path, PurePosixPath
-          archive, expected, destination = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
-          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-          assert actual == expected, (str(archive), actual, expected)
-          destination.mkdir(parents=True, exist_ok=True)
-          with zipfile.ZipFile(archive) as z:
-              for m in z.infolist():
-                  p = PurePosixPath(m.filename)
-                  assert not p.is_absolute() and ".." not in p.parts, m.filename
-                  assert not stat.S_ISLNK(m.external_attr >> 16), m.filename
-              z.extractall(destination)
-          inventory = {p.relative_to(destination).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-                       for p in sorted(destination.rglob("*")) if p.is_file()}
-          assert inventory
-          (destination / "../" / (destination.name + "-archive-inventory.json")).write_text(
-              __import__("json").dumps({"zipSha256": actual, "inventory": inventory}, sort_keys=True))
-          print(f"verified {archive.name}: sha256={actual}, files={len(inventory)}")
-          PY
-          }
-          fetch_artifact 13396815095 e8fb562d7b39f6ff9fda02145cc8926ace16b0eed638115695aed7fd63f68815 browser-smoke-artifacts/pr2422-8ca/product/current-evidence
-          fetch_artifact 13394652896 524d17616961c8b8fa9ade48432d51e1e987bb37c1f812dc1eb09ffca0d9da06 browser-smoke-artifacts/pr2422-8ca/product/current-package
-          fetch_artifact 13392026858 545cc36e5226a27ef0beef9eed2029703e6b5c338d8de56b8a3ab088fb017414 browser-smoke-artifacts/pr2422-8ca/product/d7-evidence
-          fetch_artifact 13391235889 77a11940c4e3bcc5ca9a98d01e469103d639a0f3c7f99d32d28fb4dd2cc8dd79 browser-smoke-artifacts/pr2422-8ca/product/d7-package
-      - name: Write the bounded pair and package hash comparison
-        run: |
-          python3 - <<'PY'
-          import hashlib, json
-          from pathlib import Path
-          base = Path("browser-smoke-artifacts/pr2422-8ca/product")
-          def reports(root):
-              found = []
-              for path in root.rglob("report.json"):
-                  try: row = json.loads(path.read_text())
-                  except Exception: continue
-                  if isinstance(row, dict) and isinstance(row.get("exampleId"), str):
-                      found.append((path, row))
-              assert found, f"no product reports under {root}"
-              return found
-          def inventory(root):
-              return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-                      for p in sorted(root.rglob("*")) if p.is_file() and not p.name.endswith("archive-inventory.json")}
-          def summarize(root):
-              rows = []
-              for path, row in reports(root):
-                  rows.append({"file": path.relative_to(root).as_posix(), "exampleId": row.get("exampleId"),
-                    "label": row.get("label"), "pair": row.get("pair"), "source": row.get("source"),
-                    "runtimeIdentity": row.get("runtimeIdentity"), "runtime": row.get("runtime"),
-                    "measurement": row.get("measurement"), "fps": row.get("fps"),
-                    "rendererCosts": row.get("rendererCosts"), "presentationGaps": row.get("presentationGaps"),
-                    "latencyMs": {k: row.get(k) for k in ("shellReadyMs", "coldRunMs", "warmRunMs", "editRunMs")},
-                    "packageFiles": row.get("packageSizes", {}).get("files"), "pageErrors": row.get("pageErrors"),
-                    "consoleErrors": row.get("consoleErrors"),
-                    "hostHardwareNote": "CPU model and GPU adapter are not reported by these product reports"})
-              rows.sort(key=lambda x: (x["exampleId"], str(x["label"]), str(x["pair"]), x["file"]))
-              return rows
-          packages = {}
-          for name in ("current-package", "d7-package"):
-              root = base / name
-              manifests = list(root.rglob("ci-artifact.json"))
-              identities = list(root.rglob("runtime-build-identity.json"))
-              assert len(manifests) == 1 and len(identities) == 1, (name, manifests, identities)
-              packages[name] = {"archive": json.loads((base / f"{name}-archive-inventory.json").read_text()),
-                "ciArtifact": json.loads(manifests[0].read_text()), "runtimeIdentity": json.loads(identities[0].read_text()),
-                "extractedFileHashes": inventory(root)}
-          result = {"schemaVersion": 1, "purpose": "diagnostic evidence summary; not a performance qualification",
-            "current8caCumulative": {"archive": json.loads((base / "current-evidence-archive-inventory.json").read_text()),
-                                     "reports": summarize(base / "current-evidence")},
-            "oldD7Cumulative": {"archive": json.loads((base / "d7-evidence-archive-inventory.json").read_text()),
-                                 "reports": summarize(base / "d7-evidence")},
-            "normalCandidatePackages": packages}
-          for scope, package_name in (("current8caCumulative", "current-package"), ("oldD7Cumulative", "d7-package")):
-              package = packages[package_name]
-              candidate_rows = [row for row in result[scope]["reports"] if row["label"] == "candidate"]
-              expected_workloads = {"parity-square-and-circle", "showcase-camera-follows-path",
-                "showcase-first-scene", "showcase-raster-images", "showcase-bezier-paths"}
-              counts = {example: sum(row["exampleId"] == example for row in candidate_rows)
-                        for example in expected_workloads}
-              assert len(candidate_rows) == 15 and set(counts.values()) == {3}, (scope, len(candidate_rows), counts)
-              assert {row["exampleId"] for row in candidate_rows} == expected_workloads, (scope, counts)
-              manifest_files = package["ciArtifact"]["files"]
-              package_hashes = {name: digest for name, digest in manifest_files.items()
-                                if name != "web/ci-Cargo.lock"}
-              for row in candidate_rows:
-                  assert row["runtimeIdentity"] == package["runtimeIdentity"], (scope, row["file"], "runtime identity mismatch")
-                  row_hashes = {name: item["sha256"] for name, item in row["packageFiles"].items()}
-                  assert row_hashes == package_hashes, (scope, row["file"], "reported package hashes mismatch candidate artifact")
-          out = base / "summary.json"
-          out.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
-          for label, key in (("current 8ca", "current8caCumulative"), ("old D7", "oldD7Cumulative")):
-              focused = [row for row in result[key]["reports"] if row["exampleId"] == "showcase-bezier-paths"]
-              assert len(focused) == 6, (label, len(focused), "expected 3 baseline/candidate pairs")
-              print(f"{label} showcase-bezier-paths cumulative rows (source, runtime, FPS window/costs, package hashes):")
-              for row in focused:
-                  print(json.dumps(row, sort_keys=True, separators=(",", ":")))
-          print(f"wrote {out}: current reports={len(result['current8caCumulative']['reports'])}, "
-                f"D7 reports={len(result['oldD7Cumulative']['reports'])}, candidate packages=2")
-          PY
-      - name: Retain current and D7 product evidence summary
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: pr2422-8ca-product-evidence-summary
-          path: browser-smoke-artifacts/pr2422-8ca/product
           if-no-files-found: warn
           retention-days: 3
