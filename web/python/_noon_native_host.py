@@ -63,6 +63,16 @@ noonShadow = _native.EffectDefinition.shadow
 noonPixelate = _native.EffectDefinition.pixelate
 noonNoiseDissolve = _native.EffectDefinition.noiseDissolve
 
+noonAuthoringMeshOptions = _native.MeshInput
+noonAuthoringMeshFamilyOptions = _native.MeshFamilyInput
+noonSurfaceSamplingPlan = _native.SurfaceSamplingPlan
+
+def noonCreateAuthoringMeshHandle(candidate):
+    return _arena().mesh(candidate)
+
+def noonCreateAuthoringMeshFamilyHandle(candidate):
+    return _arena().mesh_family(candidate)
+
 noonAuthoringCoordinateOptions = _native.CoordinateOptions
 
 def noonCreateAuthoringCoordinateHandle(options):
@@ -230,7 +240,7 @@ async def run_scene(scene_class, *, sample_hz=60.0, retain_history=False, prepar
         _store.reset(store_token)
 
 
-async def run_source(source, context=None, *, sample_hz=60.0, portable=False, filename="<noon>", retain_history=False, prepare_shaders=True):
+async def run_source(source, context=None, *, sample_hz=60.0, portable=False, filename="<noon>", retain_history=False, prepare_shaders=True, scene_name=None):
     """Run unchanged Python source with an explicit finite sampling policy.
 
     portable=False executes the original synchronous call stack; portable=True
@@ -244,7 +254,7 @@ async def run_source(source, context=None, *, sample_hz=60.0, portable=False, fi
     settings_token = _settings.set((float(sample_hz), bool(retain_history), bool(prepare_shaders)))
     try:
         scene = await execute_source(source, context, portable=portable,
-                                     filename=filename)
+                                     filename=filename, scene_name=scene_name)
         resources.close(keep=getattr(scene, "_canonical_authoring_context", None))
         return scene
     except BaseException:

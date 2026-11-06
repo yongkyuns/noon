@@ -23,6 +23,7 @@ mod path_query;
 mod plotting;
 mod shaders;
 mod signals;
+mod spatial;
 mod svg;
 #[cfg(feature = "native-text")]
 mod text;
@@ -74,6 +75,9 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<shaders::ShaderSchema>()?;
     m.add_class::<shaders::ShaderProgram>()?;
     m.add_class::<shaders::ShaderParameterKey>()?;
+    m.add_class::<spatial::MeshInput>()?;
+    m.add_class::<spatial::MeshFamilyInput>()?;
+    m.add_class::<spatial::SurfaceSamplingPlan>()?;
     m.add_class::<geometry::GeometryOptions>()?;
     m.add_class::<geometry::ArcMetadata>()?;
     m.add_class::<vector_path::AuthoringVectorPath>()?;

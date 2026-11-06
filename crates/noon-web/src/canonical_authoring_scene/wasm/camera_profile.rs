@@ -2,7 +2,7 @@
 
 use super::{CanonicalAuthoringSceneContext, WasmAnimationCompositionBuilder};
 use crate::{authoring_error::js_error, WasmAuthoringMobjectHandle};
-use noon_core::{ManimCamera3DProfile, SemanticVec3};
+use noon_core::ManimCamera3DProfile;
 use wasm_bindgen::prelude::*;
 
 fn invalid(message: impl ToString) -> JsValue {
@@ -14,35 +14,10 @@ fn invalid(message: impl ToString) -> JsValue {
 }
 
 fn profile(values: &[f64]) -> Result<ManimCamera3DProfile, JsValue> {
-    if values.len() != 9 {
-        return Err(invalid("camera profile requires [phi, theta, gamma, focalDistance, zoom, frameHeight, centerX, centerY, centerZ]"));
-    }
-    if values.iter().any(|value| !value.is_finite()) {
-        return Err(invalid("camera profile values must be finite"));
-    }
-    Ok(ManimCamera3DProfile {
-        phi: values[0],
-        theta: values[1],
-        gamma: values[2],
-        focal_distance: values[3],
-        zoom: values[4],
-        frame_height: values[5],
-        frame_center: SemanticVec3::new(values[6], values[7], values[8]),
-    })
+    noon::integration::spatial_input::camera_profile(values).map_err(js_error)
 }
-
-fn profile_values(profile: ManimCamera3DProfile) -> Vec<f64> {
-    vec![
-        profile.phi,
-        profile.theta,
-        profile.gamma,
-        profile.focal_distance,
-        profile.zoom,
-        profile.frame_height,
-        profile.frame_center.x,
-        profile.frame_center.y,
-        profile.frame_center.z,
-    ]
+fn profile_values(value: ManimCamera3DProfile) -> Vec<f64> {
+    noon::integration::spatial_input::camera_profile_values(value)
 }
 
 #[wasm_bindgen]

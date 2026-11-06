@@ -41,6 +41,104 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(name="setStyle",signature=(fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    pub fn set_style(
+        &mut self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> Result<(), PyErr> {
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let update = noon::integration::style_update_with_background_stroke(
+            update,
+            background_stroke_enabled,
+            [
+                background_stroke_red,
+                background_stroke_green,
+                background_stroke_blue,
+                background_stroke_alpha,
+            ],
+            background_stroke_width,
+            background_stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.family.set_style(update).map_err(engine_error)
+    }
+    #[pyo3(name = "worldFamilyCenter")]
+    fn world_center(&self) -> PyResult<Vec<f64>> {
+        self.family
+            .world_center()
+            .map(|v| vec![v.x, v.y, v.z])
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "shiftWorld")]
+    fn shift_world(&mut self, x: f64, y: f64, z: f64) -> PyResult<()> {
+        self.family
+            .world_affine(noon::WorldAffineEdit::Shift(noon::SemanticVec3::new(
+                x, y, z,
+            )))
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "rotateWorld")]
+    fn rotate_world(&mut self, angle: f64, axis: Vec<f64>, pivot: Vec<f64>) -> PyResult<()> {
+        self.family
+            .world_affine(noon::WorldAffineEdit::Rotate {
+                axis: noon::integration::spatial_input::vec3(&axis, "axis")
+                    .map_err(engine_error)?,
+                radians: angle,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            })
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "scaleWorld")]
+    fn scale_world(&mut self, factor: f64, pivot: Vec<f64>) -> PyResult<()> {
+        self.family
+            .world_affine(noon::WorldAffineEdit::Scale {
+                factor,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            })
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setFillByCheckerboard")]
+    fn checkerboard(&self, first: Vec<f64>, second: Vec<f64>, opacity: f64) -> PyResult<()> {
+        noon::SurfaceFamily::from_family(self.family.clone())
+            .map_err(engine_error)?
+            .set_fill_by_checkerboard(crate::spatial::checkerboard(&first, &second)?, opacity)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "gridOptions")]
     #[pyo3(signature=(rows,columns,gap_x,gap_y))]
     pub fn grid_options(

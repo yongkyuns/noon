@@ -144,6 +144,8 @@ pub(crate) enum Child {
         endpoint: noon::AffineLifecycleEndpoint,
         options: AnimationOptions,
     },
+    WorldTransform(Mobject, noon::SemanticWorldTransform3D, AnimationOptions),
+    CameraProfile(Mobject, noon_core::ManimCamera3DProfile, AnimationOptions),
     Wait(f64),
     Add(Mobject, AnimationOptions),
     Nested(Composition),
@@ -314,6 +316,16 @@ impl Child {
                 endpoint: *endpoint,
                 options: *options,
             },
+            Self::WorldTransform(target, transform, options) => Request::WorldTransform {
+                target,
+                transform: *transform,
+                options: *options,
+            },
+            Self::CameraProfile(target, profile, options) => Request::CameraProfile {
+                target,
+                profile: *profile,
+                options: *options,
+            },
             Self::Wait(duration) => Request::Wait {
                 duration: *duration,
             },
@@ -475,6 +487,40 @@ impl Composition {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl Composition {
+    #[pyo3(name = "appendWorldTransform")]
+    fn world_transform(
+        &mut self,
+        target: &MobjectHandle,
+        values: Vec<f64>,
+        duration: f64,
+        easing: &str,
+    ) -> PyResult<()> {
+        let transform = noon::integration::spatial_input::world_transform_from_values(&values)
+            .map_err(engine_error)?;
+        self.children.push(Child::WorldTransform(
+            target.handle.clone(),
+            transform,
+            options(duration, easing)?,
+        ));
+        Ok(())
+    }
+    #[pyo3(name = "appendCameraProfile")]
+    fn camera_profile(
+        &mut self,
+        target: &MobjectHandle,
+        values: Vec<f64>,
+        duration: f64,
+        easing: &str,
+    ) -> PyResult<()> {
+        let profile =
+            noon::integration::spatial_input::camera_profile(&values).map_err(engine_error)?;
+        self.children.push(Child::CameraProfile(
+            target.handle.clone(),
+            profile,
+            options(duration, easing)?,
+        ));
+        Ok(())
+    }
     #[pyo3(name = "appendTextWrite", signature = (_id, target, reverse_order, introducer, remover, reverse_rate, duration, easing, lag, play_duration, play_easing))]
     fn text_write(
         &mut self,

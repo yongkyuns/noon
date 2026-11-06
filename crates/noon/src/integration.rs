@@ -26,6 +26,7 @@ mod forward_sample;
 mod frame_grid;
 mod path_edits;
 mod pixel_readback;
+pub mod spatial_input;
 
 pub use export_frames::{
     ExportAudioGrid, ExportAudioGridError, ExportEndReason, ExportFrame, ExportFrameOptions,
@@ -387,3 +388,6 @@ pub fn camera_color_profile(value: &str) -> Result<noon_core::ViewColorProfile, 
         )),
     }
 }
+
+mod style_input;
+pub use style_input::{style_update, style_update_with_background_stroke};

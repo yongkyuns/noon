@@ -56,7 +56,7 @@ impl CanonicalAuthoringSceneContext {
         candidate: WasmMeshOptions,
     ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
         self.inner
-            .create_mesh(candidate.options)
+            .create_mesh(candidate.value.into_options())
             .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
             .map_err(js_error)
     }

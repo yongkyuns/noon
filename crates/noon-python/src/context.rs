@@ -22,6 +22,15 @@ pub struct Store {
 }
 #[pymethods]
 impl Store {
+    fn mesh(&self, candidate: PyRefMut<'_, crate::spatial::MeshInput>) -> PyResult<MobjectHandle> {
+        crate::spatial::authored_mesh(self, candidate)
+    }
+    fn mesh_family(
+        &self,
+        candidate: PyRefMut<'_, crate::spatial::MeshFamilyInput>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        crate::spatial::authored_family(self, candidate)
+    }
     #[cfg(feature = "typst")]
     fn typst(&self, source: &str, math: bool, size: f64) -> PyResult<MobjectHandle> {
         crate::typst::authored(self, source, math, size)
@@ -135,6 +144,7 @@ pub struct MembershipBatch {
     pub(crate) kind: String,
     members: Vec<NativeFamilyMember>,
     bindings: Vec<Mobject>,
+    spatial_domain: Option<noon::integration::spatial_input::SpatialMembershipPolicy>,
 }
 enum NativeFamilyMember {
     Object(Mobject),
@@ -153,12 +163,26 @@ impl MembershipBatch {
 }
 #[pymethods]
 impl MembershipBatch {
+    #[pyo3(name = "setSpatialDomain")]
+    fn spatial_domain(&mut self, value: &str) -> PyResult<()> {
+        if self.kind != "add" {
+            return Err(engine_error(
+                "spatial composition requires an add membership batch",
+            ));
+        }
+        self.spatial_domain = Some(
+            noon::integration::spatial_input::SpatialMembershipPolicy::from_name(value)
+                .map_err(engine_error)?,
+        );
+        Ok(())
+    }
     #[new]
     fn new(kind: &str) -> Self {
         Self {
             kind: kind.into(),
             members: Vec::new(),
             bindings: Vec::new(),
+            spatial_domain: None,
         }
     }
     #[pyo3(name = "reserveMobjectBinding")]
@@ -376,6 +400,430 @@ impl Context {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl Context {
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(name="liveSetFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    fn set_family_style(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        self.same_family_store(source)?;
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let update = noon::integration::style_update_with_background_stroke(
+            update,
+            background_stroke_enabled,
+            [
+                background_stroke_red,
+                background_stroke_green,
+                background_stroke_blue,
+                background_stroke_alpha,
+            ],
+            background_stroke_width,
+            background_stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.with_live(|live| live.set_family_style(&source.family, update).map(|_| ()))
+    }
+    #[pyo3(name = "createMesh")]
+    fn create_mesh(
+        &mut self,
+        candidate: PyRefMut<'_, crate::spatial::MeshInput>,
+    ) -> PyResult<MobjectHandle> {
+        crate::spatial::create_mesh(self, candidate)
+    }
+    #[pyo3(name = "createMeshFamily")]
+    fn create_mesh_family(
+        &mut self,
+        candidate: PyRefMut<'_, crate::spatial::MeshFamilyInput>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        crate::spatial::create_family(self, candidate)
+    }
+    #[pyo3(name = "createCamera3D")]
+    fn camera_3d(
+        &mut self,
+        _id: &str,
+        position: Vec<f64>,
+        rotation: Vec<f64>,
+        perspective_fov: f64,
+        near: f64,
+        far: f64,
+    ) -> PyResult<MobjectHandle> {
+        self.available()?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "3D camera must be declared before execution starts",
+            ));
+        }
+        let position = noon::integration::spatial_input::vec3(&position, "camera position")
+            .map_err(engine_error)?;
+        let [w, x, y, z] = rotation.as_slice() else {
+            return Err(engine_error(
+                "camera rotation requires quaternion [w,x,y,z]",
+            ));
+        };
+        let orientation = noon_core::SemanticRotation3D::from_components(*w, *x, *y, *z)
+            .ok_or_else(|| engine_error("invalid camera rotation"))?;
+        let camera = noon::SemanticCamera3D::new(
+            position,
+            orientation,
+            noon::SemanticProjection3D::Perspective {
+                vertical_fov_radians: perspective_fov,
+                near,
+                far,
+            },
+        )
+        .ok_or_else(|| engine_error("invalid camera projection or pose"))?;
+        let object = self.scene.camera_3d(camera).map_err(engine_error)?;
+        self.bound_ids.insert(object.node_id());
+        Ok(MobjectHandle::from_semantic_mobject(object))
+    }
+    #[pyo3(name = "createCamera3DProfile")]
+    fn camera_profile(
+        &mut self,
+        _id: &str,
+        values: Vec<f64>,
+        near: f64,
+        far: f64,
+    ) -> PyResult<MobjectHandle> {
+        self.available()?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "3D camera must be declared before execution starts",
+            ));
+        }
+        let profile =
+            noon::integration::spatial_input::camera_profile(&values).map_err(engine_error)?;
+        let object = self
+            .scene
+            .camera_3d_profile(profile, near, far)
+            .map_err(engine_error)?;
+        self.bound_ids.insert(object.node_id());
+        Ok(MobjectHandle::from_semantic_mobject(object))
+    }
+    #[pyo3(name = "createPointLight3D")]
+    fn point_light(
+        &mut self,
+        position: Vec<f64>,
+        rgba: Vec<f64>,
+        intensity: f64,
+    ) -> PyResult<MobjectHandle> {
+        self.available()?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "3D point lights must be created before execution starts",
+            ));
+        }
+        let position = noon::integration::spatial_input::vec3(&position, "light position")
+            .map_err(engine_error)?;
+        let [r, g, b, a] = rgba.as_slice() else {
+            return Err(engine_error("point light color requires RGBA components"));
+        };
+        let color =
+            noon::integration::spatial_input::color(*r, *g, *b, *a).map_err(engine_error)?;
+        self.scene
+            .point_light_3d(position, color, intensity)
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setWorldTransform")]
+    fn set_world_transform(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let transform = noon::integration::spatial_input::world_transform_from_values(&values)
+            .map_err(engine_error)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.set_world_transform(&target.handle, transform))
+        } else {
+            self.scene
+                .set_world_transform(&target.handle, transform)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "effectiveWorldTransform")]
+    fn world_transform(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let value = if self.execution.is_some() {
+            self.with_live(|live| live.effective_world_transform(&target.handle))
+        } else {
+            target.handle.world_transform().map_err(engine_error)
+        }?;
+        Ok(noon::integration::spatial_input::transform_values(value))
+    }
+    #[pyo3(name = "effectiveWorldCenter")]
+    fn world_center(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let value = if self.execution.is_some() {
+            self.with_live(|live| live.effective_world_center(&target.handle))
+        } else {
+            target.handle.world_center().map_err(engine_error)
+        }?;
+        Ok(vec![value.x, value.y, value.z])
+    }
+    #[pyo3(name = "effectiveWorldFamilyCenter")]
+    fn world_family_center(&mut self, target: &crate::family::FamilyHandle) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let value = if self.execution.is_some() {
+            self.with_live(|live| live.effective_world_family_center(&target.family))
+        } else {
+            target.family.world_center().map_err(engine_error)
+        }?;
+        Ok(vec![value.x, value.y, value.z])
+    }
+    #[pyo3(name = "effectiveCameraProfile")]
+    fn effective_camera_profile(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let value = if self.execution.is_some() {
+            self.with_live(|live| live.effective_camera_profile(&target.handle))
+        } else {
+            self.scene
+                .effective_camera_profile(&target.handle)
+                .map_err(engine_error)
+        }?;
+        Ok(noon::integration::spatial_input::camera_profile_values(
+            value.0,
+        ))
+    }
+    #[pyo3(name = "setCameraProfile")]
+    fn set_camera_profile(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let profile =
+            noon::integration::spatial_input::camera_profile(&values).map_err(engine_error)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.set_camera_profile(&target.handle, profile))
+        } else {
+            self.scene
+                .set_camera_profile(&target.handle, profile)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "setSurfaceCheckerboard")]
+    fn set_surface_checkerboard(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        first: Vec<f64>,
+        second: Vec<f64>,
+        opacity: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let surface =
+            noon::SurfaceFamily::from_family(target.family.clone()).map_err(engine_error)?;
+        let colors = crate::spatial::checkerboard(&first, &second)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.set_surface_checkerboard(&surface, colors, opacity))
+        } else {
+            self.scene
+                .set_surface_checkerboard(&surface, colors, opacity)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "shiftWorld")]
+    fn shift_world(&mut self, target: &MobjectHandle, x: f64, y: f64, z: f64) -> PyResult<()> {
+        crate::spatial::world_affine(
+            self,
+            noon::MobjectTarget::Object(&target.handle),
+            noon::WorldAffineEdit::Shift(noon::SemanticVec3::new(x, y, z)),
+        )
+    }
+    #[pyo3(name = "rotateWorld")]
+    fn rotate_world(
+        &mut self,
+        target: &MobjectHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        angle: f64,
+        pivot: Vec<f64>,
+    ) -> PyResult<()> {
+        crate::spatial::world_affine(
+            self,
+            noon::MobjectTarget::Object(&target.handle),
+            noon::WorldAffineEdit::Rotate {
+                axis: noon::SemanticVec3::new(x, y, z),
+                radians: angle,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            },
+        )
+    }
+    #[pyo3(name = "scaleWorld")]
+    fn scale_world(
+        &mut self,
+        target: &MobjectHandle,
+        factor: f64,
+        pivot: Vec<f64>,
+    ) -> PyResult<()> {
+        crate::spatial::world_affine(
+            self,
+            noon::MobjectTarget::Object(&target.handle),
+            noon::WorldAffineEdit::Scale {
+                factor,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            },
+        )
+    }
+    #[pyo3(name = "shiftFamilyWorld")]
+    fn family_shift_world(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+    ) -> PyResult<()> {
+        crate::spatial::world_affine(
+            self,
+            noon::MobjectTarget::Family(&target.family),
+            noon::WorldAffineEdit::Shift(noon::SemanticVec3::new(x, y, z)),
+        )
+    }
+    #[pyo3(name = "rotateFamilyWorld")]
+    fn family_rotate_world(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        angle: f64,
+        pivot: Vec<f64>,
+    ) -> PyResult<()> {
+        crate::spatial::world_affine(
+            self,
+            noon::MobjectTarget::Family(&target.family),
+            noon::WorldAffineEdit::Rotate {
+                axis: noon::SemanticVec3::new(x, y, z),
+                radians: angle,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            },
+        )
+    }
+    #[pyo3(name = "scaleFamilyWorld")]
+    fn family_scale_world(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        factor: f64,
+        pivot: Vec<f64>,
+    ) -> PyResult<()> {
+        crate::spatial::world_affine(
+            self,
+            noon::MobjectTarget::Family(&target.family),
+            noon::WorldAffineEdit::Scale {
+                factor,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            },
+        )
+    }
+    #[pyo3(name = "beginAmbientCameraRotation")]
+    fn begin_ambient_camera_rotation(
+        &mut self,
+        target: &MobjectHandle,
+        rate: f64,
+        axis: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let axis = match axis {
+            "phi" => noon_core::CameraRotationAxis::Phi,
+            "theta" => noon_core::CameraRotationAxis::Theta,
+            "gamma" => noon_core::CameraRotationAxis::Gamma,
+            _ => return Err(engine_error("unknown ambient camera rotation axis")),
+        };
+        if self.execution.is_some() {
+            self.with_live(|live| live.begin_ambient_camera_rotation(&target.handle, axis, rate))
+        } else {
+            self.scene
+                .begin_ambient_camera_rotation(&target.handle, axis, rate)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "stopAmbientCameraRotation")]
+    fn stop_ambient_camera_rotation(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.stop_ambient_camera_rotation(&target.handle))
+        } else {
+            self.scene
+                .stop_ambient_camera_rotation(&target.handle)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "begin3DIllusionCameraRotation")]
+    #[pyo3(signature=(target,rate,origin_phi,origin_theta))]
+    fn begin_3dillusion_camera_rotation(
+        &mut self,
+        target: &MobjectHandle,
+        rate: f64,
+        origin_phi: Option<f64>,
+        origin_theta: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            self.with_live(|live| {
+                live.begin_3dillusion_camera_rotation(
+                    &target.handle,
+                    rate,
+                    origin_phi,
+                    origin_theta,
+                )
+            })
+        } else {
+            self.scene
+                .begin_3dillusion_camera_rotation(&target.handle, rate, origin_phi, origin_theta)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "stop3DIllusionCameraRotation")]
+    fn stop_3dillusion_camera_rotation(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.stop_3dillusion_camera_rotation(&target.handle))
+        } else {
+            self.scene
+                .stop_3dillusion_camera_rotation(&target.handle)
+                .map_err(engine_error)
+        }
+    }
     #[pyo3(name = "createValueTracker")]
     fn create_tracker(&mut self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
         self.available()?;
@@ -1728,6 +2176,7 @@ impl Context {
             kind: kind.into(),
             members: Vec::new(),
             bindings: Vec::new(),
+            spatial_domain: None,
         }
     }
     #[pyo3(name = "editMembership")]
@@ -1756,7 +2205,22 @@ impl Context {
             },
             _ => return Err(engine_error("unsupported membership request")),
         };
-        if let Some(session) = self.execution.as_mut() {
+        if let Some(domain) = batch.spatial_domain {
+            if batch.kind != "add" {
+                return Err(engine_error(
+                    "spatial composition requires an add membership batch",
+                ));
+            }
+            if let Some(session) = self.execution.as_mut() {
+                domain
+                    .apply_live(&mut self.scene.live(session), &targets)
+                    .map_err(engine_error)?;
+            } else {
+                domain
+                    .apply_scene(&mut self.scene, &targets)
+                    .map_err(engine_error)?;
+            }
+        } else if let Some(session) = self.execution.as_mut() {
             match self.scene.live(session).edit_membership(request) {
                 Ok(_) => {}
                 Err(noon::LiveSessionError::Publication(

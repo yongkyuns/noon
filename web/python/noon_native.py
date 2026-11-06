@@ -24,6 +24,7 @@ def main():
     from pathlib import Path
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
+    parser.add_argument("--scene", dest="scene_name", help="select a Scene class from a source with multiple scenes")
     parser.add_argument("--sample-hz", type=float, default=60.0)
     parser.add_argument("--portable-source", action="store_true")
     parser.add_argument("--headless", action="store_true", help="execute and validate without a GPU or window")
@@ -38,12 +39,20 @@ def main():
         scene = await run_source(args.source.read_text(encoding="utf8"),
                                  sample_hz=args.sample_hz, portable=args.portable_source,
                                  filename=str(args.source), retain_history=not args.headless,
-                                 prepare_shaders=not args.headless)
+                                 prepare_shaders=not args.headless, scene_name=args.scene_name)
         if args.headless:
             close_scene(scene)
             return None
         return prepare_view(scene)
-    view = asyncio.run(run())
+    # Match script import lookup at the CLI boundary. Library invocations retain
+    # their caller's import path, including concurrently executing sources.
+    import sys
+    previous_path = sys.path[:]
+    try:
+        sys.path.insert(0, str(args.source.resolve().parent))
+        view = asyncio.run(run())
+    finally:
+        sys.path[:] = previous_path
     if view is not None:
         try:
             if args.snapshot:

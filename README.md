@@ -277,7 +277,10 @@ paints, image fills, persistent path edits/queries, family iteration/slices/layo
 coordinate families, preparation-only plots, moving 2D cameras and HDR
 bloom/emission, deterministic scalar bindings, section markers, explicit live
 segments/content replacement and typed WGSL materials are covered by real
-native-extension examples and tests.
+native-extension examples and tests. Finite 3D scenes use the same indexed meshes,
+sampled surfaces, world transforms, camera profiles, point lights and fixed labels
+as the Rust and WASM hosts. Use `--scene ClassName` for a file with multiple scenes,
+or pass `scene_name="ClassName"` to `run_source`.
 
 For execution without a window/GPU, add `--headless`; this rejects late shader
 publication that requires device preparation. The Python equivalent is
@@ -289,7 +292,7 @@ also call `run_source(..., retain_history=True)` and `prepare_view(scene)`, then
 
 Arbitrary Python callbacks support the sampled `--headless` profile; prepared
 window playback rejects unrecorded callbacks or external input. Advanced plotting,
-spatial/audio bindings and full gallery parity remain outside this CPython profile.
+audio bindings and full gallery parity remain outside this CPython profile.
 Native Rust retains its existing broader support. A geometry-only build can omit
 native window/capture/resource dependencies with `--minimal`.
 

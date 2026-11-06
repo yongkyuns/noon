@@ -37,10 +37,23 @@ class NativePythonTests(unittest.TestCase):
                      "manim_example_typst_text", "manim_example_math_typst", "ordinary_automatic_wait_text",
                      "showcase_editorial_cover", "live_affine_animation", "live_affine_completion",
                      "live_semantic_scene", "live_content_switch", "ordinary_become_semantics",
-                     "shader_time", "showcase_wave_interference", "showcase_shader_material"):
+                     "shader_time", "showcase_wave_interference", "showcase_shader_material",
+                     "noon_spatial_surface_lighting", "showcase_spatial_scene", "noon_spatial_three_d_axes",
+                     "manim_example_three_d_camera_rotation", "manim_example_three_d_camera_illusion_rotation",
+                     "manim_example_three_d_surface_plot"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
+                close_scene(scene)
+        for name, selection in (
+            ("noon_spatial_surface", "SpatialSurface"), ("noon_spatial_surface", "CairoSpatialSurface"),
+            ("noon_spatial_surface", "CairoSphereTorus"), ("noon_spatial_surface", "CairoConeBodies"),
+            ("noon_spatial_primitives", "SpatialPrimitives"), ("noon_spatial_primitives", "SpatialCairoCubePrism"),
+            ("noon_spatial_primitives", "SpatialCairoCylinderConeCaps"),
+        ):
+            with self.subTest(example=name, scene=selection):
+                path = ROOT / "web/python/examples" / (name + ".py")
+                scene = asyncio.run(run_source(path.read_text(), filename=str(path), scene_name=selection))
                 close_scene(scene)
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
@@ -236,6 +249,50 @@ class Demo(Scene):
             self.assertEqual(first, view.capture(time=0.5, width=160, height=90))
         finally:
             view.close()
+
+    def test_native_surface_samples_once_and_replays_world_light_motion(self):
+        source = """from noon import *
+def sample(u, v):
+    context["samples"] += 1
+    return u, v, 0.25*u*v
+class Demo(SpatialScene):
+    def construct(self):
+        surface = Mesh3D.parametric(sample, u_range=(-1.5, 1.5), v_range=(-1.5, 1.5),
+                                    resolution=(2, 2), color=Color(0.2, 0.3, 0.4), point_lit=True)
+        light = self.point_light(position=(4, -3, 6), intensity=0.3)
+        self.add(surface, light)
+        self.play(WorldTransformTo(light, translation=(-3, 3, 4)), run_time=1, rate_func=linear)
+        assert tuple(light.get_center()) == (-3.0, 3.0, 4.0)
+"""
+        context = {"samples": 0}
+        view = prepare_view(asyncio.run(run_source(source, context, retain_history=True)))
+        try:
+            first = view.capture(time=0.1, width=160, height=90)
+            self.assertGreater(sum(first[0::4]), 1000)
+            self.assertNotEqual(first, view.capture(time=0.8, width=160, height=90))
+            self.assertEqual(first, view.capture(time=0.1, width=160, height=90))
+            self.assertEqual(context["samples"], 9)
+        finally:
+            view.close()
+
+    def test_named_scene_selection_executes_one_construct(self):
+        source = """from noon import *
+context["module"] += 1
+class First(Scene):
+    def construct(self):
+        raise AssertionError("unselected construct ran")
+class Second(Scene):
+    def construct(self):
+        context["construct"] += 1
+        self.wait(0.25)
+"""
+        context = {"module": 0, "construct": 0}
+        scene = asyncio.run(run_source(source, context, scene_name="Second"))
+        close_scene(scene)
+        self.assertEqual(context, {"module": 1, "construct": 1})
+        with self.assertRaises(ValueError):
+            asyncio.run(run_source(source, context, scene_name="Second()"))
+        self.assertEqual(context, {"module": 1, "construct": 1})
 
     def test_native_camera_motion_and_rewind_use_the_same_publication(self):
         source = """from noon import *

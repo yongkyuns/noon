@@ -126,7 +126,7 @@ mod wasm {
             &mut self,
             candidate: crate::WasmMeshOptions,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-            self.live_create_mesh(candidate.options)
+            self.live_create_mesh(candidate.value.into_options())
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }

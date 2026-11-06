@@ -100,8 +100,9 @@ process. Deterministic source preparation may retain the existing bounded Rust
 history and transfer its exact scene/session pair to the native viewer or GPU
 capture host; playback never reruns Python source. Required Python callbacks use
 the existing transactional sampled driver and cannot be promoted to prepared
-viewer playback without recorded admission. This initial native 2D profile does
-not qualify the complete gallery, spatial/audio bindings, or physical performance;
+viewer playback without recorded admission. Finite 3D inputs, camera profiles,
+world motion and spatial domains use the same Rust operations as WASM. This native
+profile does not qualify the complete gallery, audio bindings, or physical performance;
 remaining frontend breadth stays with #2015 and #1874's conformance contract.
 
 Manim Community v0.21.x is the compatibility oracle for supported common 2D Python behavior. Compatibility is a semantic/API goal, not an implementation constraint. Noon does not copy Manim's renderer, Python scene engine, internal point representation, or per-frame execution model.

@@ -39,6 +39,110 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(name="setStyle",signature=(fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    pub fn set_style(
+        &mut self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> Result<(), PyErr> {
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let update = noon::integration::style_update_with_background_stroke(
+            update,
+            background_stroke_enabled,
+            [
+                background_stroke_red,
+                background_stroke_green,
+                background_stroke_blue,
+                background_stroke_alpha,
+            ],
+            background_stroke_width,
+            background_stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.handle.set_style(update).map_err(engine_error)
+    }
+    #[pyo3(name = "worldTransform")]
+    fn world_transform(&self) -> PyResult<Vec<f64>> {
+        self.handle
+            .world_transform()
+            .map(noon::integration::spatial_input::transform_values)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "worldCenter")]
+    fn world_center(&self) -> PyResult<Vec<f64>> {
+        self.handle
+            .world_center()
+            .map(|v| vec![v.x, v.y, v.z])
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "shiftWorld")]
+    fn shift_world(&mut self, x: f64, y: f64, z: f64) -> PyResult<()> {
+        self.handle
+            .world_affine(noon::WorldAffineEdit::Shift(noon::SemanticVec3::new(
+                x, y, z,
+            )))
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "rotateWorld")]
+    fn rotate_world(
+        &mut self,
+        x: f64,
+        y: f64,
+        z: f64,
+        angle: f64,
+        pivot: Vec<f64>,
+    ) -> PyResult<()> {
+        self.handle
+            .world_affine(noon::WorldAffineEdit::Rotate {
+                axis: noon::SemanticVec3::new(x, y, z),
+                radians: angle,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            })
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "scaleWorld")]
+    fn scale_world(&mut self, factor: f64, pivot: Vec<f64>) -> PyResult<()> {
+        self.handle
+            .world_affine(noon::WorldAffineEdit::Scale {
+                factor,
+                about: noon::integration::spatial_input::about(&pivot).map_err(engine_error)?,
+            })
+            .map_err(engine_error)
+    }
     #[pyo3(name = "angleValue")]
     fn angle_value(&self, degrees: bool) -> PyResult<f64> {
         self.handle.angle_value(degrees).map_err(engine_error)
