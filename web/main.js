@@ -1276,9 +1276,9 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
             } else setBusy(true);
             setPlaybackRuntimeStatus(
               result,
-              `${example.title} · Python source continuing`,
+              result.preparing === true ? example.title : `${example.title} · Python source continuing`,
             );
-            setRunPatchStatus(runToken, `Playing ${example.title}`, "running");
+            setRunPatchStatus(runToken, `${result.preparing === true ? "Preparing" : "Playing"} ${example.title}`, "running");
           },
         });
         runPhaseMetrics.sourceRunCompletedAtMs = performance.now();
