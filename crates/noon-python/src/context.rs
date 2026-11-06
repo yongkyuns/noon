@@ -35,13 +35,16 @@ impl Store {
         &self,
         batch: &MembershipBatch,
         z_index: f64,
+        draw_enabled: bool,
     ) -> PyResult<crate::family::FamilyHandle> {
-        self.family_with_color(batch, z_index, 1.0, 1.0, 1.0, 1.0)
+        self.family_with_color(batch, z_index, draw_enabled, 1.0, 1.0, 1.0, 1.0)
     }
+    #[allow(clippy::too_many_arguments)]
     fn family_with_color(
         &self,
         batch: &MembershipBatch,
         z_index: f64,
+        draw_enabled: bool,
         r: f64,
         g: f64,
         b: f64,
@@ -50,11 +53,12 @@ impl Store {
         if batch.kind != "add" {
             return Err(engine_error("family creation requires an add batch"));
         }
-        noon::MobjectFamily::create_with_own_color(
+        noon::MobjectFamily::create_with_presentation(
             Rc::clone(&self.semantics),
             &batch.targets(),
             z_index,
             noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
+            draw_enabled,
         )
         .map(|family| crate::family::FamilyHandle { family })
         .map_err(engine_error)
@@ -322,6 +326,244 @@ impl Context {
 }
 #[pymethods]
 impl Context {
+    #[pyo3(name="liveSetFillImage",signature=(target,paint,opacity))]
+    fn live_fill_image(
+        &mut self,
+        target: &MobjectHandle,
+        paint: &crate::paints::ImagePaintOptions,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| {
+            live.set_fill_image(&target.handle, paint.options.clone(), opacity)
+                .map(|_| ())
+        })
+    }
+
+    #[pyo3(name="liveSetFillImageMapping",signature=(target,paint,opacity))]
+    fn live_fill_image_mapping(
+        &mut self,
+        target: &MobjectHandle,
+        paint: &crate::paints::ImageMapping,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| {
+            live.set_fill_image_mapping(&target.handle, paint.value, opacity)
+                .map(|_| ())
+        })
+    }
+
+    #[pyo3(name="liveSetFillGradient", signature=(target,paint,opacity))]
+    fn live_fill_gradient(
+        &mut self,
+        target: &MobjectHandle,
+        paint: &crate::paints::LinearGradient,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| {
+            live.set_fill_gradient(&target.handle, paint.value.clone(), opacity)
+                .map(|_| ())
+        })
+    }
+
+    #[pyo3(name="liveSetFillRadialGradient", signature=(target,paint,opacity))]
+    fn live_fill_radial_gradient(
+        &mut self,
+        target: &MobjectHandle,
+        paint: &crate::paints::RadialGradient,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| {
+            live.set_fill_radial_gradient(&target.handle, paint.value.clone(), opacity)
+                .map(|_| ())
+        })
+    }
+
+    #[pyo3(name="liveSetFillNoise", signature=(target,paint,opacity))]
+    fn live_fill_noise(
+        &mut self,
+        target: &MobjectHandle,
+        paint: &crate::paints::NoisePaint,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| {
+            live.set_fill_noise(&target.handle, paint.value.clone(), opacity)
+                .map(|_| ())
+        })
+    }
+
+    #[pyo3(name="liveSetFillHatch", signature=(target,paint,opacity))]
+    fn live_fill_hatch(
+        &mut self,
+        target: &MobjectHandle,
+        paint: &crate::paints::HatchPaint,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| {
+            live.set_fill_hatch(&target.handle, paint.value.clone(), opacity)
+                .map(|_| ())
+        })
+    }
+
+    #[pyo3(name = "liveSetGlow")]
+    fn _set_glow(
+        &mut self,
+        target: &MobjectHandle,
+        update: &crate::effects::EffectUpdate,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.set_glow(&target.handle, update.value.clone()))
+    }
+
+    #[pyo3(name = "liveRemoveGlow")]
+    fn _remove_glow(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.remove_glow(&target.handle))
+    }
+
+    #[pyo3(name = "liveAddEffect")]
+    fn _add_effect(
+        &mut self,
+        target: &MobjectHandle,
+        definition: &crate::effects::EffectDefinition,
+        name: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.add_effect(&target.handle, definition.definition(), name))
+    }
+
+    #[pyo3(name = "liveSetEffect")]
+    fn _set_effect(
+        &mut self,
+        target: &MobjectHandle,
+        name: &str,
+        update: &crate::effects::EffectUpdate,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.set_effect(&target.handle, name, update.value.clone()))
+    }
+
+    #[pyo3(name = "liveSetEffectHandle")]
+    fn _set_effect_handle(
+        &mut self,
+        target: &MobjectHandle,
+        handle: &crate::effects::EffectHandle,
+        update: &crate::effects::EffectUpdate,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.set_effect(&target.handle, &handle.handle, update.value.clone()))
+    }
+
+    #[pyo3(name = "liveRemoveEffect")]
+    fn _remove_effect(&mut self, target: &MobjectHandle, name: &str) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.remove_effect(&target.handle, name))
+    }
+
+    #[pyo3(name = "liveRemoveEffectHandle")]
+    fn _remove_effect_handle(
+        &mut self,
+        target: &MobjectHandle,
+        handle: &crate::effects::EffectHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.remove_effect(&target.handle, &handle.handle))
+    }
+
+    #[pyo3(name = "liveSetFamilyGlow")]
+    fn family_set_glow(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        update: &crate::effects::EffectUpdate,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.set_glow(&target.family, update.value.clone()))
+    }
+
+    #[pyo3(name = "liveRemoveFamilyGlow")]
+    fn family_remove_glow(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.remove_glow(&target.family))
+    }
+
+    #[pyo3(name = "liveAddFamilyEffect")]
+    fn family_add_effect(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        definition: &crate::effects::EffectDefinition,
+        name: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.add_effect(&target.family, definition.definition(), name))
+    }
+
+    #[pyo3(name = "liveSetFamilyEffect")]
+    fn family_set_effect(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        name: &str,
+        update: &crate::effects::EffectUpdate,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.set_effect(&target.family, name, update.value.clone()))
+    }
+
+    #[pyo3(name = "liveSetFamilyEffectHandle")]
+    fn family_set_effect_handle(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        handle: &crate::effects::EffectHandle,
+        update: &crate::effects::EffectUpdate,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.set_effect(&target.family, &handle.handle, update.value.clone()))
+    }
+
+    #[pyo3(name = "liveRemoveFamilyEffect")]
+    fn family_remove_effect(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        name: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.remove_effect(&target.family, name))
+    }
+
+    #[pyo3(name = "liveRemoveFamilyEffectHandle")]
+    fn family_remove_effect_handle(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        handle: &crate::effects::EffectHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| live.remove_effect(&target.family, &handle.handle))
+    }
+
     #[pyo3(name = "queryLayoutDimensionLength")]
     fn layout_dimension_length(&mut self, source: &LayoutAnchor, dimension: u32) -> PyResult<f64> {
         self.require_active()?;
@@ -714,10 +956,12 @@ impl Context {
         &mut self,
         batch: &MembershipBatch,
         z_index: f64,
+        draw_enabled: bool,
     ) -> PyResult<crate::family::FamilyHandle> {
-        self.create_family_with_color(batch, z_index, 1.0, 1.0, 1.0, 1.0)
+        self.create_family_with_color(batch, z_index, 1.0, 1.0, 1.0, 1.0, draw_enabled)
     }
     #[pyo3(name = "liveCreateFamilyWithColor")]
+    #[allow(clippy::too_many_arguments)]
     fn create_family_with_color(
         &mut self,
         batch: &MembershipBatch,
@@ -726,6 +970,7 @@ impl Context {
         g: f64,
         b: f64,
         a: f64,
+        draw_enabled: bool,
     ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
         if batch.kind != "add" {
@@ -735,13 +980,14 @@ impl Context {
             .execution
             .as_mut()
             .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_family_creation_with_color(
+        noon::integration::publish_family_creation_with_presentation(
             self.scene.integration_store(),
             self.scene.root(),
             execution,
             &batch.targets(),
             z_index,
             noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
+            draw_enabled,
         )
         .map(|family| crate::family::FamilyHandle { family })
         .map_err(engine_error)

@@ -10,11 +10,13 @@ mod callback;
 mod callback_values;
 mod composition;
 mod context;
+mod effects;
 mod family;
 mod geometry;
 mod image;
 mod mobject;
 mod options;
+mod paints;
 mod path_query;
 mod svg;
 #[cfg(feature = "native-text")]
@@ -57,6 +59,9 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<svg::SvgDefaults>()?;
     #[cfg(feature = "native-text")]
     text::register(m)?;
+    m.add_class::<effects::EffectUpdate>()?;
+    m.add_class::<effects::EffectDefinition>()?;
+    m.add_class::<effects::EffectHandle>()?;
     m.add_class::<geometry::GeometryOptions>()?;
     m.add_class::<vector_path::AuthoringVectorPath>()?;
     m.add_class::<path_query::PathQuery>()?;
@@ -70,9 +75,16 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mobject::MobjectHandle>()?;
     m.add_class::<mobject::LayoutAnchor>()?;
     m.add_class::<mobject::LayoutObservation>()?;
+    m.add_class::<paints::ImageMapping>()?;
+    m.add_class::<paints::ImagePaintOptions>()?;
+    m.add_class::<paints::LinearGradient>()?;
+    m.add_class::<paints::RadialGradient>()?;
+    m.add_class::<paints::NoisePaint>()?;
+    m.add_class::<paints::HatchPaint>()?;
     m.add_class::<composition::Composition>()?;
     m.add_function(wrap_pyfunction!(options::resolve_animation_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_create_options, m)?)?;
+    m.add_function(wrap_pyfunction!(options::resolve_glow_pulse_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_transform_options, m)?)?;
     Ok(())
 }

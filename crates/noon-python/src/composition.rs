@@ -21,6 +21,19 @@ fn options(duration: f64, easing: &str) -> PyResult<AnimationOptions> {
         .rate_func(rate(easing)?))
 }
 #[derive(Clone)]
+pub(crate) enum DissolveTarget {
+    Object(Mobject),
+    Family(noon::MobjectFamily),
+}
+impl DissolveTarget {
+    fn target(&self) -> noon::MobjectTarget<'_> {
+        match self {
+            Self::Object(value) => noon::MobjectTarget::Object(value),
+            Self::Family(value) => noon::MobjectTarget::Family(value),
+        }
+    }
+}
+#[derive(Clone)]
 pub(crate) enum Child {
     Transform {
         source: Mobject,
@@ -44,6 +57,13 @@ pub(crate) enum Child {
         AnimationOptions,
     ),
     TextWrite(Mobject, bool, AnimationOptions),
+    GlowPulse(Mobject, f64, AnimationOptions),
+    Dissolve(
+        DissolveTarget,
+        noon_core::DissolveDirection,
+        noon_core::DissolveStyle,
+        AnimationOptions,
+    ),
     Wait(f64),
     Add(Mobject, AnimationOptions),
     Nested(Composition),
@@ -110,6 +130,17 @@ impl Child {
                 reverse_member_order: *reverse_member_order,
                 options: *options,
             },
+            Self::GlowPulse(target, intensity, options) => Request::GlowPulse {
+                target,
+                intensity: *intensity,
+                options: *options,
+            },
+            Self::Dissolve(target, direction, style, options) => Request::Dissolve {
+                target: target.target(),
+                direction: *direction,
+                style: *style,
+                options: *options,
+            },
             Self::Wait(duration) => Request::Wait {
                 duration: *duration,
             },
@@ -172,6 +203,51 @@ impl Composition {
             children: self.children.iter().map(Child::request).collect(),
             options: self.options,
         }
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn dissolve(
+        &mut self,
+        target: DissolveTarget,
+        direction: &str,
+        seed: Option<f64>,
+        softness: Option<f64>,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        reverse: bool,
+    ) -> PyResult<()> {
+        let direction = match direction {
+            "in" => noon_core::DissolveDirection::In,
+            "out" => noon_core::DissolveDirection::Out,
+            _ => return Err(engine_error("invalid dissolve direction")),
+        };
+        let update = noon::integration::mask_parameters(
+            noon::effects::EffectUpdate::default(),
+            None,
+            softness,
+            seed,
+        )
+        .map_err(engine_error)?;
+        let style = noon_core::DissolveStyle::new(update)
+            .map_err(noon::AuthoringError::from)
+            .map_err(engine_error)?;
+        self.children.push(Child::Dissolve(
+            target,
+            direction,
+            style,
+            AnimationOptions {
+                run_time: duration,
+                rate_func: easing.map(rate).transpose()?,
+                lag_ratio: lag,
+                introducer,
+                remover,
+                reverse_rate_function: Some(reverse),
+                ..AnimationOptions::new()
+            },
+        ));
+        Ok(())
     }
     #[allow(clippy::too_many_arguments)]
     fn transform(
@@ -239,6 +315,101 @@ impl Composition {
         Ok(())
     }
 
+    #[pyo3(name="appendGlowPulseMobject", signature=(target,intensity,duration,easing,lag,reverse))]
+    fn glow_pulse(
+        &mut self,
+        target: &MobjectHandle,
+        intensity: f64,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        reverse: bool,
+    ) -> PyResult<()> {
+        self.children.push(Child::GlowPulse(
+            target.handle.clone(),
+            intensity,
+            AnimationOptions {
+                run_time: duration,
+                rate_func: easing.map(rate).transpose()?,
+                lag_ratio: lag,
+                reverse_rate_function: Some(reverse),
+                ..AnimationOptions::new()
+            },
+        ));
+        Ok(())
+    }
+    #[pyo3(name="appendDissolveMobject", signature=(_id,target,direction,seed,softness,introducer,remover,duration,easing,lag,reverse))]
+    fn dissolve_object(
+        &mut self,
+        _id: &str,
+        target: &MobjectHandle,
+        direction: &str,
+        seed: Option<f64>,
+        softness: Option<f64>,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        reverse: bool,
+    ) -> PyResult<()> {
+        self.dissolve(
+            DissolveTarget::Object(target.handle.clone()),
+            direction,
+            seed,
+            softness,
+            introducer,
+            remover,
+            duration,
+            easing,
+            lag,
+            reverse,
+        )
+    }
+    #[pyo3(name="appendDissolveFamily", signature=(target,direction,seed,softness,introducer,remover,duration,easing,lag,reverse))]
+    fn dissolve_family(
+        &mut self,
+        target: &FamilyHandle,
+        direction: &str,
+        seed: Option<f64>,
+        softness: Option<f64>,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        reverse: bool,
+    ) -> PyResult<()> {
+        self.dissolve(
+            DissolveTarget::Family(target.family.clone()),
+            direction,
+            seed,
+            softness,
+            introducer,
+            remover,
+            duration,
+            easing,
+            lag,
+            reverse,
+        )
+    }
+    #[pyo3(name = "appendDissolveFamilyEntering")]
+    fn dissolve_family_entering(&self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
+        let Some(Child::Dissolve(DissolveTarget::Family(target), ..)) = self.children.last() else {
+            return Err(engine_error("family entering member must follow Dissolve"));
+        };
+        if !std::rc::Rc::ptr_eq(
+            target.integration_store(),
+            member.handle.integration_store(),
+        ) {
+            return Err(engine_error(
+                "dissolve family member belongs to another authoring store",
+            ));
+        }
+        // The shared composition admits this family's canonical members. The ID
+        // is facade binding provenance, never a second native object identity.
+        member.handle.validate().map_err(engine_error)
+    }
     #[pyo3(name = "setCompositionRateFunction")]
     fn set_rate(&mut self, value: &str) -> PyResult<()> {
         self.options.rate_func = Some(rate(value)?);

@@ -112,3 +112,32 @@ pub fn resolve_transform_options(
     .map(OptionsResolution)
     .map_err(engine_error)
 }
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (default_lag, duration, rate, lag, path, reverse, play_duration, play_rate, play_lag))]
+pub fn resolve_glow_pulse_options(
+    default_lag: f64,
+    duration: Option<f64>,
+    rate: &str,
+    lag: Option<f64>,
+    path: Option<f64>,
+    reverse: i32,
+    play_duration: Option<f64>,
+    play_rate: &str,
+    play_lag: Option<f64>,
+) -> PyResult<OptionsResolution> {
+    noon::integration::resolve_frontend_glow_pulse_animation_options(
+        default_lag,
+        duration,
+        rate,
+        lag,
+        path,
+        reverse,
+        play_duration,
+        play_rate,
+        play_lag,
+    )
+    .map(OptionsResolution)
+    .map_err(engine_error)
+}

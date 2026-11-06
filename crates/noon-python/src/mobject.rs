@@ -14,6 +14,132 @@ impl MobjectHandle {
 }
 #[pymethods]
 impl MobjectHandle {
+    #[pyo3(name="setFillImage",signature=(paint,opacity))]
+    fn fill_image(
+        &self,
+        paint: &crate::paints::ImagePaintOptions,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_fill_image(paint.options.clone(), opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name="setFillImageMapping",signature=(paint,opacity))]
+    fn fill_image_mapping(
+        &self,
+        paint: &crate::paints::ImageMapping,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_fill_image_mapping(paint.value, opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name="setFillGradient", signature=(paint,opacity))]
+    fn fill_gradient(
+        &self,
+        paint: &crate::paints::LinearGradient,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_fill_gradient(paint.value.clone(), opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name="setFillRadialGradient", signature=(paint,opacity))]
+    fn fill_radial_gradient(
+        &self,
+        paint: &crate::paints::RadialGradient,
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_fill_radial_gradient(paint.value.clone(), opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name="setFillNoise", signature=(paint,opacity))]
+    fn fill_noise(&self, paint: &crate::paints::NoisePaint, opacity: Option<f64>) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_fill_noise(paint.value.clone(), opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name="setFillHatch", signature=(paint,opacity))]
+    fn fill_hatch(&self, paint: &crate::paints::HatchPaint, opacity: Option<f64>) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_fill_hatch(paint.value.clone(), opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setGlow")]
+    fn set_glow(&self, update: &crate::effects::EffectUpdate) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_glow(update.value.clone())
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "removeGlow")]
+    fn remove_glow(&self) -> PyResult<()> {
+        self.handle.clone().remove_glow().map_err(engine_error)
+    }
+    #[pyo3(name = "addEffect")]
+    fn add_effect(
+        &self,
+        definition: &crate::effects::EffectDefinition,
+        name: &str,
+    ) -> PyResult<()> {
+        self.handle
+            .clone()
+            .add_effect(definition.definition(), name)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "getEffect")]
+    fn get_effect(&self, name: &str) -> PyResult<crate::effects::EffectHandle> {
+        self.handle
+            .get_effect(name)
+            .map(|handle| crate::effects::EffectHandle { handle })
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setEffect")]
+    fn set_effect(&self, name: &str, update: &crate::effects::EffectUpdate) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_effect(name, update.value.clone())
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setEffectHandle")]
+    fn set_effect_handle(
+        &self,
+        handle: &crate::effects::EffectHandle,
+        update: &crate::effects::EffectUpdate,
+    ) -> PyResult<()> {
+        self.handle
+            .clone()
+            .set_effect(&handle.handle, update.value.clone())
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "removeEffect")]
+    fn remove_effect(&self, name: &str) -> PyResult<()> {
+        self.handle
+            .clone()
+            .remove_effect(name)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "removeEffectHandle")]
+    fn remove_effect_handle(&self, handle: &crate::effects::EffectHandle) -> PyResult<()> {
+        self.handle
+            .clone()
+            .remove_effect(&handle.handle)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "familyKeys")]
     fn family_keys(&self) -> PyResult<Vec<String>> {
         noon::MobjectTarget::from(&self.handle)

@@ -15,7 +15,10 @@ class NativePythonTests(unittest.TestCase):
     def test_published_paired_examples_execute_without_a_browser(self):
         self.assertIn(Path(_noon_native.__file__).suffix, {".so", ".pyd"})
         for name in ("ordinary_affine_play", "ordinary_composition_play",
-                     "ordinary_text_write", "ordinary_fade_play", "shared_text", "raster_image"):
+                     "ordinary_text_write", "ordinary_fade_play", "shared_text", "raster_image",
+                     "glow_pulse", "ordered_effects", "composed_effects", "noise_dissolve",
+                     "linear_gradient", "radial_gradient", "noise_paint", "hatch_paint",
+                     "image_fill", "showcase_layered_effects", "showcase_painted_surfaces"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
@@ -92,6 +95,42 @@ class Demo(Scene):
         view.close()
         with self.assertRaises(RuntimeError):
             view.capture()
+
+    def test_native_gradient_pixels_animate_and_rewind(self):
+        path = ROOT / "web/python/examples/linear_gradient.py"
+        view = prepare_view(asyncio.run(run_source(path.read_text(), filename=str(path),
+                                                  retain_history=True)))
+        try:
+            first = view.capture(time=0.25, width=320, height=180)
+            left, right = ((90 * 320 + x) * 4 for x in (135, 185))
+            self.assertGreater(first[left], first[left + 2])
+            self.assertGreater(first[right + 2], first[right])
+            solid = view.capture(time=2.875, width=320, height=180)
+            for offset in (left, right):
+                self.assertEqual(tuple(solid[offset:offset + 3]), (255, 0, 0))
+            self.assertEqual(first, view.capture(time=0.25, width=320, height=180))
+        finally:
+            view.close()
+
+    def test_composed_dissolve_replay_preserves_effects_and_membership(self):
+        path = ROOT / "web/python/examples/dissolve.py"
+        view = prepare_view(asyncio.run(run_source(path.read_text(), filename=str(path),
+                                                  retain_history=True)))
+        try:
+            first = None
+            for time, visible in ((0.25, True), (1.75, False), (3.25, True),
+                                  (4.75, False), (6.25, True), (0.25, True)):
+                pixels = view.capture(time=time, width=320, height=180)
+                right = bytes(channel for y in range(180) for x in range(160, 320)
+                              for channel in pixels[(y * 320 + x) * 4:(y * 320 + x) * 4 + 3])
+                self.assertEqual(any(right), visible)
+                if visible:
+                    if first is None:
+                        first = pixels
+                    else:
+                        self.assertEqual(first, pixels)
+        finally:
+            view.close()
 
     def test_interleaved_failure_retires_only_its_acquisitions(self):
         from noon import Circle, RIGHT, Scene

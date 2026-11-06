@@ -13,6 +13,7 @@ class HostCapabilityTests(unittest.TestCase):
             for value in ([1, {"x": 2}], None, 1.5, "native value"):
                 self.assertIs(_noon_host.encode_callback(value), value)
                 self.assertIs(_noon_host.decode_callback(value), value)
+                self.assertIs(_noon_host.array_value(value), value)
 
     def test_browser_wait_primitives_observe_the_current_host_capability(self):
         ffi = ModuleType("pyodide.ffi")

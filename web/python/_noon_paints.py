@@ -25,7 +25,7 @@ class LinearGradient:
             packed.extend((_number(position, "gradient stop position"),
                            color.red, color.green, color.blue, color.alpha))
         from _noon_host import noonLinearGradient
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         self._definition = engine_call(noonLinearGradient, to_js(coordinates(start)),
                                        to_js(coordinates(end)), to_js(packed))
 
@@ -55,7 +55,7 @@ class HatchPaint:
                  angle=pi / 4, phase=(0.0, 0.0), cross=False):
         from _manim_compat import _as_color
         from _noon_host import noonHatchPaint
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         if not isinstance(cross, bool):
             raise TypeError("hatch cross must be a bool")
         colors = []
@@ -93,7 +93,7 @@ class NoisePaint:
     def __init__(self, low, high, *, seed=0, frequency=(8.0, 8.0), phase=(0.0, 0.0)):
         from _manim_compat import _as_color
         from _noon_host import noonNoisePaint
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         colors = []
         for value in (low, high):
             c = _as_color("noise color", value)
@@ -127,7 +127,7 @@ class RadialGradient:
             packed.extend((_number(position, "gradient stop position"),
                            color.red, color.green, color.blue, color.alpha))
         from _noon_host import noonRadialGradient
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         self._definition = engine_call(noonRadialGradient, to_js(coordinates(center)),
                                        to_js(coordinates(radii)), to_js(packed))
 
@@ -189,7 +189,7 @@ class ImageMapping:
     def __init__(self, *, fit="cover", alignment=(0.5, 0.5), address="clamp",
                  translation=(0.0, 0.0), scale=(1.0, 1.0), rotation=0.0):
         from _noon_host import noonImageMapping
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         pair = lambda value: to_js([_number(v, "image mapping coordinate") for v in value])
         self._definition = engine_call(noonImageMapping, str(fit), pair(alignment), str(address),
                                        pair(translation), pair(scale), _number(rotation, "image rotation"))

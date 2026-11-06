@@ -96,3 +96,10 @@ def byte_buffer(value):
         return bytes(value)
     from pyodide.ffi import to_js
     return to_js(memoryview(value))
+
+
+def array_value(value):
+    if _native_active():
+        return value
+    from pyodide.ffi import to_js
+    return to_js(value)

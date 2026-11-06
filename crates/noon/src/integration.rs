@@ -361,3 +361,11 @@ pub fn family_color(
         alpha as f32,
     )))
 }
+
+mod effect_options;
+pub use effect_options::{effect_color, effect_update, mask_parameters};
+
+mod paint_options;
+pub use paint_options::{
+    hatch_paint, image_mapping, linear_gradient, noise_paint, radial_gradient,
+};

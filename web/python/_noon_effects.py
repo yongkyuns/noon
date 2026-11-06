@@ -50,7 +50,7 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
         raise TypeError("glow source must be a string")
     try:
         from _noon_host import noonEffectUpdate
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
     except ImportError as error:
         raise RuntimeError("effects require the shared Rust authoring host") from error
     offset_pixels = isinstance(offset, Pixels)

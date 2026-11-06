@@ -44,6 +44,21 @@ def _arena():
         _store.set(arena)
     return arena
 
+noonImageMapping = _native.ImageMapping
+noonImagePaintOptions = _native.ImagePaintOptions
+noonLinearGradient = _native.LinearGradient
+noonRadialGradient = _native.RadialGradient
+noonNoisePaint = _native.NoisePaint
+noonHatchPaint = _native.HatchPaint
+noonEffectUpdate = _native.EffectUpdate
+noonGlow = _native.EffectDefinition.glow
+noonBlur = _native.EffectDefinition.blur
+noonBloom = _native.EffectDefinition.bloom
+noonBackdropBlur = _native.EffectDefinition.backdropBlur
+noonShadow = _native.EffectDefinition.shadow
+noonPixelate = _native.EffectDefinition.pixelate
+noonNoiseDissolve = _native.EffectDefinition.noiseDissolve
+
 noonAuthoringGeometryOptions = _native.GeometryOptions
 noonAuthoringVectorPath = _native.AuthoringVectorPath
 noonAuthoringImageOptions = _native.ImageOptions
@@ -69,6 +84,7 @@ if hasattr(_native, "FontFace"):
         return _arena().markup_text(*args)
 
 noonResolveAnimationOptions = _native.resolve_animation_options
+noonResolveGlowPulseAnimationOptions = _native.resolve_glow_pulse_options
 noonResolveCreateAnimationOptions = _native.resolve_create_options
 noonResolveTransformAnimationOptions = _native.resolve_transform_options
 
@@ -77,10 +93,10 @@ def noonCreateAuthoringGeometryHandle(options):
     return _arena().geometry(options)
 
 
-def noonCreateAuthoringFamilyHandle(batch, z_index, *color):
+def noonCreateAuthoringFamilyHandle(batch, z_index, draw_enabled, *color):
     if color:
-        return _arena().family_with_color(batch, z_index, *color)
-    return _arena().family(batch, z_index)
+        return _arena().family_with_color(batch, z_index, draw_enabled, *color)
+    return _arena().family(batch, z_index, draw_enabled)
 
 
 def noonCreateCanonicalAuthoringSceneContext():
