@@ -787,7 +787,7 @@ test("prepared render failure commits observed static-wait time without losing p
   } finally { f.close(); }
 });
 
-for (const stage of ["bootstrap", "tick", "control", "state", "notification"]) {
+for (const stage of ["bootstrap", "tick", "control", "state", "notification", "source-notification"]) {
   test(`prepared ${stage} WASM trap retires the host before source cancellation without Rust cleanup`, { timeout: 3000 }, async () => {
     const f = fixture(), trap = new WebAssembly.RuntimeError(`trapped ${stage}`);
     const previous = globalThis.noonReportEngineTrap;
@@ -807,9 +807,11 @@ for (const stage of ["bootstrap", "tick", "control", "state", "notification"]) {
           f.player.preparedPlaybackTimeAt = () => { throw trap; };
           f.post("state");
         }
-        if (stage === "notification") {
+        if (stage === "notification" || stage === "source-notification") {
           f.player.executionWake = () => { throw trap; };
-          assert.throws(() => f.endpoint.sourcePrefixDelivered(), error => error === trap);
+          assert.throws(() => stage === "notification" ? f.endpoint.sourcePrefixDelivered()
+            : f.endpoint.sourceExecutionRequired(), error => error === trap);
+          assert.equal(f.count("fatal"), 1, "synchronous notification must retire the trapped host immediately");
         }
         await f.when(() => f.count("cancel-source") === 1);
       }

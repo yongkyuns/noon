@@ -1977,10 +1977,15 @@ export async function attachSemanticEngine(
     sourceExecutionRequired() {
       // Rust released startup preparation at an actual source requirement. Play
       // its accepted introduction before the existing frontier-bound handoff.
-      if (prepared !== null && preparedClockAdmitted && !stopped && !receiverFailed) {
-        observeExecutionWake(performance.now(), true);
+      try {
+        if (prepared !== null && preparedClockAdmitted && !stopped && !receiverFailed) {
+          observeExecutionWake(performance.now(), true);
+        }
+        requestSourceHandoff();
+      } catch (error) {
+        if (notePreparedTrap(error)) stop();
+        throw error;
       }
-      requestSourceHandoff();
     },
     sourcePrefixDelivered() {
       if (prepared === null) throw new Error("semantic endpoint has no prepared source");
