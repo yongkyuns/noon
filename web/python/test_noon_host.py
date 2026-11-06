@@ -7,6 +7,13 @@ from unittest.mock import patch
 
 
 class HostCapabilityTests(unittest.TestCase):
+    def test_native_callback_values_stay_typed_in_both_directions(self):
+        import _noon_host
+        with patch.object(sys, "platform", "darwin"), patch.dict(sys.modules, {"_noon_native": ModuleType("_noon_native"), "js": ModuleType("js")}):
+            for value in ([1, {"x": 2}], None, 1.5, "native value"):
+                self.assertIs(_noon_host.encode_callback(value), value)
+                self.assertIs(_noon_host.decode_callback(value), value)
+
     def test_browser_wait_primitives_observe_the_current_host_capability(self):
         ffi = ModuleType("pyodide.ffi")
         ffi.can_run_sync = lambda: True

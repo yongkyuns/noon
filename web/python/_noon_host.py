@@ -11,12 +11,12 @@ from functools import partial
 
 
 def _native_active():
-    return sys.platform != "emscripten" and "js" not in sys.modules and "_noon_native" in sys.modules
+    return sys.platform != "emscripten" and "_noon_native" in sys.modules
 
 
 def _backend():
     # Explicit js fixtures remain usable by existing Python unit tests.
-    if sys.platform == "emscripten" or "js" in sys.modules:
+    if sys.platform == "emscripten" or ("js" in sys.modules and not _native_active()):
         return importlib.import_module("js")
     return importlib.import_module("_noon_native_host")
 
@@ -38,7 +38,7 @@ def encode_callback(value):
 
 
 def decode_callback(value):
-    return value if isinstance(value, dict) else json.loads(str(value))
+    return value if _native_active() or isinstance(value, dict) else json.loads(str(value))
 
 
 def can_wait_sync():
