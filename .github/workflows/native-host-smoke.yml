@@ -7,6 +7,13 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-python/**"
+      - "web/python/**"
+      - "scripts/build-native-python.py"
+      - "scripts/test_build_native_python.py"
+      - "scripts/test_native_python.py"
+      - "scripts/python_host_conformance.py"
+      - "parity/python-host/**"
       - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
@@ -26,6 +33,13 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-python/**"
+      - "web/python/**"
+      - "scripts/build-native-python.py"
+      - "scripts/test_build_native_python.py"
+      - "scripts/test_native_python.py"
+      - "scripts/python_host_conformance.py"
+      - "parity/python-host/**"
       - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
@@ -348,6 +362,20 @@ jobs:
           assert output.stat().st_size == 90 * 320 * 180 * 4, output.stat().st_size
           output.unlink()
           PY
+
+      - name: Use CPython for the optional native binding
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Qualify CPython source, cleanup and native pixels without a browser
+        run: |
+          python3 scripts/test_build_native_python.py
+          python3 scripts/build-native-python.py --profile dev
+          PYTHONPATH=build/python env -u DISPLAY -u WAYLAND_DISPLAY \
+            python3 scripts/test_native_python.py -v
+          python3 scripts/python_host_conformance.py \
+            --output capture-proof/python-host.json
 
       - name: Retain pinned formatter diagnostics without changing tested code
         if: always()

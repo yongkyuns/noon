@@ -94,6 +94,16 @@ Serialized transport is justified only at a real external or cross-context bound
 
 Python and JavaScript/TypeScript are optional language adapters over the same Rust semantic operations. They are not required components of the Rust engine, runtime, or renderer.
 
+The optional `noon-python` CPython extension shares the Python facade with Pyodide
+through a thin host selector. Native calls and callback values remain typed in
+process. Deterministic source preparation may retain the existing bounded Rust
+history and transfer its exact scene/session pair to the native viewer or GPU
+capture host; playback never reruns Python source. Required Python callbacks use
+the existing transactional sampled driver and cannot be promoted to prepared
+viewer playback without recorded admission. This initial native 2D profile does
+not qualify the complete gallery, spatial/audio bindings, or physical performance;
+remaining frontend breadth stays with #2015 and #1874's conformance contract.
+
 Manim Community v0.21.x is the compatibility oracle for supported common 2D Python behavior. Compatibility is a semantic/API goal, not an implementation constraint. Noon does not copy Manim's renderer, Python scene engine, internal point representation, or per-frame execution model.
 
 ---

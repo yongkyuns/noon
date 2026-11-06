@@ -37,7 +37,7 @@ def _integer(value, name, maximum):
 
 def _host():
     try:
-        from js import noonAudioSource
+        from _noon_host import noonAudioSource
     except ImportError as error:
         raise RuntimeError("audio requires the shared Rust authoring host") from error
     return noonAudioSource
@@ -164,7 +164,7 @@ def audio(scene, source, *, start_time=0.0, source_start_frame=0,
         _number(fade_in, "fade_in"),
         _number(fade_out, "fade_out"),
     )
-    from js import noonAudioClipOptions
+    from _noon_host import noonAudioClipOptions
     from _manim_scene import _context
     options = engine_call(noonAudioClipOptions, *arguments, operation="Scene.audio")
     try:

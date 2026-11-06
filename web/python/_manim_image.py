@@ -15,14 +15,17 @@ from _manim_semantic_handles import (
 )
 
 try:
-    from js import (
+    from _noon_host import (
         noonAuthoringImageOptions as _image_options,
         noonCreateAuthoringImageHandle as _create_image,
-        noonLoadImageUrl as _load_url,
-        Uint8Array,
     )
 except ImportError:
-    _image_options = _create_image = _load_url = Uint8Array = None
+    _image_options = _create_image = None
+
+try:
+    from _noon_host import noonLoadImageUrl as _load_url, Uint8Array
+except ImportError:
+    _load_url = Uint8Array = None
 
 # Pillow's documented integer constants; unsupported filters fail explicitly.
 RESAMPLING_ALGORITHMS = {
@@ -112,8 +115,8 @@ def _validate_shape(width, height, channels):
 
 def _js_bytes(data):
     # One bulk byte transfer into WASM at construction, never a JSON pixel list.
-    from pyodide.ffi import to_js
-    return to_js(memoryview(data))
+    from _noon_host import byte_buffer
+    return byte_buffer(data)
 
 
 class ImageMobject(_base.Mobject):

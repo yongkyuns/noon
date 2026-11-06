@@ -325,3 +325,39 @@ pub fn publish_family_align_to(
 ) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
     crate::family_layout::publish_align_family_to(store, root, execution, family, target, axis)
 }
+
+mod vector_path;
+pub use crate::binding_error::AuthoringFailure;
+pub use crate::binding_options::*;
+pub use vector_path::{authoring_path_point, AuthoringVectorPath};
+
+mod image_options;
+pub use image_options::image_sampling;
+#[cfg(feature = "native-text")]
+mod text_options;
+#[cfg(feature = "native-text")]
+pub use text_options::{native_text_options, text_color_channel};
+
+pub fn family_color(
+    enabled: bool,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Option<crate::Color>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    if ![red, green, blue, alpha]
+        .iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+    {
+        return Err("family color components must be finite and between zero and one".into());
+    }
+    Ok(Some(crate::Color::rgba(
+        red as f32,
+        green as f32,
+        blue as f32,
+        alpha as f32,
+    )))
+}

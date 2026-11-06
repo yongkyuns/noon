@@ -10,11 +10,11 @@ from _manim_semantic_handles import _attach_shared_family, _live_constructor_con
 from _manim_typst import NativeFontFace, Text
 
 try:
-    from js import noonCodeOptions as _new_code_options
-    from js import noonCreateAuthoringCodeHandle as _create_code
-    from js import noonCodeFromFamily as _code_from_family
-    from js import noonCodeStylesList as _code_styles_list
-    from js import noonCodeLanguagesList as _code_languages_list
+    from _noon_host import noonCodeOptions as _new_code_options
+    from _noon_host import noonCreateAuthoringCodeHandle as _create_code
+    from _noon_host import noonCodeFromFamily as _code_from_family
+    from _noon_host import noonCodeStylesList as _code_styles_list
+    from _noon_host import noonCodeLanguagesList as _code_languages_list
 except ImportError:
     _new_code_options = _create_code = _code_from_family = None
     _code_styles_list = _code_languages_list = None

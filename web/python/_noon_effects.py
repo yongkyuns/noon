@@ -49,7 +49,7 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     if source is not None and not isinstance(source, str):
         raise TypeError("glow source must be a string")
     try:
-        from js import noonEffectUpdate
+        from _noon_host import noonEffectUpdate
         from pyodide.ffi import to_js
     except ImportError as error:
         raise RuntimeError("effects require the shared Rust authoring host") from error
@@ -83,7 +83,7 @@ class Glow:
 
     def __init__(self, *, color=None, radius=None, intensity=None, source=None):
         with _update(color=color, radius=radius, intensity=intensity, source=source) as update:
-            from js import noonGlow
+            from _noon_host import noonGlow
             self._definition = engine_call(noonGlow, update)
 
     @classmethod
@@ -128,7 +128,7 @@ class Blur:
 
     def __init__(self, *, radius=None):
         with _update(radius=radius) as update:
-            from js import noonBlur
+            from _noon_host import noonBlur
             self._definition = engine_call(noonBlur, update)
 
     @classmethod
@@ -160,7 +160,7 @@ class Bloom(Blur):
 
     def __init__(self, *, radius=None, threshold=None, intensity=None):
         with _update(radius=radius, threshold=threshold, intensity=intensity) as update:
-            from js import noonBloom
+            from _noon_host import noonBloom
             self._definition = engine_call(noonBloom, update)
 
     @property
@@ -184,7 +184,7 @@ class BackdropBlur:
 
     def __init__(self, *, radius=None):
         with _update(radius=radius) as update:
-            from js import noonBackdropBlur
+            from _noon_host import noonBackdropBlur
             self._definition = engine_call(noonBackdropBlur, update)
 
     @classmethod
@@ -217,7 +217,7 @@ class Shadow:
 
     def __init__(self, *, color=None, radius=None, offset=None):
         with _update(color=color, radius=radius, offset=offset) as update:
-            from js import noonShadow
+            from _noon_host import noonShadow
             self._definition = engine_call(noonShadow, update)
 
     @classmethod
@@ -273,7 +273,7 @@ class Pixelate:
 
     def __init__(self, *, size=None):
         with _update(size=size) as update:
-            from js import noonPixelate
+            from _noon_host import noonPixelate
             self._definition = engine_call(noonPixelate, update)
 
     @property
@@ -292,7 +292,7 @@ class NoiseDissolve:
 
     def __init__(self, *, seed=None, softness=None, progress=None):
         with _update(seed=seed, softness=softness, progress=progress) as update:
-            from js import noonNoiseDissolve
+            from _noon_host import noonNoiseDissolve
             self._definition = engine_call(noonNoiseDissolve, update)
 
     @classmethod
@@ -471,7 +471,7 @@ def add_effect(value, definition, *, name, scope=None):
                 _async_continuation_active, _synchronous_continuation_active,
                 _SemanticContinuationAwaitable,
             )
-            from js import noonPrepareSemanticEffects
+            from _noon_host import noonPrepareSemanticEffects
             scene = _current_authoring_scene()
             if scene is None:
                 raise RuntimeError("live shader attachment requires its active authoring source")
@@ -489,7 +489,7 @@ def add_effect(value, definition, *, name, scope=None):
 
             if _async_continuation_active(scene):
                 return _SemanticContinuationAwaitable(scene, operation=publish, result=value)
-            from pyodide.ffi import run_sync
+            from _noon_host import wait_sync as run_sync
             engine_call(run_sync, prepare(), operation="add_effect")
             return value
     _call(value, "addEffect", definition._definition, name, scope=scope)

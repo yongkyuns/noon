@@ -30,6 +30,38 @@ fn moving_source() -> StaticExecutionSource {
 }
 
 #[test]
+fn native_viewer_replays_completed_source_history_without_rerunning_source() {
+    let mut scene = Scene::new();
+    let point = scene.circle(0.25).unwrap();
+    scene.add(&point).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    session.begin_replay_retention(Default::default()).unwrap();
+    for step in 0..2 {
+        if step == 1 {
+            scene.live(&mut session).shift(&point, 2.0, 0.0).unwrap();
+        }
+        let segment = scene.live(&mut session).wait_segment(1.0).unwrap();
+        session.advance_to(segment.end_time()).unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
+    }
+    session.seal_replay_for_viewer().unwrap();
+    let mut execution = scene.into_execution_with_session(session).unwrap();
+    execution.seek(0.0).unwrap();
+    let mut source = StaticExecutionSource::new(execution, RustHostCallbackTable::new());
+    assert_eq!(source.finite_transport_end(), Some(2.0));
+    for (time, x) in [(0.5, 0.0), (1.5, 2.0), (0.5, 0.0)] {
+        source.seek_to(time).unwrap();
+        assert_eq!(
+            source.session().frame().objects[0].transform.translation.x,
+            x
+        );
+    }
+    source.advance_to(1.5).unwrap();
+    assert_eq!(source.frame_time(), 1.5);
+    source.retire_execution_source().unwrap();
+}
+
+#[test]
 fn paired_native_audio_examples_admit_the_shared_finite_control_profile() {
     let (scene, animation) = noon::example_scenes::background_audio::scene().unwrap();
     let mut source = StaticExecutionSource::new(

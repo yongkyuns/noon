@@ -54,7 +54,7 @@ class ShaderParameter(_Immutable):
     def _make(cls, method, name, *args):
         if not isinstance(name, str):
             raise TypeError("shader parameter name must be a string")
-        from js import noonShaderParameter
+        from _noon_host import noonShaderParameter
         value = object.__new__(cls)
         value._parameter = engine_call(getattr(noonShaderParameter, method), name, *args)
         return value
@@ -106,7 +106,7 @@ class WgslEffectProgram(_Immutable):
             raise TypeError("WGSL source and coordinates must be strings")
         if not isinstance(authored_time, bool) or not isinstance(seed, bool):
             raise TypeError("shader dependencies require booleans")
-        from js import noonShaderSchema
+        from _noon_host import noonShaderSchema
         schema = engine_call(noonShaderSchema, coordinates, authored_time, seed)
         try:
             for parameter in parameters:
@@ -163,7 +163,7 @@ class ShaderEffect(_Immutable):
     def __init__(self, program, *, parameters=None, seed=None):
         if not isinstance(program, WgslEffectProgram):
             raise TypeError("ShaderEffect requires a prepared WgslEffectProgram")
-        from js import noonShaderEffect
+        from _noon_host import noonShaderEffect
         with _update(parameters=parameters, seed=seed) as update:
             self._definition = engine_call(noonShaderEffect, program._program, update)
 

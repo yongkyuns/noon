@@ -15,7 +15,7 @@ from typing import Any
 import noon as _base
 
 try:
-    from js import noonCreateAuthoringValueTrackerHandle as _create_tracker_handle
+    from _noon_host import noonCreateAuthoringValueTrackerHandle as _create_tracker_handle
 except ImportError:  # Native CPython may inspect wrappers without a browser store.
     _create_tracker_handle = None
 

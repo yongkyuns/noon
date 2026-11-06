@@ -255,6 +255,38 @@ The retained raster image example admits immutable PNG/JPEG or uint8 array resou
 
 Current Phase A acceptance status is intentionally not duplicated here; use the [Phase A umbrella](https://github.com/yongkyuns/noon/issues/953) and the architecture guide for current ownership and invariants.
 
+## Native CPython
+
+Build with CPython 3.11+ and the repository's Rust toolchain, then run Python
+source through the shared Rust engine without JavaScript, WASM, or a browser:
+
+```bash
+python3 scripts/build-native-python.py --profile dev
+PYTHONPATH=build/python python3 -m noon_native web/python/examples/ordinary_affine_play.py
+```
+
+The window uses Noon's existing native host. Space pauses/resumes, Home restarts,
+and the arrow keys seek. Source executes once; bounded deterministic history
+supports playback and rewind. Ordinary synchronous, portable and explicit async
+constructs use the same Python facade as Pyodide. Geometry, affine animation,
+composition, Create/Fade, plain Text/Write, and retained PNG/JPEG/array images are
+covered by real native-extension examples and tests.
+
+For execution without a window/GPU, add `--headless`. For native GPU output without
+a display server, use `--snapshot frame.png --time 1 --width 640 --height 360`.
+Snapshots create a new PNG and refuse to overwrite an existing file. Python can
+also call `run_source(..., retain_history=True)` and `prepare_view(scene)`, then
+`view.capture(...)`, `view.snapshot(...)`, `view.show()` or `view.close()`.
+
+Arbitrary Python callbacks support the sampled `--headless` profile; prepared
+window playback rejects unrecorded callbacks or external input. Plotting, effects,
+spatial/audio bindings, and full gallery parity are still outside this CPython
+profile. Native Rust retains its existing broader support. A geometry-only build
+can omit native window/capture/resource dependencies with `--minimal`.
+
+Validate the real extension with `PYTHONPATH=build/python python3
+scripts/test_native_python.py` and `python3 scripts/python_host_conformance.py`.
+
 ## Native background audio
 
 Enable the optional `noon-native` audio feature to play finite Rust scenes through

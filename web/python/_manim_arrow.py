@@ -11,19 +11,19 @@ import _noon_ir as _ir
 from _noon_errors import engine_call
 
 try:
-    from js import noonAuthoringArrowOptions as _arrow_options
-    from js import noonCreateAuthoringArrowHandle as _create_arrow_handle
+    from _noon_host import noonAuthoringArrowOptions as _arrow_options
+    from _noon_host import noonCreateAuthoringArrowHandle as _create_arrow_handle
 except ImportError:  # Native CPython tests install explicit bridge fixtures.
     _arrow_options = None
     _create_arrow_handle = None
 
 try:
-    from js import noonAuthoringArrowFromMobject as _arrow_from_mobject
-    from js import noonAuthoringArrowFromMobjects as _arrow_from_mobjects
-    from js import noonAuthoringArrowToMobject as _arrow_to_mobject
-    from js import noonAuthoringDoubleArrowFromMobject as _double_arrow_from_mobject
-    from js import noonAuthoringDoubleArrowFromMobjects as _double_arrow_from_mobjects
-    from js import noonAuthoringDoubleArrowToMobject as _double_arrow_to_mobject
+    from _noon_host import noonAuthoringArrowFromMobject as _arrow_from_mobject
+    from _noon_host import noonAuthoringArrowFromMobjects as _arrow_from_mobjects
+    from _noon_host import noonAuthoringArrowToMobject as _arrow_to_mobject
+    from _noon_host import noonAuthoringDoubleArrowFromMobject as _double_arrow_from_mobject
+    from _noon_host import noonAuthoringDoubleArrowFromMobjects as _double_arrow_from_mobjects
+    from _noon_host import noonAuthoringDoubleArrowToMobject as _double_arrow_to_mobject
 except ImportError:  # Normal worker hosts expose these on the typed Arrow options bridge.
     _arrow_from_mobject = getattr(_arrow_options, "arrowFromMobject", None)
     _arrow_from_mobjects = getattr(_arrow_options, "arrowFromMobjects", None)

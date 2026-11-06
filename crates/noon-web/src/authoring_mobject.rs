@@ -1,4 +1,6 @@
 #[cfg(target_arch = "wasm32")]
+pub(crate) use noon::integration::family_color;
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn gradient_colors(
     values: &[f64],
 ) -> Result<Vec<noon::Color>, crate::authoring_error::AuthoringFailure> {
@@ -130,31 +132,6 @@ pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_s
     }
     result.push(&wasm_bindgen::JsValue::from(children));
     result
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn family_color(
-    enabled: bool,
-    red: f64,
-    green: f64,
-    blue: f64,
-    alpha: f64,
-) -> Result<Option<noon::Color>, String> {
-    if !enabled {
-        return Ok(None);
-    }
-    if ![red, green, blue, alpha]
-        .iter()
-        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-    {
-        return Err("family color components must be finite and between zero and one".into());
-    }
-    Ok(Some(noon::Color::rgba(
-        red as f32,
-        green as f32,
-        blue as f32,
-        alpha as f32,
-    )))
 }
 
 #[cfg(target_arch = "wasm32")]

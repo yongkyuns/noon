@@ -16,21 +16,21 @@ from _manim_semantic_handles import (
 )
 
 try:
-    from js import noonIsAuthoringFamilyHandle as _is_family_handle
+    from _noon_host import noonIsAuthoringFamilyHandle as _is_family_handle
 except ImportError:
     _is_family_handle = None
 
 try:
-    from js import noonCreateAuthoringTableHandle as _create_table
-    from js import noonCreateAuthoringMathTableHandle as _create_math_table
-    from js import noonCreateAuthoringIntegerTableHandle as _create_integer_table
-    from js import noonCreateAuthoringDecimalTableHandle as _create_decimal_table
-    from js import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
-    from js import noonCreateAuthoringTableWithLabelsHandle as _create_table_with_labels
-    from js import noonHighlightTableCell as _highlight_table
-    from js import noonGetHighlightedTableCell as _get_highlighted_table
-    from js import noonTableFromFamily as _table_from_family
-    from js import noonTableCell as _table_cell
+    from _noon_host import noonCreateAuthoringTableHandle as _create_table
+    from _noon_host import noonCreateAuthoringMathTableHandle as _create_math_table
+    from _noon_host import noonCreateAuthoringIntegerTableHandle as _create_integer_table
+    from _noon_host import noonCreateAuthoringDecimalTableHandle as _create_decimal_table
+    from _noon_host import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
+    from _noon_host import noonCreateAuthoringTableWithLabelsHandle as _create_table_with_labels
+    from _noon_host import noonHighlightTableCell as _highlight_table
+    from _noon_host import noonGetHighlightedTableCell as _get_highlighted_table
+    from _noon_host import noonTableFromFamily as _table_from_family
+    from _noon_host import noonTableCell as _table_cell
 except ImportError:
     _table_from_family = None
     _create_table = _create_math_table = _create_integer_table = None

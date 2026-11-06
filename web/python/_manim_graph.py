@@ -14,7 +14,7 @@ import noon as _base
 from _noon_errors import engine_call
 
 try:
-    from js import noonAuthoringGraphOptions as _graph_options
+    from _noon_host import noonAuthoringGraphOptions as _graph_options
     from pyodide.ffi import to_js as _to_js
 except ImportError:  # pragma: no cover - native import smoke only
     _graph_options = None

@@ -20,32 +20,32 @@ import noon as _base
 import _manim_compat as _compat
 
 try:
-    from js import noonCreateAuthoringTextHandle as _create_authoring_text_handle
+    from _noon_host import noonCreateAuthoringTextHandle as _create_authoring_text_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_text_handle = None
 
 try:
-    from js import noonTextColorBatch as _new_text_color_batch
+    from _noon_host import noonTextColorBatch as _new_text_color_batch
 except ImportError:
     _new_text_color_batch = None
 
 try:
-    from js import noonCreateAuthoringMarkupTextHandle as _create_authoring_markup_text_handle
+    from _noon_host import noonCreateAuthoringMarkupTextHandle as _create_authoring_markup_text_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_markup_text_handle = None
 
 try:
-    from js import noonCreateAuthoringTypstHandle as _create_authoring_typst_handle
+    from _noon_host import noonCreateAuthoringTypstHandle as _create_authoring_typst_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_typst_handle = None
 
 try:
-    from js import noonNativeFontFace as _create_native_font_face
+    from _noon_host import noonNativeFontFace as _create_native_font_face
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_native_font_face = None
 
 try:
-    from js import noonBundledNativeFontFace as _create_bundled_native_font_face
+    from _noon_host import noonBundledNativeFontFace as _create_bundled_native_font_face
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_bundled_native_font_face = None
 

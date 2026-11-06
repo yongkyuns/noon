@@ -6,6 +6,7 @@ return one effective batch to their existing session.
 """
 
 from __future__ import annotations
+from _noon_host import encode_callback, decode_callback
 
 import inspect
 import json
@@ -177,6 +178,8 @@ def _canonical_session(scene: _base.Scene, context: object) -> _CanonicalCallbac
     _NEXT_SESSION_ID += 1
     _CANONICAL_SESSIONS[session.session_id] = session
     scene._noon_canonical_callback_session = session
+    from _noon_host import callback_session_acquired
+    callback_session_acquired(session.session_id, context)
     return session
 
 
@@ -801,7 +804,7 @@ class _CanonicalCallbackContext:
             )
         engine_call(
             self._callback_player.stageCallbackMembership,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             batch,
             operation="callback.membership",
         )
@@ -815,7 +818,7 @@ class _CanonicalCallbackContext:
             )
         return engine_call(
             self._callback_player.stageCallbackProvisionalGeometry,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             options,
             operation="callback.provisional_geometry",
         )
@@ -828,7 +831,7 @@ class _CanonicalCallbackContext:
             )
         engine_call(
             self._callback_player.stageCallbackProvisionalShift,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             float(offset.x),
             float(offset.y),
@@ -848,7 +851,7 @@ class _CanonicalCallbackContext:
             )
         engine_call(
             self._callback_player.stageCallbackProvisionalFill,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             float(color.red),
             float(color.green),
@@ -866,7 +869,7 @@ class _CanonicalCallbackContext:
             )
         point = engine_call(
             self._callback_player.callbackProvisionalCenter,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             operation="callback.provisional_geometry",
         )
@@ -900,7 +903,7 @@ class _CanonicalCallbackContext:
             raise RuntimeError("callback provisional construction has no pinned player")
         return engine_call(
             self._callback_player.resolveCallbackProvisionalMobject,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             provisional,
             operation="callback.provisional_geometry",
         )
@@ -918,7 +921,7 @@ class _CanonicalCallbackContext:
             return None
         return [str(key) for key in engine_call(
             self._callback_player.callbackMembershipRootKeys,
-            json.dumps(self.token, separators=(",", ":")),
+            encode_callback(self.token),
             operation="callback.membership_read",
         )]
 
@@ -936,11 +939,11 @@ class _CanonicalCallbackContext:
     def _read(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
         """Suspend this exact callback invocation for one Rust-pinned read miss."""
         try:
-            from js import (
+            from _noon_host import (
                 noonReadSemanticContinuationCallback,
                 noonSemanticContinuationGeneration,
             )
-            from pyodide.ffi import can_run_sync, run_sync
+            from _noon_host import can_wait_sync as can_run_sync, wait_sync as run_sync
         except ImportError as error:
             raise NotImplementedError(
                 "canonical callback sparse reads require a suspended Pyodide continuation"
@@ -964,11 +967,11 @@ class _CanonicalCallbackContext:
             result_json = run_sync(
                 noonReadSemanticContinuationCallback(
                     self._authoring_context,
-                    json.dumps(self.token, separators=(",", ":")),
-                    json.dumps(request, separators=(",", ":")),
+                    encode_callback(self.token),
+                    encode_callback(request),
                 )
             )
-            result = json.loads(str(result_json))
+            result = decode_callback(result_json)
         except Exception as error:
             raise_engine_error(error, operation="callback.read")
         expected_kind = "scalar" if kind == "scalar_signal" else kind
@@ -978,17 +981,17 @@ class _CanonicalCallbackContext:
 
     async def _read_async(self, kind: str, key: tuple[int, int]) -> dict[str, Any]:
         """Read one typed sparse value from the same Rust-pinned callback phase."""
-        from js import noonReadSemanticContinuationCallback
+        from _noon_host import noonReadSemanticContinuationCallback
 
         request_id = self._next_read_request_id
         self._next_read_request_id += 1
         request = {"request_id": request_id, "kind": kind, "node": _phase_node_json(key)}
         raw = await engine_await(noonReadSemanticContinuationCallback(
             self._authoring_context,
-            json.dumps(self.token, separators=(",", ":")),
-            json.dumps(request, separators=(",", ":")),
+            encode_callback(self.token),
+            encode_callback(request),
         ), operation="callback.read")
-        result = json.loads(str(raw))
+        result = decode_callback(raw)
         expected_kind = "scalar" if kind == "scalar_signal" else kind
         if not isinstance(result, dict) or result.get("kind") != expected_kind:
             raise RuntimeError("canonical callback prefetch returned the wrong typed value")
@@ -1154,11 +1157,11 @@ class _CanonicalCallbackContext:
             paint = (False, 0.0, 0.0, 0.0, 1.0, None, arguments[0])
         raw = engine_call(self._operations.callbackFamilyPaint, family,
             str(self.token["publication"]["scene_revision"]), operation,
-            json.dumps(styles, separators=(",", ":")), *paint)
+            encode_callback(styles), *paint)
         # Decode and validate every returned row before exposing any writes, so
         # user code may catch a failure without a partially changed family.
         changes = []
-        for slot, generation, style in json.loads(str(raw)):
+        for slot, generation, style in decode_callback(raw):
             node = (slot, generation)
             if node not in rows:
                 raise RuntimeError("family paint returned an unread semantic node")
@@ -1184,11 +1187,11 @@ class _CanonicalCallbackContext:
         wire = [[*node, row.transform.to_wire(), bounds_wire(row)] for node, row in rows.items()]
         raw = engine_call(self._operations.callbackFamilyShift, family,
             str(self.token["publication"]["scene_revision"]),
-            json.dumps(wire, separators=(",", ":")), offset.x, offset.y,
+            encode_callback(wire), offset.x, offset.y,
             operation="Group.shift")
         # Decode the complete Rust result before exposing any property/write.
         changes = []
-        for slot, generation, transform, bounds in json.loads(str(raw)):
+        for slot, generation, transform, bounds in decode_callback(raw):
             node = (slot, generation)
             if node not in rows:
                 raise RuntimeError("family translation returned an unread semantic node")
@@ -2230,7 +2233,7 @@ def _json_phase(value: object) -> str:
     # renderer delta encoder remain in the same WASM runtime.
     import json
 
-    return json.dumps(value, separators=(",", ":"), allow_nan=False)
+    return encode_callback(value)
 
 
 def release_session(session_id: int) -> None:

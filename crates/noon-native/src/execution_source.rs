@@ -164,11 +164,15 @@ impl StaticExecutionSource {
         // This source consumes its complete authored plan. Admitted interaction
         // attachment maintenance preserves its endpoint, so retaining that bound
         // avoids rescanning timeline events at each pause, seek, or pointer occurrence.
-        let finite_transport_end = session.session().finite_playback_end_time().filter(|&end| {
-            session.session().frame().time.is_finite()
-                && session.session().frame().time >= 0.0
-                && session.session().frame().time <= end
-        });
+        let finite_transport_end = session
+            .session()
+            .replay_end_time()
+            .or_else(|| session.session().finite_playback_end_time())
+            .filter(|&end| {
+                session.session().frame().time.is_finite()
+                    && session.session().frame().time >= 0.0
+                    && session.session().frame().time <= end
+            });
         Self {
             session,
             callbacks,
@@ -239,9 +243,8 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 
     fn finite_transport_end(&self) -> Option<f64> {
-        self.session
-            .session()
-            .supports_immutable_playback()
+        let session = self.session.session();
+        (session.replay_is_sealed() || session.supports_immutable_playback())
             .then_some(self.finite_transport_end)
             .flatten()
     }
