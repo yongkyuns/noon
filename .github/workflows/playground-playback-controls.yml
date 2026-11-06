@@ -145,7 +145,7 @@ jobs:
           cargo test -p noon-web --all-features --lib semantic_execution_player::pointer_input::selection_tests -- --nocapture
           cargo check -p noon-web --no-default-features --target wasm32-unknown-unknown
       - name: Install pinned wasm-pack
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: wasm-pack@0.15.0
           fallback: none
@@ -256,7 +256,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68
         with:
           tool: wasm-pack@0.15.0
           fallback: none
