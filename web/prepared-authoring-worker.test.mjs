@@ -38,7 +38,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const alive = () => assert.equal(freed, false, "retired WASM handle must never be reused");
   const trap = operation => { if (operation === trapAt) throw new WebAssembly.RuntimeError(`trap during ${operation}`); };
   const player = {
-    prepareSourceBeforePlayback() { events.push("prepare-before-playback"); },
+    prepareSourceBeforePlayback() { trap("preparation-hold"); events.push("prepare-before-playback"); },
     resetReceiver(session) { alive(); assert.ok(session > 3); events.push("reset-receiver"); },
     preparedPlaying: () => false,
     preparedPlaybackStateJson: () => JSON.stringify({ time: 1, frontier: 1 }),
@@ -703,7 +703,7 @@ test("cancellation during observed attachment stops a late endpoint without revi
   assert.equal(h.counters.freed, 0); assert.equal(h.counters.initial, 0);
 });
 
-for (const trapAt of ["initial", "reader", "segment", "terminal", "reserve", "adopt", "demand"]) {
+for (const trapAt of ["initial", "reader", "preparation-hold", "segment", "terminal", "reserve", "adopt", "demand"]) {
   test(`direct prepared ${trapAt} trap retires the worker before any Rust cleanup`, async () => {
     const h = host({ demand: true, trapAt });
     const done = h.start(async api => {
