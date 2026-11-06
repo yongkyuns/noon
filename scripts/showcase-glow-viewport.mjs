@@ -33,14 +33,29 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
     try {
       await page.goto(`${base}/index.html?catalog=showcase&example=showcase-gpu-glow`);
       if (fixture.resize) {
-        await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "error" ||
-          Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) >= 2,
-        null, { timeout: 120000 });
+        await page.waitForFunction(() => {
+          if (document.querySelector("#patch-status")?.dataset.state === "error") return true;
+          const controls = document.querySelector(".playback-controls");
+          return Number(controls?.dataset.elapsedSeconds) >= 2 &&
+            controls?.dataset.playing === "true" && controls.dataset.durationKnown === "true" &&
+            !window.__noonExampleGallery?.runInFlight;
+        }, null, { timeout: 120000 });
         result.resizeAt = await page.evaluate(() => ({
           elapsed: document.querySelector(".playback-controls")?.dataset.elapsedSeconds,
           sourceRunning: window.__noonExampleGallery?.runInFlight,
+          playing: document.querySelector(".playback-controls")?.dataset.playing,
+          preparing: document.querySelector(".playback-controls")?.dataset.preparing,
+          buffering: document.querySelector(".playback-controls")?.dataset.buffering,
+          durationKnown: document.querySelector(".playback-controls")?.dataset.durationKnown,
+          timelineEnd: document.querySelector(".playback-scrubber")?.max,
         }));
-        assert.equal(result.resizeAt.sourceRunning, true, "resize must occur during source execution");
+        assert.equal(result.resizeAt.sourceRunning, false, "finite source must finish before the playback resize");
+        assert.equal(result.resizeAt.playing, "true", "resize must occur during active playback");
+        assert.equal(result.resizeAt.preparing, "false");
+        assert.equal(result.resizeAt.buffering, "false");
+        assert.equal(result.resizeAt.durationKnown, "true", "full source timeline must be available at resize");
+        assert.ok(Math.abs(Number(result.resizeAt.timelineEnd) - 12) < 1e-7,
+          "resize must retain the complete 12-second source timeline");
         await page.setViewportSize(fixture.resize);
       }
       await page.waitForFunction(() => {

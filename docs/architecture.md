@@ -1323,8 +1323,8 @@ This choice neither changes source admission nor promises independent execution
 of a Python producer and reader sharing one worker.
 
 An actual callback/native-input requirement releases this preparation hold and
-uses the original source at its existing frontier-bound handoff. Source failure
-retains only the accepted prefix. A source that never completes remains visibly
+uses the original source at its existing frontier-bound handoff. Recoverable
+source failure retains only the accepted prefix. A source that never completes remains visibly
 preparing and cancellable; neither a duration hint nor a timeout manufactures a
 terminal timeline or silently starts source-paced playback. Concurrent streaming
 across independent WASM contexts would require a separately qualified execution
