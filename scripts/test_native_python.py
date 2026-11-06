@@ -28,13 +28,31 @@ class NativePythonTests(unittest.TestCase):
                      "showcase_glass_lens", "showcase_camera_follows_path",
                      "ordinary_family_arrangement", "top_level_family_arrangement", "ordinary_family_grid",
                      "tutorial_positioning", "tutorial_composition", "ordinary_value_tracker_continuation",
-                     "ordinary_mixed_scalar_composition", "tutorial_value_tracker"):
+                     "ordinary_mixed_scalar_composition", "tutorial_value_tracker",
+                     "manim_example_grow_from_point", "manim_example_grow_from_edge",
+                     "manim_example_spin_in_from_nothing", "manim_parity_shrink_to_center",
+                     "manim_compatible_family_indicate", "ordinary_focus_on", "line_passing_flash",
+                     "ordinary_draw_border_then_fill", "ordinary_text_family_fade",
+                     "ordinary_text_family_reveal", "ordinary_text_family_write"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
                 close_scene(scene)
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
+
+    def test_nested_introducers_publish_observable_native_handles(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        line = Line(LEFT, RIGHT)
+        self.play(AnimationGroup(Create(line)), run_time=1)
+        assert tuple(line.get_start()) == (-1.0, 0.0)
+        self.play(line.animate.shift(UP), run_time=1)
+        assert tuple(line.get_end()) == (1.0, 1.0)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
 
     def test_deterministic_segment_has_no_per_frame_python_continuations(self):
         source = """from noon import *

@@ -3,6 +3,30 @@ use crate::{context::MembershipBatch, engine_error};
 use pyo3::prelude::*;
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+pub struct LineEndpoints {
+    pub(crate) value: noon::ManimLineEndpoints,
+}
+#[pymethods]
+impl LineEndpoints {
+    #[getter(startX)]
+    fn start_x(&self) -> f64 {
+        self.value.start.0
+    }
+    #[getter(startY)]
+    fn start_y(&self) -> f64 {
+        self.value.start.1
+    }
+    #[getter(endX)]
+    fn end_x(&self) -> f64 {
+        self.value.end.0
+    }
+    #[getter(endY)]
+    fn end_y(&self) -> f64 {
+        self.value.end.1
+    }
+}
+
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 #[derive(Clone)]
 pub struct MobjectHandle {
     pub(crate) handle: noon::Mobject,
@@ -15,6 +39,13 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "manimLineEndpoints")]
+    fn line_endpoints(&self) -> PyResult<LineEndpoints> {
+        self.handle
+            .manim_line_endpoints()
+            .map(|value| LineEndpoints { value })
+            .map_err(engine_error)
+    }
     #[pyo3(name = "functionPlotRange")]
     fn function_plot_range(&self) -> PyResult<Vec<f64>> {
         self.handle

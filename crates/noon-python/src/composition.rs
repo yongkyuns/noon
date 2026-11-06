@@ -1,4 +1,5 @@
 //! Inert language-binding arguments. Timing/validation/lifecycle are resolved by Noon.
+use crate::callback_values::callback_color;
 use crate::{engine_error, family::FamilyHandle, mobject::MobjectHandle};
 use noon::{
     AnimationCompositionRequest as Request, AnimationOptions, FadeEndpoint, FadeTranslation,
@@ -20,6 +21,37 @@ fn options(duration: f64, easing: &str) -> PyResult<AnimationOptions> {
         .run_time(duration)
         .rate_func(rate(easing)?))
 }
+fn parse_affine_lifecycle_direction(value: &str) -> Result<noon::AffineLifecycleDirection, PyErr> {
+    match value {
+            "introduce-from" => Ok(noon::AffineLifecycleDirection::IntroduceFrom),
+            "remove-to" => Ok(noon::AffineLifecycleDirection::RemoveTo),
+            _ => Err(engine_error(format!(
+                "ordinary affine lifecycle direction must be \"introduce-from\" or \"remove-to\", got {value:?}"
+            ))),
+        }
+}
+
+fn parse_affine_lifecycle_endpoint(
+    value: &str,
+    x: f64,
+    y: f64,
+    rotation_offset: f64,
+    point_color: Option<noon::Color>,
+) -> Result<noon::AffineLifecycleEndpoint, PyErr> {
+    match value {
+            "point" => Ok(noon::AffineLifecycleEndpoint::Point {
+                x,
+                y,
+                rotation_offset,
+                point_color,
+            }),
+            "effective-center" => Ok(noon::AffineLifecycleEndpoint::EffectiveCenter),
+            _ => Err(engine_error(format!(
+                "ordinary affine lifecycle endpoint must be \"point\" or \"effective-center\", got {value:?}"
+            ))),
+        }
+}
+
 #[derive(Clone)]
 pub(crate) enum DissolveTarget {
     Object(Mobject),
@@ -67,6 +99,51 @@ pub(crate) enum Child {
     FamilyReveal(noon::MobjectFamily, bool, AnimationOptions),
     MoveAlongPath(Mobject, Mobject, AnimationOptions),
     ValueTracker(noon::ValueTracker, f64, AnimationOptions),
+    FamilyFade {
+        target: noon::MobjectFamily,
+        direction: SemanticFadeDirection,
+        options: AnimationOptions,
+    },
+    FamilyIndicate {
+        target: noon::MobjectFamily,
+        indication: noon::IndicateOptions,
+        options: AnimationOptions,
+    },
+    FocusOn {
+        focus: noon::FocusOnOptions,
+        options: AnimationOptions,
+    },
+    PassingFlash {
+        target: Mobject,
+        time_width: f64,
+        options: AnimationOptions,
+    },
+    DrawBorderThenFill {
+        target: Mobject,
+        outline: noon::DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilyDrawBorderThenFill {
+        target: noon::MobjectFamily,
+        outline: noon::DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilyTextWrite {
+        target: noon::MobjectFamily,
+        reverse_member_order: bool,
+        options: AnimationOptions,
+    },
+    TextReveal {
+        target: Mobject,
+        reverse: bool,
+        options: AnimationOptions,
+    },
+    AffineLifecycle {
+        target: Mobject,
+        direction: noon::AffineLifecycleDirection,
+        endpoint: noon::AffineLifecycleEndpoint,
+        options: AnimationOptions,
+    },
     Wait(f64),
     Add(Mobject, AnimationOptions),
     Nested(Composition),
@@ -159,6 +236,84 @@ impl Child {
                 target: *target,
                 options: *options,
             },
+            Self::FamilyFade {
+                target,
+                direction,
+                options,
+            } => Request::FamilyFade {
+                target,
+                direction: *direction,
+                options: *options,
+            },
+            Self::FamilyIndicate {
+                target,
+                indication,
+                options,
+            } => Request::FamilyIndicate {
+                target,
+                indication: *indication,
+                options: *options,
+            },
+            Self::FocusOn { focus, options } => Request::FocusOn {
+                focus: *focus,
+                options: *options,
+            },
+            Self::PassingFlash {
+                target,
+                time_width,
+                options,
+            } => Request::PassingFlash {
+                target,
+                time_width: *time_width,
+                options: *options,
+            },
+            Self::DrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => Request::DrawBorderThenFill {
+                target,
+                outline: *outline,
+                options: *options,
+            },
+            Self::FamilyDrawBorderThenFill {
+                target,
+                outline,
+                options,
+            } => Request::FamilyDrawBorderThenFill {
+                target,
+                outline: *outline,
+                options: *options,
+            },
+            Self::FamilyTextWrite {
+                target,
+                reverse_member_order,
+                options,
+            } => Request::FamilyTextWrite {
+                target,
+                reverse_member_order: *reverse_member_order,
+                options: *options,
+            },
+            Self::TextReveal {
+                target,
+                reverse,
+                options,
+            } => Request::TextReveal {
+                target,
+                reverse: *reverse,
+                options: *options,
+            },
+            Self::AffineLifecycle {
+                target,
+                direction,
+                endpoint,
+                options,
+            } => Request::AffineLifecycle {
+                target,
+                direction: *direction,
+                endpoint: *endpoint,
+                options: *options,
+            },
             Self::Wait(duration) => Request::Wait {
                 duration: *duration,
             },
@@ -188,6 +343,8 @@ pub struct Composition {
     pub(crate) options: AnimationOptions,
     pub(crate) play_options: AnimationOptions,
     pub(crate) children: Vec<Child>,
+    // Wrapper provenance for newly entered objects; membership stays in the Rust request.
+    pub(crate) bindings: Vec<Mobject>,
 }
 impl Composition {
     pub(crate) fn new(
@@ -213,6 +370,7 @@ impl Composition {
                 ..AnimationOptions::new()
             },
             children: Vec::new(),
+            bindings: Vec::new(),
         })
     }
     pub(crate) fn request(&self) -> Request<'_> {
@@ -221,6 +379,27 @@ impl Composition {
             children: self.children.iter().map(Child::request).collect(),
             options: self.options,
         }
+    }
+    fn optional_options(
+        duration: Option<f64>,
+        easing: Option<String>,
+    ) -> PyResult<AnimationOptions> {
+        Self::family_options(duration, easing, None)
+    }
+    fn family_options(
+        duration: Option<f64>,
+        easing: Option<String>,
+        lag: Option<f64>,
+    ) -> PyResult<AnimationOptions> {
+        Ok(AnimationOptions {
+            run_time: duration,
+            rate_func: easing.as_deref().map(rate).transpose()?,
+            lag_ratio: lag,
+            ..AnimationOptions::new()
+        })
+    }
+    fn options(duration: f64, easing: &str) -> PyResult<AnimationOptions> {
+        options(duration, easing)
     }
     #[allow(clippy::too_many_arguments)]
     fn dissolve(
@@ -330,6 +509,9 @@ impl Composition {
             reverse_order,
             options,
         ));
+        if !_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
         Ok(())
     }
 
@@ -382,7 +564,11 @@ impl Composition {
             easing,
             lag,
             reverse,
-        )
+        )?;
+        if !_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
+        Ok(())
     }
     #[pyo3(name="appendDissolveFamily", signature=(target,direction,seed,softness,introducer,remover,duration,easing,lag,reverse))]
     fn dissolve_family(
@@ -412,7 +598,7 @@ impl Composition {
         )
     }
     #[pyo3(name = "appendDissolveFamilyEntering")]
-    fn dissolve_family_entering(&self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
+    fn dissolve_family_entering(&mut self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
         let Some(Child::Dissolve(DissolveTarget::Family(target), ..)) = self.children.last() else {
             return Err(engine_error("family entering member must follow Dissolve"));
         };
@@ -426,7 +612,9 @@ impl Composition {
         }
         // The shared composition admits this family's canonical members. The ID
         // is facade binding provenance, never a second native object identity.
-        member.handle.validate().map_err(engine_error)
+        member.handle.validate().map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
     }
     #[pyo3(name="appendFamilyReveal",signature=(target,reverse,introducer,remover,reverse_rate,duration,easing,lag,play_duration,play_easing))]
     fn family_reveal(
@@ -461,7 +649,7 @@ impl Composition {
         Ok(())
     }
     #[pyo3(name = "appendFamilyRevealEntering")]
-    fn family_reveal_entering(&self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
+    fn family_reveal_entering(&mut self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
         let Some(Child::FamilyReveal(target, ..)) = self.children.last() else {
             return Err(engine_error(
                 "family entering member must follow FamilyReveal",
@@ -475,7 +663,9 @@ impl Composition {
                 "family member belongs to another authoring store",
             ));
         }
-        member.handle.validate().map_err(engine_error)
+        member.handle.validate().map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
     }
     #[pyo3(name = "appendMoveAlongPath")]
     fn move_along_path(
@@ -514,6 +704,347 @@ impl Composition {
         ));
         Ok(())
     }
+    #[pyo3(name = "appendIndicateFamily")]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature=(target,scale_factor,red,green,blue,alpha,child_run_time,rate_function,lag_ratio))]
+    pub fn append_indicate_family(
+        &mut self,
+        target: &FamilyHandle,
+        scale_factor: f64,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+        lag_ratio: Option<f64>,
+    ) -> Result<(), PyErr> {
+        let color = callback_color(
+            "indication color",
+            Some(red),
+            Some(green),
+            Some(blue),
+            Some(alpha),
+        )?
+        .expect("all indication color channels were supplied");
+        self.children.push(Child::FamilyIndicate {
+            target: target.family.clone(),
+            indication: noon::IndicateOptions::new(scale_factor, color),
+            options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+        });
+        Ok(())
+    }
+    #[pyo3(name = "appendFocusOn")]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature=(x,y,opacity,red,green,blue,child_run_time,rate_function))]
+    pub fn append_focus_on(
+        &mut self,
+        x: f64,
+        y: f64,
+        opacity: f64,
+        red: f64,
+        green: f64,
+        blue: f64,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+    ) -> Result<(), PyErr> {
+        let color = callback_color("focus color", Some(red), Some(green), Some(blue), Some(1.0))?
+            .expect("all focus color channels supplied");
+        self.children.push(Child::FocusOn {
+            focus: noon::FocusOnOptions {
+                point: (x, y),
+                opacity,
+                color,
+            },
+            options: Self::optional_options(child_run_time, rate_function)?,
+        });
+        Ok(())
+    }
+    #[pyo3(name = "appendPassingFlash")]
+    #[pyo3(signature=(_object_id,target,time_width,child_run_time,rate_function))]
+    pub fn append_passing_flash(
+        &mut self,
+        _object_id: &str,
+        target: &MobjectHandle,
+        time_width: f64,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+    ) -> Result<(), PyErr> {
+        self.children.push(Child::PassingFlash {
+            target: target.handle.clone(),
+            time_width,
+            options: Self::optional_options(child_run_time, rate_function)?
+                .introducer(true)
+                .remover(true),
+        });
+        if !_object_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
+        Ok(())
+    }
+    #[pyo3(name = "appendDrawBorderThenFillMobject")]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature=(_object_id,target,stroke_width,red,green,blue,alpha,phase_rate_function,introducer,child_run_time,rate_function))]
+    pub fn append_draw_border_then_fill_mobject(
+        &mut self,
+        _object_id: &str,
+        target: &MobjectHandle,
+        stroke_width: f64,
+        red: Option<f64>,
+        green: Option<f64>,
+        blue: Option<f64>,
+        alpha: Option<f64>,
+        phase_rate_function: &str,
+        introducer: bool,
+        child_run_time: f64,
+        rate_function: &str,
+    ) -> Result<(), PyErr> {
+        let color = callback_color("outline color", red, green, blue, alpha)?;
+        let phase =
+            noon_core::RateFunction::from_semantic_id(phase_rate_function).ok_or_else(|| {
+                engine_error(format!(
+                    "unsupported outline phase rate function {phase_rate_function:?}"
+                ))
+            })?;
+        self.children.push(Child::DrawBorderThenFill {
+            target: target.handle.clone(),
+            outline: noon::DrawBorderThenFillOptions::new(stroke_width, color)
+                .with_phase_rate_function(phase),
+            options: Self::options(child_run_time, rate_function)?.introducer(introducer),
+        });
+        if !_object_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
+        Ok(())
+    }
+    #[pyo3(name = "appendDrawBorderThenFillFamily")]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature=(target,stroke_width,red,green,blue,alpha,phase_rate_function,introducer,child_run_time,rate_function,lag_ratio))]
+    pub fn append_draw_border_then_fill_family(
+        &mut self,
+        target: &FamilyHandle,
+        stroke_width: f64,
+        red: Option<f64>,
+        green: Option<f64>,
+        blue: Option<f64>,
+        alpha: Option<f64>,
+        phase_rate_function: &str,
+        introducer: bool,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+        lag_ratio: Option<f64>,
+    ) -> Result<(), PyErr> {
+        let color = callback_color("outline color", red, green, blue, alpha)?;
+        let phase =
+            noon_core::RateFunction::from_semantic_id(phase_rate_function).ok_or_else(|| {
+                engine_error(format!(
+                    "unsupported outline phase rate function {phase_rate_function:?}"
+                ))
+            })?;
+        self.children.push(Child::FamilyDrawBorderThenFill {
+            target: target.family.clone(),
+            outline: noon::DrawBorderThenFillOptions::new(stroke_width, color)
+                .with_phase_rate_function(phase),
+            options: Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .introducer(introducer),
+        });
+        Ok(())
+    }
+    #[pyo3(name = "appendFamilyTextWrite")]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature=(target,reverse_member_order,introducer,remover,reverse_rate_function,child_run_time,rate_function,lag_ratio,play_run_time,play_rate_function))]
+    pub fn append_family_text_write(
+        &mut self,
+        target: &FamilyHandle,
+        reverse_member_order: bool,
+        introducer: bool,
+        remover: bool,
+        reverse_rate_function: bool,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+        lag_ratio: Option<f64>,
+        play_run_time: Option<f64>,
+        play_rate_function: Option<String>,
+    ) -> Result<(), PyErr> {
+        let options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+            .with_overrides(Self::optional_options(play_run_time, play_rate_function)?)
+            .introducer(introducer)
+            .remover(remover)
+            .reverse_rate_function(reverse_rate_function);
+        self.children.push(Child::FamilyTextWrite {
+            target: target.family.clone(),
+            reverse_member_order,
+            options,
+        });
+        Ok(())
+    }
+    #[pyo3(name = "appendTextReveal")]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature=(_object_id,target,reverse,introducer,remover,reverse_rate_function,child_run_time,rate_function,lag_ratio,play_run_time,play_rate_function))]
+    pub fn append_text_reveal(
+        &mut self,
+        _object_id: &str,
+        target: &MobjectHandle,
+        reverse: bool,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        reverse_rate_function: Option<bool>,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+        lag_ratio: Option<f64>,
+        play_run_time: Option<f64>,
+        play_rate_function: Option<String>,
+    ) -> Result<(), PyErr> {
+        let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+            .with_overrides(Self::optional_options(play_run_time, play_rate_function)?);
+        if let Some(introducer) = introducer {
+            options = options.introducer(introducer);
+        }
+        if let Some(remover) = remover {
+            options = options.remover(remover);
+        }
+        if let Some(reverse_rate_function) = reverse_rate_function {
+            options = options.reverse_rate_function(reverse_rate_function);
+        }
+        self.children.push(Child::TextReveal {
+            target: target.handle.clone(),
+            reverse,
+            options,
+        });
+        if !_object_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
+        Ok(())
+    }
+    #[pyo3(name = "appendFamilyFade")]
+    #[pyo3(signature=(target,direction,child_run_time,rate_function,lag_ratio))]
+    pub fn append_family_fade(
+        &mut self,
+        target: &FamilyHandle,
+        direction: &str,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+        lag_ratio: Option<f64>,
+    ) -> Result<(), PyErr> {
+        self.children.push(Child::FamilyFade {
+            target: target.family.clone(),
+            direction: match direction {
+                "in" => SemanticFadeDirection::In,
+                "out" => SemanticFadeDirection::Out,
+                _ => return Err(engine_error("invalid fade direction")),
+            },
+            options: Self::family_options(child_run_time, rate_function, lag_ratio)?,
+        });
+        Ok(())
+    }
+    #[pyo3(name="appendAffineLifecycle",signature=(_object_id,target,direction,endpoint,x,y,rotation_offset,point_red,point_green,point_blue,point_alpha,child_run_time,rate_function))]
+    fn append_affine_lifecycle(
+        &mut self,
+        _object_id: &str,
+        target: &MobjectHandle,
+        direction: &str,
+        endpoint: &str,
+        x: f64,
+        y: f64,
+        rotation_offset: f64,
+        point_red: Option<f64>,
+        point_green: Option<f64>,
+        point_blue: Option<f64>,
+        point_alpha: Option<f64>,
+        child_run_time: f64,
+        rate_function: &str,
+    ) -> Result<(), PyErr> {
+        let direction = parse_affine_lifecycle_direction(direction)?;
+        let endpoint = parse_affine_lifecycle_endpoint(
+            endpoint,
+            x,
+            y,
+            rotation_offset,
+            callback_color(
+                "point_color",
+                point_red,
+                point_green,
+                point_blue,
+                point_alpha,
+            )?,
+        )?;
+        let options = Self::options(child_run_time, rate_function)?;
+        self.children.push(Child::AffineLifecycle {
+            target: target.handle.clone(),
+            direction,
+            endpoint,
+            options,
+        });
+        if !_object_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
+        Ok(())
+    }
+    #[pyo3(name = "appendFamilyFadeEntering")]
+    fn append_family_fade_entering(&mut self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
+        let Some(Child::FamilyFade { target, .. }) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilyFade",
+            ));
+        };
+        if !std::rc::Rc::ptr_eq(
+            target.integration_store(),
+            member.handle.integration_store(),
+        ) {
+            return Err(engine_error(
+                "family entering member belongs to another authoring store",
+            ));
+        }
+        member.handle.validate().map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
+    #[pyo3(name = "appendDrawBorderThenFillFamilyEntering")]
+    fn append_draw_border_then_fill_family_entering(
+        &mut self,
+        _id: &str,
+        member: &MobjectHandle,
+    ) -> PyResult<()> {
+        let Some(Child::FamilyDrawBorderThenFill { target, .. }) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilyDrawBorderThenFill",
+            ));
+        };
+        if !std::rc::Rc::ptr_eq(
+            target.integration_store(),
+            member.handle.integration_store(),
+        ) {
+            return Err(engine_error(
+                "family entering member belongs to another authoring store",
+            ));
+        }
+        member.handle.validate().map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
+    #[pyo3(name = "appendFamilyTextWriteEntering")]
+    fn append_family_text_write_entering(
+        &mut self,
+        _id: &str,
+        member: &MobjectHandle,
+    ) -> PyResult<()> {
+        let Some(Child::FamilyTextWrite { target, .. }) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilyTextWrite",
+            ));
+        };
+        if !std::rc::Rc::ptr_eq(
+            target.integration_store(),
+            member.handle.integration_store(),
+        ) {
+            return Err(engine_error(
+                "family entering member belongs to another authoring store",
+            ));
+        }
+        member.handle.validate().map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
     #[pyo3(name = "setCompositionRateFunction")]
     fn set_rate(&mut self, value: &str) -> PyResult<()> {
         self.options.rate_func = Some(rate(value)?);
@@ -526,6 +1057,7 @@ impl Composition {
     }
     #[pyo3(name = "appendComposition")]
     fn nested(&mut self, child: &Self) {
+        self.bindings.extend(child.bindings.iter().cloned());
         self.children.push(Child::Nested(child.clone()));
     }
     #[pyo3(name="appendMethodTransformTo",signature=(_id,source,target,point,duration,easing,arc,reverse))]
@@ -618,7 +1150,11 @@ impl Composition {
         arc: f64,
         reverse: bool,
     ) -> PyResult<()> {
-        self.transform(source, target, false, false, duration, easing, arc, reverse)
+        self.transform(source, target, false, false, duration, easing, arc, reverse)?;
+        if !_id.is_empty() {
+            self.bindings.push(source.handle.clone());
+        }
+        Ok(())
     }
     #[pyo3(name = "appendEnteringPointTransformTo")]
     fn entering_points(
@@ -631,7 +1167,11 @@ impl Composition {
         arc: f64,
         reverse: bool,
     ) -> PyResult<()> {
-        self.transform(source, target, true, false, duration, easing, arc, reverse)
+        self.transform(source, target, true, false, duration, easing, arc, reverse)?;
+        if !_id.is_empty() {
+            self.bindings.push(source.handle.clone());
+        }
+        Ok(())
     }
     #[pyo3(name = "appendCreate")]
     fn create(
@@ -646,6 +1186,9 @@ impl Composition {
             target.handle.clone(),
             options(duration, easing)?.reverse_rate_function(reverse),
         ));
+        if !_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
         Ok(())
     }
     #[pyo3(name = "appendUncreate")]
@@ -684,6 +1227,9 @@ impl Composition {
             target.handle.clone(),
             options(duration, easing)?,
         ));
+        if !_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
         Ok(())
     }
     #[pyo3(name = "appendFade")]
@@ -719,6 +1265,9 @@ impl Composition {
             },
             options(duration, easing)?,
         ));
+        if !_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
         Ok(())
     }
     #[pyo3(name="appendManimRotate",signature=(_id,target,angle,kind,x,y,duration,easing))]

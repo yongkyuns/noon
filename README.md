@@ -269,7 +269,8 @@ The window uses Noon's existing native host. Space pauses/resumes, Home restarts
 and the arrow keys seek. Source executes once; bounded deterministic history
 supports playback and rewind. Ordinary synchronous, portable and explicit async
 constructs use the same Python facade as Pyodide. Geometry, affine animation,
-composition, Create/Fade, plain Text/Write, retained PNG/JPEG/array images,
+composition, Create/Fade, grow/shrink, indication, focus, passing flashes,
+border/fill, plain Text and family Write/reveal, retained PNG/JPEG/array images,
 built-in object/composed effects, GlowPulse/Dissolve, gradients, procedural
 paints, image fills, persistent path edits/queries, family iteration/slices/layout,
 coordinate families, preparation-only plots, moving 2D cameras and HDR

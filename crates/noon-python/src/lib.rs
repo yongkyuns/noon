@@ -81,6 +81,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<family::FamilyLayoutObservation>()?;
     m.add_class::<family::ColorObservation>()?;
     m.add_class::<mobject::MobjectHandle>()?;
+    m.add_class::<mobject::LineEndpoints>()?;
     m.add_class::<mobject::LayoutAnchor>()?;
     m.add_class::<mobject::LayoutObservation>()?;
     m.add_class::<paints::ImageMapping>()?;

@@ -2772,6 +2772,8 @@ impl Context {
                 live.declare_and_activate_composition(&candidate.request(), candidate.play_options)
             })?);
         }
+        self.bound_ids
+            .extend(candidate.bindings.iter().map(|handle| handle.node_id()));
         self.segments += 1;
         Ok(())
     }
@@ -3058,6 +3060,24 @@ impl Context {
             )
             .map_err(engine_error)?,
         ))
+    }
+
+    #[pyo3(name = "queryMobjectLineEndpoints")]
+    fn query_line_endpoints(
+        &mut self,
+        target: &MobjectHandle,
+    ) -> PyResult<crate::mobject::LineEndpoints> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        let value = if self.execution.is_some() {
+            self.with_live(|live| live.effective_line_endpoints(&target.handle))?
+        } else {
+            target.handle.manim_line_endpoints().map_err(engine_error)?
+        };
+        Ok(crate::mobject::LineEndpoints { value })
     }
 
     #[pyo3(name = "queryMobjectFillColor")]
