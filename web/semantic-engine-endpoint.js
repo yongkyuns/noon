@@ -143,7 +143,7 @@ export async function attachSemanticEngine(
   let pendingExternalContinuation = null;
   const controls = [];
   const controlEnqueueEpochMs = new WeakMap();
-  let diagnosticReady = false, diagnosticTerminal = false, diagnosticDisposition = false;
+  let diagnosticReady = false, diagnosticTerminal = false, diagnosticDisposition = false, diagnosticStarted = false;
   let diagnosticCapabilities = null;
   let preparedWaiting = null;
   const hostEpochMs = () => performance.timeOrigin + performance.now();
@@ -504,6 +504,7 @@ export async function attachSemanticEngine(
         seekRange: observation.seekRange,
         durationSeconds: observation.end,
         buffering: observation.buffering,
+        preparing: observation.preparing,
         completed: observation.completed, advancing: observation.advancing,
         loopDuration: observation.loopDuration, loopCount: observation.loopCount,
         loopError: observation.loopError,
@@ -569,6 +570,7 @@ export async function attachSemanticEngine(
     }
     const capabilities = { commands, replay, audio: hasAudio, sections: sections.length > 0 };
     const facts = { time: snapshot.time, preparedFrontier: snapshot.preparedFrontier ?? null,
+      preparing: snapshot.preparing === true, seekRange: snapshot.seekRange ?? null,
       durationSeconds: snapshot.durationSeconds ?? null, publication: lastSentPublication, capabilities };
     const signature = JSON.stringify(capabilities);
     if (attached || signature !== diagnosticCapabilities) {
@@ -581,6 +583,10 @@ export async function attachSemanticEngine(
     if (terminal && !diagnosticTerminal) {
       diagnosticTerminal = true;
       onExecutionDiagnostic({ stage: "terminal-adopted", ...facts });
+    }
+    if (prepared !== null && snapshot.time > 0 && !diagnosticStarted) {
+      diagnosticStarted = true;
+      onExecutionDiagnostic({ stage: "playback-started", ...facts });
     }
     if (!terminal || diagnosticDisposition) return;
     const disposition = prepared !== null
@@ -1968,7 +1974,14 @@ export async function attachSemanticEngine(
       stop({ preservePreparedPlayer: true });
       return prepared;
     },
-    sourceExecutionRequired() { requestSourceHandoff(); },
+    sourceExecutionRequired() {
+      // Rust released startup preparation at an actual source requirement. Play
+      // its accepted introduction before the existing frontier-bound handoff.
+      if (prepared !== null && preparedClockAdmitted && !stopped && !receiverFailed) {
+        observeExecutionWake(performance.now(), true);
+      }
+      requestSourceHandoff();
+    },
     sourcePrefixDelivered() {
       if (prepared === null) throw new Error("semantic endpoint has no prepared source");
       if (stopped) throw new Error("prepared execution endpoint is stopped");

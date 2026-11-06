@@ -1748,6 +1748,9 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
       return;
     }
     const receiver = createPreparedReceiver(request, entry, continuation, continuation.preparedPlayer);
+    // Source and playback share this WASM host. Finish deterministic preparation
+    // before its clock advances; ordinary frames then need no interpreter turns.
+    if (!continuation.preparedSourceFinished) continuation.preparedPlayer.prepareSourceBeforePlayback();
     endpoint = await attachPreparedReceiver(request, entry, receiver, false);
     requirePreparedContinuation(run, entry.context);
     continuation.endpoint = receiver;

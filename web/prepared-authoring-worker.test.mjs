@@ -38,6 +38,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const alive = () => assert.equal(freed, false, "retired WASM handle must never be reused");
   const trap = operation => { if (operation === trapAt) throw new WebAssembly.RuntimeError(`trap during ${operation}`); };
   const player = {
+    prepareSourceBeforePlayback() { events.push("prepare-before-playback"); },
     resetReceiver(session) { alive(); assert.ok(session > 3); events.push("reset-receiver"); },
     preparedPlaying: () => false,
     preparedPlaybackStateJson: () => JSON.stringify({ time: 1, frontier: 1 }),
@@ -231,6 +232,7 @@ for (const loopDurationSeconds of [null, 1]) test(`production source completes e
   assert.equal(h.posts[0].semanticExecution.prepared_playback, true);
   const initial = h.tick();
   await h.attach({ loopDurationSeconds }); await initial;
+  assert.equal(h.events.filter(event => event === "prepare-before-playback").length, 1);
   assert.equal(h.counters.initial, 1);
   assert.equal(h.events.some(event => Array.isArray(event) && event[0] === "loop"), false,
     "the first barrier does not establish the loop period");

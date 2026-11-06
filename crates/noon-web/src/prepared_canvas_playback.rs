@@ -13,6 +13,7 @@ pub(crate) struct PreparedPlaybackObservation {
     pub(crate) seek_range: Option<PreparedSeekRange>,
     pub(crate) playing: bool,
     pub(crate) buffering: bool,
+    pub(crate) preparing: bool,
     pub(crate) completed: bool,
     pub(crate) advancing: bool,
     pub(crate) loop_duration: Option<f64>,
@@ -32,6 +33,7 @@ pub(crate) struct PreparedCanvasPlayback {
     pub(crate) reader: PrefixReader,
     playing: bool,
     buffering: bool,
+    preparing: bool,
     loop_duration: Option<f64>,
     loop_error: Option<&'static str>,
     loop_count: u64,
@@ -50,6 +52,7 @@ impl PreparedCanvasPlayback {
             reader,
             playing: !ended_at_start,
             buffering: false,
+            preparing: false,
             loop_duration: None,
             loop_error: None,
             loop_count: 0,
@@ -64,6 +67,9 @@ impl PreparedCanvasPlayback {
     pub(crate) fn buffering(&self) -> bool {
         self.buffering
     }
+    pub(crate) fn preparing(&self) -> bool {
+        self.preparing
+    }
     pub(crate) fn completed(&self) -> bool {
         match self.reader.end_time() {
             Some(0.0) => true,
@@ -73,6 +79,7 @@ impl PreparedCanvasPlayback {
     }
     pub(crate) fn advancing(&self) -> bool {
         self.playing
+            && !self.preparing
             && !self.buffering
             && !(self.reader.end_time().is_some_and(|end| end == 0.0))
             && (self.loop_duration.is_some()
@@ -101,6 +108,7 @@ impl PreparedCanvasPlayback {
             seek_range,
             playing: self.playing,
             buffering: self.buffering,
+            preparing: self.preparing,
             completed: self.completed(),
             advancing: self.advancing(),
             loop_duration: self.loop_duration(),
@@ -161,7 +169,26 @@ impl PreparedCanvasPlayback {
     /// Rust producer. This is permission to resume source, not a guessed endpoint.
     pub(crate) fn needs_preparation(&self, ahead: f64) -> Result<bool, &'static str> {
         let target = self.preparation_target(ahead)?;
-        Ok(self.reader.end_time().is_none() && (self.buffering || self.reader.frontier() < target))
+        Ok(self.reader.end_time().is_none()
+            && (self.preparing || self.buffering || self.reader.frontier() < target))
+    }
+    pub(crate) fn begin_preparation(&mut self) {
+        self.preparing = true;
+        self.last_clock_sample = self.reader.frame().time;
+    }
+    pub(crate) fn release_preparation(&mut self) -> bool {
+        let was_preparing = std::mem::take(&mut self.preparing);
+        if was_preparing {
+            self.last_clock_sample = self.reader.frame().time;
+        }
+        was_preparing
+    }
+    pub(crate) fn stop_preparation(&mut self) -> bool {
+        let was_preparing = self.release_preparation();
+        if was_preparing {
+            self.set_playing(false);
+        }
+        was_preparing
     }
     pub(crate) fn set_playing(&mut self, playing: bool) -> bool {
         let playing = playing
@@ -178,6 +205,9 @@ impl PreparedCanvasPlayback {
     }
     pub(crate) fn wake_state(&self) -> RuntimeWakeState {
         let wake = self.reader.wake_state();
+        if self.preparing {
+            return wake.without_timeline_wake();
+        }
         if self.playing && !self.buffering {
             if self.reader.end_time().is_some_and(|end| end > 0.0) {
                 if let Some(duration) = self.loop_duration {
@@ -190,6 +220,12 @@ impl PreparedCanvasPlayback {
         }
     }
     pub(crate) fn seek(&mut self, time: f64) -> Result<(), PrefixError> {
+        if self.preparing {
+            if !time.is_finite() || time < 0.0 {
+                self.reader.seek(time)?;
+            }
+            return Err(PrefixError::NotReady);
+        }
         self.reader.seek(time)?;
         self.buffering = false;
         self.last_clock_sample = time;
@@ -228,6 +264,9 @@ impl PreparedCanvasPlayback {
             return Ok(());
         }
         if !self.playing || self.buffering {
+            return Ok(());
+        }
+        if self.preparing {
             return Ok(());
         }
         if let Some(end) = self.reader.end_time() {
@@ -283,6 +322,8 @@ impl PreparedCanvasPlayback {
     pub(crate) fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
         let frontier = self.reader.frontier();
         let was_buffering = self.buffering;
+        let was_preparing = self.preparing;
+        let terminal = batch.is_terminal();
         let invalid_loop_range = batch.is_terminal()
             && self
                 .loop_duration
@@ -294,6 +335,9 @@ impl PreparedCanvasPlayback {
         }
         if self.reader.frontier() > frontier || self.reader.end_time().is_some() {
             self.buffering = false;
+        }
+        if was_preparing && terminal {
+            self.release_preparation();
         }
         if was_buffering {
             self.last_clock_sample = self.reader.frame().time;

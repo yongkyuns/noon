@@ -98,8 +98,10 @@ impl PreparedExecutionPlayer {
     /// Delivery does not issue a render sequence or alter a displayed receipt.
     pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
         let was_buffering = self.playback.buffering();
+        let was_preparing = self.playback.preparing();
+        let terminal = batch.is_terminal();
         let stats = self.playback.append(batch)?;
-        if was_buffering && !self.playback.buffering() {
+        if (was_buffering && !self.playback.buffering()) || (was_preparing && terminal) {
             self.clock = BrowserExecutionWakeClock::default();
         }
         Ok(stats)
@@ -419,7 +421,7 @@ impl PreparedExecutionPlayer {
             "session": self.encoder.session(),
             "time": time,
             "playing": self.playback.playing(),
-            "buffering": self.playback.buffering(),
+            "buffering": self.playback.buffering() || self.playback.preparing(),
             "sampledEpochMs": sampled_epoch_ms,
             "authorizedUntil": self.playback.reader.end_time()
                 .unwrap_or_else(|| self.playback.reader.frontier()),
@@ -475,7 +477,7 @@ impl PreparedExecutionPlayer {
     pub fn execution_wake(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
         let directive = self.observe_clock(wall_time_ms)?;
         let wake = self.playback.wake_state();
-        let wake = if self.playback.reader.interactions_active() {
+        let wake = if !self.playback.preparing() && self.playback.reader.interactions_active() {
             wake.with_additional_timeline(noon_runtime::TimelineWakeState::Continuous)
         } else {
             wake
@@ -507,6 +509,28 @@ impl PreparedExecutionPlayer {
         if self.playback.set_playing(playing) {
             self.clock = BrowserExecutionWakeClock::default();
         }
+    }
+
+    /// Hold the open prepared reader at its current sample while the original
+    /// source continuation fills the complete finite timeline. Playback intent
+    /// remains separate; successful terminal adoption releases this gate.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = prepareSourceBeforePlayback))]
+    pub fn prepare_source_before_playback(&mut self) -> Result<(), String> {
+        let source = self
+            .source
+            .as_ref()
+            .ok_or("prepared source delivery is closed")?;
+        if self.snapshot_sent {
+            return Err(
+                "source-before-playback must be selected before the initial snapshot".into(),
+            );
+        }
+        if self.playback.reader.end_time().is_some() || source.finished() {
+            return Err("source-before-playback requires an open prepared source".into());
+        }
+        self.playback.begin_preparation();
+        self.clock = BrowserExecutionWakeClock::default();
+        Ok(())
     }
 
     /// Configure the gallery's existing loop policy. The duration is retained

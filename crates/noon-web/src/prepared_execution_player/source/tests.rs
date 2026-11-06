@@ -192,9 +192,119 @@ fn terminal_source_delivery_adopts_its_endpoint_cue_only_after_append() {
     );
 }
 
+#[test]
+fn prepare_before_playback_holds_time_until_terminal_adoption_then_reanchors() {
+    assert!(staged_player(9350, false)
+        .prepare_source_before_playback()
+        .is_err());
+    let mut player = staged_player_before_snapshot(936, true);
+    player.set_prepared_playing(true);
+    let initial_time = player.prepared_time();
+    player.prepare_source_before_playback().unwrap();
+    assert!(player.playback.preparing());
+    assert!(
+        player.prepared_playing(),
+        "user play intent remains visible"
+    );
+    assert!(!player.playback.observation().advancing);
+    assert!(!player.prepared_buffering(), "the gate is not starvation");
+    assert!(player.needs_preparation(0.01).unwrap());
+    assert!(player.needs_preparation(10_000.0).unwrap());
+    assert!(player.needs_preparation(f64::NAN).is_err());
+    assert!(matches!(
+        player.playback.wake_state().timeline(),
+        noon_runtime::TimelineWakeState::Quiescent
+    ));
+
+    let anchor: serde_json::Value =
+        serde_json::from_str(&player.audio_anchor_json(1000.0).unwrap()).unwrap();
+    assert_eq!(anchor["playing"], true);
+    assert_eq!(
+        anchor["buffering"], true,
+        "audio is held without losing intent"
+    );
+
+    assert!(player.seek_delta_json(0.75).is_err());
+    assert!(player.seek_delta_json(f64::NAN).is_err());
+    assert_eq!(player.prepared_time(), initial_time);
+    player.tick_delta_json(100_000.0).unwrap();
+    assert_eq!(player.prepared_time(), initial_time);
+
+    player.reserve_source_prefix_capacity().unwrap();
+    assert!(player.deliver_source_prefix().unwrap());
+    assert!(!player.playback.preparing());
+    assert!(
+        player.prepared_playing(),
+        "terminal adoption preserves play intent"
+    );
+    assert_eq!(
+        player.prepared_time(),
+        initial_time,
+        "adoption does not catch up"
+    );
+    player.tick_delta_json(200_000.0).unwrap();
+    assert_eq!(
+        player.prepared_time(),
+        initial_time,
+        "clock starts from adoption"
+    );
+}
+
+#[test]
+fn source_requirement_releases_gate_but_waits_for_the_real_open_frontier() {
+    let mut player = staged_player_before_snapshot(9361, false);
+    player.set_prepared_playing(true);
+    let held_time = player.prepared_time();
+    let frontier = player.prepared_frontier();
+    player.prepare_source_before_playback().unwrap();
+    player.source.as_mut().unwrap().required =
+        Some(noon::SourceExecutionRequirement::HostCallbacks);
+
+    player.release_preparation_gate();
+    assert!(!player.playback.preparing());
+    assert_eq!(player.prepared_time(), held_time);
+    assert!(!player.source_execution_ready());
+
+    player.playback.advance(frontier).unwrap();
+    assert_eq!(player.prepared_time(), held_time);
+    assert!(player.prepared_buffering());
+    assert!(player.source_execution_ready());
+}
+
+#[test]
+fn pause_and_stop_are_preserved_when_source_preparation_is_released() {
+    let mut paused = staged_player_before_snapshot(937, true);
+    paused.prepare_source_before_playback().unwrap();
+    paused.set_prepared_playing(false);
+    paused.reserve_source_prefix_capacity().unwrap();
+    assert!(paused.deliver_source_prefix().unwrap());
+    assert!(!paused.playback.preparing());
+    assert!(!paused.prepared_playing());
+
+    let mut stopped = staged_player_before_snapshot(938, false);
+    stopped.set_prepared_playing(true);
+    stopped.prepare_source_before_playback().unwrap();
+    stopped.stop_source_preparation();
+    assert!(!stopped.playback.preparing());
+    assert!(!stopped.prepared_playing());
+    assert!(stopped.source.is_none());
+}
+
 // Stage a real compiler-produced creation suffix, then release the source scene.
 // Reservation/retry can only use this retained batch; no source can be rerun.
 fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
+    staged_player_with_snapshot(session, terminal, true)
+}
+
+fn staged_player_before_snapshot(session: u32, terminal: bool) -> PreparedExecutionPlayer {
+    staged_player_with_snapshot(session, terminal, false)
+}
+
+fn staged_player_with_snapshot(
+    session: u32,
+    terminal: bool,
+    send_initial_snapshot: bool,
+) -> PreparedExecutionPlayer {
     let mut scene = Scene::new();
     let target = scene.circle(0.65).unwrap();
     scene.add(&target).unwrap();
@@ -228,7 +338,9 @@ fn staged_player(session: u32, terminal: bool) -> PreparedExecutionPlayer {
     player
         .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
         .unwrap();
-    player.initial_delta_json().unwrap();
+    if send_initial_snapshot {
+        player.initial_delta_json().unwrap();
+    }
     player.source = Some(SourceDelivery {
         publisher,
         pending: Some(batch),
