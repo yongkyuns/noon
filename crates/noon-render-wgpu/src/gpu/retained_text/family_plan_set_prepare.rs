@@ -259,6 +259,11 @@ impl RetainedFramePreparer {
                         let Some(state) = frame.family_animation(*index) else {
                             return false;
                         };
+                        // Completed text must use canonical glyph coverage, matching
+                        // the frame after this driver retires.
+                        if object.text().is_some() && state.overall_progress == 1.0 {
+                            return false;
+                        }
                         match state.mode {
                             noon_core::FamilyAnimationMode::Reveal => {
                                 // Rectangles still reveal through a progress-specific
@@ -313,17 +318,13 @@ impl RetainedFramePreparer {
             metrics,
         )?;
         self.prepared_generation_ready = false;
-        if let Err(error) = self.apply_family_plan_set_to_scratch(
-            frame,
-            plans,
-            texts,
-            fonts,
-            active_indices.is_some(),
-        ) {
+        let cache_generation = active_signature.is_some();
+        if let Err(error) =
+            self.apply_family_plan_set_to_scratch(frame, plans, texts, fonts, cache_generation)
+        {
             self.scratch_ready = false;
             return Err(error);
         }
-        let cache_generation = active_signature.is_some();
         if let Some(signature) = active_signature {
             self.family_plan_active_signature = signature;
             self.scratch_ready = true;
@@ -1185,13 +1186,23 @@ mod tests {
                         metrics,
                     )
                     .unwrap();
+                if progress == 1.0 {
+                    assert!(
+                        prepared
+                            .render_items
+                            .iter()
+                            .any(|item| matches!(item, RetainedRenderItem::Glyph { .. })),
+                        "completed Write must restore canonical glyph coverage before retirement"
+                    );
+                }
                 (
                     prepared.geometry.path_ids.to_vec(),
                     prepared.geometry.paths.to_vec(),
                     prepared.geometry_stats(),
                 )
             };
-            if let Some(expected) = &row_ids {
+            if index > 0 && index < 4 {
+                let expected = row_ids.as_ref().unwrap();
                 assert_eq!(&ids, expected);
                 assert_eq!(stats.full_rebuilds, 0);
                 // Outline progress changes instance reveal only. The fill transition
@@ -1207,7 +1218,7 @@ mod tests {
                     Some(preparer.incremental_stats().mixed_order_rebuilds),
                     baseline_stats
                 );
-            } else {
+            } else if index == 0 {
                 assert!(!ids.is_empty());
                 row_ids = Some(ids);
                 baseline_stats = Some(preparer.incremental_stats().mixed_order_rebuilds);
@@ -1386,7 +1397,6 @@ mod tests {
         painter_order.swap(0, 1);
         preparer.set_painter_order(&painter_order);
         let mut active_path_ids = None;
-        let mut active_order = None;
         let mut order_rebuilds = 0;
         let mut circle_ids = None;
         let mut partial_instances = None;
@@ -1433,6 +1443,14 @@ mod tests {
                         metrics,
                     )
                     .unwrap();
+                if progress == 1.0 {
+                    assert!(
+                        matches!(prepared.render_items.first(),
+                                Some(RetainedRenderItem::Glyph { object_id, .. })
+                                    if *object_id == ObjectId::new(10)),
+                        "completed Create must restore canonical glyph coverage before retirement"
+                    );
+                }
                 let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text_state);
                 (
                     semantic_order(prepared.render_items),
@@ -1451,26 +1469,18 @@ mod tests {
                 item_order, expected_order,
                 "family reveal preserves Text then Circle painter order at progress {progress}"
             );
-            assert_eq!(path_ids.len(), 2, "AB glyph outlines use stable path rows");
+            assert_eq!(path_ids.len(), if progress == 1.0 { 0 } else { 2 });
             assert_eq!(prepared_circle_ids.len(), 6 + STATIC_TAIL as usize);
 
             if frame_index == 0 {
                 active_path_ids = Some(path_ids);
                 circle_ids = Some(prepared_circle_ids);
-                active_order = Some(item_order);
                 order_rebuilds = current_order_rebuilds;
                 assert_eq!(order_rebuilds, 1);
-            } else {
-                if frame_index == 1 {
-                    assert_eq!(item_order, expected_order);
-                    active_order = Some(item_order.clone());
-                    assert_eq!(current_order_rebuilds, order_rebuilds + 1);
-                    order_rebuilds = current_order_rebuilds;
-                }
+            } else if frame_index == 1 {
+                assert_eq!(current_order_rebuilds, order_rebuilds + 1);
                 assert_eq!(path_ids, active_path_ids.as_deref().unwrap());
                 assert_eq!(prepared_circle_ids, circle_ids.as_deref().unwrap());
-                assert_eq!(item_order, active_order.as_deref().unwrap());
-                assert_eq!(current_order_rebuilds, order_rebuilds);
                 assert_eq!(geometry_stats.full_rebuilds, 0);
                 assert_eq!(
                     geometry_stats.geometry_cache_misses, 0,
@@ -1483,15 +1493,15 @@ mod tests {
                 let affected_member_bytes = 2 * std::mem::size_of::<PathInstance>()
                     + 6 * std::mem::size_of::<CircleInstance>();
                 assert_eq!(uploaded_geometry_bytes, affected_member_bytes);
-                if progress == 0.4 {
-                    if let Some(expected) = &partial_instances {
-                        assert_eq!(
-                            &instances, expected,
-                            "seeking back reproduces the same frame"
-                        );
-                    } else {
-                        partial_instances = Some(instances);
-                    }
+            }
+            if progress == 0.4 {
+                if let Some(expected) = &partial_instances {
+                    assert_eq!(
+                        &instances, expected,
+                        "seeking back reproduces the same frame"
+                    );
+                } else {
+                    partial_instances = Some(instances);
                 }
             }
         }

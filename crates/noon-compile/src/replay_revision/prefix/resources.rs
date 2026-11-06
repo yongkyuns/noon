@@ -173,7 +173,11 @@ impl CompiledScene {
 impl CompiledResources {
     /// Count immutable dependency entries, not bytes or process/VRAM usage.
     pub fn prefix_payload_count(&self) -> usize {
-        self.images.len() + self.texts.len() + self.fonts.len() + self.geometries.len()
+        self.audio.len()
+            + self.images.len()
+            + self.texts.len()
+            + self.fonts.len()
+            + self.geometries.len()
     }
     /// Logical payload bytes for this immutable dependency closure, once per handle.
     /// Uses the resource types' existing retained-byte estimates. Alias maps do
@@ -182,9 +186,14 @@ impl CompiledResources {
     /// Call once for bootstrap and only on new suffix closures thereafter.
     /// Overflow, including a saturated resource estimate, fails closed.
     pub fn prefix_resource_bytes(&self) -> Option<usize> {
-        self.images
+        self.audio
             .values()
             .map(|resource| resource.retained_bytes())
+            .chain(
+                self.images
+                    .values()
+                    .map(|resource| resource.retained_bytes()),
+            )
             .chain(
                 self.texts
                     .values()
@@ -216,6 +225,8 @@ impl CompiledResources {
 mod image_paint_tests;
 #[cfg(test)]
 mod resource_bytes_tests;
+#[cfg(test)]
+mod text_tests;
 
 #[cfg(test)]
 mod tests {
@@ -252,6 +263,8 @@ mod tests {
             camera_motion_payloads: 0,
             path_motion_commands: 0,
             geometry_payload_bytes: 0,
+            effect_payload_bytes: 0,
+            composed_payload_bytes: 0,
         }
     }
 

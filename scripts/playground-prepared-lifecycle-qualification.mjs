@@ -23,10 +23,12 @@ class PreparedGallery(Scene):
         events.append("start")
         target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
         self.add(target)
+        self.next_section("Start")
         self.wait(0)
         self.wait(30)
         assert events == ["start"]
         events.append("first")
+        self.next_section("Motion")
         self.play(target.animate.shift(2 * RIGHT), run_time=1, rate_func=linear)
         assert abs(target.get_center()[0] - 2) < 1e-6
         assert events == ["start", "first"]
@@ -34,6 +36,7 @@ class PreparedGallery(Scene):
         self.wait(30)
         assert events == ["start", "first", "moved"]
         target.shift(RIGHT)
+        self.next_section("End")
 `;
 const failureSource = source.slice(0, source.indexOf("        self.play(")) +
   '        raise RuntimeError("intentional gallery source failure")\n';
@@ -81,7 +84,7 @@ const hash = value => createHash("sha256").update(value).digest("hex");
 const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
   runOptions: "viewer defaults; no qualification run-options hook",
-  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; CSS corner/shadow decoration disabled; unchanged full-canvas RGBA equality", cases: [] };
+  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; integer CSS origin; corner/shadow/border color normalized; unchanged backing size and full-canvas RGBA equality", cases: [] };
 report.staticInputSourceSha256 = hash(staticInputSource); report.zeroInputSourceSha256 = hash(zeroInputSource);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let browser, server;
@@ -113,11 +116,16 @@ async function installFixture(page, evidence) {
 }
 
 async function openReady(page, frontier = 30) {
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, frontier);
+  bits.setBigUint64(0, bits.getBigUint64(0) - 1n);
+  const selectableEnd = bits.getFloat64(0);
   await page.waitForFunction(expected => {
-    const c = document.querySelector(".playback-controls"), seek = document.querySelector(".playback-prepared-seek");
+    const c = document.querySelector(".playback-controls"), seek = document.querySelector(".playback-scrubber");
     return c?.dataset.busy === "false" && c.dataset.durationKnown === "false" &&
-      seek && !seek.hidden && !seek.disabled && Number(seek.max) === expected;
-  }, frontier);
+      seek && !seek.disabled && Number(seek.max) === expected &&
+      c.querySelector(".playback-live-status")?.textContent.includes("Available history:");
+  }, selectableEnd);
 }
 async function pause(page) {
   if (await page.locator(".playback-controls").getAttribute("data-playing") === "true") {
@@ -129,13 +137,15 @@ async function pause(page) {
   });
 }
 async function seekOpen(page, time, frontier = null) {
-  const field = page.locator(".playback-prepared-seek");
-  // Commit through native blur so a later button click cannot fire a second
-  // change event for the same edit and race its seek command.
-  await field.fill(String(time)); await field.press("Tab");
+  const field = page.locator(".playback-scrubber");
+  await field.evaluate((element, value) => {
+    element.value = String(value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  }, time);
   await page.waitForFunction(t => {
     const c = document.querySelector(".playback-controls");
-    return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t;
+    return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t &&
+      !c.querySelector(".playback-live-status")?.textContent.includes("waiting for display");
   }, time);
   if (frontier !== null) await openReady(page, frontier);
 }
@@ -145,8 +155,49 @@ async function seekSealed(page, time) {
   }, time);
   await page.waitForFunction(t => {
     const c = document.querySelector(".playback-controls");
-    return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t;
+    return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t &&
+      !c.querySelector(".playback-live-status")?.textContent.includes("waiting for display");
   }, time);
+}
+
+async function holdTimelineDuringGrowth(page, touch) {
+  const rail = page.locator(".playback-scrubber");
+  await rail.focus();
+  const before = await rail.evaluate(element => {
+    globalThis.gestureRail = element;
+    return { min: element.min, max: element.max };
+  });
+  const box = await rail.boundingBox(), y = box.y + box.height / 2;
+  const x = box.x + box.width / 2, endX = box.x + box.width - 10;
+  const device = touch ? await page.context().newCDPSession(page) : null;
+  const sendTouch = (type, x) => device.send("Input.dispatchTouchEvent", {
+    type, touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+  });
+  try {
+    if (touch) await sendTouch("touchStart", x);
+    else { await page.mouse.move(x, y); await page.mouse.down(); }
+    if (touch) await sendTouch("touchMove", endX);
+    else await page.mouse.move(endX, y);
+    const heldValue = await rail.inputValue();
+    await page.waitForFunction(() => gestureRail.title.includes("31.00 seconds"));
+    assert.deepEqual(await rail.evaluate(element => ({ min: element.min, max: element.max })), before);
+    assert.equal(await rail.inputValue(), heldValue, "prefix growth must not move a held thumb");
+    assert.ok(Number(heldValue) > 29 && Number(heldValue) < 30);
+    assert.equal(await rail.evaluate(element => element === gestureRail && document.activeElement === element), true);
+  } finally {
+    if (touch) { await sendTouch("touchEnd"); await device.detach(); }
+    else await page.mouse.up();
+  }
+  await openReady(page, 31);
+  await rail.press("Home");
+  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.elapsedSeconds === "0");
+  await rail.press("ArrowRight");
+  const keyboardTarget = Number(await rail.inputValue());
+  assert.ok(keyboardTarget > 0);
+  await page.waitForFunction(time => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.busy === "false" && Number(controls.dataset.elapsedSeconds) === time;
+  }, keyboardTarget);
 }
 async function assertGallerySourceFailure(page) {
   // The status is the exception title. Its message belongs to the visible
@@ -183,7 +234,22 @@ async function pixels(page, name) {
     return metrics?.ready && Number.isFinite(metrics.firstPresentedSessionAtMs) &&
       !metrics.needsPresent && metrics.bufferedDeltas === 0;
   });
+  // Cue controls change vertical layout. Keep the original backing size while
+  // aligning the CSS capture origin, so compositing cannot shift equal pixels.
+  await page.locator("#scene").evaluate(canvas => {
+    canvas.style.transform = "none";
+    canvas.style.left = "0px";
+    canvas.style.top = "0px";
+    const { x, y } = canvas.getBoundingClientRect();
+    canvas.style.left = `${Math.round(x) - x}px`;
+    canvas.style.top = `${Math.round(y) - y}px`;
+    window.dispatchEvent(new Event("resize"));
+  });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  (report.captures ??= []).push({ name, ...await page.locator("#scene").evaluate(canvas => {
+    const { x, y, width, height } = canvas.getBoundingClientRect();
+    return { x, y, width, height, bitmap: { width: canvas.width, height: canvas.height } };
+  }) });
   const bytes = await page.locator("#scene").screenshot();
   await writeFile(path.join(output, `${name}.png`), bytes);
   return PNG.sync.read(bytes).data;
@@ -204,7 +270,7 @@ try {
     for (const transport of ["transferable", "shared"]) {
       const entry = { backend, transport, status: "running", checks: [] }; report.cases.push(entry);
       server = await serveRepository(root, 0, { crossOriginIsolated: transport === "shared" });
-      const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1 });
+      const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1, hasTouch: true });
       page.setDefaultTimeout(180_000);
       const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
       let staticInvocations = 0, zeroInvocations = 0, largeInvocations = 0, sourceInvocations = 0;
@@ -222,7 +288,7 @@ try {
         // CSS corner/shadow compositing can vary by one byte across captures.
         // Remove only that decoration and make its backdrop opaque. Keep canvas
         // dimensions, renderer, full screenshot and exact RGBA assertions.
-        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; } #scene { border-radius: 0 !important; box-shadow: none !important; }" });
+        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; } #scene { border-radius: 0 !important; box-shadow: none !important; border-color: #000 !important; }" });
         await page.evaluate(() => {
           if (!__noonExampleGallery.runInFlight && !document.querySelector(".playback-controls")) void __noonExampleGallery.run();
         });
@@ -234,6 +300,14 @@ try {
         assert.equal(metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
         assert.equal(await page.evaluate(() => __noonExampleGallery.transportMode), transport);
         entry.checks.push("actual-gallery-prepared-start", "source-does-not-lock-controls-or-gallery");
+        const cueValues = () => page.locator(".playback-section-names option").evaluateAll(options =>
+          options.map(option => option.value));
+        assert.deepEqual(await cueValues(), ["", "0"], "future cues must stay hidden");
+        if (backend === "webgpu") {
+          await holdTimelineDuringGrowth(page, transport === "shared");
+          entry.checks.push(`${transport === "shared" ? "touch" : "mouse"}-held-range-and-focus-survive-growth`,
+            "native-home-and-arrow-seek");
+        }
         await seekOpen(page, 5);
         const baseline = await pixels(page, `${backend}-${transport}-baseline`);
         const recoverGpu = async (phase, playing = false) => {
@@ -280,7 +354,16 @@ try {
         await recoverGpu("open");
         assert.equal(sourceInvocations, 1);
         await page.evaluate(() => { globalThis.originalGalleryCanvas = document.querySelector("#scene"); });
-        await seekOpen(page, 29.5, 31); await seekOpen(page, 30.5, 61); await seekOpen(page, 60.5);
+        await seekOpen(page, 29.5, 31); await seekOpen(page, 30.5, 61);
+        assert.deepEqual(await cueValues(), ["", "0", "1"]);
+        await page.locator(".playback-previous-section").click();
+        await page.waitForFunction(() => {
+          const controls = document.querySelector(".playback-controls");
+          return controls?.dataset.busy === "false" && controls.dataset.elapsedSeconds === "30";
+        });
+        assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "false");
+        assert.equal(await page.locator(".playback-next-section").isDisabled(), true);
+        await seekOpen(page, 60.5);
         await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
           document.querySelector(".playback-controls")?.dataset.durationKnown === "true");
         assert.equal(await page.locator(".playback-scrubber").getAttribute("max"), "61");
@@ -288,6 +371,13 @@ try {
         assert.equal(await page.evaluate(() => originalGalleryCanvas === document.querySelector("#scene")), true);
         assert.deepEqual(await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.reconciliations), []);
         entry.checks.push("terminal-adoption-keeps-reader-and-pause", "no-completion-reconciliation");
+        assert.deepEqual(await cueValues(), ["", "0", "1", "2"]);
+        await page.locator(".playback-section-names").selectOption("2");
+        await page.waitForFunction(() => {
+          const controls = document.querySelector(".playback-controls");
+          return controls?.dataset.busy === "false" && controls.dataset.elapsedSeconds === "61";
+        });
+        entry.checks.push("cues-follow-prefix-and-terminal-adoption", "cue-seek-preserves-pause-and-source");
         await seekSealed(page, 61);
         assert.equal(baseline.equals(await pixels(page, `${backend}-${transport}-terminal`)), false);
         await seekSealed(page, 5);

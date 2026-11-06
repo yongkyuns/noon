@@ -1654,11 +1654,11 @@ impl SceneInstance {
     fn relower_object(&mut self, object_index: usize, time: f64, stats: &mut EvaluationStats) {
         reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
         for channel in evaluation_object_channels(&self.compiled, object_index as u32) {
-            let tracks = self.compiled.channel_tracks(channel);
-            let object = &self.compiled.objects()[object_index];
             let Some(group) = self.groups.get_mut(&channel) else {
                 continue;
             };
+            let tracks = self.compiled.channel_tracks(channel);
+            let object = &self.compiled.objects()[object_index];
             group.cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
             apply_group(
                 &self.compiled,

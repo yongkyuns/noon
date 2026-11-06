@@ -121,6 +121,7 @@ impl RetainedResourceBundle {
     }
 }
 pub(super) type ImageHandles = HashMap<TransportImageResourceHandle, RasterImageContentRef>;
+
 pub(super) fn install_images(
     entries: Vec<TransportImageEntry>,
 ) -> Result<(RasterImageResourceArena, ImageHandles), RetainedResourceTransportError> {
@@ -169,6 +170,7 @@ impl InstalledRetainedResources {
         self.image_handles.clone()
     }
 }
+
 impl RasterImageResourceLookup for InstalledRetainedResources {
     fn get(&self, handle: RasterImageResourceHandle) -> Option<&noon_core::RasterImageResource> {
         self.images.get(handle).or_else(|| {
@@ -183,5 +185,67 @@ impl RasterImageResourceLookup for InstalledRetainedResources {
 impl PreparedRetainedResourceAdditions {
     pub(crate) fn image_handle_remap(&self) -> ImageHandles {
         self.installed.image_handle_remap()
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_resource_handles_track_append_retirement_and_exact_ids() {
+        let mut arena = RasterImageResourceArena::new();
+        let first = arena.intern_rgba8(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let second = arena.intern_rgba8(1, 1, vec![5, 6, 7, 8]).unwrap();
+        let base = RetainedResourceBundle::empty()
+            .with_images([first], &arena)
+            .unwrap();
+        let mut inventory = base.inventory();
+        let mut installed = base.install().unwrap();
+        let mut addition = RetainedResourceBundle::empty()
+            .with_images([second], &arena)
+            .unwrap();
+        let large_handle = TransportImageResourceHandle {
+            arena: 17,
+            id: 9_007_199_254_740_993,
+            version: 0,
+        };
+        addition.images.push(TransportImageEntry {
+            handle: large_handle,
+            width: 1,
+            height: 1,
+            rgba8: vec![9, 10, 11, 12],
+        });
+        addition.retain_additions(&mut inventory);
+        let prepared = installed.prepare_additions(addition).unwrap();
+        installed.commit_additions(prepared);
+
+        let snapshot = installed.diagnostic_resource_handles(1);
+        assert_eq!(snapshot["total"], 3);
+        assert_eq!(snapshot["omitted"], 2);
+        assert_eq!(snapshot["records"][0]["kind"], "image");
+        let assert_handles =
+            |snapshot: serde_json::Value, expected: &[TransportImageResourceHandle]| {
+                assert_eq!(snapshot["total"], expected.len());
+                assert_eq!(snapshot["omitted"], 0);
+                let records = snapshot["records"].as_array().unwrap();
+                assert_eq!(records.len(), expected.len());
+                for handle in expected {
+                    let record = serde_json::json!({"kind": "image", "handle": {
+                        "arena": handle.arena.to_string(), "id": handle.id.to_string(),
+                        "version": handle.version.to_string(),
+                    }});
+                    assert!(records.contains(&record));
+                }
+            };
+        assert_handles(
+            installed.diagnostic_resource_handles(3),
+            &[first.into(), second.into(), large_handle],
+        );
+        installed.retire_image(first.into());
+        assert_handles(
+            installed.diagnostic_resource_handles(3),
+            &[second.into(), large_handle],
+        );
     }
 }

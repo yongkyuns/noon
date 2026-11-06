@@ -8,7 +8,7 @@ export async function holdPlaygroundPreload(page) {
   const gate = new Promise((resolve) => { release = resolve; });
   await page.route("**/live-authoring-bootstrap.js", async (route) => {
     await gate;
-    await route.continue();
+    if (!page.isClosed()) await route.continue();
   });
   return release;
 }
@@ -74,6 +74,10 @@ export async function disableAuthoringJspi(context, { beforeImport } = {}) {
     await route.fulfill({
       status: 200,
       contentType: "text/javascript",
+      headers: {
+        "Cross-Origin-Embedder-Policy": "require-corp",
+        "Cross-Origin-Resource-Policy": "same-origin",
+      },
       body: [
         "delete WebAssembly.promising;",
         "delete WebAssembly.Suspending;",

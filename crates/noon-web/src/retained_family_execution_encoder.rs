@@ -10,6 +10,17 @@ use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame
 
 use std::{collections::HashMap, sync::Arc};
 
+/// An evaluated sample with no renderer changes still names the publication
+/// whose actual display receipt is required. This is not a display acknowledgment.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NoChangePresentation {
+    pub session: u32,
+    pub sequence: u64,
+    pub time: f64,
+    pub publication_context: noon_core::PublicationContext,
+}
+
 use crate::{
     RenderGeometryPreparation, RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
     RetainedFamilyExecutionDeltaEnvelope, RetainedFamilyExecutionTransportError,

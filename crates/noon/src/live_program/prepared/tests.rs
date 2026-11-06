@@ -101,7 +101,7 @@ fn fixture(
         .unwrap();
     (source, calls, drops)
 }
-fn deliver(source: &mut PreparedSource<Script>, reader: &mut PrefixReader) {
+fn deliver<C: LiveContinuation>(source: &mut PreparedSource<C>, reader: &mut PrefixReader) {
     let batch = source.pending_batch().expect("prepared batch");
     reader
         .reserve_object_capacity(batch.required_object_capacity())
@@ -401,6 +401,577 @@ fn cooperative_source_demand_sleeps_at_frontier_and_admits_only_one_unknown_segm
     assert_eq!(drops.get(), 1);
     assert_eq!(reader.end_time(), Some(2.0));
     assert_eq!(reader.frame(), &before);
+}
+
+#[test]
+fn affine_lifecycle_prefix_preserves_intro_removal_rewind_and_future_isolation() {
+    let program = crate::example_scenes::ordinary_affine_lifecycle_program().unwrap();
+    let mut source = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    let object_id = reader.frame().objects[0].id;
+
+    reader.seek(0.5).unwrap();
+    let intro_frame = reader.frame().clone();
+    let intro_index = intro_frame
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(intro_frame.is_present(intro_index));
+    assert!(intro_frame.objects[intro_index].transform.scale.x > 0.0);
+    assert!(intro_frame.objects[intro_index].transform.scale.x < 1.0);
+
+    // Appending the removal suffix must not rewrite a reader on its earlier
+    // introduction sample or change the historical publication identity.
+    let intro_publication = reader.publication_context();
+    assert_eq!(
+        source.prepare_until(1.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(reader.frame(), &intro_frame);
+    assert_eq!(reader.publication_context(), intro_publication);
+
+    reader.seek(1.0).unwrap();
+    let boundary = reader.frame();
+    let boundary_index = boundary
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(boundary.is_present(boundary_index));
+    assert_eq!(boundary.objects[boundary_index].transform.scale.x, 1.0);
+
+    reader.seek(1.5).unwrap();
+    let removal = reader.frame();
+    let removal_index = removal
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(removal.is_present(removal_index));
+    assert!(removal.objects[removal_index].transform.scale.x > 0.0);
+    assert!(removal.objects[removal_index].transform.scale.x < 1.0);
+
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    reader.seek(2.0).unwrap();
+    let terminal = reader.frame();
+    let terminal_index = terminal
+        .objects
+        .iter()
+        .position(|row| row.id == object_id)
+        .unwrap();
+    assert!(!terminal.is_present(terminal_index));
+
+    // The same semantic identity re-enters when explicitly rewinding to its
+    // original introduction history; future publication did not replace it.
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.frame(), &intro_frame);
+    assert_eq!(reader.frame().objects[intro_index].id, object_id);
+}
+
+#[test]
+fn ordinary_composition_prefix_preserves_parallel_sequence_boundaries_and_rewind() {
+    let program = crate::example_scenes::ordinary_composition_continuation_program().unwrap();
+    let mut source = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    let left_id = reader.frame().objects[0].id;
+    let right_id = reader.frame().objects[1].id;
+
+    reader.seek(0.5).unwrap();
+    let parallel_midpoint = reader.frame().clone();
+    assert_eq!(parallel_midpoint.objects[0].id, left_id);
+    assert_eq!(parallel_midpoint.objects[1].id, right_id);
+    assert_eq!(
+        parallel_midpoint.objects[0].transform.translation,
+        Vec2::new(-2.0, 0.25)
+    );
+    assert_eq!(
+        parallel_midpoint.objects[1].transform.translation,
+        Vec2::new(2.0, -0.25)
+    );
+    let publication = reader.publication_context();
+
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(reader.frame(), &parallel_midpoint);
+    assert_eq!(reader.publication_context(), publication);
+
+    reader.seek(2.0).unwrap();
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(-2.0, 1.0)
+    );
+    assert_eq!(
+        reader.frame().objects[1].transform.translation,
+        Vec2::new(2.0, -1.0)
+    );
+
+    assert_eq!(
+        source.prepare_until(4.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    assert!(batch.is_terminal());
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+
+    reader.seek(3.0).unwrap();
+    assert_eq!(
+        reader.frame().objects[0].style.fill,
+        Some(Color::rgb(1.0, 0.0, 0.0))
+    );
+    assert_eq!(
+        reader.frame().objects[1].style.fill,
+        Some(Color::rgb(1.0, 1.0, 1.0))
+    );
+    reader.seek(3.5).unwrap();
+    let right_fill = reader.frame().objects[1].style.fill.unwrap();
+    assert!((right_fill.red - 0.5).abs() < 1e-6);
+    assert!((right_fill.green - 0.5).abs() < 1e-6);
+    assert!((right_fill.blue - 1.0).abs() < 1e-6);
+
+    assert_eq!(reader.end_time(), Some(4.0));
+    reader.seek(4.0).unwrap();
+    assert_eq!(
+        reader.frame().objects[0].style.fill,
+        Some(Color::rgb(0.0, 1.0, 0.0))
+    );
+    assert_eq!(
+        reader.frame().objects[1].style.fill,
+        Some(Color::rgb(0.0, 0.0, 1.0))
+    );
+
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.frame(), &parallel_midpoint);
+    assert_eq!(reader.frame().objects[0].id, left_id);
+    assert_eq!(reader.frame().objects[1].id, right_id);
+}
+
+fn assert_paint_prefix_history<C: LiveContinuation>(
+    mut source: PreparedSource<C>,
+    inspect: impl Fn(&PrefixReader, f64),
+) where
+    C::Error: std::fmt::Debug,
+{
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    assert_eq!(
+        source.prepare_until(1.0).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    deliver(&mut source, &mut reader);
+    reader.seek(1.0).unwrap();
+    let midpoint = reader.frame().clone();
+    let midpoint_paint = midpoint.objects[0].fill_paint.as_ref().unwrap();
+    inspect(&reader, 1.0);
+    let publication = reader.publication_context();
+
+    for target in [2.0, 2.1] {
+        assert_eq!(
+            source.prepare_until(target).unwrap(),
+            Some(PreparedSourceStatus::BatchReady)
+        );
+        deliver(&mut source, &mut reader);
+        assert_eq!(reader.frame(), &midpoint);
+        assert!(std::sync::Arc::ptr_eq(
+            reader.frame().objects[0].fill_paint.as_ref().unwrap(),
+            midpoint_paint
+        ));
+        assert_eq!(reader.publication_context(), publication);
+    }
+
+    reader.seek(1.5).unwrap();
+    inspect(&reader, 1.5);
+    reader.seek(1.0).unwrap();
+    assert_eq!(reader.frame(), &midpoint);
+}
+
+fn assert_near_pair(actual: [f64; 2], expected: [f64; 2]) {
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert!((actual - expected).abs() < 1e-12, "{actual} != {expected}");
+    }
+}
+
+#[test]
+fn procedural_paint_tracks_preserve_midpoint_and_old_resources_after_future_append() {
+    let radial = crate::example_scenes::radial_gradient::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_paint_prefix_history(radial, |reader, time| {
+        let radial = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_radial_gradient()
+            .unwrap();
+        let (center, radii) = if time == 1.0 {
+            ([0.45, 0.425], [0.625, 0.575])
+        } else {
+            ([0.65, 0.35], [0.75, 0.4])
+        };
+        assert_eq!(radial.center(), center);
+        assert_eq!(radial.radii(), radii);
+    });
+
+    let noise = crate::example_scenes::noise_paint::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_paint_prefix_history(noise, |reader, time| {
+        let noise = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_noise()
+            .unwrap();
+        let (frequency, phase) = if time == 1.0 {
+            ([20.0, 10.0], [0.179, -0.244])
+        } else {
+            ([32.0, 12.0], [0.531, -0.719])
+        };
+        assert_near_pair(noise.frequency(), frequency);
+        assert_near_pair(noise.phase(), phase);
+    });
+
+    let hatch = crate::example_scenes::hatch_paint::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_paint_prefix_history(hatch, |reader, time| {
+        let hatch = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_hatch()
+            .unwrap();
+        let (spacing, width, angle, phase) = if time == 1.0 {
+            (0.475, 0.105, 0.525, [0.179, -0.244])
+        } else {
+            (0.35, 0.12, 0.85, [0.531, -0.719])
+        };
+        assert!((hatch.spacing() - spacing).abs() < 1e-12);
+        assert!((hatch.width() - width).abs() < 1e-12);
+        assert!((hatch.angle() - angle).abs() < 1e-12);
+        assert_near_pair(hatch.phase(), phase);
+    });
+
+    let image = crate::example_scenes::image_fill::program()
+        .unwrap()
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    let image_resource = std::cell::Cell::new(None);
+    assert_paint_prefix_history(image, |reader, time| {
+        let image = reader.frame().objects[0]
+            .fill_paint
+            .as_ref()
+            .unwrap()
+            .as_image()
+            .unwrap();
+        let mapping = image.mapping();
+        assert_eq!(mapping.fit(), crate::ImageFit::Cover);
+        assert_eq!(mapping.alignment(), [0.5; 2]);
+        assert_eq!(mapping.address(), crate::ImageAddressMode::Clamp);
+        let transform = mapping.transform();
+        let (translation, scale, rotation) = if time == 1.0 {
+            image_resource.set(Some(image.resource()));
+            ([0.0865, -0.1155], [0.815, 1.185], 0.185)
+        } else {
+            assert_eq!(Some(image.resource()), image_resource.get());
+            ([0.173, -0.231], [0.63, 1.37], 0.37)
+        };
+        assert_near_pair(transform.translation(), translation);
+        assert_near_pair(transform.scale(), scale);
+        assert!((transform.rotation() - rotation).abs() < 1e-12);
+    });
+}
+
+#[test]
+fn matching_shapes_prefix_preserves_correspondence_replacement_and_rewind() {
+    let program =
+        crate::example_scenes::family_transform_indicate::matching_shapes::program().unwrap();
+    let mut source = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    assert_eq!(reader.painter_order().len(), 2);
+    let initial_ids: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+
+    assert_eq!(
+        source.prepare_until(1.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+
+    reader.seek(0.5).unwrap();
+    let midpoint = reader.frame().clone();
+    let midpoint_order: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+    let xs: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| {
+            reader.frame().objects[index as usize]
+                .transform
+                .translation
+                .x
+        })
+        .collect();
+    assert_eq!(midpoint_order, initial_ids);
+    assert_eq!(xs, vec![1.0, -1.0]);
+
+    let publication = reader.publication_context();
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    let terminal_batch = batch.is_terminal();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(reader.frame(), &midpoint);
+    assert_eq!(reader.publication_context(), publication);
+
+    reader.seek(1.0).unwrap();
+    let target_order: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+    let target_xs: Vec<_> = reader
+        .painter_order()
+        .iter()
+        .map(|&index| {
+            reader.frame().objects[index as usize]
+                .transform
+                .translation
+                .x
+        })
+        .collect();
+    assert_eq!(target_order.len(), 2);
+    assert_ne!(target_order, initial_ids);
+    assert_eq!(target_xs, vec![-4.0, 4.0]);
+
+    if !terminal_batch {
+        assert_eq!(
+            source.prepare_until(2.1).unwrap(),
+            Some(PreparedSourceStatus::BatchReady)
+        );
+        let batch = source.pending_batch().unwrap();
+        assert!(batch.is_terminal());
+        reader
+            .reserve_object_capacity(batch.required_object_capacity())
+            .unwrap();
+        reader.preflight_append(batch).unwrap();
+        reader.append(source.take_batch().unwrap()).unwrap();
+    }
+    assert_eq!(
+        source.prepare_until(2.1).unwrap(),
+        Some(PreparedSourceStatus::Finished)
+    );
+    assert_eq!(reader.end_time(), Some(2.0));
+
+    let query = reader.query_renderer_viewports(&[crate::Rect::new(
+        Vec2::new(-10.0, -10.0),
+        Vec2::new(10.0, 10.0),
+    )]);
+    assert_eq!(query.publication(), reader.publication_context());
+    assert!(reader.viewport_query_is_current(&query));
+    assert_eq!(query.object_indices().len(), 2);
+
+    reader.seek(0.5).unwrap();
+    assert_eq!(reader.frame(), &midpoint);
+    assert_eq!(
+        reader
+            .painter_order()
+            .iter()
+            .map(|&index| reader.frame().objects[index as usize].id)
+            .collect::<Vec<_>>(),
+        initial_ids
+    );
+}
+
+#[test]
+fn subset_display_prefix_preserves_order_thresholds_and_rewind() {
+    let program = crate::example_scenes::ordinary_subset_display::program().unwrap();
+    let mut source = program
+        .into_prepared_source(ReplayLimits::default())
+        .unwrap();
+    assert_eq!(
+        source.prepare_until(0.0).unwrap(),
+        Some(PreparedSourceStatus::ReaderReady)
+    );
+    let mut reader = source.take_reader().unwrap();
+    let increasing_order = reader.painter_order().to_vec();
+    assert_eq!(increasing_order.len(), 3);
+    let increasing_ids: Vec<_> = increasing_order
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+    assert_eq!(reader.frontier(), 3.0);
+    let alphas = |reader: &PrefixReader| -> Vec<f32> {
+        reader
+            .painter_order()
+            .iter()
+            .map(|&index| {
+                reader.frame().objects[index as usize]
+                    .style
+                    .fill
+                    .expect("subset member has fill")
+                    .alpha
+            })
+            .collect()
+    };
+
+    reader.seek(1.5).unwrap();
+    let increasing_midpoint = reader.frame().clone();
+    assert_eq!(alphas(&reader), vec![1.0, 0.0, 0.0]);
+    let publication = reader.publication_context();
+    assert_eq!(
+        source.prepare_until(4.1).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+    assert_eq!(reader.frame(), &increasing_midpoint);
+    assert_eq!(reader.publication_context(), publication);
+
+    assert_eq!(
+        source.prepare_until(6.3).unwrap(),
+        Some(PreparedSourceStatus::BatchReady)
+    );
+    let batch = source.pending_batch().unwrap();
+    let terminal_batch = batch.is_terminal();
+    reader
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    reader.preflight_append(batch).unwrap();
+    reader.append(source.take_batch().unwrap()).unwrap();
+
+    reader.seek(3.0).unwrap();
+    let full_order = reader.painter_order().to_vec();
+    assert_eq!(full_order.len(), 6);
+    assert_eq!(full_order[..3], increasing_order);
+    let full_ids: Vec<_> = full_order
+        .iter()
+        .map(|&index| reader.frame().objects[index as usize].id)
+        .collect();
+    assert_eq!(alphas(&reader), vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
+    reader.seek(4.0).unwrap();
+    assert_eq!(alphas(&reader), vec![1.0, 1.0, 1.0, 1.0, 0.0, 0.0]);
+    reader.seek(4.001).unwrap();
+    assert_eq!(alphas(&reader), vec![1.0, 1.0, 1.0, 0.0, 1.0, 0.0]);
+    reader.seek(6.0).unwrap();
+    assert_eq!(alphas(&reader), vec![1.0, 1.0, 1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(
+        reader
+            .painter_order()
+            .iter()
+            .map(|&index| reader.frame().objects[index as usize].id)
+            .collect::<Vec<_>>(),
+        full_ids
+    );
+
+    if !terminal_batch {
+        assert_eq!(
+            source.prepare_until(6.3).unwrap(),
+            Some(PreparedSourceStatus::BatchReady)
+        );
+        let batch = source.pending_batch().unwrap();
+        assert!(batch.is_terminal());
+        reader
+            .reserve_object_capacity(batch.required_object_capacity())
+            .unwrap();
+        reader.preflight_append(batch).unwrap();
+        reader.append(source.take_batch().unwrap()).unwrap();
+    }
+    assert_eq!(
+        source.prepare_until(6.3).unwrap(),
+        Some(PreparedSourceStatus::Finished)
+    );
+    assert_eq!(reader.end_time(), Some(6.25));
+
+    let query = reader
+        .query_renderer_viewports(&[crate::Rect::new(Vec2::new(0.5, -1.2), Vec2::new(1.5, -0.2))]);
+    assert_eq!(query.publication(), reader.publication_context());
+    assert!(reader.viewport_query_is_current(&query));
+    assert!(query.object_indices().contains(&(full_order[5] as usize)));
+
+    reader.seek(1.5).unwrap();
+    assert_eq!(alphas(&reader), vec![1.0, 0.0, 0.0]);
+    assert_eq!(reader.painter_order(), increasing_order);
+    assert_eq!(
+        reader
+            .painter_order()
+            .iter()
+            .map(|&index| reader.frame().objects[index as usize].id)
+            .collect::<Vec<_>>(),
+        increasing_ids
+    );
 }
 
 #[test]

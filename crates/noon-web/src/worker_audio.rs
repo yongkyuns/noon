@@ -7,6 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use noon::ExecutionSession;
+#[cfg(feature = "prepared-prefix")]
+use noon::PrefixReader;
 use noon_core::{
     AudioClipDefinition, AudioClipOptions, AudioResource, AudioResourceHandle, AudioResourceId,
     SemanticNodeId, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
@@ -17,6 +19,23 @@ use serde::{Deserialize, Serialize};
 const VERSION: u32 = 1;
 const MAX_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_CLIPS: usize = 4096;
+
+// Context clocks can round a received timestamp below the producer's sample.
+// Delivery cannot have negative duration; the authored anchor stays unchanged.
+#[cfg(any(target_arch = "wasm32", test))]
+fn nonnegative_delivery_delay_seconds(
+    sampled_epoch_ms: f64,
+    received_epoch_ms: f64,
+) -> Result<f64, &'static str> {
+    if !sampled_epoch_ms.is_finite() || !received_epoch_ms.is_finite() {
+        return Err("audio sample timestamps must be finite");
+    }
+    let elapsed_ms = received_epoch_ms - sampled_epoch_ms;
+    if !elapsed_ms.is_finite() {
+        return Err("audio delivery delay must be finite");
+    }
+    Ok(elapsed_ms.max(0.0) / 1000.0)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,15 +75,37 @@ pub(crate) fn encode(
     session: &ExecutionSession,
     transport_session: u32,
 ) -> Result<Vec<u8>, String> {
+    encode_clips(
+        session
+            .audio_playback_at(0.0)
+            .map_err(|error| error.to_string())?,
+        transport_session,
+    )
+}
+
+#[cfg(feature = "prepared-prefix")]
+pub(crate) fn encode_prepared(
+    reader: &PrefixReader,
+    transport_session: u32,
+) -> Result<Vec<u8>, String> {
+    encode_clips(
+        reader
+            .audio_playback_at(0.0)
+            .map_err(|error| error.to_string())?,
+        transport_session,
+    )
+}
+
+fn encode_clips<'a>(
+    playback_clips: impl Iterator<Item = AudioPlaybackClip<'a>>,
+    transport_session: u32,
+) -> Result<Vec<u8>, String> {
     let mut indices = BTreeMap::new();
     let mut resources = Vec::new();
     let mut payloads = Vec::new();
     let mut clips = Vec::new();
     let mut pcm_bytes = 0_usize;
-    for clip in session
-        .audio_playback_at(0.0)
-        .map_err(|error| error.to_string())?
-    {
+    for clip in playback_clips {
         if clips.len() == MAX_CLIPS {
             return Err("worker audio exceeds the finite clip limit".into());
         }
@@ -299,18 +340,79 @@ mod wasm {
             sampled_epoch_ms: f64,
             received_epoch_ms: f64,
         ) -> Result<(), JsValue> {
+            if session != self.resources.session() || !time.is_finite() || time < 0.0 {
+                return Err(js_error("stale or invalid worker audio anchor"));
+            }
+            let delivery_delay =
+                nonnegative_delivery_delay_seconds(sampled_epoch_ms, received_epoch_ms)
+                    .map_err(|_| js_error("stale or invalid worker audio anchor"))?;
+            let time = time + delivery_delay;
+            self.output
+                .start_clips(self.resources.at_time(time).map_err(js_error)?)
+        }
+
+        /// Start the immutable schedule only through the Rust reader's
+        /// currently admitted open-prefix boundary.
+        #[wasm_bindgen(js_name = startUntil)]
+        pub fn start_until(
+            &mut self,
+            session: u32,
+            time: f64,
+            authorized_until: f64,
+            sampled_epoch_ms: f64,
+            received_epoch_ms: f64,
+        ) -> Result<(), JsValue> {
             if session != self.resources.session()
                 || !time.is_finite()
                 || time < 0.0
-                || !sampled_epoch_ms.is_finite()
-                || !received_epoch_ms.is_finite()
-                || received_epoch_ms < sampled_epoch_ms
+                || !authorized_until.is_finite()
+                || authorized_until < time
             {
-                return Err(js_error("stale or invalid worker audio anchor"));
+                return Err(js_error("stale or invalid bounded worker audio anchor"));
             }
-            let time = time + (received_epoch_ms - sampled_epoch_ms) / 1000.0;
-            self.output
-                .start_clips(self.resources.at_time(time).map_err(js_error)?)
+            let delivery_delay =
+                nonnegative_delivery_delay_seconds(sampled_epoch_ms, received_epoch_ms)
+                    .map_err(|_| js_error("stale or invalid bounded worker audio anchor"))?;
+            let time = time + delivery_delay;
+            if time >= authorized_until {
+                return Ok(());
+            }
+            self.output.start_clips_until(
+                self.resources.at_time(time).map_err(js_error)?,
+                time,
+                authorized_until,
+            )
+        }
+
+        #[wasm_bindgen(js_name = extendUntil)]
+        pub fn extend_until(
+            &mut self,
+            session: u32,
+            time: f64,
+            authorized_until: f64,
+            sampled_epoch_ms: f64,
+            received_epoch_ms: f64,
+        ) -> Result<(), JsValue> {
+            if session != self.resources.session()
+                || !time.is_finite()
+                || time < 0.0
+                || !authorized_until.is_finite()
+                || authorized_until < time
+            {
+                return Err(js_error("stale or invalid bounded worker audio extension"));
+            }
+            let delivery_delay =
+                nonnegative_delivery_delay_seconds(sampled_epoch_ms, received_epoch_ms)
+                    .map_err(|_| js_error("stale or invalid bounded worker audio extension"))?;
+            let time = time + delivery_delay;
+            if time >= authorized_until {
+                return Ok(());
+            }
+            self.output.extend_clips_until(
+                self.resources.at_time(time).map_err(js_error)?,
+                time,
+                authorized_until,
+            )
         }
 
         pub fn pause(&mut self) -> Result<(), JsValue> {
@@ -347,6 +449,26 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_delay_normalizes_clock_rounding_without_hiding_invalid_timestamps() {
+        assert_eq!(
+            nonnegative_delivery_delay_seconds(10_000.1, 10_000.0),
+            Ok(0.0)
+        );
+        assert_eq!(
+            nonnegative_delivery_delay_seconds(10_000.0, 10_000.0),
+            Ok(0.0)
+        );
+        assert_eq!(
+            nonnegative_delivery_delay_seconds(10_000.0, 10_500.0),
+            Ok(0.5)
+        );
+        assert!(nonnegative_delivery_delay_seconds(f64::NAN, 10_000.0).is_err());
+        assert!(nonnegative_delivery_delay_seconds(10_000.0, f64::INFINITY).is_err());
+        assert!(nonnegative_delivery_delay_seconds(-f64::MAX, f64::MAX).is_err());
+    }
+
     #[test]
     fn round_trip_keeps_trimmed_loop_phase_fades_and_silent_gaps() {
         let mut scene = noon::Scene::new();

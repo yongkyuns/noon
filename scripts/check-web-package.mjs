@@ -30,6 +30,8 @@ const expectedJavascriptSurface = [
   "export class WasmWorkerAudioOutput",
   "audioResourceBundleBytes(",
   "audioAnchorJson(",
+  "takeNoChangePresentationJson(",
+  "preparedRetentionMetricsJson(",
   "finiteAudioDuration(",
   "freshFiniteSourceDuration(",
   "finiteSourceProbeJson(",
@@ -357,6 +359,8 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "takeNoChangePresentationJson(): string | undefined",
+  "preparedRetentionMetricsJson(): string",
   "requiresContentBoundary(): boolean",
   "queryFamilyRequiresContentBoundary(handle: WasmAuthoringFamilyHandle): boolean",
   "queryMobjectRequiresContentBoundary(handle: WasmAuthoringMobjectHandle): boolean",
@@ -676,14 +680,21 @@ const expectedTypeSurface = [
 // Prepared-prefix exports are optional. Require the complete handoff ABI when
 // either binding surface advertises it, without changing the normal package.
 if (javascript.includes("export class PreparedExecutionPlayer") || declarations.includes("export class PreparedExecutionPlayer")) {
-  expectedJavascriptSurface.push("prepareFinishedSource(");
-  expectedTypeSurface.push("prepareFinishedSource(): boolean");
-  expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(");
+  expectedJavascriptSurface.push("prepareFinishedSource(", "observedSourceExecutionRequirementJson(");
+  expectedTypeSurface.push("prepareFinishedSource(): boolean", "observedSourceExecutionRequirementJson(): string");
+  expectedJavascriptSurface.push("export class PreparedExecutionPlayer", "sourceExecutionReady(", "beginSourceExecution(",
+    "preparedPlaybackStateJson(", "preparedTime(", "takePreparedNoChangePresentationJson(",
+    "setPreparedLoopDuration(", "get sourceExecutionRequirementJson()", "prepareSourceSegmentStep(");
   expectedTypeSurface.push("export class PreparedExecutionPlayer",
     "resetReceiver(transport_session: number): void",
-    "beginObservedPreparedSource(scene_only_source?: boolean | null): boolean",
+    "beginObservedPreparedSource(scene_only_source?: boolean | null): string",
+    "preparedPlaybackStateJson(wall_time_ms: number): string", "preparedTime(): number",
+    "takePreparedNoChangePresentationJson(): string | undefined",
+    "setPreparedLoopDuration(duration?: number | null): void",
+    "readonly sourceExecutionRequirementJson: string",
     "createFinishedPreparedExecutionPlayer(transport_session: number): PreparedExecutionPlayer | undefined",
     "prepareSourceSegment(context: CanonicalAuthoringSceneContext): boolean",
+    "prepareSourceSegmentStep(context: CanonicalAuthoringSceneContext): boolean | undefined",
     "finishSourcePreparation(context: CanonicalAuthoringSceneContext): boolean",
     "beginSourceExecution(context: CanonicalAuthoringSceneContext): boolean", "sourceExecutionReady(): boolean");
 }

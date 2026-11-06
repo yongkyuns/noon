@@ -3,6 +3,8 @@
 // A driver belongs to one source invocation and is deliberately not restartable.
 export function createPreparedInterpreterDriver(options) {
   const { prepareSegment, needsPreparation, finishSource } = options;
+  const sourceTurnResumed = options.onSourceTurnResumed;
+  const sourceTurnSuspended = options.onSourceTurnSuspended;
   for (const callback of [prepareSegment, needsPreparation, finishSource]) {
     if (typeof callback !== "function") throw new TypeError("prepared interpreter callbacks are required");
   }
@@ -54,6 +56,7 @@ export function createPreparedInterpreterDriver(options) {
           if (typeof event !== "string") throw new TypeError("observed continuation event must be a string");
           pending = null;
           phase = "running";
+          sourceTurnResumed?.();
           barrier.resolve(event);
           return;
         }
@@ -68,6 +71,7 @@ export function createPreparedInterpreterDriver(options) {
       pending = null;
       phase = "running";
       // Reuse the existing continuation control event, not a scene/wire payload.
+      sourceTurnResumed?.();
       barrier.resolve('{"kind":"complete"}');
     } catch (error) {
       stop(error);
@@ -108,6 +112,7 @@ export function createPreparedInterpreterDriver(options) {
         stop(error);
         return Promise.reject(error);
       }
+      sourceTurnSuspended?.();
       const result = new Promise((resolve, reject) => {
         pending = { context, resolve, reject, prepared: false };
       });

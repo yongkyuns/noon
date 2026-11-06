@@ -69,6 +69,7 @@ export function createAuthoringRenderController(host) {
   // present exposes. It is an acknowledgement only, never scene or time state.
   let pendingPresentationPublication = null;
   let lastPresentedPublication = null;
+  let latestPresentationSample = null;
   let lastPointerReceipt = null;
   let pendingRendererObservationRequest = null;
   let pendingRendererObservationPublication = null;
@@ -92,6 +93,17 @@ export function createAuthoringRenderController(host) {
   const presentationIntervals = new SampleWindow(120);
   let lastContinuousPresentationAtMs = null;
   let continuousPresentation = false;
+  // Optional W8 capture of the same gaps already measured above. The rolling
+  // UI summary keeps its existing reset/retention behavior; this separate ring
+  // survives cadence resets so polling cannot erase unobserved intervals.
+  const rawPresentationIntervalCapacity = 120;
+  const rawPresentationIntervalSamples = [];
+  let rawPresentationIntervalNext = 0;
+  let rawPresentationIntervalOrdinal = 0;
+  let rawPresentationIntervalOrdinalOverflow = false;
+  let rawPresentationIntervalGeneration = 0;
+  let rawPresentationIntervalGenerationStartedAtMs = performance.now();
+  let rawPresentationIntervalCaptureEnabled = false;
   let rendererReadyAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
@@ -149,6 +161,7 @@ export function createAuthoringRenderController(host) {
         case "metrics":
           if (!drainGpuDiagnostics()) return;
           if (message.profilePublicationStages === true) publicationStageProfiling = true;
+          if (message.includePresentationIntervals === true) rawPresentationIntervalCaptureEnabled = true;
           if (message.profileRenderSubstages === true) {
             renderSubstageProfiling = true;
             renderer?.setRenderSubstageProfiling(true);
@@ -227,6 +240,7 @@ export function createAuthoringRenderController(host) {
     event.preventDefault();
     webglContextLost = true;
     resetPresentationIntervals();
+    invalidateRawPresentationIntervalHistory();
     invalidatePointerReceipt();
     cancelScheduledFrame();
   }
@@ -423,7 +437,7 @@ export function createAuthoringRenderController(host) {
     if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
       transferableReceiver = new TransferableExecutionDeltaReceiver(
         port,
-        (json, metadata) => (renderPort === port ? consumeDelta(json, metadata) : true),
+        (json, metadata, packet) => (renderPort === port ? consumeDelta(packet, metadata) : true),
       );
     }
     port.start();
@@ -449,6 +463,7 @@ export function createAuthoringRenderController(host) {
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    latestPresentationSample = null;
     lastPointerReceipt = null;
     pendingRendererObservationRequest = null;
     pendingRendererObservationPublication = null;
@@ -531,16 +546,21 @@ export function createAuthoringRenderController(host) {
   }
 
   async function prepareEffectPrograms(message) {
-    const port = renderPort, owner = renderer;
+    const port = renderPort;
     const entry = { session: message.session, requestId: message.requestId, prepared: null };
     try {
-      requireBootstrappedRenderer("prepare effect programs");
       if (!Number.isSafeInteger(message.requestId) || message.requestId <= 0 ||
           !Number.isInteger(message.session) || message.session < 0 || message.session > 0xffffffff ||
           !(message.bytes instanceof Uint8Array) || effectPreparation !== null) {
         throw new Error("invalid effect preparation request");
       }
       effectPreparation = entry;
+      // Prepared source may reach a later attachment while the initial retained
+      // snapshot is still creating its GPU owner. Reuse that bootstrap barrier.
+      if (bootstrapPromise !== null) await bootstrapPromise;
+      if (stopped || renderPort !== port || effectPreparation !== entry) return;
+      requireBootstrappedRenderer("prepare effect programs");
+      const owner = renderer;
       const prepared = await owner.prepareEffectPrograms(message.bytes);
       if (renderPort !== port || renderer !== owner || effectPreparation !== entry) {
         prepared.free();
@@ -598,7 +618,7 @@ export function createAuthoringRenderController(host) {
   function drainTransport() {
     try {
       if (sharedReader !== null) {
-        const drained = sharedReader.drain((json, metadata) => consumeDelta(json, metadata));
+        const drained = sharedReader.drain((json, metadata, packet) => consumeDelta(packet, metadata));
         if (drained > 0) {
           renderPort?.postMessage({ type: "transport_writable" });
         }
@@ -679,6 +699,7 @@ export function createAuthoringRenderController(host) {
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    latestPresentationSample = null;
     lastPointerReceipt = null;
     pendingRendererObservationPublication = null;
     mode = nextMode;
@@ -810,7 +831,21 @@ export function createAuthoringRenderController(host) {
     }
     if (continuousPresentation) {
       if (lastContinuousPresentationAtMs !== null) {
-        presentationIntervals.record(presentedAtMs - lastContinuousPresentationAtMs);
+        const intervalMs = presentedAtMs - lastContinuousPresentationAtMs;
+        presentationIntervals.record(intervalMs);
+        if (Number.isSafeInteger(rawPresentationIntervalOrdinal + 1)) {
+          rawPresentationIntervalOrdinal += 1;
+          if (rawPresentationIntervalCaptureEnabled) {
+            const sample = { ordinal: rawPresentationIntervalOrdinal,
+              session: presentedSession, presentedAtMs, intervalMs };
+            if (rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity) {
+              rawPresentationIntervalSamples.push(sample);
+            } else {
+              rawPresentationIntervalSamples[rawPresentationIntervalNext] = sample;
+              rawPresentationIntervalNext = (rawPresentationIntervalNext + 1) % rawPresentationIntervalCapacity;
+            }
+          }
+        } else rawPresentationIntervalOrdinalOverflow = true;
       }
       lastContinuousPresentationAtMs = presentedAtMs;
     }
@@ -821,9 +856,20 @@ export function createAuthoringRenderController(host) {
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
+    const displayedPublication = publication ?? lastPresentedPublication;
+    if (displayedPublication !== null) {
+      const displayedTime = renderer.time();
+      latestPresentationSample = {
+        session: displayedPublication.session,
+        sequence: displayedPublication.sequence,
+        time: displayedTime,
+        presentedAtMs,
+      };
+      if (stageSample !== null) stageSample.time = displayedTime;
+    }
     if (stageSample !== null) {
       // Preserve the displayed authored time even when metrics polling is late.
-      stageSample.time = renderer.time();
+      stageSample.time ??= renderer.time();
       stageSample.presentation = presentedFrames;
       stageSample.presentedAtMs = presentedAtMs;
       stageSample.applyMs = lastDeltaApplyMs;
@@ -865,7 +911,7 @@ export function createAuthoringRenderController(host) {
 
   function applyRendererDelta(json) {
     const startedAtMs = performance.now();
-    const applied = renderer.applyDeltaJson(json);
+    const applied = renderer.applyDeltaTransportJson(json);
     if (applied) lastDeltaApplyMs = Math.max(0, performance.now() - startedAtMs);
     return applied;
   }
@@ -883,6 +929,7 @@ export function createAuthoringRenderController(host) {
       type: "execution_presented",
       session: publication.session,
       sequence: publication.sequence,
+      objectCount: renderer.objectCount(),
       ...(lastPointerReceipt === null ? {} : { pointerReceipt: lastPointerReceipt }),
     });
   }
@@ -1111,7 +1158,8 @@ export function createAuthoringRenderController(host) {
     }
   }
 
-  function currentMetrics({ profileRenderSubstages, profileGpuCompletion } = {}) {
+  function currentMetrics({ profileRenderSubstages, profileGpuCompletion, includePresentationIntervals } = {}) {
+    const sampledAtMs = performance.now();
     const base = {
       ready: renderer !== null,
       mode,
@@ -1120,16 +1168,31 @@ export function createAuthoringRenderController(host) {
       presentedFrames,
       presentationIntervalMs: presentationIntervals.summary(),
       presentationIntervalSamples: presentationIntervals.size,
+      ...(includePresentationIntervals === true ? {
+        rawPresentationIntervals: {
+          enabled: rawPresentationIntervalCaptureEnabled,
+          capacity: rawPresentationIntervalCapacity,
+          generation: rawPresentationIntervalGeneration,
+          generationStartedAtMs: rawPresentationIntervalGenerationStartedAtMs,
+          latestOrdinal: rawPresentationIntervalOrdinal,
+          ordinalOverflow: rawPresentationIntervalOrdinalOverflow,
+          samples: rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity
+            ? rawPresentationIntervalSamples.slice()
+            : rawPresentationIntervalSamples.slice(rawPresentationIntervalNext)
+              .concat(rawPresentationIntervalSamples.slice(0, rawPresentationIntervalNext)),
+        },
+      } : {}),
       lastDeltaApplyMs,
       lastRendererCallMs,
       modeSwitches,
       rendererRebuilds,
-      sampledAtMs: performance.now(),
+      sampledAtMs,
       performanceTimeOriginMs: performance.timeOrigin,
       rendererReadyAtMs,
       firstPresentedAtMs,
       presentedSession,
       firstPresentedSessionAtMs,
+      latestPresentationSample,
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
@@ -1191,6 +1254,7 @@ export function createAuthoringRenderController(host) {
     if (renderer === null) {
       return;
     }
+    invalidateRawPresentationIntervalHistory();
     pendingPublicationStageSample = null;
     const retiredRenderer = renderer;
     renderer = null;
@@ -1205,6 +1269,13 @@ export function createAuthoringRenderController(host) {
     } else {
       retiredRenderer.free?.();
     }
+  }
+
+  function invalidateRawPresentationIntervalHistory() {
+    rawPresentationIntervalGeneration += 1;
+    rawPresentationIntervalGenerationStartedAtMs = performance.now();
+    rawPresentationIntervalSamples.length = 0;
+    rawPresentationIntervalNext = 0;
   }
 
   function modeFlags() {

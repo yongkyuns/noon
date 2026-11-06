@@ -46,6 +46,14 @@ pub struct CompiledReplayRevision {
     // finalizes both sides after the compiler commits a validated patch.
     #[cfg(feature = "prepared-prefix")]
     geometry_payload_bytes: usize,
+    // Logical immutable effect-stack payload retained by both row snapshots.
+    // Arc aliases are conservatively charged per row reference by the reader.
+    #[cfg(feature = "prepared-prefix")]
+    effect_payload_bytes: usize,
+    // Logical composed-source membership payload retained by both row snapshots.
+    // Arc aliases are conservatively charged per row reference by the reader.
+    #[cfg(feature = "prepared-prefix")]
+    composed_payload_bytes: usize,
 }
 
 impl CompiledReplayRevision {
@@ -224,6 +232,10 @@ impl CompiledScene {
             path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
             #[cfg(feature = "prepared-prefix")]
             geometry_payload_bytes: 0,
+            #[cfg(feature = "prepared-prefix")]
+            effect_payload_bytes: 0,
+            #[cfg(feature = "prepared-prefix")]
+            composed_payload_bytes: 0,
             rows: rows
                 .into_iter()
                 .map(|index| SavedRow {

@@ -15,7 +15,7 @@ test("newest selection request wins when source loads complete out of order", ()
   assert.equal(generations.isSelectionCurrent(committed), true);
 });
 
-test("loading a newer selection preserves the current run until that selection commits", () => {
+test("selection and draft changes preserve the active run until explicit replacement", () => {
   const generations = new PlaygroundGeneration();
   generations.commitSelection(generations.beginSelectionRequest("first"));
   const currentRun = generations.beginRun("first");
@@ -31,12 +31,12 @@ test("loading a newer selection preserves the current run until that selection c
   assert.ok(committedSecond);
   assert.equal(
     generations.isRunCurrent(currentRun, "first"),
-    false,
-    "the loaded selection invalidates prior authoring at commit time",
+    true,
+    "changing the selected draft must not stop the active source",
   );
 });
 
-test("committing a new selection invalidates authoring from the previous selection", () => {
+test("only a new Run invalidates authoring from the previous selection", () => {
   const generations = new PlaygroundGeneration();
   const firstSelection = generations.commitSelection(
     generations.beginSelectionRequest("first"),
@@ -48,7 +48,10 @@ test("committing a new selection invalidates authoring from the previous selecti
     generations.beginSelectionRequest("second"),
   );
   assert.ok(secondSelection);
+  assert.equal(generations.isRunCurrent(firstRun, "first"), true);
+  const secondRun = generations.beginRun("second");
   assert.equal(generations.isRunCurrent(firstRun, "first"), false);
+  assert.equal(generations.isRunCurrent(secondRun), true);
 });
 
 test("a newer run supersedes an older run for the same example", () => {
@@ -109,7 +112,7 @@ test("stale-result diagnostics are monotonic and retain the last trace", () => {
     kind: "run",
     exampleId: "scene",
     selectionGeneration: 1,
-    runGeneration: 2,
+    runGeneration: 1,
     requestGeneration: null,
     stage: "after-authoring",
   });

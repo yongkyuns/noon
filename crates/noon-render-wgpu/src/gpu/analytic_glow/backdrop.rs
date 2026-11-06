@@ -46,6 +46,10 @@ impl BackdropGpu {
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
+    pub fn retire_publication(&mut self) {
+        self.scopes.clear();
+        self.bytes = 0;
+    }
     pub fn remove(&mut self, object: ObjectId) {
         if let Some(scope) = self.scopes.remove(&object) {
             self.bytes -= scope.bytes();

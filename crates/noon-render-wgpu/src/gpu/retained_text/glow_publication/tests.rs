@@ -563,6 +563,75 @@ fn glow_order_attachment_to_object_added_without_effects_stays_local() {
 }
 
 #[test]
+fn effect_context_reset_rebuilds_typed_growth_after_no_effect_fast_path() {
+    let mut fixture = Fixture::new();
+    let mut scene = runtime(6, true, false);
+    let first = fixture.prepare(&mut scene, true);
+    assert_eq!(first.sources_prepared, 1);
+    assert!(first.pipeline_compiles > 0);
+    let effect = scene.frame().objects[1]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(31, 5))
+        .unwrap();
+    let attachment = effect.attachment;
+    let definition = effect.definition.clone();
+
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+            object: ObjectId::new(101),
+            expected: Box::new([attachment]),
+            effects: None,
+        })
+        .unwrap();
+    let retired = fixture.prepare(&mut scene, true);
+    assert_eq!(retired.retained_texture_bytes, 0);
+    assert!(!fixture.renderer.has_retained_effect_sources());
+    assert_eq!(fixture.renderer.effect_capture_texture_bytes(), 0);
+
+    // The canvas leaves glow preparation while ordinary typed publications
+    // continue. Their painter-order changes must not be applied to stale ranks.
+    fixture.renderer.reset_retained_effect_publication_context();
+    let added = ObjectId::new(10_006);
+    scene
+        .apply_execution_patch(&ExecutionPatch::CreateObject(CompiledObject::new(
+            added,
+            GeometryRef::circle(0.4),
+            Transform2D::IDENTITY,
+            Style {
+                fill: Some(Color::WHITE),
+                stroke: None,
+                ..Style::default()
+            },
+        )))
+        .unwrap();
+    drop(scene.take_renderer_publication());
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+            object: added,
+            expected: Box::new([]),
+            effects: Some(Arc::new(
+                CompiledEffectStack::new([CompiledEffect {
+                    attachment: SemanticNodeId::new(32, 5),
+                    definition,
+                }])
+                .unwrap(),
+            )),
+        })
+        .unwrap();
+    assert!(scene.frame_changes().painter_order_range().is_none());
+
+    let attached = fixture.prepare(&mut scene, true);
+    assert_eq!((attached.rows_examined, attached.sources_prepared), (7, 1));
+    assert_eq!(
+        attached.pipeline_compiles, 0,
+        "publication reset must keep shared filter programs warm"
+    );
+    assert_eq!(fixture.renderer.retained_effects.painter_ranks.len(), 7);
+}
+
+#[test]
 fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
     for mixed in [false, true] {
         let mut fixture = Fixture::new();

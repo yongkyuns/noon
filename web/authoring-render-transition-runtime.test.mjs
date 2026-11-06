@@ -52,7 +52,7 @@ test("controller instances isolate dispatch and shutdown", async () => {
   const firstMessages = [];
   const secondMessages = [];
   const closed = [];
-  const context = vm.createContext({ firstMessages, secondMessages, closed });
+  const context = vm.createContext({ firstMessages, secondMessages, closed, performance: { now: () => 0 } });
   vm.runInContext(executableSource, context);
   vm.runInContext(
     `first = createAuthoringRenderController({
@@ -87,6 +87,7 @@ test("a terminated main-thread adapter cannot shut down a later adapter", async 
   const context = vm.createContext({
     EventTarget,
     MessageEvent,
+    performance: { now: () => 0 },
     queueMicrotask,
     loadControllerModule: () => moduleLoad.promise,
     messages,
@@ -135,6 +136,7 @@ test("retired geometry mode is rejected before canvas or port admission", async 
   const context = vm.createContext({
     port,
     messages,
+    performance: { now: () => 0 },
     MessagePort: FakePort,
     init: () => { throw new Error("invalid mode must not initialize WASM"); },
   });
@@ -166,6 +168,7 @@ test("shutdown during asynchronous initialization cannot revive a controller", a
     canvas,
     port,
     closed,
+    performance: { now: () => 0 },
     init: () => initialization.promise,
     OffscreenCanvas: FakeCanvas,
     MessagePort: FakePort,
@@ -214,6 +217,7 @@ test("concurrent controllers share wasm initialization without sharing lifecycle
     secondCanvas: new FakeCanvas(),
     firstMessages,
     secondMessages,
+    performance: { now: () => 0 },
     init: () => {
       initializationCalls += 1;
       return initialization.promise;
@@ -267,6 +271,7 @@ test("failed shared wasm initialization can be retried by a new controller", asy
     firstCanvas: new FakeCanvas(),
     secondCanvas: new FakeCanvas(),
     messages,
+    performance: { now: () => 0 },
     init: () => {
       initializationCalls += 1;
       return initializationCalls === 1
@@ -309,6 +314,7 @@ function createRenderer(renderResults) {
     gpuCompletionProfiling: false,
     gpuCompletionSamplesJson: "null",
     applyDeltaJson: () => true,
+    applyDeltaTransportJson(json) { return this.applyDeltaJson(json); },
     setRendererObservationRequestJson(json) { this.observationRequests.push(json); },
     takeRendererObservationJson() {
       const result = this.observationResult;
@@ -348,13 +354,13 @@ function createRenderer(renderResults) {
   };
 }
 
-function createWorkerHarness(renderResults = [false, true], publication = null) {
+function createWorkerHarness(renderResults = [false, true], publication = null, performanceSource = performance) {
   const creation = deferred();
   const animationFrames = [];
   const mainMessages = [];
   const context = vm.createContext({
     console,
-    performance,
+    performance: performanceSource,
     Promise,
     Uint8Array,
     setTimeout,
@@ -417,6 +423,7 @@ test("cold WebGPU work withholds source admission once, including resize repaint
   const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
   const completion = deferred();
   let waits = 0;
+  harness.createdRenderer.objectCount = () => 37;
   harness.createdRenderer.waitForSubmittedWork = () => { waits += 1; return completion.promise; };
   harness.creation.resolve(harness.createdRenderer);
   await flushTasks();
@@ -430,6 +437,7 @@ test("cold WebGPU work withholds source admission once, including resize repaint
   const receipts = () => harness.nextPort.messages.filter(message => message.type === "execution_presented");
   assert.deepEqual(receipts().map(({session, sequence}) => ({session, sequence})),
     [{ session: 11, sequence: 0 }]);
+  assert.equal(receipts()[0].objectCount, 37, "presentation ack carries the count from the rendered frame");
   assert.equal(harness.mainMessages.filter(message => message.type === "mode_switched").length, 1);
   vm.runInContext('consumeDelta("next", {session:11, sequence:1});', harness.context);
   assert.equal(receipts().at(-1).sequence, 1);
@@ -588,15 +596,14 @@ test("a stale no-op cannot acknowledge ahead of a pending present", async () => 
 });
 
 async function createManagedWakeHarness(renderResults = [true]) {
-  const harness = createWorkerHarness(renderResults);
+  let clock = 0;
+  const harness = createWorkerHarness(renderResults, null, { now: () => clock });
   harness.creation.resolve(harness.createdRenderer);
   await flushTasks();
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"idle"});', harness.context);
   for (const callback of harness.animationFrames.splice(0)) callback(0);
-  let clock = 0;
   let timerId = 0;
   const timers = new Map();
-  harness.context.performance = { now: () => clock };
   harness.context.setTimeout = (callback, delay) => {
     const id = ++timerId;
     timers.set(id, { callback, delay });
@@ -651,6 +658,9 @@ test("publication profiling retains displayed time across delayed metrics polls"
   assert.equal(metrics.publicationStageSamples[0].time, 0.25);
   assert.equal(metrics.publicationStageSamples[0].presentation, 2);
   assert.equal(metrics.publicationStageSamples[0].presentedAtMs, 50);
+  assert.deepEqual(JSON.parse(JSON.stringify(metrics.latestPresentationSample)), {
+    session: 53, sequence: 7, time: 0.25, presentedAtMs: 50,
+  });
 });
 
 test("render substage timing is opt-in and drains bounded renderer samples", async () => {
@@ -728,6 +738,10 @@ test("ordinary metrics polls preserve diagnostics for the requested profile", as
 
 test("renderer transition discards an old timing sample even when publication identity repeats", async () => {
   const harness = await createManagedWakeHarness();
+  vm.runInContext(`latestPresentationSample = {session:53, sequence:43, time:0.5, presentedAtMs:24};
+    resetTransportState();`, harness.context);
+  assert.equal(vm.runInContext("currentMetrics().latestPresentationSample", harness.context), null,
+    "transport teardown must clear renderer presentation identity");
   await vm.runInContext(`handleMainMessage({
     channel:"noon.render", protocolVersion:1, type:"metrics", requestId:73,
     profilePublicationStages:true,
@@ -736,6 +750,7 @@ test("renderer transition discards an old timing sample even when publication id
   // replay the same logical publication identity, so identity matching alone
   // cannot distinguish the old attempt from the new render attempt.
   vm.runInContext(`renderer = null;
+    latestPresentationSample = {session:53, sequence:44, time:0.5, presentedAtMs:25};
     needsPresent = true;
     pendingPresentationPublication = {session:53, sequence:44};
     pendingPublicationStageSample = {session:53, sequence:44, receivedAtMs:0};
@@ -746,6 +761,10 @@ test("renderer transition discards an old timing sample even when publication id
   await flushTasks();
   const samples = vm.runInContext("currentMetrics().publicationStageSamples", harness.context);
   assert.deepEqual(JSON.parse(JSON.stringify(samples)), []);
+  const latest = vm.runInContext("currentMetrics().latestPresentationSample", harness.context);
+  assert.deepEqual(JSON.parse(JSON.stringify(latest)), {
+    session: 53, sequence: 44, time: 0, presentedAtMs: 0,
+  }, "only the replacement renderer's successful present may restore the sample");
 });
 
 test("Rust wake directives admit one animation drive and one deadline without idle polling", async () => {
@@ -1015,8 +1034,50 @@ test("continuous frame-gap windows exclude holds and reset on session and surfac
   assert.equal(vm.runInContext("continuousPresentation", harness.context), false);
 });
 
+test("optional raw cadence capture keeps ordinal gaps across ordinary cadence resets", async () => {
+  const harness = await createManagedWakeHarness();
+  assert.equal(vm.runInContext("currentMetrics().rawPresentationIntervals", harness.context), undefined,
+    "raw cadence data is absent from ordinary metrics");
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:84, includePresentationIntervals:true});`, harness.context);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  const present = (sequence, timestamp) => {
+    harness.setClock(timestamp);
+    vm.runInContext(`consumeDelta("frame", {session:12, sequence:${sequence}});`, harness.context);
+  };
+  present(1, 100); present(2, 116); present(3, 132);
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"timer", timerAfterMilliseconds:1000});', harness.context);
+  present(4, 2000); // Not continuous; no gap is attributed to the static hold.
+  vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
+  present(5, 3000); present(6, 3017);
+
+  const raw = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);
+  assert.equal(raw.enabled, true);
+  assert.equal(raw.latestOrdinal, 3);
+  assert.equal(raw.generationStartedAtMs, 0, "ordinary cadence resets preserve the raw generation start");
+  assert.deepEqual(JSON.parse(JSON.stringify(raw.samples)), [
+    { ordinal: 1, session: 12, presentedAtMs: 116, intervalMs: 16 },
+    { ordinal: 2, session: 12, presentedAtMs: 132, intervalMs: 16 },
+    { ordinal: 3, session: 12, presentedAtMs: 3017, intervalMs: 17 },
+  ], "the optional ring preserves all gaps in chronological order across reset windows");
+  vm.runInContext("disposeRenderer()", harness.context);
+  harness.setClock(4000);
+  const replacedMetrics = vm.runInContext("currentMetrics({includePresentationIntervals:true})", harness.context);
+  const replaced = replacedMetrics.rawPresentationIntervals;
+  assert.equal(replaced.generation, raw.generation + 1);
+  assert.equal(replaced.generationStartedAtMs, 3017,
+    "renderer retirement timestamps the new raw generation");
+  assert.equal(replacedMetrics.sampledAtMs, 4000);
+  assert.ok(replaced.generationStartedAtMs <= replacedMetrics.sampledAtMs,
+    "the generation start precedes the later metrics observation");
+  assert.deepEqual(JSON.parse(JSON.stringify(replaced.samples)), [],
+    "renderer retirement cannot expose samples from the replaced surface");
+});
+
 test("live frame-gap collection is bounded and adds no timer or engine drive", async () => {
   const harness = await createManagedWakeHarness();
+  await vm.runInContext(`handleMainMessage({channel:"noon.render", protocolVersion:1,
+    type:"metrics", requestId:85, includePresentationIntervals:true});`, harness.context);
   vm.runInContext('handleEngineMessage({type:"execution_wake", cadence:"animation_frame"});', harness.context);
   for (let sequence = 0; sequence <= 240; sequence += 1) {
     harness.setClock(sequence === 0 ? 0 : 1000 + sequence * 16);
@@ -1025,6 +1086,12 @@ test("live frame-gap collection is bounded and adds no timer or engine drive", a
   assert.equal(vm.runInContext("currentMetrics().presentationIntervalSamples", harness.context), 120);
   assert.equal(vm.runInContext("currentMetrics().presentationIntervalMs.max", harness.context), 16,
     "a spike older than the rolling window must retire");
+  const raw = vm.runInContext("currentMetrics({includePresentationIntervals:true}).rawPresentationIntervals", harness.context);
+  assert.equal(raw.ordinalOverflow, false);
+  assert.equal(raw.latestOrdinal, 240);
+  assert.equal(raw.samples.length, 120, "the opt-in history remains bounded to the existing capacity");
+  assert.equal(raw.samples[0].ordinal, 121, "the oldest retained raw ordinal exposes any cursor overrun");
+  assert.equal(raw.samples.at(-1).ordinal, 240);
   assert.equal(harness.timers.size, 0);
   assert.equal(harness.nextPort.messages.filter(message => message.type === "tick").length, 0);
   // This fake retains cancelled RAF callbacks. Tickets must still admit only
@@ -1078,9 +1145,9 @@ test("first presentation timestamp latches only after renderer reports a success
   assert.equal(vm.runInContext("currentMetrics().lastRendererCallMs", harness.context), null);
 
   harness.context.advanceClock = () => { now += 5; };
-  vm.runInContext("renderer.applyDeltaJson = () => { advanceClock(); return true; }; applyRendererDelta('{}')", harness.context);
+  vm.runInContext("renderer.applyDeltaTransportJson = () => { advanceClock(); return true; }; applyRendererDelta('{}')", harness.context);
   assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5);
-  vm.runInContext("renderer.applyDeltaJson = () => false; applyRendererDelta('{}')", harness.context);
+  vm.runInContext("renderer.applyDeltaTransportJson = () => false; applyRendererDelta('{}')", harness.context);
   assert.equal(vm.runInContext("currentMetrics().lastDeltaApplyMs", harness.context), 5,
     "a stale delta cannot replace the last successfully applied interval");
 
@@ -1517,6 +1584,26 @@ test("WebGL recovery waits for later restoration listeners, beyond a microtask c
   assert.equal(vm.runInContext('webglContextLost', harness.context), false);
 });
 
+
+test("effect preparation waits for cold renderer bootstrap and respects cancellation", async () => {
+  for (const cancel of [false, true]) {
+    const harness = createWorkerHarness([true], { session: 11, sequence: 0 });
+    let preparations = 0;
+    harness.createdRenderer.prepareEffectPrograms = async () => {
+      preparations++;
+      return { free() {} };
+    };
+    harness.createdRenderer.cacheEffectPrograms = () => {};
+    harness.context.bytes = new Uint8Array([1]);
+    const pending = vm.runInContext("prepareEffectPrograms({session:11, requestId:1, bytes})", harness.context);
+    assert.equal(preparations, 0);
+    if (cancel) vm.runInContext("handleEngineMessage({type:'release_effect_programs', session:11, requestId:1})", harness.context);
+    harness.creation.resolve(harness.createdRenderer);
+    await pending;
+    assert.equal(preparations, cancel ? 0 : 1);
+    assert.equal(harness.nextPort.messages.some(message => message.type === "effect_programs_prepared"), !cancel);
+  }
+});
 
 test("owned effect jobs drop late results and retain modules until source acknowledgement", async () => {
   const harness = createWorkerHarness([true], { session: 11, sequence: 0 });

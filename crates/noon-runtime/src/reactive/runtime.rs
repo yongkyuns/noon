@@ -72,19 +72,9 @@ impl PreparedReactiveRuntimeUpdate {
 }
 
 impl ReactiveRuntime {
-    /// Empty semantic reactive scaffolding is not externally driven behavior.
-    #[cfg(feature = "prepared-prefix")]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.state.signal_count() == 0 && self.targets.is_empty()
-    }
-
     pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
         self.target_lookup
             .contains_key(&binding_key(object, property))
-    }
-
-    pub(crate) fn has_property_bindings(&self) -> bool {
-        !self.targets.is_empty()
     }
     pub(crate) fn state_value(&self, signal: noon_core::SignalId) -> Option<&ReactiveValue> {
         self.state.value(signal)
@@ -274,6 +264,22 @@ impl ReactiveRuntime {
 }
 
 impl SceneInstance {
+    /// Apply the sparse derived-property changes after a sealed historical
+    /// forward step. The retained scalar schedule is authored; raw input paths
+    /// still invalidate history before reaching this helper.
+    pub(crate) fn apply_retained_scalar_reactive_changes(
+        &mut self,
+        changes: &[(usize, Property, ReactiveValue)],
+    ) {
+        for (object_index, property, value) in changes {
+            if self.object_slot_is_live(*object_index)
+                && apply_reactive_value(&mut self.frame, *object_index, *property, value)
+            {
+                self.mark_changed(*object_index);
+            }
+        }
+    }
+
     /// Preflight one input-only reactive slot append. `None` reserves a slot for
     /// a semantic identity that will be allocated by the owning transaction.
     pub fn prepare_reactive_signal_enrollment(

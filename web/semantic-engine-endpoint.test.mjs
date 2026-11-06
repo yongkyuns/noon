@@ -54,7 +54,7 @@ function fixture(
   const json = () => JSON.stringify({ channel: "noon.execution.retained", protocol_version: 28, session: 7, sequence: sequence++, snapshot: sequence === 1, time, objects: [] });
   const player = {
     sectionsJson: () => "[]",
-    sealReplay: () => {},
+    sealReplayForViewer: () => {},
     freshFiniteSourceDuration: () => null,
     initialDeltaJson: () => { initialSnapshots += 1; return json(); },
     debugFrameJson: () => JSON.stringify({ time, source: "active" }),
@@ -144,12 +144,12 @@ function fixture(
     drained, committedPhases,
     callbackReads,
   }),
-    attach: () => attachSemanticEngine(context, {
+    attach: (prepared = callbackHooks.prepared ?? null) => attachSemanticEngine(context, {
       controlPort: control.port1, renderPort: render.port1, session: 7,
       loopDurationSeconds: 2, transportMode, ...requestOptions,
     }, () => { stopped += 1; callbackHooks.onStop?.(); }, runRequiredCallbackPhase, continuation,
     callbackHooks.complete ?? null, callbackHooks.discard ?? null,
-    callbackHooks.testOnlyTickTimestamp ?? null),
+    callbackHooks.testOnlyTickTimestamp ?? null, prepared, callbackHooks.onExecutionDiagnostic ?? null),
     close: () => { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); },
   };
 }
@@ -2254,7 +2254,7 @@ for (const stage of ["initial", "intermediate", "endpoint"]) {
 for (const mode of ["shared", "transferable"]) {
   test(`completed static input stays at authored zero without replay or source controls (${mode})`, async () => {
     const f = fixture(mode, null, null, { completedStaticSource: true });
-    f.player.sealReplay = () => assert.fail("input owner cannot become immutable history");
+    f.player.sealReplayForViewer = () => assert.fail("input owner cannot become immutable history");
     f.player.freshFiniteSourceDuration = () => assert.fail("no invented source duration");
     let endpoint;
     try {
@@ -2285,7 +2285,7 @@ test("completed source attachment publishes once without starting its old callba
     onComplete: () => assert.fail("source is already complete"), onError: (_generation, error) => { throw error; },
   });
   f.player.initialCallbackPhaseJson = () => assert.fail("completed source cannot bootstrap another callback phase");
-  f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
+  f.player.sealReplayForViewer = () => { throw new Error("UnsupportedDomain"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2306,12 +2306,13 @@ test("completed source attachment publishes once without starting its old callba
 });
 
 for (const replaySupported of [true, false]) test(`source result waits for final edits before replay admission (${replaySupported})`, async () => {
+  const diagnostics = [];
   let finishSegment;
   const finished = new Promise((resolve) => { finishSegment = resolve; });
   const f = fixture("transferable", null, {
     generation: 27, onComplete: finishSegment, onError: (_generation, error) => { throw error; },
-  });
-  if (!replaySupported) f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
+  }, {}, { onExecutionDiagnostic: event => diagnostics.push(event) });
+  if (!replaySupported) f.player.sealReplayForViewer = () => { throw new Error("UnsupportedDomain"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2340,11 +2341,15 @@ for (const replaySupported of [true, false]) test(`source result waits for final
     await turn();
     assert.equal(resultReady, false);
     assert.equal(f.stats().completedSources, 0, "transport acceptance cannot retake the completed owner");
+    assert.equal(diagnostics.some(event => event.stage === "disposition"), false);
     assert.equal(finalDelta.sequence, initialDelta.sequence + 1);
     assert.equal(JSON.parse(decodeTransferableExecutionDelta(finalDelta).json).time, 1);
     f.render.port2.postMessage({ type: "execution_presented", session: finalDelta.session, sequence: finalDelta.sequence });
     await result;
     assert.equal(f.stats().completedSources, 1);
+    assert.equal(diagnostics.at(-1).disposition, "observed-complete",
+      "completed live execution stays observed even when final history can replay");
+    assert.equal(diagnostics.at(-1).capabilities.replay, replaySupported);
     const state = await request(f.control.port2, "state", 899);
     assert.equal(state.replaySupported, replaySupported);
     assert.equal(state.sections[0].name, "Tail");
@@ -2615,7 +2620,7 @@ test("rejected continuation pointer input preserves its existing wake", { timeou
 
 test("unavailable replay preserves final presentation and rejects transport commands", async () => {
   const f = fixture();
-  f.player.sealReplay = () => { throw new Error("RetentionLimit"); };
+  f.player.sealReplayForViewer = () => { throw new Error("RetentionLimit"); };
   let endpoint;
   try {
     const ready = next(f.control.port2);
@@ -2634,7 +2639,7 @@ test("unavailable replay preserves final presentation and rejects transport comm
 
 test("source continuation never seals a still-growing execution plan", async () => {
   const f = fixture("transferable", null, { generation: 901, onComplete() {}, onError() {} });
-  f.player.sealReplay = () => { throw new Error("must not seal source-owned playback"); };
+  f.player.sealReplayForViewer = () => { throw new Error("must not seal source-owned playback"); };
   let endpoint;
   try { const ready = next(f.control.port2); endpoint = await f.attach(); await ready;
     assert.equal((await request(f.control.port2, "state", 903)).durationSeconds, null);
@@ -2652,7 +2657,7 @@ for (const [sealError, reason] of [
 ]) {
   test(`replay rejection (${sealError}) preserves the normalized reason and paused forward observation`, async () => {
     const f = fixture();
-    f.player.sealReplay = () => { throw new Error(sealError); };
+    f.player.sealReplayForViewer = () => { throw new Error(sealError); };
     let seeks = 0;
     f.player.seekDeltaJson = () => { seeks += 1; throw new Error("forward controls must not seek"); };
     let ticks = 0;
@@ -2705,7 +2710,7 @@ test("non-replayable callback observation still waits for matching renderer evid
     callbacks += 1;
     return JSON.stringify({ token: phase.token, writes: [] });
   });
-  f.player.sealReplay = () => { throw new Error("Incomplete"); };
+  f.player.sealReplayForViewer = () => { throw new Error("Incomplete"); };
   let endpoint;
   try {
     const prepared = await prepareRendererObservationFixture(f, [
@@ -2800,7 +2805,37 @@ test("seek acknowledgements retain the exact evaluated time", async () => {
   try {
     const ready = next(f.control.port2);
     endpoint = await f.attach(); await ready;
-    assert.equal((await request(f.control.port2, "seek", 904, { time: 0.25 })).time, 0.25);
+    const result = await request(f.control.port2, "seek", 904, { time: 0.25 });
+    assert.equal(result.time, 0.25);
+    assert.ok(Number.isFinite(result.commandTiming.acceptedEpochMs));
+    assert.equal(result.commandTiming.presentationSettledEpochMs, undefined,
+      "nonblocking command acknowledgement does not claim a presentation before its receipt arrives");
+    assert.deepEqual(result.commandPublication, { session: 7, sequence: 1, time: 0.25 });
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("unchanged observed controls require Rust no-change evidence before reusing a shown frame", async () => {
+  const f = fixture(); let endpoint;
+  let proof = { session: 7, sequence: 0, time: 0, publicationContext: { frameEpoch: "1" } };
+  f.player.takeNoChangePresentationJson = () => JSON.stringify(proof);
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(); await ready;
+    present(f.render.port2, await initial);
+    await turn();
+
+    const paused = await request(f.control.port2, "pause", 905);
+    assert.deepEqual(paused.commandPublication, { session: 7, sequence: 0, time: 0 });
+    assert.equal(paused.presentationReceipt, undefined,
+      "nonblocking no-change evidence does not claim a command-time renderer receipt");
+    assert.equal(paused.commandTiming.presentationSettledEpochMs, undefined);
+
+    proof = { ...proof, sequence: 99 };
+    const resumed = await request(f.control.port2, "resume", 906);
+    assert.equal(resumed.commandPublication, undefined, "a stale Rust proof cannot name the cached frame");
+    assert.equal(resumed.presentationReceipt, undefined);
+    assert.equal(resumed.commandTiming.presentationSettledEpochMs, undefined);
   } finally { endpoint?.stop(); f.close(); }
 });
 
@@ -3089,7 +3124,7 @@ test("worker inspection errors retain their cause without admitting or resuming 
 
 test("non-replayable paused scenes drive native interaction wakes and settle", { timeout: 3000 }, async () => {
   const f = fixture();
-  f.player.sealReplay = () => { throw new Error("UnsupportedDomain"); };
+  f.player.sealReplayForViewer = () => { throw new Error("UnsupportedDomain"); };
   let active = false, ticks = 0;
   f.player.executionWake = () => ({ presentNow: false, cadence: active ? "animation_frame" : "idle" });
   f.player.submitBrowserPointerInputJson = () => { active = true; return true; };
@@ -3156,6 +3191,29 @@ test("finite completion probes use the Rust target and await its matching presen
   } finally { endpoint?.stop(); f.close(); }
 });
 
+for (const replaySupported of [true, false]) test(`finite audio diagnostics wait for playback completion (replay=${replaySupported})`, async () => {
+  const events = [], f = fixture("transferable", null, null, {}, { onExecutionDiagnostic: event => events.push(event) });
+  let time = 0, endpoint;
+  Object.assign(f.player, { hasAudio: () => true, finiteAudioDuration: () => 2,
+    audioResourceBundleBytes: () => new Uint8Array([2]), time: () => time, playbackTimeAt: () => time,
+    sealReplayForViewer() { if (!replaySupported) throw new Error("replay unavailable"); } });
+  try {
+    const ready = next(f.control.port2);
+    endpoint = await f.attach();
+    await ready;
+    assert.deepEqual(events.map(event => event.stage), ["attached", "terminal-adopted"]);
+    assert.equal(events[0].capabilities.audio, true);
+    assert.equal(events[0].capabilities.commands.includes("loop"), false);
+    await request(f.control.port2, "state", 1);
+    assert.equal(events.some(event => event.stage === "disposition"), false,
+      "source cleanup and a paused audio start do not complete playback");
+    time = 2;
+    await request(f.control.port2, "state", 2); await request(f.control.port2, "state", 3);
+    assert.equal(events.filter(event => event.stage === "disposition").length, 1);
+    assert.equal(events.at(-1).disposition, "finite-complete");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("finite audio prepares silently and anchors resume/seek only after matching presentation", async () => {
   const f = fixture();
   f.player.hasAudio = () => true;
@@ -3185,6 +3243,10 @@ test("finite audio prepares silently and anchors resume/seek only after matching
     assert.equal(playing.audioAnchor.playing, true);
     assert.equal(playing.audioAnchor.time, 0);
     assert.ok(Number.isFinite(playing.audioAnchor.sampledEpochMs));
+    assert.ok(Number.isFinite(playing.commandTiming.acceptedEpochMs));
+    assert.equal(playing.commandTiming.presentationSettledEpochMs, undefined,
+      "resume does not reuse a prior frame without Rust no-change proof");
+    assert.equal(playing.presentationReceipt, undefined);
     const changed = nextMatching(f.render.port2, message => message.type === "execution_delta");
     settled = false;
     const seeking = request(f.control.port2, "seek", 2, { time: 1.25 }).then(result => { settled = true; return result; });
@@ -3196,6 +3258,9 @@ test("finite audio prepares silently and anchors resume/seek only after matching
     const sought = await seeking;
     assert.equal(sought.audioAnchor.time, 1.25);
     assert.equal(sought.audioAnchor.playing, true);
+    assert.ok(sought.commandTiming.presentationSettledEpochMs >= sought.commandTiming.acceptedEpochMs);
+    assert.deepEqual(sought.presentationReceipt, { session: 7, sequence: delta.sequence,
+      time: 1.25, unchanged: false });
     assert.equal(f.stats().created, 1, "the original player remains sole execution owner");
   } finally { endpoint?.stop(); f.close(); }
 });
@@ -3299,6 +3364,90 @@ test("source effect preparation publishes only after GPU readiness and waits for
 });
 
 
+test("prepared source effect preparation keeps the paused reader as presentation authority", { timeout: 5000 }, async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  let preparedPlaying = false, published = 0, drained = 0, wakes = 0, deltaCount = 0;
+  f.render.port2.on("message", message => {
+    if (message.type === "execution_delta") deltaCount += 1;
+  });
+  f.player.setPreparedPlaying = value => { preparedPlaying = value; };
+  f.player.preparedPlaying = () => preparedPlaying;
+  f.player.preparedTime = () => f.player.time();
+  f.player.preparedPlaybackTimeAt = () => f.player.time();
+  f.player.preparedFrontier = () => 1;
+  f.player.sourceExecutionReady = () => false;
+  f.player.stopSourcePreparation = () => {};
+  f.player.free = () => {};
+  f.player.preparedPlaybackStateJson = () => JSON.stringify({
+    time: f.player.time(), frontier: 1, end: null,
+    seekRange: { start: 0, end: 0.9999999999999999 }, playing: preparedPlaying,
+    buffering: false, completed: false, advancing: false,
+    loopDuration: null, loopCount: 0, loopError: null,
+  });
+  f.player.sectionsJson = () => "[]";
+  f.context.effectPreparationResources = () => new Uint8Array([1, 2, 3]);
+  f.context.publishPreparedEffects = () => { published += 1; };
+  f.context.drainReturnedPublicationJson = () => { drained += 1; return null; };
+  let resolveInitialWake;
+  const initialWake = new Promise(resolve => { resolveInitialWake = resolve; });
+  const prepared = {
+    player: f.player, generation: 74, wakeSource() { wakes += 1; resolveInitialWake?.(); resolveInitialWake = null; },
+  };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(prepared);
+    await ready;
+    const first = await initial;
+    present(f.render.port2, first);
+    await initialWake;
+    await request(f.control.port2, "state", 900);
+    const wakeCount = wakes;
+    const beforeTime = f.player.time();
+    assert.equal(deltaCount, 1);
+
+    await assert.rejects(
+      endpoint.prepareSourceEffects(75, { startsSegment: false }),
+      /current returned source lease/,
+      "a stale continuation generation cannot prepare a module",
+    );
+
+    const staged = { startsSegment: false };
+    let resourceReady = nextMatching(f.render.port2, message => message.type === "prepare_effect_programs");
+    let released = nextMatching(f.render.port2, message => message.type === "release_effect_programs");
+    const failedPreparation = assert.rejects(
+      endpoint.prepareSourceEffects(74, staged),
+      /shader compilation failed/,
+    );
+    let resource = await resourceReady;
+    f.render.port2.postMessage({
+      type: "effect_programs_prepared", session: resource.session,
+      requestId: resource.requestId, error: "shader compilation failed",
+    });
+    await failedPreparation;
+    await released;
+    assert.equal(published, 0, "failed device work cannot commit the source edit");
+
+    resourceReady = nextMatching(f.render.port2, message => message.type === "prepare_effect_programs");
+    released = nextMatching(f.render.port2, message => message.type === "release_effect_programs");
+    const operation = endpoint.prepareSourceEffects(74, staged);
+    resource = await resourceReady;
+    assert.equal(published, 0, "source semantics wait for successful device compilation");
+    f.render.port2.postMessage({
+      type: "effect_programs_prepared", session: resource.session, requestId: resource.requestId,
+    });
+    await operation;
+    await released;
+
+    assert.equal(published, 1);
+    assert.equal(drained, 0, "future source state is not sent as a display publication");
+    assert.equal(deltaCount, 1, "shader preparation does not fabricate a new picture");
+    assert.equal(f.player.time(), beforeTime);
+    assert.equal(wakes, wakeCount, "source resumes only through its prepared-driver barrier");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
 test("silent execution publishes Rust cue metadata and forwards strict section navigation", async () => {
   const f = fixture();
   const sections = [{ index: 0, name: "Start", time: 0 }, { index: 1, name: "Detail", time: 0.75 }];
@@ -3327,6 +3476,166 @@ test("silent execution publishes Rust cue metadata and forwards strict section n
       assert.equal((await result).time, time);
     }
     assert.deepEqual(directions, [[false, 0.5], [true, 0.5]], "relative seeks use the Rust clock observation, not stale frame time");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("prepared execution publishes admitted Rust cues and waits for section presentation", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: true });
+  const calls = [];
+  let currentPublication = null;
+  let noChangeProof = null;
+  let preparedPlaying = false;
+  f.player.setPreparedPlaying = value => { preparedPlaying = value; };
+  f.player.preparedTime = () => f.player.time();
+  f.player.preparedPlaybackTimeAt = () => f.player.time();
+  f.player.preparedFrontier = () => 1;
+  f.player.preparedPlaybackStateJson = () => JSON.stringify({
+    time: f.player.time(), frontier: 1, end: null,
+    seekRange: { start: 0, end: 0.9999999999999999 }, playing: preparedPlaying,
+    buffering: false, completed: false, advancing: false,
+    loopDuration: null, loopCount: 0, loopError: null,
+  });
+  f.player.sectionsJson = () => JSON.stringify([
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Interior", time: 0.75 },
+  ]);
+  f.player.sectionStateJson = time => JSON.stringify({ current: 0, previous: null, next: 1, observedTime: time });
+  f.player.seekSectionDeltaJson = (previous, time) => {
+    calls.push([previous, time]);
+    if (!previous && f.player.time() >= 0.75) {
+      noChangeProof = JSON.stringify({ ...currentPublication, time: f.player.time() });
+      return null;
+    }
+    const delta = f.player.seekDeltaJson(previous ? 0 : 0.75);
+    const publication = JSON.parse(delta);
+    currentPublication = { session: publication.session, sequence: publication.sequence };
+    noChangeProof = JSON.stringify({ ...currentPublication, time: 0 });
+    return delta;
+  };
+  f.player.sourceExecutionReady = () => false;
+  f.player.takePreparedNoChangePresentationJson = () => {
+    const proof = noChangeProof;
+    noChangeProof = null;
+    return proof;
+  };
+  f.player.setPreparedLoopDuration = () => {};
+  f.player.stopSourcePreparation = () => {};
+  f.player.free = () => {};
+  const prepared = { player: f.player, generation: 1, wakeSource() {} };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(prepared);
+    const state = await ready;
+    assert.deepEqual(state.sections, [
+      { index: 0, name: "Start", time: 0 },
+      { index: 1, name: "Interior", time: 0.75 },
+    ]);
+    assert.equal(state.sectionState.observedTime, state.time);
+    present(f.render.port2, await initial);
+
+    let settled = false;
+    const seeking = request(f.control.port2, "seek_section", 1, { previous: false })
+      .then(result => { settled = true; return result; });
+    const delta = await nextMatching(f.render.port2, message => message.type === "execution_delta");
+    await turn();
+    assert.equal(settled, false, "section navigation waits for the chosen picture to be presented");
+    assert.deepEqual(calls, [[false, 0]]);
+    present(f.render.port2, delta);
+    const result = await seeking;
+    assert.equal(result.time, 0.75);
+    assert.ok(result.commandTiming.presentationSettledEpochMs >= result.commandTiming.acceptedEpochMs);
+
+    noChangeProof = JSON.stringify({ ...currentPublication, time: 0 });
+    const unchanged = await request(f.control.port2, "seek_section", 2, { previous: false });
+    assert.deepEqual(calls, [[false, 0], [false, 0.75]]);
+    assert.deepEqual(unchanged.presentationReceipt, {
+      session: currentPublication.session,
+      sequence: currentPublication.sequence,
+      time: 0.75,
+      unchanged: true,
+    }, "a no-target command replaces a stale proof with the current displayed receipt");
+  } finally { endpoint?.stop(); f.close(); }
+});
+
+test("prepared no-target section acknowledgement keeps the Rust playhead without a new picture", async () => {
+  const f = fixture("transferable", null, null, { initiallyPaused: false });
+  let currentPublication = null;
+  let noChangeProof = null;
+  let playing = true;
+  let sectionQueries = [];
+  let deltaCount = 0;
+  f.render.port2.on("message", message => {
+    if (message.type === "execution_delta") deltaCount += 1;
+  });
+  f.player.seekDeltaJson(3);
+  const initialDelta = f.player.initialDeltaJson;
+  f.player.initialDeltaJson = () => {
+    const delta = JSON.parse(initialDelta());
+    currentPublication = { session: delta.session, sequence: delta.sequence };
+    return JSON.stringify(delta);
+  };
+  f.player.setPreparedPlaying = value => { playing = value; };
+  f.player.preparedTime = () => f.player.time();
+  f.player.preparedPlaybackTimeAt = () => 4;
+  f.player.preparedFrontier = () => 5;
+  f.player.preparedPlaybackStateJson = () => JSON.stringify({
+    time: f.player.time(), frontier: 5, end: null,
+    seekRange: { start: 0, end: 4.999999999999999 }, playing,
+    buffering: false, completed: false, advancing: true,
+    loopDuration: null, loopCount: 0, loopError: null,
+  });
+  f.player.sectionsJson = () => JSON.stringify([
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Last", time: 2 },
+  ]);
+  f.player.sectionStateJson = time => {
+    sectionQueries.push(time);
+    return JSON.stringify({ current: 1, previous: 0, next: null });
+  };
+  f.player.seekSectionDeltaJson = (previous, time) => {
+    assert.equal(previous, false);
+    assert.equal(time, 4);
+    assert.equal(JSON.parse(f.player.sectionStateJson(time)).next, null);
+    noChangeProof = JSON.stringify({ ...currentPublication, time: f.player.time() });
+    return f.player.drainDeltaJson();
+  };
+  f.player.sourceExecutionReady = () => false;
+  f.player.takePreparedNoChangePresentationJson = () => {
+    const proof = noChangeProof;
+    noChangeProof = null;
+    return proof;
+  };
+  f.player.setPreparedLoopDuration = () => {};
+  f.player.stopSourcePreparation = () => {};
+  f.player.free = () => {};
+  const prepared = { player: f.player, generation: 1, wakeSource() {} };
+  let endpoint;
+  try {
+    const ready = next(f.control.port2);
+    const initial = nextMatching(f.render.port2, message => message.type === "execution_delta");
+    endpoint = await f.attach(prepared);
+    const initialState = await ready;
+    assert.equal(initialState.time, 3);
+    present(f.render.port2, await initial);
+    await turn();
+
+    const result = await request(f.control.port2, "seek_section", 2, { previous: false });
+    assert.equal(result.time, 4, "the no-op acknowledgement preserves the logical playhead");
+    assert.equal(result.playing, true, "a no-target query preserves playback intent");
+    assert.equal(f.player.time(), 3, "the reader remains at its displayed sample");
+    assert.deepEqual(result.presentationReceipt, {
+      ...currentPublication,
+      time: 3,
+      unchanged: true,
+    }, "the receipt stays attached to the unchanged displayed sample");
+    assert.equal(result.sectionState.next, null);
+    assert.ok(sectionQueries.filter(time => time === 4).length >= 3,
+      "Rust cue metadata detects the no-target query and describes its logical acknowledgement");
+    await turn();
+    assert.equal(deltaCount, 1, "the no-target query does not force a renderer upload");
+    assert.equal(f.stats().initialSnapshots, 1);
   } finally { endpoint?.stop(); f.close(); }
 });
 

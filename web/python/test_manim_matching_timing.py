@@ -49,7 +49,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
         path = Path(__file__).with_name("_manim_scene.py")
         tree = ast.parse(path.read_text())
         candidate = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                         and n.name == "_build_canonical_composition_candidate")
+                         and n.name == "_build_canonical_composition_candidate_steps")
         branch = next(n for n in ast.walk(candidate) if isinstance(n, ast.If)
                       and ast.unparse(n.test) == "family_transform is not None")
         params = "context builder family_transform child_kwargs completed_families".split()

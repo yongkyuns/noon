@@ -7,9 +7,10 @@ import { PNG } from "pngjs";
 import playwright from "playwright";
 import { disableAuthoringJspi, playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
-import { createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
+import { captureAttemptedPage, createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
 import { assertNonreplayableShowcase, readLiveState } from "./showcase-live-review.mjs";
+import { seekPausedGallery } from "./showcase-playback.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
 import { serveRepository } from "./browser-test-server.mjs";
 
@@ -43,6 +44,7 @@ await mkdir(artifacts, { recursive: true });
 
 let server;
 let browser;
+let page = null;
 let runtimeCache;
 const failureTrace = createBrowserFailureTrace();
 let detachFailureTrace;
@@ -138,7 +140,7 @@ try {
   });
   await runtimeCache.install(context);
   await disableAuthoringJspi(context);
-  const page = await context.newPage();
+  page = await context.newPage();
   detachFailureTrace = failureTrace.attach(browser, context, page);
   failureTrace.setPhase("gallery-selection");
   page.setDefaultTimeout(30000);
@@ -244,22 +246,13 @@ try {
     "none",
     "source-declared click actions must not require manifest interaction policy",
   );
-  const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-  if (await pause.count()) await pause.click();
   const authoredPlayback = await readLiveState(page);
+  report.authoredPlaybackBeforeSeek = authoredPlayback;
   if (authoredPlayback.controls.controllable === "true") {
-    const scrubber = page.locator(".playback-scrubber");
-    const endpoint = Number(await scrubber.getAttribute("max"));
-    await scrubber.evaluate((input, time) => {
-      input.value = String(time);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }, endpoint);
-    await page.waitForFunction((time) => {
-      const controls = document.querySelector(".playback-controls");
-      return controls?.dataset.busy === "false" &&
-        controls.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation" &&
-        Math.abs(Number(controls.dataset.elapsedSeconds) - time) < 1e-7;
-    }, endpoint);
+    const manifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
+    const lesson = manifest.entries.find(entry => entry.id === "showcase-pointer-selection");
+    assert.ok(lesson);
+    const endpoint = await seekPausedGallery(page, lesson.duration);
     // Nonaudio seek acknowledgement can precede presentation. Baseline the
     // actual endpoint, not an earlier Create frame that the click will replace.
     await waitForBrowserObservation(page, async time => {
@@ -280,7 +273,6 @@ try {
     assert.match(authoredPlayback.replayReason, /^Replay unavailable:/);
     for (const control of ["play", "restart", "scrubber"]) assert.equal(authoredPlayback.disabledReplayControls[control], true);
   }
-  report.authoredPlaybackBeforeSeek = authoredPlayback;
   report.authoredPlayback = await readLiveState(page);
   const authoredBox = await authoredCanvas.boundingBox();
   assert.ok(authoredBox && authoredBox.width > 0 && authoredBox.height > 0, "authored canvas is not drawable");
@@ -560,6 +552,7 @@ try {
   assert.deepEqual(errors, []);
 } catch (error) {
   failure = error;
+  report.attemptedPage = await captureAttemptedPage(page);
   if (error.capture) captures.failure = error.capture;
   throw error;
 } finally {

@@ -1,15 +1,1197 @@
+import ast
 import unittest
+from hashlib import sha256
 from pathlib import Path
 from textwrap import dedent
+from unittest.mock import patch
 
-from _manim_source_execution import source_is_scene_only
+from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 
 class SourceEffectsTests(unittest.TestCase):
-    def test_lesson_navigation_retains_observed_source_until_completed_replay(self):
-        # Prefix transport does not carry navigation metadata; ordinary source
-        # execution still compiles its barriers and retains completed replay.
-        self.assertFalse(source_is_scene_only(dedent('''
+    def test_helper_proof_work_scales_with_call_sites(self):
+        def visits(count):
+            source = ("def offset(value):\n    return value + 1\n\n"
+                      "def samples(count):\n    rows = []\n    for index in range(count):\n"
+                      + "        rows.append(offset(index))\n" * count + "    return rows\n")
+            original_walk = ast.walk
+            visited = 0
+
+            def counted_walk(node):
+                nonlocal visited
+                for child in original_walk(node):
+                    visited += 1
+                    yield child
+
+            with patch.object(ast, "walk", counted_walk):
+                self.assertTrue(source_execution_proof(source)["admitted"])
+            return visited
+
+        # Count syntax work, not wall time: doubling calls must not rescan the
+        # growing function body once per call (the previous quadratic behavior).
+        self.assertLessEqual(visits(64), 2.5 * visits(32))
+
+    def test_regex_match_reads_require_canonical_iterator_results(self):
+        source = '''import re
+
+def tokens(value):
+    spans = []
+    for match in re.finditer(r"[A-Za-z]+", value):
+        token = match.group()
+        if token.isdigit():
+            spans.append((match.start(), match.end()))
+    return spans
+'''
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        for unsafe in (
+            source.replace("import re\n", "import re\nre = context.get('module')\n", 1),
+            source.replace('for match in re.finditer(r"[A-Za-z]+", value):',
+                           "for match in context.get('matches'):", 1),
+            source.replace("token = match.group()", "group = match.group\n        token = group()", 1),
+        ):
+            self.assertFalse(source_execution_proof(unsafe)["admitted"])
+
+    def test_typed_local_grouping_and_scene_owned_forwarding(self):
+        source = Path(__file__).with_name("examples").joinpath("cuda_transpose_banks.py").read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        unsafe = (
+            source.replace("banks = [{} for _ in range(32)]", "banks = [external for _ in range(32)]", 1),
+            source.replace("banks[word % 32].setdefault(word, [])", "other[word % 32].setdefault(word, [])", 1),
+            source.replace("for bank in banks", "for bank in external", 1),
+            source.replace("await self.play(*animations, run_time=seconds / SPEED)",
+                           "saved = animations\n        await self.play(*saved, run_time=seconds / SPEED)", 1),
+            source.replace("selected.append([tx, c, word, c * 32 + tx, tile[word]])",
+                           "selected.append([tx, c, word, c * 32 + tx, context.get('value')])", 1),
+            source.replace('        stride, reads = trace["stride"], trace["reads"]\n',
+                           '        stride, reads = trace["stride"], trace["reads"]\n        reads = None\n', 1),
+            source.replace('        stride, reads = trace["stride"], trace["reads"]\n',
+                           '        stride, reads = trace["stride"], trace["reads"]\n        if True:\n            reads = None\n', 1),
+            source.replace('    for lane, _, word, _, _ in reads:\n',
+                           '    for lane, _, word, _, _ in reads:\n        word = None\n', 1),
+            source.replace('    for lane, _, word, _, _ in reads:\n',
+                           '    banks[0] = None\n    for lane, _, word, _, _ in reads:\n', 1),
+            source.replace('def service_batches(reads):\n',
+                           'def service_batches(reads):\n    reads = None\n', 1),
+            source.replace('getattr(self, "_cuda_probe", None)',
+                           'getattr(self, "_owner", None)', 1),
+        )
+        for candidate in unsafe:
+            with self.subTest(candidate="modified typed source provenance"):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+        smaller = source.replace("banks = [{} for _ in range(32)]",
+                                 "banks = [{} for _ in range(16)]", 1).replace(
+                                     "banks[word % 32]", "banks[word % 16]", 1)
+        self.assertTrue(source_execution_proof(smaller)["admitted"])
+        self.assertFalse(source_execution_proof(smaller.replace(
+            "banks[word % 16]", "banks[word % 32]", 1))["admitted"])
+
+        wrappers = "\n".join((
+            "from noon import *", "class Example(Scene):",
+            "    async def dispatch(self, *animations):",
+            "        await self.play(*animations)",
+            "    def construct(self):", "        self.play(FadeIn(Square()))", ""))
+        self.assertTrue(source_execution_proof(wrappers)["admitted"])
+        self.assertFalse(source_execution_proof(wrappers.replace(
+            "await self.play(*animations)", "saved = animations\n        await self.play(*saved)"))["admitted"])
+
+        optional = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        listener = getattr(self, '_listener', None)",
+            "        if listener is not None:", "            listener.notify(self)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertTrue(source_execution_proof(optional)["admitted"])
+        collision = optional.replace("    def inspect(self):\n",
+                                     "    def inspect(self):\n        self._listener = None\n", 1)
+        self.assertFalse(source_execution_proof(collision)["admitted"])
+        class_collision = optional.replace("class Example(Scene):\n",
+                                           "class Example(Scene):\n    _listener = None\n", 1)
+        self.assertFalse(source_execution_proof(class_collision)["admitted"])
+        for field in ("__class__", "__dict__", "__doc__"):
+            with self.subTest(field=field):
+                source = optional.replace("class Example(Scene):\n",
+                                          "class Example(Scene):\n    '''present class documentation'''\n", 1)
+                self.assertFalse(source_is_scene_only(source.replace("'_listener'", repr(field))))
+        for field in ("time", "declare_wait"):
+            with self.subTest(field=field):
+                self.assertFalse(source_is_scene_only(optional.replace("'_listener'", repr(field))))
+        for field in ("_noon_portable_construct_mode", "_noon_async_continuation_pending",
+                      "_canonical_authoring_context"):
+            with self.subTest(runtime_field=field):
+                self.assertFalse(source_is_scene_only(optional.replace("'_listener'", repr(field))))
+        for field in ("_noon_async_continuation_mode", "_canonical_authoring_context"):
+            with self.subTest(runtime_write=field):
+                runtime_write = optional.replace(
+                    "        listener = getattr(self, '_listener', None)",
+                    f"        self.{field} = None\n"
+                    "        listener = getattr(self, '_listener', None)")
+                self.assertFalse(source_is_scene_only(runtime_write))
+        wrapped = optional.replace(
+            "listener = getattr(self, '_listener', None)",
+            "listener = (getattr(self, '_listener', None),)")
+        self.assertFalse(source_is_scene_only(wrapped))
+        wrapped = optional.replace(
+            "listener = getattr(self, '_listener', None)",
+            "listener = getattr(self, '_listener', None) or True")
+        self.assertFalse(source_is_scene_only(wrapped))
+        nested_shadow = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        listener = getattr(self, '_listener', None)",
+            "        def nested(listener):", "            if listener is not None:",
+            "                self.wait(1)", "        nested(1)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_is_scene_only(nested_shadow))
+        parameter_shadow = "\n".join((
+            "from noon import *", "class Example(Scene):",
+            "    def inspect(self, optional=1):", "        if optional is not None:",
+            "            print('observable effect')",
+            "        optional = getattr(self, '_absent', None)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_is_scene_only(parameter_shadow))
+        late_getter = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        if optional is not None:", "            self.wait(1)",
+            "        optional = getattr(self, '_absent', None)",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_is_scene_only(late_getter))
+        dynamic_lookup = optional.replace(
+            "    def inspect(self):",
+            "    def __getattr__(self, name):\n        return object()\n    def inspect(self):", 1)
+        self.assertFalse(source_is_scene_only(dynamic_lookup))
+        storage_write = optional.replace(
+            "        listener = getattr(self, '_listener', None)",
+            "        self.__dict__['_listener'] = object()\n        listener = getattr(self, '_listener', None)")
+        self.assertFalse(source_is_scene_only(storage_write))
+
+    def test_optional_scene_storage_is_not_proven_absent(self):
+        source = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        storage = getattr(self, '__dict__', None)",
+            "        if storage is not None:", "            storage['_listener'] = None",
+            "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_execution_proof(source)["admitted"])
+        replacement = "\n".join((
+            "from noon import *", "class Example(Scene):", "    def inspect(self):",
+            "        self.__dict__ = {'_absent': 1}",
+            "        optional = getattr(self, '_absent', None)",
+            "        if optional is not None:", "            print('observable effect')",
+            "        self.wait(1)", "    def construct(self):", "        self.inspect()", ""))
+        self.assertFalse(source_execution_proof(replacement)["admitted"])
+
+    def test_canonical_numpy_import_replaces_the_optional_wildcard_namespace(self):
+        import noon
+        source = Path(__file__).parents[2].joinpath("scripts/fixtures/noon_fourier_epicycles.py").read_text()
+        with patch.object(noon, "__all__", [*noon.__all__, "np"]):
+            self.assertTrue(source_is_scene_only(source))
+            for replacement in ("np = context.get('module')", "import numpy as other",
+                                "import numpy as np\nnp = context.get('module')",
+                                "early = np.array([1])\nimport numpy as np"):
+                with self.subTest(replacement=replacement):
+                    self.assertFalse(source_is_scene_only(source.replace("import numpy as np", replacement, 1)))
+
+    def test_linear_scene_requires_closed_base_initializer_and_text(self):
+        source = Path(__file__).with_name("examples").joinpath("showcase_linear_algebra.py").read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        variants = (
+            source.replace("from noon import *", "from noon import Scene, LinearTransformationScene, prepare_latex, YELLOW"),
+            source.replace("from noon import *", "from manim import *"),
+            source.replace("class LinearAlgebra", "LinearTransformationScene = Scene\nclass LinearAlgebra"),
+            source.replace("leave_ghost_vectors=True", "leave_ghost_vectors=context.get('value')"),
+            source.replace("leave_ghost_vectors=True", "leave_ghost_vectors=1"),
+            source + "\n    def apply_matrix(self, matrix): pass\n",
+            source.replace('        caption = Typst', '        Typst = self.wait\n        caption = Typst'),
+            source.replace('        caption = Typst', '        Mesh3D.sphere(radius=1)\n        caption = Typst'),
+            source.replace('        caption = Typst("Swap the coordinates")', '        caption = Typst(context.get("caption"))'),
+        )
+        for unsafe in variants:
+            with self.subTest(source=unsafe):
+                self.assertFalse(source_is_scene_only(unsafe))
+
+    def test_moving_camera_scene_requires_the_canonical_closed_wrapper(self):
+        examples = Path(__file__).with_name("examples")
+        bloom = (examples / "showcase_bloom_emission.py").read_text()
+        self.assertEqual(source_execution_proof(bloom), {"admitted": True, "reason": None})
+        camera_callbacks = (examples / "showcase_camera_follows_path.py").read_text()
+        self.assertFalse(source_execution_proof(camera_callbacks)["admitted"])
+        self.assertTrue(source_is_scene_only(
+            'from noon import MovingCameraScene\n'
+            'class Example(MovingCameraScene):\n'
+            '    def construct(self): self.wait(0.1)\n'))
+        self.assertTrue(source_is_scene_only(
+            'from noon import MovingCameraScene\n'
+            'class Example(MovingCameraScene):\n'
+            '    async def construct(self): await self.wait(0.1)\n'))
+
+        unsafe_sources = (
+            'from noon import *\nMovingCameraScene = Scene\n'
+            'class Example(MovingCameraScene):\n    def construct(self): pass\n',
+            'from manim import MovingCameraScene\n'
+            'class Example(MovingCameraScene):\n    def construct(self): pass\n',
+            'from manim import *\n'
+            'class Example(MovingCameraScene):\n    def construct(self): pass\n',
+            'from noon import MovingCameraScene as CameraScene\n'
+            'class Example(CameraScene):\n    def construct(self): pass\n',
+            'from noon import *\nclass Example(MovingCameraScene):\n'
+            '    def construct(self): pass\n    def add(self): pass\n',
+            'from noon import *\nclass Example(MovingCameraScene):\n'
+            '    def __init__(self): pass\n    def construct(self): pass\n',
+            'from noon import *\nclass Example(MovingCameraScene):\n    pass\n',
+        )
+        for source in unsafe_sources:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
+    def test_coordinate_plot_uses_only_preparation_time_scalar_math(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_coordinate_plotting.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        for callback in ("lambda t: print(t)", "lambda t: self.wait(t)",
+                         "lambda t: open(str(t))", "sin", "lambda t: context.sample(t)"):
+            with self.subTest(callback=callback):
+                self.assertFalse(source_is_scene_only(source.replace("lambda t: sin(0.8 * t)", callback)))
+        self.assertFalse(source_is_scene_only(source.replace(
+            "        model = axes.plot", "        sin = self.wait\n        model = axes.plot")))
+        self.assertFalse(source_is_scene_only(source.replace(
+            "        model = axes.plot", "        factory = axes.plot\n        model = factory")))
+
+    def test_spatial_showcases_use_the_closed_three_d_scene_wrappers(self):
+        examples = Path(__file__).with_name("examples")
+        for filename in ("showcase_three_d_axes.py", "showcase_spatial_scene.py"):
+            with self.subTest(filename=filename):
+                self.assertEqual(source_execution_proof((examples / filename).read_text()),
+                                 {"admitted": True, "reason": None})
+
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import ThreeDScene, ThreeDAxes, Typst
+            class Example(ThreeDScene):
+                def construct(self):
+                    axes = ThreeDAxes()
+                    Typst("caption")
+        ''')))
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import Scene, Circle, Color
+            class Example(Scene):
+                def construct(self):
+                    Color(0.1, 0.2, 0.3)
+                    Circle()
+        ''')))
+
+        unsafe_sources = (
+            # A wildcard import cannot authorize a subsequently shadowed base.
+            ('from noon import *\nThreeDScene = Scene\n'
+             'class Example(ThreeDScene):\n    def construct(self): pass\n'),
+            ('from manim import ThreeDScene\nclass Example(ThreeDScene):\n'
+             '    def construct(self): pass\n'),
+            # Additional overrides could replace the wrapper's closed methods.
+            ('from noon import *\nclass Example(ThreeDScene):\n'
+             '    def construct(self): pass\n    def move_camera(self): pass\n'),
+            # Spatial constructors are callable only directly in the proven class.
+            ('from noon import *\nclass Example(ThreeDScene):\n'
+             '    def construct(self):\n        factory = Mesh3D.parametric\n'),
+            ('from noon import *\nclass Example(ThreeDScene):\n'
+             '    def construct(self):\n'
+             '        Mesh3D.parametric(lambda u, v: (self.wait(), v, 0), '
+             'u_range=(0, 1), v_range=(0, 1), resolution=(2, 2), '
+             'color=RED, point_lit=True)\n'),
+            # The same wrapper names are not enabled on ordinary Scene classes.
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        ThreeDAxes()\n'),
+        )
+        for source in unsafe_sources:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
+        for filename, names in (("showcase_spatial_scene.py", ("Mesh3D", "Color")),
+                                ("showcase_three_d_axes.py", ("RED",))):
+            spatial = (examples / filename).read_text()
+            for shadowed in names:
+                with self.subTest(filename=filename, shadowed=shadowed):
+                    poisoned = spatial.replace(
+                        "    async def construct(self):\n",
+                        f"    async def construct(self):\n        {shadowed} = None\n",
+                        1,
+                    )
+                    self.assertFalse(source_execution_proof(poisoned)["admitted"])
+    def test_builtin_audio_source_is_confined_to_initial_scene_audio(self):
+        source = dedent('''
+            from noon import *
+
+            class AudioWithOrdinaryPlay(Scene):
+                def construct(self):
+                    self.audio(
+                        AudioSource.small_discovery(),
+                        duration=3.0,
+                        gain=0.5,
+                        fade_in=0.5,
+                        fade_out=0.5,
+                    )
+                    self.play(Create(Circle(radius=0.5)), run_time=1.0)
+                    self.wait(2.0)
+        ''').lstrip()
+        self.assertEqual(sha256(source.encode()).hexdigest(),
+                         "a898089e0534e31a5a149daaff4fec95ffc7ba5d108125d8ba93b4e252e5a60b")
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        rejected = (
+            # Module or local rebinding cannot change the trusted factory.
+            'from noon import *\nAudioSource = Circle\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self, AudioSource):\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            # Factory/member aliases and escaped resources are not a proof.
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        make = AudioSource.small_discovery\n'
+            '        self.audio(make(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        source = AudioSource.small_discovery()\n'
+            '        self.audio(source, duration=3)\n',
+            'from noon import *\nAudioSource.small_discovery()\n',
+            # A source cannot add or replace audio after execution has started.
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        self.play(Create(Circle()), run_time=1)\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        if True:\n            self.play(Create(Circle()), run_time=1)\n'
+            '        self.audio(AudioSource.small_discovery(), duration=3)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        self.audio(AudioSource.small_discovery(channels=1), duration=3)\n',
+        )
+        for unsafe in rejected:
+            with self.subTest(source=unsafe):
+                self.assertFalse(source_execution_proof(unsafe)["admitted"])
+
+    def test_audio_option_proof_rejects_integer_literals_outside_device_range_without_raising(self):
+        duration = str(10**1000)
+        source = ("from noon import *\nclass Example(Scene):\n"
+                  "    def construct(self):\n"
+                  f"        self.audio(AudioSource.small_discovery(), duration={duration})\n")
+        self.assertFalse(source_execution_proof(source)["admitted"])
+
+    def test_svg_from_string_is_in_memory_and_path_queries_are_read_only(self):
+        source = dedent('''
+            from noon import *
+
+            SVG_SOURCE = """<svg xmlns="http://www.w3.org/2000/svg">
+              <path d="M0 0 L1 0 L1 1 Z"/>
+            </svg>"""
+
+            class Outline(Scene):
+                def construct(self):
+                    imported = SVGMobject.from_string(SVG_SOURCE, height=4)
+                    contours = []
+                    for member in imported.family_members_with_points():
+                        for control_points in member.get_subpaths():
+                            if len(control_points) >= 4:
+                                contours.append(VMobject().set_points(control_points))
+                    contours.sort(key=lambda path: path.get_arc_length(), reverse=True)
+                    path = contours[0]
+                    point = path.point_from_proportion(0.5)
+                    self.add(path)
+        ''')
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        unsafe = (
+            # Path-based SVG construction and nonliteral resource acquisition stay opaque.
+            'from noon import *\nclass Outline(Scene):\n'
+            '    def construct(self):\n        imported = SVGMobject("outline.svg")\n',
+            'from noon import *\ndef load_svg(): return "<svg/>"\n'
+            'class Outline(Scene):\n    def construct(self):\n'
+            '        imported = SVGMobject.from_string(load_svg())\n',
+            # A method alias cannot carry the constructor capability.
+            'from noon import *\nmake_svg = SVGMobject.from_string\n',
+            # Imported geometry is immutable; set_points is limited to a fresh local VMobject.
+            'from noon import *\nclass Outline(Scene):\n'
+            '    def construct(self):\n'
+            '        imported = SVGMobject.from_string("<svg/>")\n'
+            '        imported.set_points([])\n',
+            # Module string ownership cannot be shadowed in the scene scope.
+            'from noon import *\nSVG_SOURCE = "<svg/>"\nclass Outline(Scene):\n'
+            '    def construct(self):\n        SVG_SOURCE = "<svg/>"\n'
+            '        SVGMobject.from_string(SVG_SOURCE)\n',
+        )
+        for candidate in unsafe:
+            with self.subTest(source=candidate):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+    def test_full_fourier_source_proves_closed_numpy_dataflow_without_claiming_runtime_replay(self):
+        source = Path(__file__).parents[2].joinpath(
+            "scripts", "fixtures", "noon_fourier_epicycles.py"
+        ).read_text()
+        self.assertEqual(sha256(source.encode()).hexdigest(),
+                         "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9")
+        proof = source_execution_proof(source)
+        self.assertEqual(proof, {"admitted": True, "reason": None})
+
+        unsafe = (
+            source.replace("import numpy as np", "import numpy", 1),
+            source.replace("np.fft.fft(samples)", "np.fft.rfft(samples)", 1),
+            source.replace("import numpy as np", "from numpy import array", 1),
+            source.replace("dtype=complex", "dtype=object", 1),
+            source.replace("import numpy as np", "import numpy as np\nmake_array = np.array", 1),
+            source.replace("import numpy as np", "import numpy as np\ndef leak(value):\n    return value.real", 1),
+            source.replace("def resample_outline(points, count):",
+                           "def resample_outline(points, count):\n    np = math", 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    sampled.append(context.get("payload"))\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    alias = sampled\n    alias.append(context.get("payload"))\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    sampled[0] = context.get("payload")\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    path = contours[CONTOUR_INDEX]",
+                           '    alias = contours\n    alias.append(context.get("payload"))\n'
+                           '    path = contours[CONTOUR_INDEX]', 1),
+            source.replace("    path = contours[CONTOUR_INDEX]",
+                           '    contours[0] = context.get("payload")\n'
+                           '    path = contours[CONTOUR_INDEX]', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    values = np.array([0])\n    values[0] = context.get("payload")\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    def mutate():\n        sampled.append(context.get("payload"))\n'
+                           '    mutate()\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])",
+                           '    values = np.array([0])\n'
+                           '    def mutate():\n        values[0] = context.get("payload")\n'
+                           '    mutate()\n'
+                           '    return np.array([complex(float(p[0]), float(p[1])) for p in sampled])', 1),
+            source.replace("from noon import *", "from noon import *\nVMobject = context.get('factory')", 1),
+            source.replace("from noon import *", "from noon import *\nSVGMobject = context.get('factory')", 1),
+            source.replace("    imported = SVGMobject.from_string(SVG_SOURCE, height=4)",
+                           "    VMobject = context.get('factory')\n"
+                           "    imported = SVGMobject.from_string(SVG_SOURCE, height=4)", 1),
+            source.replace("    imported = SVGMobject.from_string(SVG_SOURCE, height=4)",
+                           "    SVGMobject = context.get('factory')\n"
+                           "    imported = SVGMobject.from_string(SVG_SOURCE, height=4)", 1),
+        )
+        for candidate in unsafe:
+            with self.subTest(source_mutation=candidate[:120]):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+        shadow = ("import numpy as np\n"
+                  "def outer(value):\n"
+                  "    def inner():\n"
+                  "        value = np.array([])\n"
+                  "    return value.real\n")
+        self.assertFalse(source_execution_proof(shadow)["admitted"])
+
+    def test_numpy_array_provenance_rejects_external_inputs_rebinds_and_shadowed_helpers(self):
+        unsafe = (
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        values = np.asarray(context.get("payload"))\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(samples): return samples.real\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            '        helper(np.array([1]))\n        helper(context)\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        values = np.array([1])\n'
+            '        values = context\n        result = np.sum(values)\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(samples): return samples.real\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            '        helper = context.get("callback")\n'
+            '        result = helper(np.array([1]))\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        callback = context.get("callback")\n'
+            '        result = callback(np.array([1]))\n',
+            'import numpy as np\n'
+            'def mutate(values):\n    view = np.asarray(values)\n    view[0] = 2\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        result = np.concatenate(context.get("arrays"))\n',
+            'from noon import *\nimport numpy as np\nclass Example(Scene):\n'
+            '    def construct(self):\n        result = np.linspace(context.get("start"), 1, 3)\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    return np.array([values[context.get("index")]])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    values[0] = values[context.get("index")]\n'
+            '    return values\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    int = context.get("cast")\n'
+            '    return np.array([int(1)])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    def read(index): return values[index]\n'
+            '    return np.array([read(context.get("index"))])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(index):\n'
+            '    values = np.array([1])\n'
+            '    return values[index]\n'
+            'def seed(): return helper(0)\n'
+            'class Example(Scene):\n'
+            '    def construct(self):\n'
+            '        callback = helper\n'
+            '        return callback(context.get("index"))\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper(index):\n'
+            '    values = np.array([1])\n'
+            '    return values[index]\n'
+            'def seed(): return helper(0)\n'
+            'class Example(Scene):\n'
+            '    def construct(self):\n'
+            '        return sorted([context.get("index")], key=helper)\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    index += context.get("index")\n    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    for index in [context.get("index")]:\n        pass\n'
+            '    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    index: int = context.get("index")\n'
+            '    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n'
+            '    enumerate = context.get("enumerate")\n'
+            '    for index, value in enumerate(values):\n        pass\n'
+            '    return values[index]\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    index += context.get("index")\n'
+            '    def read(): return values[index]\n'
+            '    return np.array([read()])\n',
+            'from noon import *\nimport numpy as np\n'
+            'def helper():\n'
+            '    values = np.array([1])\n    index = 0\n'
+            '    return np.array([values[index] for index in [context.get("index")]])\n',
+            'import numpy as np\n'
+            'def helper(context):\n'
+            '    values = [context.get("payload")]\n'
+            '    return np.array([float(value) for value in values])\n',
+            'from noon import *\nimport numpy as np\n'
+            'SVG_SOURCE = "<svg/>"\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        imported = SVGMobject.from_string(SVG_SOURCE)\n'
+            '        contours = []\n'
+            '        for member in imported.family_members_with_points():\n'
+            '            for control_points in member.get_subpaths():\n'
+            '                contours.append(VMobject().set_points(control_points))\n'
+            '                contours.append(context.get("payload"))\n'
+            '        contours.sort()\n        path = contours[0]\n'
+            '        sampled = [path.point_from_proportion(t) for t in np.linspace(0, 1, 3)]\n'
+            '        values = np.array([float(point[0]) for point in sampled])\n',
+        )
+        for source in unsafe:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
+    def test_matching_shapes_showcase_uses_only_proven_scene_data_calls(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_shape_matching.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        unsafe = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    source, target = VGroup(Circle()), VGroup(Square())
+                    self.play(TransformMatchingShapes(source, target, key_map=load_keys()))
+        ''')
+        proof = source_execution_proof(unsafe)
+        self.assertFalse(proof["admitted"])
+        self.assertEqual(proof["reason"]["code"], "unknown_name")
+
+    def test_text_math_showcase_uses_shared_native_text_and_typst_resources(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_text_math.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        for constructor in ("MathTex", "prepare_latex"):
+            with self.subTest(constructor=constructor):
+                proof = source_execution_proof(
+                    f"from noon import *\n{constructor}('x')\n"
+                )
+                self.assertFalse(proof["admitted"])
+                self.assertEqual(proof["reason"]["code"], "unproven_text_compiler"
+                                 if constructor == "MathTex" else "unproven_resource_preparation")
+
+    def test_latex_showcase_requires_direct_controlled_preparation(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_latex_create.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        safe = '''from noon import *
+class Example(Scene):
+    async def construct(self):
+        await prepare_latex()
+        MathTex("x^2", font_size=24, color=BLUE, opacity=0.8)
+'''
+        self.assertEqual(source_execution_proof(safe), {"admitted": True, "reason": None})
+
+        unsafe_sources = (
+            # Preparation must be awaited before compilation in the same scope.
+            safe.replace('        await prepare_latex()\n', ''),
+            safe.replace('        await prepare_latex()', '        prepare_latex()'),
+            safe.replace('        await prepare_latex()', '        await prepare_latex(context)'),
+            safe.replace('        await prepare_latex()', '        await prep()').replace(
+                'from noon import *', 'from noon import *\nprep = prepare_latex'
+            ),
+            safe.replace('await prepare_latex()', 'await prepare()').replace(
+                'from noon import *', 'from noon import prepare_latex as prepare, MathTex'
+            ),
+            safe.replace('MathTex("x^2"', 'MathTex(context'),
+            safe.replace('MathTex("x^2", font_size=24', 'MathTex("x^2", font_size=context'),
+            safe.replace('await prepare_latex()', 'if True:\n            await prepare_latex()'),
+            safe.replace('await prepare_latex()', 'await prepare_latex()\n        prepare_latex = None'),
+            safe.replace('MathTex("x^2"', 'Compiler("x^2"').replace(
+                'from noon import *', 'from noon import *\nCompiler = MathTex'
+            ),
+        )
+        for unsafe in unsafe_sources:
+            with self.subTest(source=unsafe):
+                self.assertFalse(source_execution_proof(unsafe)["admitted"])
+
+    def test_raster_image_source_requires_fresh_numeric_lists(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_raster_images.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        glass = Path(__file__).with_name("examples").joinpath(
+            "showcase_glass_lens.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(glass), {"admitted": True, "reason": None})
+        triangle = Path(__file__).with_name("examples").joinpath(
+            "showcase_triangle_light.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(triangle), {"admitted": True, "reason": None})
+        factory_start = triangle.index("def accumulate_ray_exposures(")
+        factory_end = triangle.index("\n\n\ndef wood_texture", factory_start)
+        factory = triangle[factory_start:factory_end]
+        renamed_factory = factory.replace("checkpoints", "stops")
+        renamed = triangle[:factory_start] + renamed_factory + triangle[factory_end:]
+        self.assertEqual(source_execution_proof(renamed), {"admitted": True, "reason": None})
+        grown_factory = renamed_factory.replace(
+            "    wanted = set(stops)\n",
+            "    stops += tuple(range(1, len(points)))\n    wanted = set(stops)\n",
+            1,
+        )
+        self.assertFalse(source_execution_proof(
+            triangle[:factory_start] + grown_factory + triangle[factory_end:]
+        )["admitted"])
+        shadowed_builtin = triangle.replace(
+            "def accumulate_ray_exposures(vertices, points, checkpoints, width=EXPOSURE_WIDTH):",
+            "def checkpoint_tuple(value):\n"
+            "    scratch = bytearray(100_000_000)\n"
+            "    return value\n\n\n"
+            "def accumulate_ray_exposures(vertices, points, checkpoints, "
+            "width=EXPOSURE_WIDTH, tuple=checkpoint_tuple):",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_builtin)["admitted"])
+        nested_shadow = triangle.replace(
+            "def accumulate_ray_exposures(",
+            "def checkpoint_tuple(value):\n"
+            "    scratch = bytearray(100_000_000)\n"
+            "    return value\n\n\n"
+            "def accumulate_ray_exposures(",
+            1,
+        ).replace(
+            "    def pixel(p):\n"
+            "        return (min(width - 1, max(0, round((p[0] - xmin) * width / (xmax - xmin) - 0.5))),\n"
+            "                min(height - 1, max(0, round((ymax - p[1]) * height / (ymax - ymin) - 0.5))))",
+            "    def pixel(p, tuple=checkpoint_tuple):\n"
+            "        return tuple((min(width - 1, max(0, round((p[0] - xmin) * width / (xmax - xmin) - 0.5))),\n"
+            "                      min(height - 1, max(0, round((ymax - p[1]) * height / (ymax - ymin) - 0.5)))))",
+            1,
+        )
+        self.assertFalse(source_execution_proof(nested_shadow)["admitted"])
+        effectful_callback = triangle.replace(
+            "def accumulate_ray_exposures(",
+            "RESOURCE_GROUP = VGroup()\n\n"
+            "def alloc(data):\n"
+            "    RESOURCE_GROUP.add(Circle())\n"
+            "    return data\n\n"
+            "def invoke(callback, data):\n"
+            "    return callback(data)\n\n"
+            "def accumulate_ray_exposures(",
+            1,
+        ).replace(
+            "    for count, (a, b) in enumerate(zip(points, points[1:]), 1):",
+            "    for count, (a, b) in enumerate(zip(points, points[1:]), 1):\n"
+            "        invoke(alloc, points)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(effectful_callback)["admitted"])
+        shadowed_callback = effectful_callback.replace(
+            "def invoke(callback, data):\n    return callback(data)",
+            "def invoke(len, data):\n    return len(data)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_callback)["admitted"])
+        for unsafe in (
+            triangle.replace("        if count in wanted:\n",
+                             "        if count in wanted:\n            pass\n        else:\n", 1),
+            triangle.replace("        if count in wanted:\n",
+                             "        count = checkpoints[0]\n        if count in wanted:\n", 1),
+            triangle.replace("    wanted = set(checkpoints)\n",
+                             "    checkpoints.append(1)\n    wanted = set(checkpoints)\n", 1),
+            triangle.replace("    wanted = set(checkpoints)\n",
+                             "    checkpoint_alias = checkpoints\n    wanted = set(checkpoints)\n", 1),
+        ):
+            with self.subTest(source="Triangle checkpoint resource bound"):
+                self.assertFalse(source_execution_proof(unsafe)["admitted"])
+
+        external_buffer = triangle.replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = context.get('pixels')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_buffer)["admitted"])
+        external_global = triangle.replace(
+            "from noon import *",
+            "from noon import *\nEXTERNAL_PIXELS = context.get('pixels')",
+            1,
+        ).replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = bytearray(width * height * 4)\n    pixels[0:4] = EXTERNAL_PIXELS[:4]",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_global)["admitted"])
+        aliased_buffer = triangle.replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = bytearray(width * height * 4)\n    backup = pixels",
+            1,
+        )
+        self.assertFalse(source_execution_proof(aliased_buffer)["admitted"])
+        external_geometry = triangle.replace(
+            "points, _ = trace_ray(TRIANGLE, LAUNCH_POINT, LAUNCH_ANGLE_DEGREES, visible_count + DENSE_BOUNCES)",
+            "points, _ = context.get('points')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_geometry)["admitted"])
+        shadowed_encoder = triangle.replace(
+            "def wood_texture(width=640, height=360):",
+            "def wood_texture(width=640, height=360):\n    rgba_png = context.get('encoder')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_encoder)["admitted"])
+        shadowed_enumerator = triangle.replace(
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            "enumerate = context.get('enumerate')\n        pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_enumerator)["admitted"])
+        shadowed_png = triangle.replace(
+            "exposure = ImageMobject(png, height=ymax - ymin, resampling_algorithm=\"bilinear\", z_index=18)",
+            "exposure = ImageMobject(png, height=ymax - ymin, resampling_algorithm=\"bilinear\", z_index=18)\n"
+            "            [ImageMobject(png) for png in context.get('external')]",
+            1,
+        )
+        self.assertFalse(source_execution_proof(shadowed_png)["admitted"])
+        unbounded_buffer_loop = triangle.replace(
+            "pixels = bytearray(width * height * 4)",
+            "pixels = bytearray(width * height * 4)\n    while True:\n        pass",
+            1,
+        )
+        self.assertFalse(source_execution_proof(unbounded_buffer_loop)["admitted"])
+        unbounded_exposure_growth = triangle.replace(
+            "snapshots = []",
+            "snapshots = []\n    while True:\n"
+            "        snapshots.append(rgba_png(width, height, bytearray(width * height * 4)))\n"
+            "        if width < 0:\n            break",
+            1,
+        )
+        self.assertFalse(source_execution_proof(unbounded_exposure_growth)["admitted"])
+        oversized_image = triangle.replace(
+            "def wood_texture(width=640, height=360):",
+            "def wood_texture(width=4096, height=4096):",
+            1,
+        )
+        self.assertFalse(source_execution_proof(oversized_image)["admitted"])
+        nested_growth = triangle.replace(
+            "snapshots = []",
+            "snapshots = []\n    def grow():\n"
+            "        snapshots.append(rgba_png(width, height, bytearray(width * height * 4)))\n"
+            "    grow()",
+            1,
+        )
+        self.assertFalse(source_execution_proof(nested_growth)["admitted"])
+        escaped_snapshot_list = triangle.replace(
+            "snapshots = []",
+            "snapshots = []\n    backup = snapshots",
+            1,
+        )
+        self.assertFalse(source_execution_proof(escaped_snapshot_list)["admitted"])
+        oversized_loop_growth = triangle.replace(
+            "            snapshots.append(rgba_png(width, height, rgba))",
+            "            snapshots.append(rgba_png(width, height, rgba))\n"
+            "            for extra in range(1_000_000):\n"
+            "                snapshots.append(rgba_png(width, height, rgba))",
+            1,
+        )
+        self.assertFalse(source_execution_proof(oversized_loop_growth)["admitted"])
+        nested_loop_growth = triangle.replace(
+            "            snapshots.append(rgba_png(width, height, rgba))",
+            "            for extra in range(1_000_000):\n"
+            "                snapshots.append(rgba_png(width, height, rgba))",
+            1,
+        )
+        self.assertFalse(source_execution_proof(nested_loop_growth)["admitted"])
+        growing_encoded_bytes = triangle.replace(
+            "    scanlines = b\"\".join(b\"\\0\" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))",
+            "    scanlines = b\"\".join(b\"\\0\" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))\n"
+            "    while True:\n        scanlines += b'x'\n        break",
+            1,
+        )
+        self.assertFalse(source_execution_proof(growing_encoded_bytes)["admitted"])
+        external_png = triangle.replace(
+            "ImageMobject(wood_texture(), height=8.0, resampling_algorithm=\"bilinear\")",
+            "ImageMobject(open('image.png', 'rb').read(), height=8.0, resampling_algorithm=\"bilinear\")",
+            1,
+        )
+        self.assertFalse(source_execution_proof(external_png)["admitted"])
+        forged_encoder = triangle.replace(
+            "return (b\"\\x89PNG\\r\\n\\x1a\\n\" + chunk(b\"IHDR\", struct.pack(\">2I5B\", width, height, 8, 6, 0, 0, 0))\n"
+            "            + chunk(b\"IDAT\", zlib.compress(scanlines, 4)) + chunk(b\"IEND\", b\"\"))",
+            "return b\"\\x89PNG\\r\\n\\x1a\\n\" + bytes(rgba)",
+            1,
+        )
+        self.assertFalse(source_execution_proof(forged_encoder)["admitted"])
+        replaced_exposure = triangle.replace(
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)\n"
+            "        pngs[0] = context.get('external')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(replaced_exposure)["admitted"])
+        replaced_bounds = triangle.replace(
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)",
+            "pngs, bounds = accumulate_ray_exposures(TRIANGLE, points, checkpoints)\n"
+            "        bounds = context.get('external')",
+            1,
+        )
+        self.assertFalse(source_execution_proof(replaced_bounds)["admitted"])
+
+        direct_pixels = '''from noon import *
+class Example(Scene):
+    def construct(self):
+        pixels = [[[x, y, 0, 255] for x in range(2)] for y in range(3)]
+        ImageMobject(pixels)
+'''
+        self.assertEqual(source_execution_proof(direct_pixels), {"admitted": True, "reason": None})
+
+        for source in (
+            'from noon import *\ndef pixels():\n    return "image.png"\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef landscape(width=1):\n'
+            '    if width:\n        pixels = [[1]]\n    return pixels\n'
+            'class Example(Scene):\n    def construct(self):\n        data = landscape()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [context]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels(flag=1):\n'
+            '    if flag:\n        row = [1]\n    else:\n        row = [context]\n'
+            '    return [row]\nclass Example(Scene):\n'
+            '    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    row = [1]\n    return [row]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        pixels = lambda: "file.png"\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[[1, 2, 3, 255]]]\n'
+            'class Example(Scene):\n    def construct(self):\n'
+            "        images = [ImageMobject(pixels()) for pixels in [context.get('factory')]]\n",
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        factory = pixels\n'
+            '        data = pixels()\n        factory()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        alias = data\n        alias.append(context)\n        ImageMobject(data)\n',
+            'from noon import *\nImageMobject("image.png")\n',
+            'from noon import *\nImageMobject(context)\n',
+            'from noon import *\nfactory = ImageMobject\n',
+            'from noon import ImageMobject as Raster\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self, ImageMobject):\n'
+            '        data = pixels()\n        ImageMobject(data)\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        ImageMobject(*[data])\n',
+            'from noon import *\ndef landscape():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        pixels = landscape()\n'
+            '        images = [ImageMobject(pixels) for pixels in ["file.png"]]\n',
+            'from noon import *\ndef landscape():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        pixels = landscape()\n'
+            '        images = {0: ImageMobject(pixels) for pixels in ["file.png"]}\n',
+            'from noon import *\ndef landscape():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        pixels = landscape()\n'
+            '        images = (ImageMobject(pixels) for pixels in ["file.png"])\n',
+            'from noon import *\nImageMobject.from_url("https://example.test/image.png")\n',
+            'from noon import *\ndef pixels():\n    return [[1]]\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n'
+            '        ImageMobject(data, height=context)\n',
+            'from noon import *\ndef pixels():\n    return open("image.png")\n'
+            'class Example(Scene):\n    def construct(self):\n        data = pixels()\n        ImageMobject(data)\n',
+            direct_pixels.replace('        ImageMobject(pixels)\n',
+                                  '        alias = pixels\n        ImageMobject(pixels)\n'),
+            direct_pixels.replace('        ImageMobject(pixels)\n',
+                                  '        pixels[0][0][0] = 7\n        ImageMobject(pixels)\n'),
+            direct_pixels.replace('range(2)', 'range(1000000)'),
+            direct_pixels.replace('pixels = [[[x, y, 0, 255] for x in range(2)] for y in range(3)]',
+                                  'pixels = [[x, y, 0, 255] for x in range(2)]'),
+        ):
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
+    def test_painted_image_uses_only_a_closed_local_pixel_expression(self):
+        example = Path(__file__).with_name("examples").joinpath(
+            "showcase_painted_surfaces.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(example), {"admitted": True, "reason": None})
+
+        for source in (
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        pixels = "texture.png"\n'
+            '        paint = ImagePaint(pixels)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        palette = [(1, 2, 3)]\n'
+            '        palette_alias = palette\n'
+            '        pixels = [[[*palette_alias[0], 255] for x in range(1)] for y in range(1)]\n'
+            '        paint = ImagePaint(pixels)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        palette = [(1, 2, 3)]\n'
+            '        pixels = [[[*palette[0], 255] for x in range(1)] for y in range(1)]\n'
+            '        palette.append((4, 5, 6))\n        paint = ImagePaint(pixels)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        pixels = [[[1, 2, 3, 255]]]\n'
+            '        paint = ImagePaint(pixels, sampling="nearest")\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n        pixels = [[[1, 2, 3, 255]]]\n'
+            '        paint = ImagePaint(*[pixels])\n',
+        ):
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
+    def test_procedural_paint_examples_use_resource_free_rust_values(self):
+        examples = Path(__file__).with_name("examples")
+        for name in ("radial_gradient.py", "noise_paint.py", "hatch_paint.py"):
+            with self.subTest(name=name):
+                source = examples.joinpath(name).read_text()
+                self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        external_image = source_execution_proof(
+            'from noon import *\n'
+            'class Example(Scene):\n'
+            '    def construct(self):\n'
+            '        paint = ImagePaint("https://example.test/texture.png")\n'
+        )
+        self.assertFalse(external_image["admitted"])
+        self.assertEqual(external_image["reason"]["code"], "unproven_image_paint_source")
+
+    def test_shader_showcases_use_closed_wgsl_schemas_and_bound_parameter_keys(self):
+        examples = Path(__file__).with_name("examples")
+        for filename in ("showcase_shader_material.py", "showcase_wave_interference.py"):
+            with self.subTest(filename=filename):
+                self.assertEqual(source_execution_proof((examples / filename).read_text()),
+                                 {"admitted": True, "reason": None})
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    self.play(Rotate(Square(), angle=PI))
+        ''')))
+
+        unsafe_sources = (
+            'from noon import *\nSOURCE = "fn shade() {}"\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        SOURCE = context\n'
+            '        program = WgslEffectProgram(SOURCE, parameters=[])\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram(open("shader.wgsl").read(), parameters=[])\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=[], authored_time=True)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=[], seed=context)\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=['
+            'ShaderParameter.scalar("phase", default=context, minimum=0, maximum=1)])\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        program = WgslEffectProgram("fn shade() {}", parameters=['
+            'ShaderParameter.scalar("phase", default=0, minimum=0, maximum=1)])\n'
+            '        key = program.parameter("other")\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        a = WgslEffectProgram("a", parameters=['
+            'ShaderParameter.scalar("phase", default=0, minimum=0, maximum=1)])\n'
+            '        b = WgslEffectProgram("b", parameters=['
+            'ShaderParameter.scalar("phase", default=0, minimum=0, maximum=1)])\n'
+            '        key = a.parameter("phase")\n'
+            '        Rectangle().add_effect(ShaderEffect(b, parameters={key: 1}))\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        factory = WgslEffectProgram\n',
+            'from noon import ShaderEffect as Apply\n',
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            '        paint = LinearGradient([(0, RED), (1, external_color())])\n',
+        )
+        for source in unsafe_sources:
+            with self.subTest(source=source):
+                self.assertFalse(source_execution_proof(source)["admitted"])
+
+    def test_shader_program_and_key_collections_cannot_be_mutated_or_escape(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_shader_material.py"
+        ).read_text()
+        insertion = '        phase = [program.parameter("phase") for program in programs]\n'
+        program_mutations = (
+            '        programs.append(context.get("proxy"))\n',
+            '        alias = programs\n        alias.append(context.get("proxy"))\n',
+            '        programs.extend([material("scene")])\n',
+            '        programs.insert(0, material("scene"))\n',
+            '        programs.pop()\n',
+            '        programs.clear()\n',
+            '        programs.reverse()\n',
+            '        programs.sort()\n',
+            '        programs[0] = context.get("proxy")\n',
+            '        alias = programs\n        alias[0] = context.get("proxy")\n',
+            '        programs += [material("scene")]\n',
+            '        programs = context.get("proxy")\n',
+            '        programs = []\n',
+            '        consume(programs)\n',
+            '        consume(zip(programs))\n',
+            '        zipped = zip(programs)\n',
+            '        alias = programs if True else []\n        alias.append(context.get("proxy"))\n',
+            '        if True:\n            alias = programs\n            alias.append(context.get("proxy"))\n',
+            '        def expose():\n            return programs\n        alias = expose()\n'
+            '        alias.append(context.get("proxy"))\n',
+        )
+        for mutation in program_mutations:
+            with self.subTest(mutation=mutation):
+                self.assertFalse(source_execution_proof(
+                    source.replace(insertion, mutation + insertion, 1)
+                )["admitted"])
+
+        key_insertion = '        self.wait(0.5)\n'
+        key_mutations = (
+            '        phase.append(context.get("proxy"))\n',
+            '        alias = phase\n        alias[0] = context.get("proxy")\n',
+            '        phase += [phase[0]]\n',
+        )
+        for mutation in key_mutations:
+            with self.subTest(mutation=mutation):
+                self.assertFalse(source_execution_proof(
+                    source.replace(key_insertion, mutation + key_insertion, 1)
+                )["admitted"])
+
+    def test_shader_zip_proof_requires_builtin_and_qualified_play_generator(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_shader_material.py"
+        ).read_text()
+        shadowed = source.replace(
+            '        programs = [material("local"), material("scene")]\n',
+            '        zip = self.add\n        programs = [material("local"), material("scene")]\n',
+            1,
+        )
+        nested_escape = source.replace(
+            "for panel, key in zip(panels, phase))",
+            "for panel, key in zip(panels, zip(programs, phase)))",
+            1,
+        )
+        wrong_generator = source.replace(
+            "for panel, key in zip(panels, phase))",
+            "for panel in zip(panels, programs))",
+            1,
+        )
+        for candidate in (shadowed, nested_escape, wrong_generator):
+            with self.subTest(candidate=candidate[-250:]):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+        huge = "9" * 400
+        overflow = (
+            'from noon import *\nclass Example(Scene):\n'
+            '    def construct(self):\n'
+            f'        WgslEffectProgram("shader", parameters=[ShaderParameter.scalar("phase", '
+            f'default={huge} * {huge}, minimum=0, maximum={huge})])\n'
+        )
+        proof = source_execution_proof(overflow)
+        self.assertFalse(proof["admitted"])
+        self.assertEqual(proof["reason"]["code"], "unproven_shader_schema")
+
+    def test_ordered_reveal_showcase_uses_typed_subset_lifecycle_constructors(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_ordered_reveal.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+
+        unsafe = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    group = VGroup(Circle())
+                    self.play(ShowIncreasingSubsets(group, int_func=load_int_func()))
+        ''')
+        proof = source_execution_proof(unsafe)
+        self.assertFalse(proof["admitted"])
+        self.assertEqual(proof["reason"]["code"], "unknown_name")
+
+    def test_source_proof_reports_the_rejected_construct_and_exact_span(self):
+        for expression, code, construct in (
+            ('print("effect")', "unknown_name", "print"),
+            ('circle.set_x(1)', "unsupported_member", "circle.set_x"),
+            ('Code(code_file="input.py")', "unproven_resource_input", 'Code(code_file="input.py")'),
+            ('__builtins__', "private_name", "__builtins__"),
+        ):
+            with self.subTest(expression=expression):
+                source = f'from noon import *\ncircle = Circle()\n{expression}\n'
+                proof = source_execution_proof(source)
+                self.assertFalse(proof["admitted"])
+                reason = proof["reason"]
+                self.assertEqual(reason["code"], code)
+                span = reason["span"]
+                self.assertEqual(span["line"], 3)
+                self.assertEqual(span["endLine"], 3)
+                self.assertEqual(source.splitlines()[2].encode()[span["column"]:span["endColumn"]].decode(), construct)
+        self.assertEqual(source_execution_proof('from noon import *\nCircle()'),
+                         {"admitted": True, "reason": None})
+        syntax = source_execution_proof('π =\n')["reason"]
+        self.assertEqual(syntax["code"], "invalid_syntax")
+        self.assertEqual(syntax["span"]["line"], 1)
+        self.assertGreaterEqual(syntax["span"]["column"], len('π'.encode()))
+
+    def test_module_binding_and_owned_write_failures_keep_their_origin(self):
+        for source, code, line in (
+            ('print = None\n', "unproven_binding", 1),
+            ('from noon import *\nversion = 3\n', "unproven_wildcard_binding", 2),
+            ('from noon import *\nvalues = [1]\nvalues[0] = 2\n', "unproven_ownership", 3),
+        ):
+            with self.subTest(source=source):
+                reason = source_execution_proof(source)["reason"]
+                self.assertEqual(reason["code"], code)
+                self.assertEqual(reason["span"]["line"], line)
+
+    def test_lesson_navigation_uses_the_shared_prepared_cue_contract(self):
+        self.assertTrue(source_is_scene_only(dedent('''
             from noon import *
             class Example(Scene):
                 def construct(self):
@@ -34,6 +1216,122 @@ class SourceEffectsTests(unittest.TestCase):
                         circle.shift(calculate(index))
                     self.wait(1)
         ''')))
+
+    def test_divmod_is_an_ordinary_builtin_with_module_rebinding_rejected(self):
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    row, column = divmod(17, 4)
+                    self.wait(row + column)
+        ''')))
+        for source, code in (
+            ('from noon import *\ndivmod = print\n', "unproven_binding"),
+            ('from noon import *\nfrom math import divmod\n', "unproven_binding"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        divmod = print\n', "unknown_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        divide = print\n        divide(17, 4)\n',
+             "unknown_name"),
+        ):
+            with self.subTest(source=source):
+                proof = source_execution_proof(source)
+                self.assertFalse(proof["admitted"])
+                self.assertEqual(proof["reason"]["code"], code)
+
+    def test_discard_store_is_local_and_never_read_or_mutated(self):
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    quotient, _ = divmod(17, 4)
+                    self.wait(quotient)
+        ''')))
+        for source, code in (
+            ('from noon import *\n_ = 1\n', "unproven_binding"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        _ = 1\n        self.wait(_)\n', "private_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        _other = 1\n', "private_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        _ += 1\n', "private_name"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    _ = 1\n    def construct(self):\n        pass\n', "unsupported_class_contract"),
+            ('from noon import *\ndef helper():\n    global _\n    _ = 1\n',
+             "unproven_scope_effect"),
+            ('from noon import *\ndef outer():\n    _ = 1\n    def inner():\n'
+             '        nonlocal _\n        _ = 2\n', "unproven_scope_effect"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        values = context\n        values[0] = 2\n',
+             "unproven_ownership"),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n        values = [1]\n        alias = values\n'
+             '        alias[0] = 2\n', "unproven_ownership"),
+        ):
+            with self.subTest(source=source):
+                proof = source_execution_proof(source)
+                self.assertFalse(proof["admitted"])
+                self.assertEqual(proof["reason"]["code"], code)
+
+    def test_subscript_writes_require_fresh_local_container_bindings(self):
+        self.assertTrue(source_is_scene_only(dedent('''
+            from noon import *
+            def trace():
+                tile, loads = {}, []
+                tile[0] = 7
+                output = [None] * 4
+                output[0] = tile[0]
+                counts = [0 for _ in range(4)]
+                counts[0] += 1
+                return output
+            class Example(Scene):
+                def construct(self):
+                    self.wait(trace()[0])
+        ''')))
+        for body in (
+            'data = context; data[0] = 1',
+            'data = []; alias = data; alias[0] = 1',
+            'data = []; data = context; data[0] = 1',
+            'data = [];\n        if True: data = context\n        data[0] = 1',
+            'data = [[]]; data[0][0] = 1',
+            'data = [0] * self; data[0] = 1',
+            'data = [];\n        match context:\n            case data: data[0] = 1',
+            'data = [];\n        try: self.wait(0)\n        except ValueError as data: data[0] = 1',
+        ):
+            with self.subTest(body=body):
+                proof = source_execution_proof('from noon import *\nclass Example(Scene):\n'
+                    '    def construct(self):\n        ' + body + '\n')
+                self.assertFalse(proof['admitted'])
+                self.assertEqual(proof['reason']['code'], 'unproven_ownership')
+        for source in (
+            'from noon import *\ndata = []; data[0] = 1\n',
+            'from noon import *\ndef edit(data):\n    data[0] = 1\n',
+            'from noon import *\ndef edit(data):\n    data[0] = 1\n    data = []\n',
+            'from noon import *\ndef outer():\n    data = []\n'
+            '    def edit(data):\n        data[0] = 1\n',
+        ):
+            with self.subTest(source=source):
+                self.assertFalse(source_is_scene_only(source))
+
+    def test_list_repetition_requires_a_dominating_builtin_integer_guard(self):
+        template = 'from noon import *\ndef histogram(bins):\n%s\n    counts = [0] * bins\n    counts[0] += 1\n'
+        self.assertTrue(source_is_scene_only(template %
+            '    if isinstance(bins, bool) or not isinstance(bins, int) or bins < 1:\n        raise ValueError("bins")'))
+        for guard in (
+            '    if bins < 1 or not isinstance(bins, int):\n        raise ValueError("bins")',
+            '    if bins.count() or not isinstance(bins, int):\n        raise ValueError("bins")',
+            '    if not isinstance(bins, int) and bins < 1:\n        raise ValueError("bins")',
+            '    if not isinstance(bins, int):\n        pass',
+            '    if not isinstance(bins, int):\n        counts = [0] * bins\n        raise ValueError("bins")',
+            '    bins = context\n    if not isinstance(bins, int):\n        raise ValueError("bins")',
+            '    isinstance = lambda value, kind: False\n    if not isinstance(bins, int):\n        raise ValueError("bins")',
+        ):
+            with self.subTest(guard=guard):
+                self.assertFalse(source_is_scene_only(template % guard))
+        self.assertFalse(source_is_scene_only('from noon import *\n'
+            'def outer(isinstance):\n    def histogram(bins):\n'
+            '        if not isinstance(bins, int):\n            raise ValueError("bins")\n'
+            '        counts = [0] * bins\n        counts[0] = 1\n'))
 
     def test_unknown_host_work_and_dispatch_cannot_be_proven(self):
         for statement in (
@@ -100,11 +1398,227 @@ class SourceEffectsTests(unittest.TestCase):
         ''')))
         self.assertFalse(source_is_scene_only('from noon import Code as __builtins__\n'))
 
-    def test_unchanged_basic_text_and_glow_gallery_use_the_closed_subset(self):
+    def test_unchanged_gallery_and_stress_sources_use_the_closed_subset(self):
         examples = Path(__file__).parent / 'examples'
-        for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py', 'showcase_gpu_glow.py'):
+        for name in ('manim_parity_create_circle.py', 'showcase_code_blocks.py',
+                     'showcase_gpu_glow.py', 'showcase_dynamic_scene.py',
+                     'manim_parity_stress_grid.py', 'showcase_layered_effects.py'):
             with self.subTest(name=name):
                 self.assertTrue(source_is_scene_only((examples / name).read_text()))
+
+    def test_affine_lifecycle_wrappers_are_trusted_as_exact_closed_imports(self):
+        examples = Path(__file__).parent / 'examples'
+        for name in ('manim_parity_affine_lifecycle.py', 'showcase_entrances_exits.py'):
+            with self.subTest(name=name):
+                source = (examples / name).read_text()
+                self.assertTrue(source_is_scene_only(source))
+
+        alias = dedent('''
+            from noon import *
+            intro = SpinInFromNothing
+            class Example(Scene):
+                def construct(self):
+                    square = Square()
+                    self.play(intro(square))
+                    self.play(ShrinkToCenter(square))
+        ''')
+        self.assertTrue(source_is_scene_only(alias))
+
+        for source, code, span_text in (
+            ('from noon import *\nSpinInFromNothing = print\n',
+             'unknown_name', 'print'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        SpinInFromNothing.__call__ = Circle\n',
+             'unproven_member_write', 'SpinInFromNothing.__call__'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        SpinInFromNothing(context.target)\n',
+             'unsupported_member', 'context.target'),
+        ):
+            with self.subTest(source=source):
+                reason = source_execution_proof(source)['reason']
+                self.assertEqual(reason['code'], code)
+                span = reason['span']
+                self.assertEqual(source.splitlines()[span['line'] - 1].encode()
+                                 [span['column']:span['endColumn']].decode(), span_text)
+
+    def test_lagged_start_map_requires_proven_factories_and_scene_only_callbacks(self):
+        examples = Path(__file__).parent / 'examples'
+        timing = (examples / 'showcase_timing.py').read_text()
+        self.assertTrue(source_is_scene_only(timing))
+        self.assertFalse(source_is_scene_only(dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    target = Circle()
+                    self.play(UpdateFromFunc(target, lambda item: item.shift(RIGHT)))
+        ''')))
+
+        alias = dedent('''
+            from noon import *
+            animation_factory = FadeIn
+            class Example(Scene):
+                def construct(self):
+                    group = VGroup(Square(), Square())
+                    self.play(LaggedStartMap(
+                        animation_factory, group,
+                        arg_creator=lambda member: (member,),
+                    ))
+        ''')
+        alias_proof = source_execution_proof(alias)
+        self.assertFalse(alias_proof["admitted"])
+        self.assertEqual(alias_proof["reason"]["code"], "unproven_callback_factory")
+
+        identity = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    group = VGroup(Square(), Square())
+                    self.play(LaggedStartMap(FadeIn, group, arg_creator=lambda member: member))
+        ''')
+        self.assertTrue(source_is_scene_only(identity))
+
+        blocked = (
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(Code, group))\n',
+             'unproven_resource_reference', 'Code'),
+            ('from noon import *\ndef make(member):\n'
+             '    return Code(code_file="input.py")\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=make))\n',
+             'unproven_resource_input', 'Code(code_file="input.py")'),
+            ('from noon import *\nimport os as host\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(host.system, group))\n',
+             'unsupported_import', 'import os as host'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, '
+             'arg_creator=lambda member: print(member)))\n',
+             'unproven_callback_argument', 'lambda member: print(member)'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, '
+             'arg_creator=lambda member: (self.wait(0.1) and member,)))\n',
+             'unproven_callback_argument',
+             'lambda member: (self.wait(0.1) and member,)'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=self.wait))\n',
+             'unproven_callback_argument', 'self.wait'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=self.play))\n',
+             'unproven_callback_argument', 'self.play'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, '
+             'lambda member: (member, Code(code_file="input.py"))))\n',
+             'unproven_callback_argument', 'lambda member: (member, Code(code_file="input.py"))'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, self.wait))\n',
+             'unproven_callback_argument', 'self.wait'),
+            ('from noon import *\nfactory = LaggedStartMap\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(factory(FadeIn, group, arg_creator=self.wait))\n',
+             'unproven_callback_factory', 'LaggedStartMap'),
+            ('from noon import *\nfactory = LaggedStartMap\nwrapped = factory\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(wrapped(FadeIn, group, arg_creator=self.play))\n',
+             'unproven_callback_factory', 'LaggedStartMap'),
+            ('from noon import LaggedStartMap as Make\nfrom noon import *\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(Make(FadeIn, group, arg_creator=self.wait))\n',
+             'unproven_callback_factory', 'from noon import LaggedStartMap as Make'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(LaggedStartMap, group))\n',
+             'unproven_callback_factory', 'LaggedStartMap'),
+            ('from noon import *\nanimation_factory = FadeIn\n'
+             'def helper(animation_factory, group):\n'
+             '    return LaggedStartMap(animation_factory, group, '
+             'arg_creator=lambda member: (member,))\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(helper(self.wait, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(*[FadeIn, group]))\n',
+             'unproven_callback_arguments', 'LaggedStartMap(*[FadeIn, group])'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(self.wait, group))\n',
+             'unproven_callback_factory', 'self.wait'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self, LaggedStartMap):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group))\n',
+             'unproven_shadowed_constructor', 'LaggedStartMap'),
+            ('from noon import *\n'
+             'def FadeIn(member):\n    member.wait(0.1)\n    return Circle()\n'
+             'animation_factory = FadeIn\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(animation_factory, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\nanimation_factory = FadeIn\n'
+             'match {"x": ValueTracker}:\n'
+             '    case {"x": animation_factory}:\n        pass\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(animation_factory, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(Scene, group))\n',
+             'unproven_callback_factory', 'Scene'),
+            ('from noon import *\nclass Example(Scene):\n'
+             '    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        animation_factory = self.play\n'
+             '        self.play(LaggedStartMap(animation_factory, group))\n',
+             'unproven_callback_factory', 'animation_factory'),
+            ('from noon import *\n'
+             'def make(scene, member):\n    scene.wait(0.1)\n    return (member,)\n'
+             'class Example(Scene):\n    def construct(self):\n'
+             '        group = VGroup(Square())\n'
+             '        self.play(LaggedStartMap(FadeIn, group, arg_creator=make))\n',
+             'unproven_callback_argument', 'make'),
+        )
+        for source, code, span_text in blocked:
+            with self.subTest(source=source):
+                reason = source_execution_proof(source)['reason']
+                self.assertEqual(reason['code'], code)
+                span = reason['span']
+                self.assertEqual(source.splitlines()[span['line'] - 1].encode()
+                                 [span['column']:span['endColumn']].decode(), span_text)
+
+        # This paired showcase uses only already-qualified map/composition
+        # structure; its separate tutorial pair remains blocked at Add.
+        paired = (examples / 'ordinary_timed_composition.py').read_text()
+        reason = source_execution_proof(paired)['reason']
+        self.assertEqual(reason['code'], 'unknown_name')
+        self.assertEqual(reason['span']['line'], 11)
 
 
 if __name__ == '__main__':

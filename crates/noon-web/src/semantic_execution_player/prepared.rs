@@ -7,7 +7,22 @@ fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
     AuthoringFailure::unclassified("prepared.prefix", &error)
 }
 
+pub(crate) enum PreparedPrefixAdvance {
+    Required(noon::SourceExecutionRequirement),
+    Advanced {
+        segment: ExecutionSegment,
+        publication: noon_core::PublicationContext,
+    },
+}
+
 impl SemanticExecutionPlayer {
+    pub(crate) fn observed_source_execution_requirement(
+        &self,
+    ) -> Option<noon::SourceExecutionRequirement> {
+        self.session
+            .continuation_execution_requirement(noon::ContinuationEffects::Opaque)
+    }
+
     pub(crate) fn prefix_source_requirement(
         &self,
         publisher: &PrefixPublisher,
@@ -51,14 +66,13 @@ impl SemanticExecutionPlayer {
     pub(crate) fn begin_observed_prepared_source(
         &mut self,
         effects: noon::ContinuationEffects,
-    ) -> Result<bool, AuthoringFailure> {
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
         self.live_segment()?;
         // An interpreter invocation may perform arbitrary host work after this
         // await. Scene replay metadata is not a source-purity proof. Keep its
         // original stack behind the ordinary observed completion protocol.
         self.session
             .begin_observed_prepared_source(effects)
-            .map(|requirement| requirement.is_some())
             .map_err(prefix_error)
     }
 
@@ -82,21 +96,55 @@ impl SemanticExecutionPlayer {
         &mut self,
         publisher: Option<&PrefixPublisher>,
     ) -> Result<f64, AuthoringFailure> {
+        let (segment, publication) = match self.live_advance_prepared_prefix_segment(publisher)? {
+            PreparedPrefixAdvance::Required(requirement) => {
+                return Err(AuthoringFailure::new(
+                    "unsupported_domain",
+                    "prepared.execution_required",
+                    format!("source requires observed execution: {requirement:?}"),
+                ));
+            }
+            PreparedPrefixAdvance::Advanced {
+                segment,
+                publication,
+            } => (segment, publication),
+        };
+        self.live_complete_prepared_prefix_segment(segment, publication)?;
+        Ok(segment.end_time())
+    }
+
+    pub(crate) fn live_advance_prepared_prefix_segment(
+        &mut self,
+        publisher: Option<&PrefixPublisher>,
+    ) -> Result<PreparedPrefixAdvance, AuthoringFailure> {
         if let Some(requirement) = self
             .session
             .preflight_prepared_source(publisher)
             .map_err(prefix_error)?
         {
-            return Err(AuthoringFailure::new(
-                "unsupported_domain",
-                "prepared.execution_required",
-                format!("source requires observed execution: {requirement:?}"),
-            ));
+            return Ok(PreparedPrefixAdvance::Required(requirement));
         }
         let segment = self.live_segment()?;
         self.live_advance_segment_to(segment.end_time())?;
+        Ok(PreparedPrefixAdvance::Advanced {
+            segment,
+            publication: self.session.publication_context(),
+        })
+    }
+
+    pub(crate) fn live_complete_prepared_prefix_segment(
+        &mut self,
+        expected: ExecutionSegment,
+        publication: noon_core::PublicationContext,
+    ) -> Result<f64, AuthoringFailure> {
+        if self.live_segment()? != expected
+            || self.session.frame().time != expected.end_time()
+            || self.session.publication_context() != publication
+        {
+            return Err(prefix_error(noon::PrefixError::NotReady));
+        }
         self.live_complete_segment()?;
-        Ok(segment.end_time())
+        Ok(expected.end_time())
     }
 
     fn completed_prepared_boundary(&self) -> Result<ExecutionSegment, AuthoringFailure> {

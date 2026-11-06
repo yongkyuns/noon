@@ -1,9 +1,9 @@
 //! A reusable image surface with authored-time UV and opacity animation.
 //! Paired with web/python/examples/image_fill.py on the ordinary engine path.
 use crate::{
-    AnimationOptions, ContinuationStep, ImageAddressMode, ImageFit, ImageMapping,
-    ImagePaintOptions, ImageUvTransform, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    RateFunction, Scene,
+    AnimationOptions, ContinuationEffects, ContinuationStep, ImageAddressMode, ImageFit,
+    ImageMapping, ImagePaintOptions, ImageUvTransform, LiveContinuation, LiveProgram, LiveSession,
+    Mobject, RateFunction, Scene,
 };
 
 pub struct ImageSurface {
@@ -42,6 +42,7 @@ fn mapping(mirrored: bool) -> Result<ImageMapping, String> {
 }
 
 impl LiveContinuation for ImageSurface {
+    const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
         let segment = match self.stage {

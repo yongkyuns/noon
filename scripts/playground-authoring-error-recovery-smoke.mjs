@@ -1,16 +1,28 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS, validateGalleryRuntimeBuildIdentity, validateShowcaseDiagnostics }
+  from "./playground-profile-expectations.mjs";
 
 const { chromium } = playwright;
 const port = Number(process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PORT ?? "4185");
-const baseUrl = `http://127.0.0.1:${port}`;
 const presentationProfile = process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_PROFILE ?? "default";
 assert.ok(["default", "live"].includes(presentationProfile));
 const liveComparison = presentationProfile === "live";
+const externalBase = process.env.NOON_AUTHORING_RECOVERY_BASE ?? null;
+const externalRevision = process.env.NOON_AUTHORING_RECOVERY_REVISION ?? null;
+assert.equal(Boolean(externalBase), Boolean(externalRevision),
+  "external deployment checks require both NOON_AUTHORING_RECOVERY_BASE and NOON_AUTHORING_RECOVERY_REVISION");
+const externalRoot = externalBase ? new URL(externalBase) : null;
+assert.ok(!externalRoot || externalRoot.pathname.endsWith("/") && !externalRoot.search && !externalRoot.hash,
+  "NOON_AUTHORING_RECOVERY_BASE must be the deployed root URL ending in `/`");
+assert.ok(!externalRoot || !liveComparison,
+  "deployed navigation qualification uses the default prepared profile");
 const artifactDir = path.resolve(
   process.env.NOON_PLAYGROUND_AUTHORING_RECOVERY_ARTIFACTS ??
     "browser-smoke-artifacts/playground-authoring-recovery",
@@ -44,50 +56,63 @@ class FinalRecovery(Scene):
         self.add(Circle())
 `,
   explicitRerun: `from noon import *
-import builtins
 
 class ExplicitRerun(Scene):
     def construct(self):
-        attempt = getattr(builtins, "_noon_test_preview_rerun", 0) + 1
-        builtins._noon_test_preview_rerun = attempt
-        if attempt == 2:
-            raise ValueError("Intentional explicit rerun failure")
         square = Square()
         self.add(square)
         self.play(square.animate.shift(RIGHT), run_time=3)
 `,
+  explicitRerunFailure: `from noon import *
+
+class ExplicitRerunFailure(Scene):
+    def construct(self):
+        raise ValueError("Intentional edited-draft failure")
+`,
+  taintMutation: `from noon import *
+
+class TaintLibrary(Scene):
+    def construct(self):
+        Square.shift = lambda self, *args, **kwargs: self
+        self.add(Square())
+`,
 };
+const navigationCancellationSource = SOURCES.explicitRerun
+  .replace("ExplicitRerun", "CatalogNavigationCancellation")
+  .replace("run_time=3", "run_time=30");
 
 await mkdir(artifactDir, { recursive: true });
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", "."],
-  { stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => (serverOutput += chunk));
-server.stderr.on("data", (chunk) => (serverOutput += chunk));
+let server = null;
+let baseUrl = externalRoot?.href ?? null;
+const showcaseManifest = JSON.parse(readFileSync(
+  path.resolve("web/python/examples/noon_showcase_manifest.json"), "utf8"));
+const showcaseTitles = new Map(showcaseManifest.entries.map(entry => [entry.id, entry.title]));
+const showcaseProfiles = new Map(SHOWCASE_PROFILE_EXPECTATIONS.map(entry => [entry.id, entry]));
 
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground server did not start: ${lastError}\n${serverOutput}`);
+async function readExternalIdentity() {
+  if (!externalRoot) return;
+  const read = async name => {
+    const response = await fetch(new URL(`${name}?stage=${Date.now()}`, externalRoot), {
+      headers: { "Cache-Control": "no-cache" },
+      signal: AbortSignal.timeout(20_000),
+    });
+    assert.ok(response.ok, `${name}: HTTP ${response.status}`);
+    return response.json();
+  };
+  const [build, runtime] = await Promise.all([read("build-info.json"), read("runtime-build-identity.json")]);
+  assert.equal(build.commit, externalRevision, "deployed Pages revision changed");
+  validateGalleryRuntimeBuildIdentity(runtime, { requireSourceRevision: true });
+  assert.equal(runtime.sourceRevision, externalRevision, "deployed runtime source revision changed");
+  return { build, runtime };
 }
 
 async function snapshot(page) {
   return page.evaluate(() => {
     const status = document.querySelector("#status");
     const patch = document.querySelector("#patch-status");
+    const draft = document.querySelector("#draft-status");
+    const executionDiagnostics = window.__noonExampleGallery?.executionDiagnostics ?? null;
     return {
       runtimeState: status?.dataset.state ?? "",
       runtimeStartup: status?.dataset.runtimeStartup ?? "",
@@ -99,6 +124,15 @@ async function snapshot(page) {
       patchText: patch?.value ?? patch?.textContent ?? "",
       patchSequence: patch?.dataset.sequence ?? "",
       exampleId: patch?.dataset.exampleId ?? "",
+      runGeneration: patch?.dataset.runGeneration ?? "",
+      draftState: draft?.dataset.state ?? "",
+      draftText: draft?.value ?? draft?.textContent ?? "",
+      activeDraftRunGeneration: draft?.dataset.activeRunGeneration ?? "",
+      executionDiagnostics,
+      interpreterGeneration: executionDiagnostics?.interpreterGeneration ?? null,
+      runRequestId: executionDiagnostics?.runRequestId ?? null,
+      runInFlight: window.__noonExampleGallery?.runInFlight ?? null,
+      authoringRunCount: window.__recoveryAuthoringRuns?.length ?? 0,
       objectCount: document.querySelector("#metric-objects")?.value ?? "",
       playhead: document.querySelector("#metric-time")?.value ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
@@ -131,6 +165,68 @@ async function assertSourceDiagnostic(page, observed, { type, line, selectedText
 function assertDiagnosticCleared(observed) {
   assert.equal(observed.problemVisible, false, "edited/corrected source must clear the old panel");
   assert.equal(observed.traceback, "", "old technical details must not survive into the next run");
+}
+
+async function workerEvidence(page) {
+  return page.evaluate(() => ({
+    workers: window.__recoveryWorkerEvents ?? [],
+    runs: window.__recoveryAuthoringRuns ?? [],
+  }));
+}
+
+function assertRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration) {
+  assert.equal(evidence.runs.length, beforeCount + 1, "one explicit Run must submit source exactly once");
+  const run = evidence.runs.at(-1);
+  assert.equal(run.source, source, "Run must capture the latest editor draft");
+  assert.equal(Number(observed.runRequestId), run.requestId,
+    "diagnostic trace must belong to the source request submitted by this Run");
+  assert.equal(observed.executionDiagnostics.context.exampleId, observed.exampleId);
+  assert.ok(Number(observed.executionDiagnostics.context.runGeneration) > previousRunGeneration,
+    "diagnostics must be bound to a newer explicit Run generation");
+  if (observed.patchState === "applied") {
+    assert.equal(Number(observed.executionDiagnostics.context.runGeneration), Number(observed.runGeneration),
+      "an adopted source trace must match the active Run generation");
+  }
+  assert.equal(observed.executionDiagnostics.requestedProfile,
+    run.preparedPlayback === null ? "incremental" : run.preparedPlayback ? "incremental" : "observed");
+  assert.equal(Number(observed.interpreterGeneration) >= 0, true,
+    "diagnostic trace must identify the interpreter generation");
+  const messages = evidence.workers.filter(message => message.workerId === run.workerId &&
+    message.requestId === run.requestId);
+  const ready = evidence.workers.find(message => message.workerId === run.workerId && message.type === "ready");
+  const proof = messages.find(message => message.type === "execution_diagnostic" &&
+    ["source-proof", "interpreter-trust"].includes(message.event?.stage));
+  const settled = messages.find(message => message.type === "result" || message.type === "error");
+  const failed = messages.find(message => message.type === "execution_diagnostic" && message.event?.stage === "failed");
+  assert.ok(ready && ready.libraryTrust === "pristine" && ready.sequence < run.sequence,
+    "worker must report pristine before accepting the explicit source Run");
+  const decision = proof ?? failed;
+  assert.ok(decision && decision.sequence > run.sequence && settled && decision.sequence < settled.sequence,
+    "run must report its source proof/trust or source failure before settling");
+  return { run, ready, proof: decision };
+}
+
+function captureRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration) {
+  const { run, ready, proof } = assertRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration);
+  return { run: { workerId: run.workerId, requestId: run.requestId,
+    sequence: run.sequence, sourceLength: run.source.length,
+    sourceSha256: createHash("sha256").update(run.source).digest("hex") }, ready, proof };
+}
+
+async function assertDraftOnly(page, before, expectedSource) {
+  const after = await snapshot(page);
+  const evidence = await workerEvidence(page);
+  assert.equal(await page.evaluate(() => document.querySelector("#python-scene-source").value), expectedSource);
+  assert.equal(after.runGeneration, before.runGeneration, "draft edits cannot advance the Run generation");
+  assert.equal(after.interpreterGeneration, before.interpreterGeneration,
+    "typing, IME and Reset cannot replace the interpreter");
+  assert.equal(evidence.runs.length, before.authoringRunCount, "draft edits cannot invoke Python");
+  assert.equal(after.canvasHidden, before.canvasHidden, "draft edits cannot hide or replace the active preview");
+  assert.equal(after.exampleId, before.exampleId, "draft edits cannot change the selected example");
+  assert.equal(after.patchText, before.patchText, "draft edits cannot replace active execution status");
+  assert.equal(after.patchState, before.patchState);
+  assert.equal(after.runDisabled, before.runDisabled, "editing cannot disable the explicit Run action");
+  return after;
 }
 
 async function assertStoppedPreview(page, observed) {
@@ -285,23 +381,117 @@ async function setEditorSource(page, source) {
   );
 }
 
-async function waitForRunResult(page, { expectedState, expectedObjectCount = null }) {
+async function waitForRunResult(page, { expectedState, expectedObjectCount = null, runGenerationUnchanged = null }) {
   await page.waitForFunction(
-    ({ state, objectCount }) => {
+    ({ state, objectCount, runGenerationUnchanged }) => {
       const patch = document.querySelector("#patch-status");
       const run = document.querySelector("#replace-scene");
       if (patch?.dataset.state !== state || run?.disabled) return false;
+      const diagnostics = window.__noonExampleGallery?.executionDiagnostics;
+      if (runGenerationUnchanged !== null &&
+          String(diagnostics?.context?.runGeneration) === runGenerationUnchanged) return false;
+      if (state === "applied" &&
+          patch.dataset.runGeneration !== String(diagnostics?.context?.runGeneration)) return false;
       if (objectCount === null) return true;
       return document.querySelector("#metric-objects")?.value === String(objectCount);
     },
-    { state: expectedState, objectCount: expectedObjectCount },
+    { state: expectedState, objectCount: expectedObjectCount, runGenerationUnchanged },
     { timeout: 60_000 },
   );
   return snapshot(page);
 }
 
 async function runEditedSource(page, options) {
-  return waitForRunResult(page, options);
+  const source = await page.evaluate(() => document.querySelector("#python-scene-source").value);
+  const before = await workerEvidence(page);
+  const generationBefore = Number((await snapshot(page)).executionDiagnostics?.context?.runGeneration ?? 0);
+  await page.locator("#replace-scene").click();
+  await page.waitForFunction(count => (window.__recoveryAuthoringRuns?.length ?? 0) === count + 1,
+    before.runs.length, { timeout: 30_000 });
+  const result = await waitForRunResult(page, { ...options, runGenerationUnchanged: String(generationBefore) });
+  const evidence = await workerEvidence(page);
+  result.runEvidence = captureRunEvidence(evidence, before.runs.length, source, result, generationBefore);
+  return result;
+}
+
+async function selectGalleryExample(page, id, title, supersededRequestId = null) {
+  const trigger = page.locator("#example-browser-trigger");
+  if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click();
+  const search = page.locator('.example-browser-layer input[type="search"]');
+  await search.fill(title);
+  const card = page.locator(`.example-card[data-example-id="${id}"]`);
+  await card.waitFor({ state: "visible" });
+  const before = await workerEvidence(page);
+  const beforeState = await snapshot(page);
+  if (supersededRequestId !== null) {
+    assert.equal(beforeState.runInFlight, true, "the gallery selection must interrupt a still-active Run");
+    assert.equal(beforeState.runRequestId, supersededRequestId,
+      "the selection must supersede the exact accepted Run captured before it");
+  }
+  await card.click();
+  await page.waitForFunction(({ count, id }) =>
+    (window.__recoveryAuthoringRuns?.length ?? 0) === count + 1 &&
+    window.__noonExampleGallery?.selectedExampleId === id,
+  { count: before.runs.length, id }, { timeout: 30_000 });
+  await page.waitForFunction(previousGeneration => !window.__noonExampleGallery?.runInFlight &&
+    document.querySelector("#patch-status")?.dataset.state === "applied" &&
+    document.querySelector("#replace-scene")?.disabled === false &&
+    String(window.__noonExampleGallery?.executionDiagnostics?.context?.runGeneration) !== previousGeneration &&
+    document.querySelector("#patch-status")?.dataset.runGeneration ===
+      String(window.__noonExampleGallery?.executionDiagnostics?.context?.runGeneration),
+  String(beforeState.executionDiagnostics?.context?.runGeneration ?? 0), { timeout: 120_000 });
+  await page.waitForFunction(({ id, runIndex }) => {
+    const gallery = window.__noonExampleGallery;
+    const diagnostics = gallery?.executionDiagnostics;
+    const submitted = window.__recoveryAuthoringRuns?.[runIndex];
+    const patch = document.querySelector("#patch-status");
+    return patch?.dataset.state === "applied" && !gallery?.runInFlight &&
+      submitted && diagnostics?.runRequestId === submitted.requestId &&
+      diagnostics?.context?.exampleId === id && Array.isArray(diagnostics.events) &&
+      diagnostics.events.some(event => event.stage === "disposition");
+  }, { id, runIndex: before.runs.length }, { timeout: 180_000 });
+  const result = await snapshot(page);
+  const evidence = await workerEvidence(page);
+  assert.equal(evidence.runs.length, before.runs.length + 1, "gallery Run must submit source exactly once");
+  const source = await page.evaluate(() => document.querySelector("#python-scene-source").value);
+  result.runEvidence = captureRunEvidence(evidence, before.runs.length, source, result,
+    Number(beforeState.executionDiagnostics?.context?.runGeneration ?? 0));
+  return result;
+}
+
+async function selectShowcase(page, id, supersededRequestId = null) {
+  const title = showcaseTitles.get(id);
+  assert.ok(title, `showcase manifest has no title for ${id}`);
+  const selected = await selectGalleryExample(page, id, title, supersededRequestId);
+  const expected = showcaseProfiles.get(id);
+  assert.ok(expected, `profile ledger has no entry for ${id}`);
+  assert.equal(selected.runEvidence.run.sourceSha256, expected.sha256,
+    `${id}: selected catalog source bytes differ from the frozen profile ledger`);
+  if (!liveComparison) selected.showcaseProfile = validateShowcaseDiagnostics(
+    expected, selected.executionDiagnostics);
+  return selected;
+}
+
+function seededPermutation(values, seed) {
+  let state = seed >>> 0;
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index--) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    const other = state % (index + 1);
+    [result[index], result[other]] = [result[other], result[index]];
+  }
+  return result;
+}
+
+async function trackFullNavigations(targetPage) {
+  let documentStart = await targetPage.evaluate(() => performance.timeOrigin);
+  targetPage.on("framenavigated", frame => {
+    if (frame !== targetPage.mainFrame()) return;
+    void targetPage.evaluate(() => performance.timeOrigin).then(nextStart => {
+      if (nextStart !== documentStart) diagnostics.unexpectedNavigations += 1;
+      documentStart = nextStart;
+    }).catch(() => {});
+  });
 }
 
 async function waitForObjectCount(page, count) {
@@ -322,7 +512,7 @@ const diagnostics = {
   consoleErrors: [],
   failedRequests: [],
   unexpectedNavigations: 0,
-  serverOutput: "",
+  testServer: { baseUrl },
 };
 
 let browser = null;
@@ -330,7 +520,13 @@ let context = null;
 let page = null;
 let phase = "startup";
 try {
-  await waitForServer();
+  if (!externalRoot) {
+    server = await serveRepository(path.resolve("."), port);
+    baseUrl = server.baseUrl;
+    diagnostics.testServer.baseUrl = baseUrl;
+  } else {
+    diagnostics.deployedIdentity = { before: await readExternalIdentity() };
+  }
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -348,10 +544,46 @@ try {
     viewport: diagnostics.viewport,
     deviceScaleFactor: diagnostics.devicePixelRatio,
   });
+  await context.addInitScript(({ preparedPlayback }) => {
+    window.__recoveryAuthoringRuns = [];
+    window.__recoveryWorkerEvents = [];
+    let sequence = 0, workerId = 0;
+    window.Worker = new Proxy(window.Worker, {
+      construct(target, args, newTarget) {
+        const id = workerId++;
+        const workerUrl = new URL(args[0], window.location.href).href;
+        const worker = Reflect.construct(target, args, newTarget);
+        const originalPostMessage = worker.postMessage.bind(worker);
+        const originalTerminate = worker.terminate.bind(worker);
+        worker.terminate = (...terminateArgs) => {
+          window.__recoveryWorkerEvents.push({ workerId: id, workerUrl: workerUrl.slice(0, 400),
+            type: "terminated", requestId: null, sequence: sequence++ });
+          return originalTerminate(...terminateArgs);
+        };
+        worker.postMessage = (data, ...rest) => {
+          if (data?.channel === "noon.authoring" && data.type === "run") {
+            window.__recoveryAuthoringRuns.push({ workerId: id, requestId: data.requestId,
+              source: data.source, preparedPlayback: window.__recoveryPreparedPlayback, sequence: sequence++ });
+          }
+          return originalPostMessage(data, ...rest);
+        };
+        worker.addEventListener("message", ({ data }) => {
+          if (data?.channel !== "noon.authoring" || !["ready", "execution_diagnostic", "result", "error"].includes(data.type)) return;
+          window.__recoveryWorkerEvents.push({ workerId: id, workerUrl: workerUrl.slice(0, 400),
+            type: data.type, requestId: data.requestId ?? null, libraryTrust: data.libraryTrust ?? null,
+            event: data.event ?? null, sequence: sequence++ });
+          if (window.__recoveryWorkerEvents.length > 1000) window.__recoveryWorkerEvents.shift();
+        });
+        return worker;
+      },
+    });
+    window.__recoveryPreparedPlayback = preparedPlayback;
+    window.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+      authoringRunOptions: () => window.__recoveryPreparedPlayback === null
+        ? {} : ({ preparedPlayback: window.__recoveryPreparedPlayback }),
+    };
+  }, { preparedPlayback: externalRoot ? null : !liveComparison });
   page = await context.newPage();
-  if (liveComparison) await page.addInitScript(() => {
-    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: false }) };
-  });
   page.on("pageerror", (error) => diagnostics.pageErrors.push(String(error)));
   page.on("requestfailed", request => diagnostics.failedRequests.push({
     phase, url: request.url(), error: request.failure()?.errorText ?? "request failed",
@@ -361,12 +593,12 @@ try {
   });
 
   diagnostics.browser = await browser.version();
-  await page.goto(`${baseUrl}/web/index.html?example=parity-create-circle`, { waitUntil: "load" });
+  await page.goto(externalRoot
+    ? new URL("index.html?example=parity-create-circle", externalRoot).href
+    : `${baseUrl}/web/index.html?example=parity-create-circle`, { waitUntil: "load" });
   await waitForInitialScene(page);
   await waitForObjectCount(page, 1);
-  page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) diagnostics.unexpectedNavigations += 1;
-  });
+  await trackFullNavigations(page);
 
   phase = "baseline";
   diagnostics.snapshots.baseline = await snapshot(page);
@@ -378,10 +610,36 @@ try {
   await page.screenshot({ path: path.join(artifactDir, "baseline.png"), fullPage: true });
 
   diagnostics.previewBaseline = await pauseAndRecordPreview(page);
+  const draftBaseline = await snapshot(page);
+  const canonicalSource = await page.evaluate(() => document.querySelector("#python-scene-source").value);
+  phase = "draft-only-ime-reset";
+  await page.evaluate(() => {
+    const source = document.querySelector("#python-scene-source");
+    window.__recoveryCompositionEvents = [];
+    source.addEventListener("compositionstart", () => window.__recoveryCompositionEvents.push("start"));
+    source.addEventListener("compositionend", () => window.__recoveryCompositionEvents.push("end"));
+    document.querySelector("#scene-editor-panel .cm-content").dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true }));
+  });
+  assert.deepEqual(await page.evaluate(() => window.__recoveryCompositionEvents), ["start"],
+    "visible CodeMirror IME start must reach the source lifecycle listener");
+  await setEditorSource(page, SOURCES.twoObjects);
+  let edited = await assertDraftOnly(page, draftBaseline, SOURCES.twoObjects);
+  await page.evaluate(() => document.querySelector("#scene-editor-panel .cm-content").dispatchEvent(
+    new CompositionEvent("compositionend", { bubbles: true })));
+  assert.deepEqual(await page.evaluate(() => window.__recoveryCompositionEvents), ["start", "end"],
+    "visible CodeMirror IME end must be forwarded");
+  edited = await assertDraftOnly(page, draftBaseline, SOURCES.twoObjects);
+  assert.equal(edited.draftState, "unapplied");
+  assert.match(edited.draftText, /draft not applied.*Run to apply/);
+  await page.locator(".reset-example").click();
+  await page.waitForFunction(expected => document.querySelector("#python-scene-source").value === expected,
+    canonicalSource, { timeout: 10_000 });
+  await assertDraftOnly(page, draftBaseline, canonicalSource);
+
   phase = "syntax-error";
   await setEditorSource(page, SOURCES.syntaxError);
-  let edited = await snapshot(page);
-  assert.match(edited.patchText, /restarting/);
+  edited = await assertDraftOnly(page, draftBaseline, SOURCES.syntaxError);
   assert.equal(edited.objectCount, diagnostics.snapshots.baseline.objectCount);
   diagnostics.snapshots.syntaxError = await runEditedSource(page, { expectedState: "error" });
   assert.equal(diagnostics.snapshots.syntaxError.patchText, "Python raised SyntaxError");
@@ -405,9 +663,8 @@ try {
 
   phase = "syntax-recovery";
   await setEditorSource(page, SOURCES.twoObjects);
-  edited = await snapshot(page);
+  edited = await assertDraftOnly(page, diagnostics.snapshots.syntaxError, SOURCES.twoObjects);
   assertDiagnosticCleared(edited);
-  assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.syntaxRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 2,
@@ -421,8 +678,7 @@ try {
   diagnostics.previewRecovered = await pauseAndRecordPreview(page);
   phase = "runtime-error";
   await setEditorSource(page, SOURCES.runtimeError);
-  edited = await snapshot(page);
-  assert.match(edited.patchText, /restarting/);
+  edited = await assertDraftOnly(page, diagnostics.snapshots.syntaxRecovered, SOURCES.runtimeError);
   assert.equal(edited.objectCount, "2");
   diagnostics.snapshots.runtimeError = await runEditedSource(page, { expectedState: "error" });
   assert.equal(diagnostics.snapshots.runtimeError.patchText, "Python raised NameError");
@@ -448,9 +704,8 @@ try {
 
   phase = "runtime-recovery";
   await setEditorSource(page, SOURCES.oneObject);
-  edited = await snapshot(page);
+  edited = await assertDraftOnly(page, diagnostics.snapshots.runtimeError, SOURCES.oneObject);
   assertDiagnosticCleared(edited);
-  assert.match(edited.patchText, /restarting/);
   diagnostics.snapshots.runtimeRecovered = await runEditedSource(page, {
     expectedState: "applied",
     expectedObjectCount: 1,
@@ -462,10 +717,159 @@ try {
   assert.equal(await page.locator("#last-successful-preview").isHidden(), true);
   await page.screenshot({ path: path.join(artifactDir, "recovered.png"), fullPage: true });
 
-  // Opaque builtins work runs on the original source stack. Its completed
-  // retained journal can replay without invoking that work again, in either mode.
-  // A later explicit source invocation fails while that replay is active.
+  phase = "taint-mutation";
+  await page.evaluate(() => { window.__recoveryPreparedPlayback = false; });
+  await setEditorSource(page, SOURCES.taintMutation);
+  edited = await assertDraftOnly(page, diagnostics.snapshots.runtimeRecovered, SOURCES.taintMutation);
+  diagnostics.snapshots.taintMutation = await runEditedSource(page, {
+    expectedState: "applied", expectedObjectCount: 1,
+  });
+  diagnostics.previewTainted = await pauseAndRecordPreview(page);
+  assert.equal(diagnostics.snapshots.taintMutation.executionDiagnostics.requestedProfile, "observed");
+  assert.equal(diagnostics.snapshots.taintMutation.runEvidence.proof.libraryTrust, "tainted",
+    "opaque source execution must report monotonic interpreter taint");
+
+  phase = "taint-recovery";
+  await page.evaluate(() => { window.__recoveryPreparedPlayback = true; });
+  await setEditorSource(page, SOURCES.oneObject);
+  edited = await assertDraftOnly(page, diagnostics.snapshots.taintMutation, SOURCES.oneObject);
+  diagnostics.snapshots.taintRecovered = await runEditedSource(page, {
+    expectedState: "applied", expectedObjectCount: 1,
+  });
+  assert.ok(diagnostics.snapshots.taintRecovered.interpreterGeneration >
+    diagnostics.snapshots.taintMutation.interpreterGeneration,
+  "a pure Run after opaque mutation must use a fresh interpreter generation");
+  assert.notEqual(diagnostics.snapshots.taintRecovered.runEvidence.run.workerId,
+    diagnostics.snapshots.taintMutation.runEvidence.run.workerId);
+  assert.equal(diagnostics.snapshots.taintRecovered.runEvidence.ready.libraryTrust, "pristine");
+  assert.equal(diagnostics.snapshots.taintRecovered.runEvidence.proof.libraryTrust, "pristine");
+  assert.equal(diagnostics.snapshots.taintRecovered.runEvidence.proof.event.admitted, true,
+    "the fresh interpreter must prove the clean source before dependencies execute");
+  assert.ok(diagnostics.snapshots.taintRecovered.executionDiagnostics.events.some(event =>
+    event.stage === "attached"), "the fresh source must attach to its actual Rust-owned profile");
+  diagnostics.previewTaintRecovered = await pauseAndRecordPreview(page);
+  assert.notEqual(diagnostics.previewTaintRecovered.pixels.digest, diagnostics.previewTainted.pixels.digest,
+    "the fresh Run must display its own scene, not reactivate the tainted worker's scene");
+
+  phase = "same-page-pixels-to-first-scene";
+  await page.close();
+  page = await context.newPage();
+  page.on("pageerror", (error) => diagnostics.pageErrors.push(String(error)));
+  page.on("requestfailed", request => diagnostics.failedRequests.push({
+    phase, url: request.url(), error: request.failure()?.errorText ?? "request failed",
+  }));
+  page.on("console", (message) => {
+    if (message.type() === "error") diagnostics.consoleErrors.push({ phase, text: message.text() });
+  });
+  await page.goto(externalRoot
+    ? new URL("index.html?example=showcase-first-scene", externalRoot).href
+    : `${baseUrl}/web/index.html?example=showcase-first-scene`, { waitUntil: "load" });
+  await waitForInitialScene(page);
+  await trackFullNavigations(page);
+  diagnostics.snapshots.catalogAnchor = await snapshot(page);
+  const anchorRun = (await workerEvidence(page)).runs.at(-1);
+  assert.equal(diagnostics.snapshots.catalogAnchor.exampleId, "showcase-first-scene");
+  if (externalRoot) {
+    assert.equal(anchorRun?.preparedPlayback, null, "deployed startup must not override viewer policy");
+    assert.equal(diagnostics.snapshots.catalogAnchor.executionDiagnostics.requestedProfile, "incremental",
+      "deployed first-scene startup must use the default prepared profile");
+  }
+  diagnostics.snapshots.catalogAnchor.preparedPlaybackOverride = anchorRun?.preparedPlayback ?? null;
+  diagnostics.snapshots.pixels = await selectShowcase(page, "showcase-raster-images");
+  assert.equal(diagnostics.snapshots.pixels.exampleId, "showcase-raster-images");
+  const pixelProof = diagnostics.snapshots.pixels.runEvidence.proof;
+  assert.equal(pixelProof.libraryTrust, "pristine",
+    "qualified deterministic pixel generation must preserve interpreter trust");
+  assert.equal(pixelProof.event.admitted, true);
+  const pixelGeneration = diagnostics.snapshots.pixels.interpreterGeneration;
+  diagnostics.snapshots.firstSceneAfterPixels = await selectShowcase(page, "showcase-first-scene");
+  assert.equal(diagnostics.snapshots.firstSceneAfterPixels.exampleId, "showcase-first-scene");
+  assert.ok(Number(diagnostics.snapshots.firstSceneAfterPixels.executionDiagnostics.context.runGeneration) >
+    Number(diagnostics.snapshots.catalogAnchor.executionDiagnostics.context.runGeneration),
+  "same-page First scene → Pixels → First scene must apply a fresh final run");
+  assert.equal(diagnostics.snapshots.firstSceneAfterPixels.interpreterGeneration, pixelGeneration,
+    "same-page qualified Pixels → Your first scene reuses the healthy interpreter");
+  assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.ready.libraryTrust, "pristine");
+  assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.proof.libraryTrust, "pristine");
+  assert.equal(diagnostics.snapshots.firstSceneAfterPixels.runEvidence.proof.event.admitted, true);
+  assert.ok(diagnostics.snapshots.firstSceneAfterPixels.executionDiagnostics.events.some(event =>
+    event.stage === "attached" && event.profile === "incremental"));
+
+  if (!liveComparison) {
+    phase = "catalog-exception-to-first";
+    diagnostics.catalogTransitions = [];
+    for (const id of ["showcase-reactive-relationships", "showcase-camera-follows-path",
+      "showcase-always-redraw", "showcase-translation-drag"]) {
+      const exception = await selectShowcase(page, id);
+      const first = await selectShowcase(page, "showcase-first-scene");
+      diagnostics.catalogTransitions.push([id, exception.runEvidence.run,
+        exception.showcaseProfile, first.runEvidence.run]);
+    }
+
+    phase = "catalog-failed-to-first";
+    await selectShowcase(page, "showcase-group-slicing");
+    await setEditorSource(page, SOURCES.syntaxError);
+    diagnostics.snapshots.catalogFailedSource = await runEditedSource(page, { expectedState: "error" });
+    assert.equal(diagnostics.snapshots.catalogFailedSource.patchText, "Python raised SyntaxError");
+    diagnostics.snapshots.firstAfterCatalogFailure = await selectShowcase(page, "showcase-first-scene");
+    assert.equal(diagnostics.snapshots.firstAfterCatalogFailure.exampleId, "showcase-first-scene");
+
+    phase = "catalog-cancelled-to-first";
+    await selectShowcase(page, "showcase-transform-ownership");
+    await setEditorSource(page, navigationCancellationSource);
+    const beforeCancelledRun = await workerEvidence(page);
+    await page.locator("#replace-scene").click();
+    await page.waitForFunction(count => {
+      const pending = window.__recoveryAuthoringRuns?.[count];
+      const gallery = window.__noonExampleGallery;
+      return (window.__recoveryAuthoringRuns?.length ?? 0) === count + 1 && pending &&
+        gallery?.runInFlight && gallery.executionDiagnostics?.runRequestId === pending.requestId;
+    }, beforeCancelledRun.runs.length, { timeout: 30_000 });
+    const cancelledCandidate = (await workerEvidence(page)).runs[beforeCancelledRun.runs.length];
+    assert.equal(cancelledCandidate.source, navigationCancellationSource);
+    diagnostics.snapshots.cancelledCatalogRun = {
+      workerId: cancelledCandidate.workerId, requestId: cancelledCandidate.requestId,
+      sourceSha256: createHash("sha256").update(cancelledCandidate.source).digest("hex"),
+    };
+    const firstAfterCancellation = await selectShowcase(page, "showcase-first-scene",
+      cancelledCandidate.requestId);
+    diagnostics.snapshots.firstAfterCatalogCancellation = firstAfterCancellation;
+    assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.exampleId, "showcase-first-scene",
+      "the superseded Run must not replace the newer gallery selection");
+    assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.patchState, "applied");
+    assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.runRequestId,
+      firstAfterCancellation.runEvidence.run.requestId,
+    "the superseded edited Run cannot publish over the completed first-scene cycle");
+    const cancellationEvidence = await workerEvidence(page);
+    const cancelledMessage = cancellationEvidence.workers.some(message =>
+      message.workerId === cancelledCandidate.workerId && message.requestId === cancelledCandidate.requestId &&
+      message.type === "execution_diagnostic" && message.event?.stage === "cancelled");
+    const terminatedWorker = cancellationEvidence.workers.some(message =>
+      message.workerId === cancelledCandidate.workerId && message.type === "terminated" &&
+      firstAfterCancellation.runEvidence.run.workerId !== cancelledCandidate.workerId);
+    assert.ok(cancelledMessage || terminatedWorker,
+      "the superseded source must report cancellation or its owning worker must terminate");
+    diagnostics.snapshots.cancelledCatalogRun.resolution = cancelledMessage
+      ? "cancelled" : "worker-terminated";
+
+    phase = "catalog-seeded-permutations";
+    const permutationIds = ["showcase-timing", "showcase-bezier-paths", "showcase-ordered-reveal"];
+    diagnostics.seededCatalogOrders = [];
+    for (const seed of [0x2422, 0x2423]) {
+      const order = seededPermutation(permutationIds, seed);
+      const selected = [];
+      for (const id of order) {
+        const result = await selectShowcase(page, id);
+        selected.push({ id, run: result.runEvidence.run, profile: result.showcaseProfile });
+      }
+      diagnostics.seededCatalogOrders.push({ seed, order, selected });
+    }
+  }
+
+  // Replaying a retained timeline does not rerun source. A later explicit Run
+  // applies the latest draft once while the prior playback is active.
   phase = "explicit-rerun-baseline";
+  await page.evaluate(() => { window.__recoveryPreparedPlayback = true; });
   await setEditorSource(page, SOURCES.explicitRerun);
   diagnostics.snapshots.rerunBaseline = await runEditedSource(page, {
     expectedState: "applied", expectedObjectCount: 1,
@@ -478,6 +882,9 @@ try {
   // CodeMirror exposes the source through a main-world textarea getter.
   // Playwright inputValue reads the isolated world's stale native fallback.
   assert.equal(await page.evaluate(() => document.querySelector("#python-scene-source").value), SOURCES.explicitRerun);
+  assert.equal(diagnostics.snapshots.rerunReady.authoringRunCount,
+    diagnostics.snapshots.rerunBaseline.authoringRunCount,
+  "Replay controls must not invoke source again");
   // Record the precondition at the actual Run event, before its handler pauses
   // playback. A slow test that lets the replay finish must not pass vacuously.
   await page.evaluate(() => {
@@ -491,11 +898,13 @@ try {
     }, { capture: true, once: true });
   });
   phase = "explicit-rerun-error";
-  await page.locator("#replace-scene").click();
+  await setEditorSource(page, SOURCES.explicitRerunFailure);
+  edited = await assertDraftOnly(page, diagnostics.snapshots.rerunReady, SOURCES.explicitRerunFailure);
+  assert.equal(edited.playing, true, "editing the replaying draft cannot pause the active preview");
+  diagnostics.snapshots.rerunError = await runEditedSource(page, { expectedState: "error" });
   diagnostics.rerunClick = await page.evaluate(() => window.__noonPreviewRerunClick);
   assert.deepEqual(diagnostics.rerunClick, { playing: true, busy: false, runGeneration: acceptedGeneration },
     "the rerun must begin while the retained replay is actively playing");
-  diagnostics.snapshots.rerunError = await waitForRunResult(page, { expectedState: "error" });
   assert.equal(diagnostics.snapshots.rerunError.problemTitle, "Python raised ValueError");
   await assertStoppedPreview(page, diagnostics.snapshots.rerunError);
   await page.waitForFunction(() => {
@@ -510,8 +919,9 @@ try {
   // against independent exact displayed-pixel references.
   await assertFrozenPreview(page, { pixels: rerunPixels, runGeneration: acceptedGeneration });
   phase = "explicit-rerun-recovery";
-  await page.locator("#replace-scene").click();
-  diagnostics.snapshots.rerunRecovered = await waitForRunResult(page, {
+  await setEditorSource(page, SOURCES.oneObject);
+  edited = await assertDraftOnly(page, diagnostics.snapshots.rerunError, SOURCES.oneObject);
+  diagnostics.snapshots.rerunRecovered = await runEditedSource(page, {
     expectedState: "applied", expectedObjectCount: 1,
   });
   assertDiagnosticCleared(diagnostics.snapshots.rerunRecovered);
@@ -520,10 +930,13 @@ try {
   const syntaxConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "syntax-error");
   const runtimeConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "runtime-error");
   const rerunConsole = diagnostics.consoleErrors.filter((entry) => entry.phase === "explicit-rerun-error");
+  const catalogSyntaxConsole = diagnostics.consoleErrors.filter((entry) =>
+    entry.phase === "catalog-failed-to-first" && /SyntaxError|invalid syntax|expected ':'/i.test(entry.text));
   const unexpectedConsole = diagnostics.consoleErrors.filter(
-    (entry) => entry.phase !== "syntax-error" && entry.phase !== "runtime-error" && entry.phase !== "explicit-rerun-error",
+    entry => !["syntax-error", "runtime-error", "explicit-rerun-error"].includes(entry.phase) &&
+      !(entry.phase === "catalog-failed-to-first" && catalogSyntaxConsole.includes(entry)),
   );
-  assert.ok(rerunConsole.some((entry) => /Intentional explicit rerun failure/.test(entry.text)),
+  assert.ok(rerunConsole.some((entry) => /Intentional edited-draft failure/.test(entry.text)),
     `the explicit rerun should expose its actual exception: ${JSON.stringify(rerunConsole)}`);
   assert.ok(
     syntaxConsole.some((entry) => /SyntaxError|invalid syntax|expected ':'/i.test(entry.text)),
@@ -533,11 +946,18 @@ try {
     runtimeConsole.some((entry) => /NameError|MissingShape|not defined/i.test(entry.text)),
     `runtime failure should be diagnostic in the console: ${JSON.stringify(runtimeConsole)}`,
   );
+  assert.ok(catalogSyntaxConsole.length > 0,
+    `catalog recovery should expose its expected SyntaxError: ${JSON.stringify(
+      diagnostics.consoleErrors.filter(entry => entry.phase === "catalog-failed-to-first"))}`);
   assert.deepEqual(unexpectedConsole, [], `valid runs emitted console errors: ${JSON.stringify(unexpectedConsole)}`);
   assert.deepEqual(diagnostics.pageErrors, [], `unhandled page errors: ${diagnostics.pageErrors.join("\n")}`);
   assert.equal(diagnostics.unexpectedNavigations, 0, "failure/recovery must not reload the Playground");
+  if (externalRoot) {
+    diagnostics.deployedIdentity.after = await readExternalIdentity();
+    assert.deepEqual(diagnostics.deployedIdentity.after, diagnostics.deployedIdentity.before,
+      "deployed package identity changed during navigation validation");
+  }
 
-  diagnostics.serverOutput = serverOutput;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   console.log(
     `playground live authoring recovery ok: ${diagnostics.snapshots.baseline.objectCount} -> ` +
@@ -545,7 +965,6 @@ try {
   );
 } catch (error) {
   diagnostics.failure = error instanceof Error ? error.stack ?? error.message : String(error);
-  diagnostics.serverOutput = serverOutput;
   if (page !== null) {
     try {
       diagnostics.snapshots.failure = await snapshot(page);
@@ -559,5 +978,5 @@ try {
 } finally {
   await context?.close().catch(() => {});
   await browser?.close().catch(() => {});
-  server.kill("SIGTERM");
+  await server?.close();
 }

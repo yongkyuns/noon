@@ -5,6 +5,8 @@ import { runtimeBuildIdentity } from "./test-support/runtime-build.mjs";
 import {
   AUTHORING_CHANNEL,
   AUTHORING_PROTOCOL_VERSION,
+  MAX_EXECUTION_DIAGNOSTICS,
+  MAX_PREPARATION_TIMING_DIAGNOSTICS,
   PythonAuthoringClient,
   parseAuthoringResult,
   validateSceneDuration,
@@ -71,6 +73,107 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("diagnostics distinguish the requested profile from actual attachment and return detached snapshots", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
+  assert.equal(client.executionDiagnostics, null, "an unused interpreter has no run trace");
+  const run = client.run("pass", { playground: { example_id: "lesson", run_generation: 3 } },
+    { preparedPlayback: true, onSemanticContinuation() {} });
+  await Promise.resolve();
+  assert.equal(client.executionDiagnostics.requestedProfile, "incremental");
+  assert.equal(client.executionDiagnostics.libraryTrust, "pristine");
+  assert.deepEqual(client.executionDiagnostics.events, [], "requesting a profile cannot claim attachment");
+  worker.emit("message", workerMessage("execution_diagnostic", { requestId: 0,
+    event: { stage: "attached", profile: "immutable", capabilities: { commands: ["play"] } } }));
+  const snapshot = client.executionDiagnostics;
+  snapshot.events[0].capabilities.commands.push("seek");
+  assert.deepEqual(client.executionDiagnostics.events[0].capabilities.commands, ["play"]);
+  assert.equal(client.executionDiagnostics.events[0].sequence, 0);
+  worker.emit("message", workerMessage("result", { requestId: 0,
+    resultJson: JSON.stringify(sceneResult({ semantic_execution: { context_id: "lesson", prepared_playback: false } })) }));
+  await run;
+  worker.emit("message", workerMessage("execution_diagnostic", { requestId: 0,
+    event: { stage: "terminal-adopted", profile: "immutable" } }));
+  assert.equal(client.executionDiagnostics.events.length, 2, "completed source can still report playback disposition");
+  client.terminate();
+});
+
+test("stale decisions cannot alter a new run trace, but old opaque work still taints its interpreter", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
+  const first = client.run("first"), second = client.run("second"); await Promise.resolve();
+  const before = client.executionDiagnostics;
+  worker.emit("message", workerMessage("execution_diagnostic", { requestId: 0, libraryTrust: "tainted",
+    event: { stage: "attached", profile: "observed" } }));
+  assert.equal(client.libraryTrust, "tainted");
+  assert.equal(client.executionDiagnostics.libraryTrust, "tainted");
+  assert.equal(before.libraryTrust, "pristine", "a detached trace retains its sampled trust");
+  assert.equal(client.executionDiagnostics.runRequestId, 1);
+  assert.deepEqual(client.executionDiagnostics.events, []);
+  for (const requestId of [0, 1]) worker.emit("message", workerMessage("result", {
+    requestId, resultJson: JSON.stringify(semanticResult(String(requestId))) }));
+  await Promise.all([first, second]); client.terminate();
+});
+
+test("diagnostics stay bounded and expose loss rather than silently passing a complete trace", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
+  const run = client.run("pass"); await Promise.resolve();
+  for (let i = 0; i < MAX_EXECUTION_DIAGNOSTICS + 2; i++) worker.emit("message", workerMessage("execution_diagnostic", {
+    requestId: 0, event: { stage: "profile-change", profile: "observed" } }));
+  assert.equal(client.executionDiagnostics.events.length, MAX_EXECUTION_DIAGNOSTICS);
+  assert.equal(client.executionDiagnostics.droppedEvents, 2);
+  worker.emit("message", workerMessage("result", { requestId: 0, resultJson: JSON.stringify(semanticResult()) }));
+  await run; client.terminate();
+});
+
+test("opt-in preparation timings are bounded separately from essential lifecycle diagnostics", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
+  const run = client.run("pass", {}, { preparedPlayback: true, diagnosticPreparationTiming: true,
+    onSemanticContinuation() {} }); await Promise.resolve();
+  const descriptor = { context_id: "timed", continuation_generation: 1, prepared_playback: true };
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 0, generation: 1, duration: 1, semanticExecution: descriptor,
+  })); await Promise.resolve();
+  worker.emit("message", workerMessage("execution_diagnostic", { requestId: 0,
+    event: { stage: "attached", profile: "incremental" } }));
+  for (let i = 0; i < MAX_PREPARATION_TIMING_DIAGNOSTICS + 2; i++) worker.emit("message", workerMessage("execution_diagnostic", {
+    requestId: 0, event: { stage: "preparation-timing", owner: "source-turn", ordinal: i, durationMs: 1 },
+  }));
+  for (const stage of ["source-complete", "terminal-adopted", "disposition"]) worker.emit("message", workerMessage("execution_diagnostic", {
+    requestId: 0, event: { stage, disposition: stage === "disposition" ? "looped" : undefined },
+  }));
+  const lifecycle = client.executionDiagnostics;
+  assert.deepEqual(lifecycle.events.map(event => event.stage), [
+    "attached", "source-complete", "terminal-adopted", "disposition",
+  ]);
+  assert.equal(lifecycle.droppedEvents, 0);
+  const timings = client.executionPreparationTimingDiagnostics;
+  assert.equal(timings.events.length, MAX_PREPARATION_TIMING_DIAGNOSTICS);
+  assert.equal(timings.droppedEvents, 2);
+  timings.events[0].owner = "mutated";
+  assert.equal(client.executionPreparationTimingDiagnostics.events[0].owner, "source-turn",
+    "the opt-in timing snapshot is detached");
+  worker.emit("message", workerMessage("result", { requestId: 0,
+    resultJson: JSON.stringify({ kind: "semantic_scene", semantic_execution: descriptor, duration: 1 }) }));
+  await run; client.terminate();
+});
+
+test("a false clean report cannot restore trust; only a fresh interpreter generation can", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await client.ready();
+  const run = client.run("pass"); await Promise.resolve();
+  for (const libraryTrust of ["tainted", "pristine"]) worker.emit("message", workerMessage("execution_diagnostic", {
+    requestId: 0, libraryTrust, event: { stage: "interpreter-trust" } }));
+  await assert.rejects(run, /trust cannot be restored/);
+  assert.equal(client.libraryTrust, "tainted");
+  const freshWorker = new FakeWorker(), fresh = new PythonAuthoringClient(freshWorker);
+  freshWorker.emit("message", workerMessage("ready", { libraryTrust: "pristine" })); await fresh.ready();
+  assert.notEqual(fresh.interpreterGeneration, client.interpreterGeneration);
+  assert.equal(fresh.libraryTrust, "pristine"); fresh.terminate();
+});
+
 test("prepared source options validate before posting and require a continuation consumer", async () => {
   const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
   worker.emit("message", workerMessage("ready")); await client.ready();
@@ -78,11 +181,36 @@ test("prepared source options validate before posting and require a continuation
     { preparedPlayback: "yes" },
     ...[0, -1, NaN, Infinity].map(preparationLookaheadSeconds => ({ preparationLookaheadSeconds })),
     { preparedPlayback: true },
+    { diagnosticPreparationTiming: true },
+    { diagnosticPreparationTiming: "yes", preparedPlayback: true, onSemanticContinuation() {} },
   ]) {
     await assert.rejects(client.run("class Demo(Scene): pass", {}, options),
-      /boolean|positive and finite|continuation consumer/);
+      /boolean|positive and finite|continuation consumer|preparation timing diagnostics/);
   }
   assert.equal(worker.messages.length, 0); client.terminate();
+});
+
+test("preparation timing is an opt-in prepared-run diagnostic", async () => {
+  const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
+  worker.emit("message", workerMessage("ready")); await client.ready();
+  const ordinary = client.run("result = scene"); await Promise.resolve();
+  assert.equal("diagnosticPreparationTiming" in worker.messages[0], false);
+  worker.emit("message", workerMessage("result", { requestId: 0, resultJson: JSON.stringify(semanticResult()) }));
+  await ordinary;
+
+  const prepared = client.run("prepared source", {}, { preparedPlayback: true,
+    diagnosticPreparationTiming: true, onSemanticContinuation() {} });
+  await Promise.resolve();
+  assert.equal(worker.messages[1].diagnosticPreparationTiming, true);
+  worker.emit("message", workerMessage("semantic_continuation_registered", {
+    requestId: 1, generation: 5, duration: 0.5,
+    semanticExecution: { context_id: "timed", continuation_generation: 5, prepared_playback: true },
+  }));
+  worker.emit("message", workerMessage("result", { requestId: 1, resultJson: JSON.stringify(sceneResult({
+    duration: 0.5,
+    semantic_execution: { context_id: "timed", continuation_generation: 5, prepared_playback: true },
+  })) }));
+  await prepared; client.terminate();
 });
 
 test("prepared continuation metadata permits initial pause and prevents source reattachment", async () => {
@@ -648,6 +776,8 @@ test("accepts pending Python responses that complete out of order", async () => 
     pendingRequests: 0,
     staleResponses: 0,
     terminated: false,
+    interpreterGeneration: client.interpreterGeneration,
+    libraryTrust: "unknown",
   });
 });
 

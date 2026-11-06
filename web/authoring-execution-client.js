@@ -280,10 +280,14 @@ export class AuthoringExecutionClient {
     this.#preparedPlayback = false;
   }
 
-  async resume() {
+  preparePlaybackActivation() {
+    return this.#withInputPlayer(player => player.preparePlaybackActivation());
+  }
+
+  async resume(activation = null) {
     // Device activation belongs to this gesture and owner. A replacement
     // scene must receive its own explicit Play, never a retried unlock.
-    return this.#withInputPlayer((player) => player.resume());
+    return this.#withInputPlayer((player) => player.resume(activation));
   }
 
   async seek(timeSeconds) {

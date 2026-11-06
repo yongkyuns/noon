@@ -351,6 +351,7 @@ impl InstalledRetainedExecutionMirror {
             &delta.retained,
             additions.render_geometry_updates(),
         )?;
+        self.resources.reserve_additions_with_render(&additions)?;
         let image_handles = additions.image_handle_remap();
         self.wire.extend_installed_image_handles(&image_handles);
         let text_handles = additions.text_handle_remap();
@@ -1218,6 +1219,70 @@ mod tests {
                 .intensity(),
             1.25
         );
+    }
+
+    #[test]
+    fn prepared_surface_snapshot_resolves_meshes_added_after_empty_bootstrap() {
+        let (scene, _, _) = noon::example_scenes::spatial_surface::scene().unwrap();
+        let mut source = scene.execution_session().unwrap();
+        source
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .unwrap();
+        let wait = source.wait_segment(0.5).unwrap();
+        source.advance_to(wait.end_time()).unwrap();
+        scene.live(&mut source).complete_segment(wait).unwrap();
+        let (_, reader) = source.create_prepared_prefix(wait).unwrap();
+        let mut player = crate::PreparedExecutionPlayer::from_reader(reader, 81);
+        let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(
+            &player.resource_bundle_bytes().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mirror.resources().geometry_count(), 0);
+        let initial = player.initial_delta_json().unwrap();
+        let mut invalid: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial).unwrap();
+        let row = invalid
+            .retained
+            .objects
+            .iter_mut()
+            .find(|row| {
+                matches!(
+                    row.content,
+                    TransportObjectContent::Geometry {
+                        resource: Some(_),
+                        ..
+                    },
+                )
+            })
+            .unwrap();
+        if let TransportObjectContent::Geometry { resource, .. } = &mut row.content {
+            *resource = None;
+        }
+        assert!(mirror.apply_family(invalid).is_err());
+        assert!(mirror.frame().is_none());
+        assert_eq!(mirror.resources().geometry_count(), 0);
+        mirror.apply_json(&initial).unwrap();
+        let frame = mirror.frame().unwrap();
+        let mesh = frame
+            .objects
+            .iter()
+            .find(|object| {
+                object.spatial.as_deref().is_some_and(|spatial| {
+                    spatial.draw_kind == noon_compile::CompiledSpatialDrawKind::Mesh
+                })
+            })
+            .unwrap();
+        let Some(GeometryRef::External(id)) = mesh.content.geometry() else {
+            panic!("spatial mesh must retain its geometry reference");
+        };
+        let resources = mirror.resources().geometries();
+        let handle = resources
+            .current_handle(*id)
+            .expect("renderer must resolve added mesh");
+        assert!(matches!(
+            resources.get(handle),
+            Some(noon_core::GeometryResource::Mesh(_))
+        ));
     }
 
     #[test]

@@ -35,7 +35,10 @@ async function waitForMetricNear(page, target, tolerance = 0.08, timeout = 10_00
         document.querySelector("#metric-time")?.textContent ??
         "";
       const observed = Number(String(raw).match(/([0-9]+(?:\.[0-9]+)?)\s*s/)?.[1]);
-      return Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
+      const controls = document.querySelector(".playback-controls");
+      return controls?.dataset.busy === "false" &&
+        Math.abs(Number(controls.dataset.elapsedSeconds) - expected) <= allowed &&
+        Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
     },
     { target, tolerance },
     { timeout },
@@ -107,6 +110,7 @@ async function playbackSnapshot(page) {
       runText: document.querySelector("#replace-scene")?.textContent?.trim() ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
       patchState: document.querySelector("#patch-status")?.dataset.state ?? "",
+      draftState: document.querySelector("#draft-status")?.dataset.state ?? "",
       patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
       patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
       runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
@@ -146,6 +150,29 @@ try {
   });
 
   await page.addInitScript(() => {
+    window.__playbackScrubberLifecycle = {
+      initial: null, replaced: false, detached: false, placeholderVisibleHiddenControls: null,
+    };
+    const captureScrubber = (records = []) => {
+      const lifecycle = window.__playbackScrubberLifecycle;
+      if (lifecycle.initial !== null && records.some(record =>
+        [...record.removedNodes].some(node => node === lifecycle.initial || node.contains?.(lifecycle.initial)))) {
+        lifecycle.detached = true;
+      }
+      const scrubber = document.querySelector(".playback-scrubber");
+      if (!scrubber) return;
+      const placeholder = document.querySelector(".playback-slot");
+      if (placeholder && lifecycle.placeholderVisibleHiddenControls === null) {
+        lifecycle.placeholderVisibleHiddenControls = [...placeholder.querySelectorAll("[hidden]")]
+          .filter(element => element.getClientRects().length > 0).map(element => element.className);
+      }
+      if (lifecycle.initial === null) lifecycle.initial = scrubber;
+      else if (lifecycle.initial !== scrubber) lifecycle.replaced = true;
+    };
+    const scrubberObserver = new MutationObserver(captureScrubber);
+    scrubberObserver.observe(document, { childList: true, subtree: true });
+    captureScrubber();
+
     window.addEventListener("DOMContentLoaded", () => {
       const status = document.querySelector("#status");
       if (!status) return;
@@ -198,11 +225,69 @@ try {
     waitUntil: "load",
   });
   await startDeferredRuntime(page, "parity-square-and-circle");
+
+  // A no-op playback render must not replace the button's text node during a
+  // pointer gesture. WebKit can then drop the click after mouseup.
+  await page.evaluate(async () => {
+    const { PlaygroundPlaybackControls } = await import("/web/playground-playback-controls.js");
+    const preview = document.createElement("div");
+    preview.style.cssText = "position:fixed;left:20px;top:20px;z-index:10000";
+    document.body.append(preview);
+    const player = {
+      pause: async () => { window.__controlsGesturePauseCalls++; return { time: 0, playing: false }; },
+      resume: async () => ({ time: 0, playing: true }),
+      seek: async (time) => ({ time, playing: true }),
+      restartPlayback: async () => ({ time: 0, playing: true }),
+    };
+    window.__controlsGesturePauseCalls = 0;
+    const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 4 });
+    window.__controlsGestureRegression = { controls, preview, state: { time: 0, playing: true, durationSeconds: 4 } };
+    controls.sync(window.__controlsGestureRegression.state);
+    window.__controlsGestureRegression.labelNode = preview.querySelector(".playback-toggle").firstChild;
+  });
+  const gestureToggle = page.locator(".playback-controls .playback-toggle").last();
+  const gestureBounds = await gestureToggle.boundingBox();
+  assert.ok(gestureBounds, "gesture regression toggle must be visible");
+  const gestureX = gestureBounds.x + gestureBounds.width / 2;
+  const gestureY = gestureBounds.y + gestureBounds.height / 2;
+  await page.mouse.move(gestureX, gestureY);
+  await page.mouse.down();
+  await page.waitForTimeout(40);
+  await page.evaluate(() => {
+    const { controls, state, preview, labelNode } = window.__controlsGestureRegression;
+    controls.sync(state);
+    if (preview.querySelector(".playback-toggle").firstChild !== labelNode) {
+      throw new Error("unchanged playback render replaced the toggle label text node");
+    }
+  });
+  await page.mouse.up();
+  await page.waitForFunction(() => window.__controlsGesturePauseCalls === 1);
+  assert.equal(await page.evaluate(() => window.__controlsGesturePauseCalls), 1,
+    "unchanged control state during a pointer gesture must preserve the pause click");
+  await page.evaluate(() => {
+    const { controls, preview } = window.__controlsGestureRegression;
+    controls.destroy();
+    preview.remove();
+  });
+
   await page.evaluate(() => {
     document.querySelector("#scene").dataset.playbackSmokeIdentity = "original";
   });
 
   const initial = await playbackSnapshot(page);
+  const scrubberLifecycle = await page.evaluate(() => ({
+    initialFound: window.__playbackScrubberLifecycle.initial !== null,
+    replaced: window.__playbackScrubberLifecycle.replaced,
+    detached: window.__playbackScrubberLifecycle.detached,
+    placeholderVisibleHiddenControls: window.__playbackScrubberLifecycle.placeholderVisibleHiddenControls,
+    currentIsInitial: window.__playbackScrubberLifecycle.initial === document.querySelector(".playback-scrubber"),
+  }));
+  diagnostics.scrubberLifecycle = scrubberLifecycle;
+  assert.deepEqual(scrubberLifecycle, {
+    initialFound: true, replaced: false, detached: false, currentIsInitial: true,
+    placeholderVisibleHiddenControls: [],
+  },
+    "runtime initialization must keep the original loading scrubber node attached");
   diagnostics.initial = initial;
   diagnostics.lifecycle = await page.evaluate(() => window.__noonPlaybackLifecycle);
   const preparedSamples = diagnostics.lifecycle.samples.filter(sample =>
@@ -212,8 +297,8 @@ try {
   assert.ok(
     diagnostics.lifecycle.samples
       .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
-      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && sample.scrubberHidden),
-    "source-owned playback must expose live progress but reject host commands",
+      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && !sample.scrubberHidden),
+    "source-owned playback must keep the shared timeline visible while rejecting host commands",
   );
   const liveTimes = diagnostics.lifecycle.samples
     .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
@@ -298,13 +383,17 @@ class Lesson(Scene):
   });
   const edited = await playbackSnapshot(page);
   diagnostics.edited = edited;
-  assert.equal(edited.patchState, "ready", "editing must stop before its debounced restart");
-  assert.ok(edited.runGeneration > initialGeneration, "editing must immediately invalidate the old run");
-  assert.equal(edited.canvasHidden, true, "editing must hide the old source preview");
-  assert.equal(edited.playing, "false", "editing must pause the retained execution");
-  assert.ok(edited.playDisabled && edited.restartDisabled && edited.scrubberDisabled,
-    "editing must disable every control for the old replay lease");
-  await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === true);
+  assert.equal(edited.draftState, "unapplied");
+  assert.equal(edited.patchState, "applied");
+  assert.equal(edited.runGeneration, initialGeneration, "editing must retain the active source");
+  assert.equal(edited.canvasHidden, false, "editing must keep the active preview visible");
+  assert.equal(edited.playing, "false");
+  assert.ok(!edited.playDisabled && !edited.restartDisabled && !edited.scrubberDisabled,
+    "draft edits must preserve the active playback controls");
+  await page.waitForTimeout(600);
+  assert.equal((await playbackSnapshot(page)).runGeneration, initialGeneration,
+    "draft edits must not schedule a delayed source restart");
+  await page.locator("#replace-scene").click();
   await page.waitForFunction(
     () =>
       window.__noonExampleGallery?.runInFlight === false &&
@@ -315,11 +404,11 @@ class Lesson(Scene):
   );
   const rerun = await playbackSnapshot(page);
   diagnostics.rerun = rerun;
-  assert.equal(rerun.hasControls, true, "automatic source restart must restore a completed replay lease");
+  assert.equal(rerun.hasControls, true, "Run must expose controls for the replacement source");
   assert.equal(rerun.playbackAvailability, "available");
   assert.equal(rerun.runDisabled, false);
   assert.equal(rerun.patchRunGeneration, String(rerun.runGeneration));
-  assert.ok(rerun.runGeneration > initialGeneration, "automatic restart must apply the newest source generation");
+  assert.ok(rerun.runGeneration > initialGeneration, "Run must apply the newest source generation");
   assert.equal(
     Number(rerun.scrubberMax),
     Number(initial.scrubberMax) + 2,
@@ -328,6 +417,15 @@ class Lesson(Scene):
   assert.equal(rerun.canvasCount, 1, "source replacement must leave exactly one canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
   assert.equal(rerun.canvasCount, 1);
+
+  // Source completion can precede presentation. Inspect lesson controls at the
+  // selected terminal frame instead of depending on a loop's sampling instant.
+  if (rerun.playing === "true") await page.locator(".playback-toggle").click();
+  await page.locator(".playback-scrubber").evaluate(input => {
+    input.value = input.max;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await waitForMetricNear(page, Number(rerun.scrubberMax));
 
   // The existing edit/rerun also proves silent lesson annotations reach the
   // viewer through shared Rust, without an additional scene or browser job.
@@ -422,7 +520,7 @@ class Lesson(Scene):
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ live progress, completed replay controls, fullscreen, and automatic source restart");
+  console.log("✓ playback controls, fullscreen, retained draft editing, and explicit Run");
 } catch (error) {
   if (page !== null) {
     try {

@@ -5,7 +5,7 @@ const initial = dom();
 globalThis.HTMLElement = Element;
 globalThis.document = initial.document;
 const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
-function fixture(withDragUndo = false) {
+function fixture(withDragUndo = false, durationSeconds = 2) {
   const { document, preview } = dom();
   globalThis.document = document;
   const calls = [];
@@ -15,7 +15,7 @@ function fixture(withDragUndo = false) {
   }
   if (withDragUndo) player.undoTranslationDrag = async () => ({ time: 0, playing: false, canUndoTranslationDrag: false });
   const errors = [];
-  const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 2, onError: (error) => errors.push(error) });
+  const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds, onError: (error) => errors.push(error) });
   return { controls, player, preview, calls, errors, range: preview.querySelector(".playback-scrubber"), output: preview.querySelector(".playback-time") };
 }
 
@@ -25,7 +25,7 @@ test("source-owned progress moves despite busy/paused flags, without permitting 
   f.controls.setBusy(true);
   f.controls.observe({ time: 0.4, playing: false, durationSeconds: 2 });
   assert.equal(f.controls.element.dataset.elapsedSeconds, "0.4");
-  assert.equal(f.range.hidden, true);
+  assert.equal(f.range.hidden, false);
   assert.equal(f.output.value, "0.40 / — s");
   f.controls.observe({ time: 2.5, playing: true, durationSeconds: 4 });
   assert.equal(f.controls.element.dataset.elapsedSeconds, "2.5");
@@ -57,7 +57,7 @@ test("an observed source can pause and resume without enabling replay or inventi
   f.controls.setUnavailable("source execution is not retained for replay");
   const button = f.preview.querySelector(".playback-toggle");
   assert.equal(button.disabled, false);
-  assert.equal(f.range.hidden, true);
+  assert.equal(f.range.hidden, false);
   assert.equal(f.preview.querySelector(".playback-restart").disabled, true);
   assert.equal(f.output.value, "0.50 / — s");
   button.dispatchEvent(new Event("click")); await flush();
@@ -112,6 +112,23 @@ test("retired command completion cannot mutate a replacement's controls or error
   assert.equal(replacement.element.dataset.busy, "false");
   assert.equal(f.preview.querySelector(".playback-scrubber").value, "0.75");
   assert.deepEqual(f.errors, []);
+});
+
+test("the placeholder scrubber survives controls teardown and reinitialization", async () => {
+  const f = fixture();
+  const root = f.controls.element;
+  const scrubber = f.range;
+  assert.equal(f.preview.querySelector(".playback-live-status").textContent, "Loading playback state");
+  f.controls.destroy();
+  assert.equal(f.preview.querySelector(".playback-scrubber"), scrubber);
+  const replacement = new PlaygroundPlaybackControls(f.player, f.preview, { durationSeconds: 3 });
+  assert.equal(replacement.element, root);
+  assert.equal(f.preview.querySelector(".playback-scrubber"), scrubber);
+  scrubber.value = "1.25";
+  scrubber.dispatchEvent(new Event("input"));
+  await flush();
+  assert.equal(replacement.element.dataset.elapsedSeconds, "1.25");
+  assert.deepEqual(f.calls, ["seek"]);
 });
 
 test("source handoff suppresses an in-flight playback rejection and permits the next seek", async () => {
@@ -171,7 +188,7 @@ test("first-pass segment changes never expose a misleading percentage, and compl
     f.controls.observe({ ...state, playing: false });
     assert.equal(f.controls.element.dataset.elapsedSeconds, String(state.time));
     assert.equal(f.controls.durationSeconds, null);
-    assert.equal(f.range.hidden, true);
+    assert.equal(f.range.hidden, false);
     assert.equal(f.preview.querySelector(".playback-live-status").hidden, false);
   }
   f.controls.setDuration(5.7);
@@ -296,6 +313,110 @@ test("silent lessons expose annotated cues and delegate navigation without resol
   markers[1].click();
   await flush();
   assert.equal(selected, null, "retired markers cannot issue commands");
+});
+
+test("prepared playback seeks with Rust cue state and clears it when a new profile omits metadata", async () => {
+  const f = fixture();
+  const sections = [
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Interior", time: 0.5 },
+  ];
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    sections, sectionState: { current: 0, previous: null, next: 1 },
+  });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, false);
+  assert.deepEqual(f.preview.querySelector(".playback-section-names").children
+    .slice(1).map(option => option.value), ["0", "1"]);
+
+  f.player.seek = async time => ({
+    preparedPlayback: true, replaySupported: true, time, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    sectionState: { current: 1, previous: 0, next: null },
+    presentationReceipt: { session: 1, sequence: 1, time },
+  });
+  f.range.value = "0.5";
+  f.range.dispatchEvent(new Event("input"));
+  await flush();
+  assert.equal(f.preview.querySelector(".playback-section-names").value, "1");
+  assert.equal(f.preview.querySelector(".playback-previous-section").disabled, false);
+  assert.equal(f.preview.querySelector(".playback-next-section").disabled, true);
+
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+  });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true,
+    "a prepared observation with no Rust cue metadata clears previous cues");
+
+  f.controls.sync({ time: 0.25, playing: false, sourceExecution: "observed" });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true,
+    "a profile switch cannot retain prepared cue metadata");
+  f.controls.destroy();
+});
+
+test("prepared playback retains Rust audio capability and device controls without a finite endpoint", () => {
+  const f = fixture();
+  const base = { preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false };
+  f.controls.sync({ ...base, hasAudio: true, audioReady: true,
+    audioMuted: true, audioVolume: 0.35 });
+  const audio = f.preview.querySelector(".playback-audio-controls");
+  assert.equal(audio.hidden, false);
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Unmute");
+  assert.equal(audio.children[1].children[0].value, "0.35");
+  assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play",
+    "a Rust reader with an open end does not use finite-audio endpoint logic");
+
+  f.controls.sync({ ...base, hasAudio: true, audioReady: false,
+    audioMuted: false, audioVolume: 0.7 });
+  assert.equal(audio.hidden, false);
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Mute");
+  assert.equal(audio.children[1].children[0].value, "0.7");
+  assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play with sound");
+
+  f.controls.sync({ ...base, hasAudio: false });
+  assert.equal(audio.hidden, true, "explicit absence clears prior audio capability");
+  f.controls.destroy();
+});
+
+test("prepared observation refreshes audio capability while a seek is pending", () => {
+  const f = fixture();
+  const base = { preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false };
+  f.controls.sync({ ...base, hasAudio: false });
+  const audio = f.preview.querySelector(".playback-audio-controls");
+  assert.equal(audio.hidden, true);
+  f.player.seek = () => new Promise(() => {});
+  f.range.value = "0.5";
+  f.range.dispatchEvent(new Event("input"));
+
+  f.controls.observe({ ...base, hasAudio: true, audioReady: false,
+    audioMuted: true, audioVolume: 0.4 });
+  assert.equal(audio.hidden, false, "a replacement prepared profile exposes its Rust audio capability");
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Unmute");
+  assert.equal(audio.children[1].children[0].value, "0.4");
+  f.controls.destroy();
+});
+
+test("prepared playback controls can start with an unknown duration", () => {
+  const f = fixture(false, null);
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    hasAudio: true, audioReady: true,
+  });
+  assert.equal(f.controls.durationSeconds, null);
+  assert.equal(f.range.max, "0.9999999999999999");
+  assert.equal(f.controls.element.dataset.durationKnown, "false");
+  f.controls.destroy();
 });
 
 test("focused panel shortcuts reuse admitted buttons and leave native controls alone", async () => {

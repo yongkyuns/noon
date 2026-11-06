@@ -93,7 +93,6 @@ _EXCEPTION_TYPES = {
     "ownership": NoonOwnershipError,
 }
 
-
 def _diagnostic(value: object) -> NoonErrorCause | None:
     if getattr(value, "noonErrorVersion", None) != 1:
         return None
@@ -146,9 +145,10 @@ def raise_engine_error(error: Exception, *, operation: str | None = None) -> NoR
 def engine_call(function, *args, operation: str | None = None):
     """Explicit callsite adapter; successful calls and their return values are unchanged."""
     try:
-        return function(*args)
+        result = function(*args)
     except Exception as error:
         raise_engine_error(error, operation=operation)
+    return result
 
 
 async def engine_await(awaitable, *, operation: str | None = None):

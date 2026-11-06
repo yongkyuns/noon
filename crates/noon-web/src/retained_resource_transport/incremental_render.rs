@@ -53,6 +53,15 @@ impl RetainedResourceBundle {
 }
 
 impl InstalledRetainedResources {
+    pub(crate) fn reserve_additions_with_render(
+        &mut self,
+        additions: &PreparedRetainedResourceAdditionsWithRender,
+    ) -> Result<(), RetainedResourceTransportError> {
+        self.geometries
+            .reserve_insertions(&additions.ordinary.mesh_insertions)
+            .map_err(|error| RetainedResourceTransportError::GeometryReservation(error.to_string()))
+    }
+
     pub(crate) fn prepare_additions_with_render(
         &self,
         mut bundle: RetainedResourceBundle,
