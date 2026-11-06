@@ -271,8 +271,8 @@ supports playback and rewind. Ordinary synchronous, portable and explicit async
 constructs use the same Python facade as Pyodide. Geometry, affine animation,
 composition, Create/Fade, plain Text/Write, retained PNG/JPEG/array images,
 built-in object/composed effects, GlowPulse/Dissolve, gradients, procedural
-paints, image fills, persistent path edits/queries and family iteration/slices
-are covered by real native-extension examples and tests.
+paints, image fills, persistent path edits/queries, family iteration/slices,
+coordinate families and preparation-only plots are covered by real native-extension examples and tests.
 
 For execution without a window/GPU, add `--headless`. For native GPU output without
 a display server, use `--snapshot frame.png --time 1 --width 640 --height 360`.
@@ -281,8 +281,8 @@ also call `run_source(..., retain_history=True)` and `prepare_view(scene)`, then
 `view.capture(...)`, `view.snapshot(...)`, `view.show()` or `view.close()`.
 
 Arbitrary Python callbacks support the sampled `--headless` profile; prepared
-window playback rejects unrecorded callbacks or external input. Plotting, shader
-preparation, spatial/audio bindings, and full gallery parity are still outside
+window playback rejects unrecorded callbacks or external input. Advanced plotting,
+shader preparation, spatial/audio bindings, and full gallery parity remain outside
 this CPython profile. Native Rust retains its existing broader support. A
 geometry-only build can omit native window/capture/resource dependencies with `--minimal`.
 

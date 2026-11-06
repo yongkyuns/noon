@@ -1036,6 +1036,33 @@ impl LayoutAnchor {
 }
 #[pymethods]
 impl LayoutAnchor {
+    #[pyo3(name = "nextToEdgeInFrame")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn next_to_edge_in_frame(
+        &self,
+        target: &LayoutAnchor,
+        edge_x: f64,
+        edge_y: f64,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        frame_buff: f64,
+    ) -> Result<(), PyErr> {
+        self.anchor
+            .next_to_edge_in_frame(
+                &target.anchor,
+                (edge_x, edge_y),
+                noon::ManimNextToArgs {
+                    direction: (direction_x, direction_y),
+                    buff,
+                    aligned_edge: (0.0, 0.0),
+                    mask: (1.0, 1.0),
+                },
+                frame_buff,
+            )
+            .map_err(engine_error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn stretch(
         &self,

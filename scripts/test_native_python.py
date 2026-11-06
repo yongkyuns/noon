@@ -21,7 +21,9 @@ class NativePythonTests(unittest.TestCase):
                      "image_fill", "showcase_layered_effects", "showcase_painted_surfaces",
                      "ordinary_path_construction", "ordinary_path_editing", "ordinary_path_smoothing",
                      "ordinary_path_refinement", "ordinary_path_selection", "ordinary_path_alignment",
-                     "showcase_bezier_paths", "manim_parity_family_slices"):
+                     "showcase_bezier_paths", "manim_parity_family_slices",
+                     "coordinate_plotting", "animated_number_line", "live_coordinate_plotting",
+                     "number_plane", "polar_plane"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
@@ -121,6 +123,31 @@ class Demo(Scene):
             raise AssertionError("invalid coordinates were admitted")
         assert before == [tuple(point) for point in path.get_all_points()]
         self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
+    def test_plot_callable_samples_once_against_the_effective_axes(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        axes = Axes((-1, 1, 0.5), (-1, 1, 0.5), tips=False)
+        self.add(axes)
+        self.wait(0.1)
+        axes.shift(RIGHT)
+        samples = []
+        def sample(x):
+            samples.append(x)
+            return x
+        graph = axes.plot(sample, (-1, 1, 0.5), use_smoothing=False)
+        start, expected = graph.get_start(), axes.c2p(-1, -1)
+        assert abs(start[0] - expected[0]) < 1e-6
+        assert abs(start[1] - expected[1]) < 1e-6
+        assert len(samples) == 5
+        sampled = tuple(samples)
+        self.add(graph)
+        self.play(graph.animate.shift(UP), run_time=2, rate_func=linear)
+        assert tuple(samples) == sampled
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)

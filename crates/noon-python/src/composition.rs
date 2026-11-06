@@ -64,6 +64,7 @@ pub(crate) enum Child {
         noon_core::DissolveStyle,
         AnimationOptions,
     ),
+    FamilyReveal(noon::MobjectFamily, bool, AnimationOptions),
     Wait(f64),
     Add(Mobject, AnimationOptions),
     Nested(Composition),
@@ -139,6 +140,11 @@ impl Child {
                 target: target.target(),
                 direction: *direction,
                 style: *style,
+                options: *options,
+            },
+            Self::FamilyReveal(target, reverse, options) => Request::FamilyReveal {
+                target,
+                reverse: *reverse,
                 options: *options,
             },
             Self::Wait(duration) => Request::Wait {
@@ -408,6 +414,55 @@ impl Composition {
         }
         // The shared composition admits this family's canonical members. The ID
         // is facade binding provenance, never a second native object identity.
+        member.handle.validate().map_err(engine_error)
+    }
+    #[pyo3(name="appendFamilyReveal",signature=(target,reverse,introducer,remover,reverse_rate,duration,easing,lag,play_duration,play_easing))]
+    fn family_reveal(
+        &mut self,
+        target: &FamilyHandle,
+        reverse: bool,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        reverse_rate: Option<bool>,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        play_duration: Option<f64>,
+        play_easing: Option<&str>,
+    ) -> PyResult<()> {
+        let options = AnimationOptions {
+            run_time: duration,
+            rate_func: easing.map(rate).transpose()?,
+            lag_ratio: lag,
+            introducer,
+            remover,
+            reverse_rate_function: reverse_rate,
+            ..AnimationOptions::new()
+        }
+        .with_overrides(AnimationOptions {
+            run_time: play_duration,
+            rate_func: play_easing.map(rate).transpose()?,
+            ..AnimationOptions::new()
+        });
+        self.children
+            .push(Child::FamilyReveal(target.family.clone(), reverse, options));
+        Ok(())
+    }
+    #[pyo3(name = "appendFamilyRevealEntering")]
+    fn family_reveal_entering(&self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
+        let Some(Child::FamilyReveal(target, ..)) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilyReveal",
+            ));
+        };
+        if !std::rc::Rc::ptr_eq(
+            target.integration_store(),
+            member.handle.integration_store(),
+        ) {
+            return Err(engine_error(
+                "family member belongs to another authoring store",
+            ));
+        }
         member.handle.validate().map_err(engine_error)
     }
     #[pyo3(name = "setCompositionRateFunction")]

@@ -369,3 +369,8 @@ mod paint_options;
 pub use paint_options::{
     hatch_paint, image_mapping, linear_gradient, noise_paint, radial_gradient,
 };
+
+mod plot_error;
+pub use plot_error::{coordinate_failure, coordinate_math_failure, plot_failure, sampling_failure};
+mod plot_input;
+pub use plot_input::{data_points as plot_data_points, PlotSamplingInput};

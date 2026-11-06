@@ -10,6 +10,7 @@ mod callback;
 mod callback_values;
 mod composition;
 mod context;
+mod coordinates;
 mod effects;
 mod family;
 mod geometry;
@@ -19,6 +20,7 @@ mod options;
 mod paints;
 mod path_input;
 mod path_query;
+mod plotting;
 mod svg;
 #[cfg(feature = "native-text")]
 mod text;
@@ -85,6 +87,14 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<paints::NoisePaint>()?;
     m.add_class::<paints::HatchPaint>()?;
     m.add_class::<composition::Composition>()?;
+    m.add_class::<coordinates::CoordinateOptions>()?;
+    #[cfg(feature = "native-text")]
+    m.add_class::<coordinates::NumberLabelOptions>()?;
+    m.add_class::<coordinates::NumberLineObservation>()?;
+    m.add_class::<coordinates::AxesObservation>()?;
+    m.add_class::<coordinates::PolarObservation>()?;
+    m.add_class::<coordinates::ThreeDAxesObservation>()?;
+    m.add_class::<plotting::PlotSamplingPlan>()?;
     m.add_function(wrap_pyfunction!(options::resolve_animation_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_create_options, m)?)?;
     m.add_function(wrap_pyfunction!(options::resolve_glow_pulse_options, m)?)?;

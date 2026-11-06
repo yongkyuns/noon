@@ -46,6 +46,7 @@ def _arena():
 
 noonImageMapping = _native.ImageMapping
 noonImagePaintOptions = _native.ImagePaintOptions
+noonPlotSamplingPlan = _native.PlotSamplingPlan
 noonLinearGradient = _native.LinearGradient
 noonRadialGradient = _native.RadialGradient
 noonNoisePaint = _native.NoisePaint
@@ -58,6 +59,11 @@ noonBackdropBlur = _native.EffectDefinition.backdropBlur
 noonShadow = _native.EffectDefinition.shadow
 noonPixelate = _native.EffectDefinition.pixelate
 noonNoiseDissolve = _native.EffectDefinition.noiseDissolve
+
+noonAuthoringCoordinateOptions = _native.CoordinateOptions
+
+def noonCreateAuthoringCoordinateHandle(options):
+    return _arena().coordinates(options)
 
 noonAuthoringGeometryOptions = _native.GeometryOptions
 noonAuthoringVectorPath = _native.AuthoringVectorPath

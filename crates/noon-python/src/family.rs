@@ -1,6 +1,11 @@
 //! Native family handles project canonical Rust ownership and metadata only.
 use crate::{context::MembershipBatch, engine_error, mobject::MobjectHandle};
+use noon::integration::coordinate_failure;
+use noon::ManimNumberPlane;
+use noon::ManimPolarPlane;
+use noon::{CoordinateAuthoringError, ManimAxes, ManimNumberLine, ManimThreeDAxes};
 use pyo3::prelude::*;
+use std::rc::Rc;
 
 #[pyclass(frozen, skip_from_py_object, module = "_noon_native")]
 pub struct ColorObservation {
@@ -29,8 +34,327 @@ impl From<noon::Color> for ColorObservation {
 pub struct FamilyHandle {
     pub(crate) family: noon::MobjectFamily,
 }
+impl FamilyHandle {
+    pub(crate) fn from_semantic_family(family: noon::MobjectFamily) -> Self {
+        Self { family }
+    }
+}
 #[pymethods]
 impl FamilyHandle {
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "numberLabelFamily")]
+    fn number_labels(
+        &self,
+        values: Vec<f64>,
+        automatic: bool,
+        options: &crate::coordinates::NumberLabelOptions,
+        attach: bool,
+    ) -> PyResult<Self> {
+        use crate::coordinates::label_failure;
+        if automatic && !values.is_empty() {
+            return Err(label_failure(
+                "automatic labels cannot supply explicit values",
+            ));
+        }
+        let line =
+            noon::ManimNumberLine::from_family(self.family.clone()).map_err(label_failure)?;
+        let values = if automatic {
+            None
+        } else {
+            Some(values.as_slice())
+        };
+        let family = if attach {
+            line.add_numbers(values, &options.options)
+        } else {
+            line.get_number_mobjects(values, &options.options)
+        };
+        family
+            .map(Self::from_semantic_family)
+            .map_err(label_failure)
+    }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "numberLabelMembers")]
+    fn number_label_members(&self) -> PyResult<Vec<(MobjectHandle, String)>> {
+        use crate::coordinates::label_failure;
+        let store = self.family.integration_store();
+        let members = store
+            .borrow()
+            .semantic_family_members_checked(self.family.node_id())
+            .map_err(label_failure)?;
+        members
+            .into_iter()
+            .map(|member| {
+                let object =
+                    noon::Mobject::from_node(Rc::clone(store), member).map_err(label_failure)?;
+                let handle = object
+                    .state()
+                    .map_err(label_failure)?
+                    .content
+                    .text()
+                    .ok_or_else(|| label_failure("label member is not Text"))?;
+                let source = store
+                    .borrow()
+                    .text_resources()
+                    .get(handle)
+                    .ok_or_else(|| label_failure("label text resource is missing"))?
+                    .source
+                    .to_string();
+                Ok((MobjectHandle::from_semantic_mobject(object), source))
+            })
+            .collect()
+    }
+
+    #[pyo3(name = "memberIsFamily")]
+    pub fn member_is_family(&self, index: usize) -> Result<bool, PyErr> {
+        let family = self.family.clone();
+        let store = family.integration_store();
+        let member = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .map_err(engine_error)?
+            .get(index)
+            .copied()
+            .ok_or_else(|| engine_error("family member index is out of bounds"))?;
+        let is_family = store.borrow().semantic_family_checked(member).is_ok();
+        Ok(is_family)
+    }
+
+    #[pyo3(name = "memberFamily")]
+    pub fn member_family(&self, index: usize) -> Result<FamilyHandle, PyErr> {
+        let family = self.family.clone();
+        let store = family.integration_store();
+        let member = store
+            .borrow()
+            .semantic_family_members_checked(family.node_id())
+            .map_err(engine_error)?
+            .get(index)
+            .copied()
+            .ok_or_else(|| engine_error("family member index is out of bounds"))?;
+        noon::MobjectFamily::from_node(std::rc::Rc::clone(store), member)
+            .map(FamilyHandle::from_semantic_family)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "polarPlanePart")]
+    pub fn polar_plane_part(&self, index: u32) -> Result<Self, PyErr> {
+        let plane = ManimPolarPlane::from_family(self.family.clone())
+            .map_err(coordinate_failure)
+            .map_err(engine_error)?;
+        let family = match index {
+            0 => plane.faded_lines(),
+            1 => plane.background_lines(),
+            2 => plane.x_axis().map(|axis| axis.family().clone()),
+            3 => plane.y_axis().map(|axis| axis.family().clone()),
+            _ => {
+                return Err(engine_error(
+                    "PolarPlane part index must be between zero and three",
+                ))
+            }
+        }
+        .map_err(coordinate_failure)
+        .map_err(engine_error)?;
+        Ok(Self::from_semantic_family(family))
+    }
+    #[pyo3(name = "polarPlaneFrame")]
+    pub fn polar_plane_frame(&self) -> Result<crate::coordinates::PolarObservation, PyErr> {
+        ManimPolarPlane::from_family(self.family.clone())
+            .and_then(|plane| plane.authored_polar_frame())
+            .map(|frame| crate::coordinates::PolarObservation { frame })
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "numberPlaneGridLineIndices")]
+    pub fn number_plane_grid_line_indices(&self, horizontal: bool) -> Result<Vec<u32>, PyErr> {
+        ManimNumberPlane::from_family(self.family.clone())
+            .and_then(|plane| plane.grid_line_indices(horizontal))
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    /// Return authoritative root members in their painter order, without new IDs.
+    #[pyo3(name = "numberPlanePart")]
+    pub fn number_plane_part(&self, index: u32) -> Result<Self, PyErr> {
+        let plane = ManimNumberPlane::from_family(self.family.clone())
+            .map_err(coordinate_failure)
+            .map_err(engine_error)?;
+        let family = match index {
+            0 => plane.faded_lines(),
+            1 => plane.background_lines(),
+            2 => plane.x_axis().map(|axis| axis.family().clone()),
+            3 => plane.y_axis().map(|axis| axis.family().clone()),
+            _ => {
+                return Err(engine_error(
+                    "NumberPlane part index must be between zero and three",
+                ))
+            }
+        }
+        .map_err(coordinate_failure)
+        .map_err(engine_error)?;
+        Ok(Self::from_semantic_family(family))
+    }
+
+    #[pyo3(name = "numberPlaneFrame")]
+    pub fn number_plane_frame(&self) -> Result<crate::coordinates::AxesObservation, PyErr> {
+        ManimNumberPlane::from_family(self.family.clone())
+            .and_then(|plane| plane.authored_frame())
+            .map(|frame| crate::coordinates::AxesObservation { frame })
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+    /// Only wrapper identities are reconstructed; ranges remain on the shafts.
+    #[pyo3(name = "coordinateAxis")]
+    pub fn coordinate_axis(&self, index: u32) -> Result<FamilyHandle, PyErr> {
+        let axes = ManimAxes::from_family(self.family.clone())
+            .map_err(coordinate_failure)
+            .map_err(engine_error)?;
+        let axis = match index {
+            0 => axes.x_axis(),
+            1 => axes.y_axis(),
+            _ => return Err(engine_error("coordinate axis index must be zero or one")),
+        }
+        .map_err(coordinate_failure)
+        .map_err(engine_error)?;
+        Ok(Self::from_semantic_family(axis.family().clone()))
+    }
+
+    #[pyo3(name = "threeDAxesAxis")]
+    pub fn three_d_axes_axis(&self, index: u32) -> Result<FamilyHandle, PyErr> {
+        let axes = ManimThreeDAxes::from_family(self.family.clone())
+            .map_err(coordinate_failure)
+            .map_err(engine_error)?;
+        axes.axis(index as usize)
+            .map(|axis| Self::from_semantic_family(axis.family().clone()))
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "threeDAxesTip")]
+    pub fn three_d_axes_tip(&self, index: u32) -> Result<Option<MobjectHandle>, PyErr> {
+        let axes = ManimThreeDAxes::from_family(self.family.clone())
+            .map_err(coordinate_failure)
+            .map_err(engine_error)?;
+        axes.tip(index as usize)
+            .map(|tip| tip.map(MobjectHandle::from_semantic_mobject))
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    /// Family-valued variant for existing multi-leaf retained TeX labels.
+    #[pyo3(name = "threeDAxesLabelFamilies")]
+    pub fn three_d_axes_label_families(
+        &self,
+        x: &FamilyHandle,
+        y: &FamilyHandle,
+        z: &FamilyHandle,
+        selected_axes: u32,
+        buff: f64,
+        fixed_orientation: bool,
+    ) -> Result<FamilyHandle, PyErr> {
+        // wasm-bindgen cannot represent optional borrowed exported handles.
+        // Inactive arguments alias an active handle; this mask preserves one
+        // typed, atomic call without consuming any caller-owned wrappers.
+        if selected_axes == 0 || selected_axes & !7 != 0 {
+            return Err(engine_error(
+                "axis labels require a nonempty three-axis mask",
+            ));
+        }
+        let axes = ManimThreeDAxes::from_family(self.family.clone())
+            .map_err(coordinate_failure)
+            .map_err(engine_error)?;
+        let mut families = Vec::new();
+        for (index, handle) in [(0, x), (1, y), (2, z)] {
+            if selected_axes & (1 << index) != 0 {
+                families.push((index, handle.family.clone()));
+            }
+        }
+        let labels = families
+            .iter()
+            .map(|(index, family)| (*index, noon::MobjectTarget::Family(family)))
+            .collect::<Vec<_>>();
+        axes.create_axis_label_targets(&labels, buff, fixed_orientation)
+            .map(Self::from_semantic_family)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "coordinateShaft")]
+    pub fn coordinate_shaft(&self) -> Result<MobjectHandle, PyErr> {
+        ManimNumberLine::from_family(self.family.clone())
+            .and_then(|line| line.shaft())
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "coordinateTicks")]
+    pub fn coordinate_ticks(&self) -> Result<FamilyHandle, PyErr> {
+        ManimNumberLine::from_family(self.family.clone())
+            .and_then(|line| line.ticks())
+            .map(Self::from_semantic_family)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    /// Constructor-only wrapper materialization, bounded by this line's ticks.
+    #[pyo3(name = "coordinateTickObjects")]
+    fn coordinate_tick_objects(&self) -> PyResult<Vec<MobjectHandle>> {
+        let ticks = ManimNumberLine::from_family(self.family.clone())
+            .and_then(|v| v.ticks())
+            .map_err(coordinate_failure)
+            .map_err(engine_error)?;
+        Self::from_semantic_family(ticks).direct_mobjects()
+    }
+    #[pyo3(name = "coordinateTip")]
+    pub fn coordinate_tip(&self) -> Result<MobjectHandle, PyErr> {
+        ManimNumberLine::from_family(self.family.clone())
+            .and_then(|line| line.tip()?.ok_or(CoordinateAuthoringError::InvalidTopology))
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    /// Batch direct leaf handles once, avoiding one full membership scan per leaf.
+    #[pyo3(name = "directMobjects")]
+    fn direct_mobjects(&self) -> PyResult<Vec<MobjectHandle>> {
+        let store = self.family.integration_store().borrow();
+        let node = store
+            .semantic_family_checked(self.family.node_id())
+            .map_err(engine_error)?;
+        node.members_iter()
+            .map(|id| {
+                noon::Mobject::from_node(Rc::clone(self.family.integration_store()), id)
+                    .map(MobjectHandle::from_semantic_mobject)
+                    .map_err(engine_error)
+            })
+            .collect()
+    }
+    #[pyo3(name = "numberLineFrame")]
+    pub fn number_line_frame(&self) -> Result<crate::coordinates::NumberLineObservation, PyErr> {
+        ManimNumberLine::from_family(self.family.clone())
+            .and_then(|line| line.authored_frame())
+            .map(|frame| crate::coordinates::NumberLineObservation { frame })
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "axesFrame")]
+    pub fn axes_frame(&self) -> Result<crate::coordinates::AxesObservation, PyErr> {
+        ManimAxes::from_family(self.family.clone())
+            .and_then(|axes| axes.authored_frame())
+            .map(|frame| crate::coordinates::AxesObservation { frame })
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "threeDAxesFrame")]
+    pub fn three_d_axes_frame(&self) -> Result<crate::coordinates::ThreeDAxesObservation, PyErr> {
+        ManimThreeDAxes::from_family(self.family.clone())
+            .and_then(|axes| axes.authored_frame())
+            .map(|frame| crate::coordinates::ThreeDAxesObservation { frame })
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "prependMembers")]
     fn prepend_members(&self, batch: &MembershipBatch) -> PyResult<()> {
         if batch.kind != "add" {

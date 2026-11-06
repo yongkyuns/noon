@@ -22,6 +22,13 @@ pub struct Store {
 }
 #[pymethods]
 impl Store {
+    fn coordinates(
+        &self,
+        options: &crate::coordinates::CoordinateOptions,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        crate::coordinates::create(&self.semantics, options)
+    }
+
     #[new]
     fn new() -> Self {
         Self {
@@ -327,6 +334,122 @@ impl Context {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl Context {
+    #[pyo3(name = "queryNumberPlaneFrame")]
+    fn effective_number_plane_frame(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<crate::coordinates::AxesObservation> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let plane = noon::ManimNumberPlane::from_family(target.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let value = if let Some(session) = self.execution.as_mut() {
+            self.scene
+                .live(session)
+                .effective_number_plane_frame(&plane)
+        } else {
+            plane.authored_frame()
+        };
+        value
+            .map(|frame| crate::coordinates::AxesObservation { frame })
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryPolarPlaneFrame")]
+    fn effective_polar_plane_frame(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<crate::coordinates::PolarObservation> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let plane = noon::ManimPolarPlane::from_family(target.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let value = if let Some(session) = self.execution.as_mut() {
+            self.scene.live(session).effective_polar_plane_frame(&plane)
+        } else {
+            plane.authored_polar_frame()
+        };
+        value
+            .map(|frame| crate::coordinates::PolarObservation { frame })
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "queryNumberLineFrame")]
+    fn effective_number_line_frame(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<crate::coordinates::NumberLineObservation> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let coordinates = noon::ManimNumberLine::from_family(target.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let value = if let Some(session) = self.execution.as_mut() {
+            self.scene
+                .live(session)
+                .effective_number_line_frame(&coordinates)
+        } else {
+            coordinates.authored_frame()
+        };
+        value
+            .map(|frame| crate::coordinates::NumberLineObservation { frame })
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryAxesFrame")]
+    fn effective_axes_frame(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<crate::coordinates::AxesObservation> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let coordinates = noon::ManimAxes::from_family(target.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let value = if let Some(session) = self.execution.as_mut() {
+            self.scene.live(session).effective_axes_frame(&coordinates)
+        } else {
+            coordinates.authored_frame()
+        };
+        value
+            .map(|frame| crate::coordinates::AxesObservation { frame })
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryThreeDAxesFrame")]
+    fn effective_three_d_axes_frame(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<crate::coordinates::ThreeDAxesObservation> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let coordinates = noon::ManimThreeDAxes::from_family(target.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let value = if let Some(session) = self.execution.as_mut() {
+            self.scene
+                .live(session)
+                .effective_three_d_axes_frame(&coordinates)
+        } else {
+            coordinates.authored_frame()
+        };
+        value
+            .map(|frame| crate::coordinates::ThreeDAxesObservation { frame })
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "liveCreateCoordinates")]
+    fn coordinates(
+        &mut self,
+        options: &crate::coordinates::CoordinateOptions,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        crate::coordinates::live(self, options)
+    }
+
     #[pyo3(name = "associatePublishedMobjects")]
     fn associate_published(&mut self, batch: &MembershipBatch) -> PyResult<()> {
         self.available()?;
