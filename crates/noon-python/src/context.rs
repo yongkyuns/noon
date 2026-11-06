@@ -334,6 +334,267 @@ impl Context {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl Context {
+    #[pyo3(name = "liveNextLayoutTo")]
+    fn next_layout_to_anchor(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        aligner: &LayoutAnchor,
+        dx: f64,
+        dy: f64,
+        buff: f64,
+        ex: f64,
+        ey: f64,
+        mx: f64,
+        my: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.with_live(|live| {
+            live.next_layout_to_aligned(
+                &source.anchor,
+                noon::LiveLayoutTarget::Anchor(&target.anchor),
+                &aligner.anchor,
+                noon::ManimNextToArgs {
+                    direction: (dx, dy),
+                    buff,
+                    aligned_edge: (ex, ey),
+                    mask: (mx, my),
+                },
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveNextLayoutToPoint")]
+    fn next_layout_to_point(
+        &mut self,
+        source: &LayoutAnchor,
+        x: f64,
+        y: f64,
+        aligner: &LayoutAnchor,
+        dx: f64,
+        dy: f64,
+        buff: f64,
+        ex: f64,
+        ey: f64,
+        mx: f64,
+        my: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.with_live(|live| {
+            live.next_layout_to_aligned(
+                &source.anchor,
+                noon::LiveLayoutTarget::Point(x, y),
+                &aligner.anchor,
+                noon::ManimNextToArgs {
+                    direction: (dx, dy),
+                    buff,
+                    aligned_edge: (ex, ey),
+                    mask: (mx, my),
+                },
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveNextLayoutToEdgeInFrame")]
+    fn next_layout_edge(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        ex: f64,
+        ey: f64,
+        dx: f64,
+        dy: f64,
+        buff: f64,
+        frame_buff: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.with_live(|live| {
+            live.next_layout_to_edge_in_frame(
+                &source.anchor,
+                &target.anchor,
+                (ex, ey),
+                noon::ManimNextToArgs {
+                    direction: (dx, dy),
+                    buff,
+                    aligned_edge: (0., 0.),
+                    mask: (1., 1.),
+                },
+                frame_buff,
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveArrangeFamily")]
+    fn arrange_family_with_options(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        options: &crate::family::FamilyArrangeOptions,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.arrange_family_with_options(&target.family, &options.options)
+                .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveArrangeFamilyInGrid")]
+    fn arrange_family_in_grid_with_options(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        options: &crate::family::FamilyGridOptions,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.arrange_family_in_grid_with_options(&target.family, &options.options)
+                .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveMoveFamilyToPoint")]
+    fn move_family_to_point(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+        ex: f64,
+        ey: f64,
+        mx: f64,
+        my: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.move_family_to(
+                &target.family,
+                noon::LiveLayoutTarget::Point(x, y),
+                (ex, ey),
+                (mx, my),
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveMoveFamilyToMobject")]
+    fn move_family_to_mobject(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        other: &MobjectHandle,
+        ex: f64,
+        ey: f64,
+        mx: f64,
+        my: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_store(other)?;
+        self.with_live(|live| {
+            live.move_family_to(
+                &target.family,
+                noon::LiveLayoutTarget::Mobject(&other.handle),
+                (ex, ey),
+                (mx, my),
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveMoveFamilyToFamily")]
+    fn move_family_to_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        other: &crate::family::FamilyHandle,
+        ex: f64,
+        ey: f64,
+        mx: f64,
+        my: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_family_store(other)?;
+        self.with_live(|live| {
+            live.move_family_to(
+                &target.family,
+                noon::LiveLayoutTarget::Family(&other.family),
+                (ex, ey),
+                (mx, my),
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveAlignFamilyToPoint")]
+    fn align_family_to_point(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+        ex: f64,
+        ey: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.align_family_to(
+                &target.family,
+                noon::LiveLayoutTarget::Point(x, y),
+                (ex, ey),
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveAlignFamilyToMobject")]
+    fn align_family_to_mobject(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        other: &MobjectHandle,
+        ex: f64,
+        ey: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_store(other)?;
+        self.with_live(|live| {
+            live.align_family_to(
+                &target.family,
+                noon::LiveLayoutTarget::Mobject(&other.handle),
+                (ex, ey),
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveAlignFamilyToFamily")]
+    fn align_family_to_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        other: &crate::family::FamilyHandle,
+        ex: f64,
+        ey: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_family_store(other)?;
+        self.with_live(|live| {
+            live.align_family_to(
+                &target.family,
+                noon::LiveLayoutTarget::Family(&other.family),
+                (ex, ey),
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveAlignFamilyOnFrame")]
+    fn align_family_on_frame(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+        buff: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.align_family_on_frame(&target.family, (x, y), buff)
+                .map(|_| ())
+        })
+    }
+
     #[pyo3(name = "liveSetFamilyObjectOpacity")]
     fn family_object_opacity(
         &mut self,

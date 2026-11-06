@@ -72,6 +72,8 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<context::Context>()?;
     m.add_class::<context::MembershipBatch>()?;
     m.add_class::<family::FamilyHandle>()?;
+    m.add_class::<family::FamilyArrangeOptions>()?;
+    m.add_class::<family::FamilyGridOptions>()?;
     m.add_class::<family::FamilyIterator>()?;
     m.add_class::<family::FamilySlicePlan>()?;
     m.add_class::<family::FamilyCopy>()?;

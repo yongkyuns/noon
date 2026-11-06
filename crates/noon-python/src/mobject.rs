@@ -1058,6 +1058,94 @@ impl LayoutAnchor {
 }
 #[pymethods]
 impl LayoutAnchor {
+    #[pyo3(name = "moveTo")]
+    pub fn move_to(
+        &self,
+        target: &LayoutAnchor,
+        edge_x: f64,
+        edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), PyErr> {
+        self.anchor
+            .layout()
+            .map_err(engine_error)?
+            .move_to(
+                noon::FamilyLayoutTarget::Anchor(&target.anchor),
+                (edge_x, edge_y),
+                (mask_x, mask_y),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "alignTo")]
+    pub fn align_to(&self, target: &LayoutAnchor, axis_x: f64, axis_y: f64) -> Result<(), PyErr> {
+        self.anchor
+            .layout()
+            .map_err(engine_error)?
+            .align_to(
+                noon::FamilyLayoutTarget::Anchor(&target.anchor),
+                (axis_x, axis_y),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "nextTo")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn next_to(
+        &self,
+        target: &LayoutAnchor,
+        aligner: &LayoutAnchor,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        edge_x: f64,
+        edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), PyErr> {
+        self.anchor
+            .next_to_aligned(
+                noon::FamilyLayoutTarget::Anchor(&target.anchor),
+                &aligner.anchor,
+                noon::ManimNextToArgs {
+                    direction: (direction_x, direction_y),
+                    buff,
+                    aligned_edge: (edge_x, edge_y),
+                    mask: (mask_x, mask_y),
+                },
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "nextToPoint")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn next_to_point(
+        &self,
+        x: f64,
+        y: f64,
+        aligner: &LayoutAnchor,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        edge_x: f64,
+        edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), PyErr> {
+        self.anchor
+            .next_to_aligned(
+                noon::FamilyLayoutTarget::Point(x, y),
+                &aligner.anchor,
+                noon::ManimNextToArgs {
+                    direction: (direction_x, direction_y),
+                    buff,
+                    aligned_edge: (edge_x, edge_y),
+                    mask: (mask_x, mask_y),
+                },
+            )
+            .map_err(engine_error)
+    }
     #[pyo3(name = "nextToEdgeInFrame")]
     #[allow(clippy::too_many_arguments)]
     pub fn next_to_edge_in_frame(

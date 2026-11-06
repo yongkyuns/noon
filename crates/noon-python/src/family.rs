@@ -41,6 +41,62 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "gridOptions")]
+    #[pyo3(signature=(rows,columns,gap_x,gap_y))]
+    pub fn grid_options(
+        &self,
+        rows: Option<u32>,
+        columns: Option<u32>,
+        gap_x: f64,
+        gap_y: f64,
+    ) -> FamilyGridOptions {
+        FamilyGridOptions {
+            options: noon::FamilyGridOptions {
+                rows: rows.map(|v| v as usize),
+                columns: columns.map(|v| v as usize),
+                gap: (gap_x, gap_y),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[pyo3(name = "arrangeInGrid")]
+    pub fn arrange_in_grid(&self, options: &FamilyGridOptions) -> Result<(), PyErr> {
+        self.family
+            .clone()
+            .arrange_in_grid_with_options(&options.options)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "arrangeOptions")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn arrange_options(
+        &self,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        center: bool,
+        edge_x: f64,
+        edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+        member_index: Option<i32>,
+    ) -> FamilyArrangeOptions {
+        let mut options = noon::FamilyArrangeOptions::new(direction_x, direction_y, buff, center);
+        options.placement.aligned_edge = (edge_x, edge_y);
+        options.placement.mask = (mask_x, mask_y);
+        options.member_index = member_index.map(|index| index as isize);
+        FamilyArrangeOptions { options }
+    }
+
+    /// Arrange authored state with all options in one semantic transaction.
+    pub fn arrange(&self, options: &FamilyArrangeOptions) -> Result<(), PyErr> {
+        self.family
+            .clone()
+            .arrange_with_options(&options.options)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "setObjectOpacity")]
     fn object_opacity(&self, value: f64) -> PyResult<()> {
         self.family.set_object_opacity(value).map_err(engine_error)
@@ -739,10 +795,130 @@ pub struct FamilyLayoutObservation {
 }
 #[pymethods]
 impl FamilyLayoutObservation {
-    #[pyo3(name = "shiftBy")]
-    fn shift_by(&self, x: f64, y: f64) -> PyResult<()> {
-        self.layout.shift(x, y).map_err(engine_error)
+    #[pyo3(name = "alignOnFrame")]
+    pub fn align_on_frame(
+        &self,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+    ) -> Result<(), PyErr> {
+        self.layout
+            .align_on_frame((direction_x, direction_y), buff)
+            .map_err(engine_error)
     }
+
+    #[pyo3(name = "shiftBy")]
+    pub fn shift_by(&self, delta_x: f64, delta_y: f64, delta_z: Option<f64>) -> Result<(), PyErr> {
+        self.layout
+            .shift_3d(noon_core::SemanticVec3::new(
+                delta_x,
+                delta_y,
+                delta_z.unwrap_or(0.0),
+            ))
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "moveToPoint")]
+    pub fn move_to_point(
+        &self,
+        point_x: f64,
+        point_y: f64,
+        aligned_edge_x: f64,
+        aligned_edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), PyErr> {
+        self.layout
+            .move_to(
+                noon::FamilyLayoutTarget::Point(point_x, point_y),
+                (aligned_edge_x, aligned_edge_y),
+                (mask_x, mask_y),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "moveToMobject")]
+    pub fn move_to_mobject(
+        &self,
+        target: &MobjectHandle,
+        aligned_edge_x: f64,
+        aligned_edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), PyErr> {
+        self.layout
+            .move_to(
+                noon::FamilyLayoutTarget::Mobject(&target.handle),
+                (aligned_edge_x, aligned_edge_y),
+                (mask_x, mask_y),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "moveToFamily")]
+    pub fn move_to_family(
+        &self,
+        target: &FamilyLayoutObservation,
+        aligned_edge_x: f64,
+        aligned_edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> Result<(), PyErr> {
+        self.layout
+            .move_to(
+                noon::FamilyLayoutTarget::Family(&target.layout),
+                (aligned_edge_x, aligned_edge_y),
+                (mask_x, mask_y),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "alignToPoint")]
+    pub fn align_to_point(
+        &self,
+        point_x: f64,
+        point_y: f64,
+        axis_x: f64,
+        axis_y: f64,
+    ) -> Result<(), PyErr> {
+        self.layout
+            .align_to(
+                noon::FamilyLayoutTarget::Point(point_x, point_y),
+                (axis_x, axis_y),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "alignToMobject")]
+    pub fn align_to_mobject(
+        &self,
+        target: &MobjectHandle,
+        axis_x: f64,
+        axis_y: f64,
+    ) -> Result<(), PyErr> {
+        self.layout
+            .align_to(
+                noon::FamilyLayoutTarget::Mobject(&target.handle),
+                (axis_x, axis_y),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "alignToFamily")]
+    pub fn align_to_family(
+        &self,
+        target: &FamilyLayoutObservation,
+        axis_x: f64,
+        axis_y: f64,
+    ) -> Result<(), PyErr> {
+        self.layout
+            .align_to(
+                noon::FamilyLayoutTarget::Family(&target.layout),
+                (axis_x, axis_y),
+            )
+            .map_err(engine_error)
+    }
+
     #[getter(centerX)]
     fn center_x(&self) -> f64 {
         self.layout.center().0
@@ -937,4 +1113,60 @@ pub(crate) fn slice_plan(
         .slice_plan_with_self(inclusion(target.as_target(), include)?)
         .map(|plan| FamilySlicePlan { plan: Some(plan) })
         .map_err(engine_error)
+}
+
+/// Host-normalized options for one shared arrangement transaction.
+#[pyclass(unsendable, module = "_noon_native")]
+pub struct FamilyArrangeOptions {
+    pub(crate) options: noon::FamilyArrangeOptions,
+}
+
+#[pymethods]
+impl FamilyArrangeOptions {
+    fn free(&self) {}
+    #[pyo3(name = "setAligner")]
+    pub fn set_aligner(&mut self, aligner: &crate::mobject::LayoutAnchor) {
+        self.options.aligner = Some(aligner.anchor.clone());
+    }
+}
+
+/// Transient grid call arguments; all sizing and validation belong to shared Rust.
+#[pyclass(unsendable, module = "_noon_native")]
+pub struct FamilyGridOptions {
+    pub(crate) options: noon::FamilyGridOptions,
+}
+
+#[pymethods]
+impl FamilyGridOptions {
+    fn free(&self) {}
+    #[pyo3(name = "setAlignment")]
+    pub fn set_alignment(&mut self, x: f64, y: f64, rows: Option<String>, columns: Option<String>) {
+        self.options.cell_alignment = (x, y);
+        self.options.row_alignments = rows;
+        self.options.column_alignments = columns;
+    }
+    #[pyo3(name = "setFlow")]
+    pub fn set_flow(&mut self, flow: &str) -> Result<(), PyErr> {
+        self.options.flow = flow.parse().map_err(engine_error)?;
+        Ok(())
+    }
+    #[pyo3(name = "setSizeLists")]
+    pub fn set_size_lists(&mut self, rows: bool, columns: bool) {
+        self.options.row_heights = rows.then(Vec::new);
+        self.options.column_widths = columns.then(Vec::new);
+    }
+    #[pyo3(name = "addRowHeight")]
+    pub fn add_row_height(&mut self, value: Option<f64>) {
+        self.options
+            .row_heights
+            .get_or_insert_with(Vec::new)
+            .push(value);
+    }
+    #[pyo3(name = "addColumnWidth")]
+    pub fn add_column_width(&mut self, value: Option<f64>) {
+        self.options
+            .column_widths
+            .get_or_insert_with(Vec::new)
+            .push(value);
+    }
 }

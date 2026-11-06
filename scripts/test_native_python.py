@@ -25,7 +25,9 @@ class NativePythonTests(unittest.TestCase):
                      "coordinate_plotting", "animated_number_line", "live_coordinate_plotting",
                      "number_plane", "polar_plane", "manim_example_moving_camera_center",
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
-                     "showcase_glass_lens", "showcase_camera_follows_path"):
+                     "showcase_glass_lens", "showcase_camera_follows_path",
+                     "ordinary_family_arrangement", "top_level_family_arrangement", "ordinary_family_grid",
+                     "tutorial_positioning", "tutorial_composition"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
