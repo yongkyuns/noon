@@ -66,7 +66,6 @@ def wait_sync(value):
 # resolution above rather than retaining fixture functions across tool invocations.
 if sys.platform == "emscripten":
     _browser = importlib.import_module("js")
-    from pyodide.ffi import can_run_sync as can_wait_sync, run_sync as wait_sync
 
     def __getattr__(name):
         if name.startswith("__"):
