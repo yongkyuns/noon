@@ -9,7 +9,7 @@ from contextvars import ContextVar
 import _noon_native as _native
 
 _store = ContextVar("noon_native_store", default=None)
-_settings = ContextVar("noon_native_settings", default=(60.0, False))
+_settings = ContextVar("noon_native_settings", default=(60.0, False, True))
 _resources = ContextVar("noon_native_resources", default=None)
 
 
@@ -51,6 +51,9 @@ noonLinearGradient = _native.LinearGradient
 noonRadialGradient = _native.RadialGradient
 noonNoisePaint = _native.NoisePaint
 noonHatchPaint = _native.HatchPaint
+noonShaderParameter = _native.ShaderParameter
+noonShaderSchema = _native.ShaderSchema
+noonShaderEffect = _native.EffectDefinition.shader
 noonEffectUpdate = _native.EffectUpdate
 noonGlow = _native.EffectDefinition.glow
 noonBlur = _native.EffectDefinition.blur
@@ -156,6 +159,10 @@ class _NativeCompletion:
         return self._wait().__await__()
 
 
+def noonPrepareSemanticEffects(context, staged):
+    return _NativeCompletion(context.publish_prepared_effects, staged)
+
+
 def noonAwaitSemanticContinuation(context):
     return _NativeCompletion(context.drive)
 
@@ -202,12 +209,12 @@ def close_scene(scene):
         _manim_updaters.release_session(session)
 
 
-async def run_scene(scene_class, *, sample_hz=60.0, retain_history=False):
+async def run_scene(scene_class, *, sample_hz=60.0, retain_history=False, prepare_shaders=True):
     from _manim_scene import execute_construct
     resources = _NativeRunResources()
     resource_token = _resources.set(resources)
     store_token = _store.set(_native.Store())
-    settings_token = _settings.set((float(sample_hz), bool(retain_history)))
+    settings_token = _settings.set((float(sample_hz), bool(retain_history), bool(prepare_shaders)))
     scene = None
     try:
         scene = scene_class()
@@ -223,17 +230,18 @@ async def run_scene(scene_class, *, sample_hz=60.0, retain_history=False):
         _store.reset(store_token)
 
 
-async def run_source(source, context=None, *, sample_hz=60.0, portable=False, filename="<noon>", retain_history=False):
+async def run_source(source, context=None, *, sample_hz=60.0, portable=False, filename="<noon>", retain_history=False, prepare_shaders=True):
     """Run unchanged Python source with an explicit finite sampling policy.
 
     portable=False executes the original synchronous call stack; portable=True
     exercises exactly the bounded compiler used by the browser source host.
+    Set prepare_shaders=False to forbid GPU allocation for live shader admission.
     """
     from _noon_source import execute_source
     resources = _NativeRunResources()
     resource_token = _resources.set(resources)
     store_token = _store.set(_native.Store())
-    settings_token = _settings.set((float(sample_hz), bool(retain_history)))
+    settings_token = _settings.set((float(sample_hz), bool(retain_history), bool(prepare_shaders)))
     try:
         scene = await execute_source(source, context, portable=portable,
                                      filename=filename)

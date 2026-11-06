@@ -1332,3 +1332,9 @@ impl Composition {
         Ok(())
     }
 }
+
+/// The declaration itself retains its Rust store identity and validates at activation.
+#[pyclass(unsendable, module = "_noon_native")]
+pub struct DeclaredAnimation {
+    pub(crate) value: noon::DeclaredAnimation,
+}

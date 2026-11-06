@@ -190,6 +190,11 @@ pub struct Context {
     pub(crate) terminal: bool,
     pub(crate) sample_hz: f64,
     retain_history: bool,
+    // Explicit host observation range; never an execution cursor or scheduler.
+    observation_horizon: Option<f64>,
+    prepare_shaders: bool,
+    #[cfg(feature = "capture")]
+    effect_preparer: Option<noon_export::SessionCapture>,
     pub(crate) next_sample: u64,
     pub(crate) frames: u64,
     pub(crate) segments: u64,
@@ -207,6 +212,10 @@ impl Context {
             terminal: false,
             sample_hz: 60.0,
             retain_history: false,
+            observation_horizon: None,
+            prepare_shaders: true,
+            #[cfg(feature = "capture")]
+            effect_preparer: None,
             next_sample: 0,
             frames: 0,
             segments: 0,
@@ -215,11 +224,28 @@ impl Context {
             callback_regions: 0,
         }
     }
+    fn staged(
+        &self,
+        pending: noon::StagedEffectPublication,
+        bindings: Vec<Mobject>,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        let runtime = self
+            .execution
+            .as_ref()
+            .ok_or_else(|| engine_error("no execution session"))?
+            .runtime_identity();
+        Ok(crate::effects::StagedEffectPublication {
+            pending: Some(pending),
+            runtime,
+            bindings,
+        })
+    }
     fn bootstrap(&self) -> PyResult<ExecutionSession> {
         let mut session = self
             .scene
             .execution_session()
             .map_err(|e| engine_error(e.to_string()))?;
+        session.require_effect_resource_preparation();
         if self.retain_history {
             session
                 .begin_replay_retention(Default::default())
@@ -252,6 +278,10 @@ impl Context {
         // Transfer the exact arena/session pair at the authored frontier. Only
         // then select history; no source rerun, scene clone or relowering.
         let scene = std::mem::take(&mut self.scene);
+        #[cfg(feature = "capture")]
+        {
+            self.effect_preparer = None;
+        }
         self.terminal = true;
         let mut execution = scene
             .into_execution_with_session(session)
@@ -294,7 +324,9 @@ impl Context {
     pub(crate) fn available(&self) -> PyResult<()> {
         self.require_active()?;
         if self.segment.is_some() {
-            Err(engine_error("a segment is already active"))
+            Err(engine_error(
+                noon::ExecutionSessionPublicationError::SegmentCompletionPending,
+            ))
         } else {
             Ok(())
         }
@@ -1699,7 +1731,10 @@ impl Context {
         }
     }
     #[pyo3(name = "editMembership")]
-    fn edit_membership(&mut self, batch: &MembershipBatch) -> PyResult<()> {
+    fn edit_membership(
+        &mut self,
+        batch: &MembershipBatch,
+    ) -> PyResult<Option<crate::effects::StagedEffectPublication>> {
         self.available()?;
         for handle in &batch.bindings {
             if !Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
@@ -1721,18 +1756,27 @@ impl Context {
             },
             _ => return Err(engine_error("unsupported membership request")),
         };
-        let result = if self.execution.is_some() {
-            self.with_live(|live| live.edit_membership(request).map(|_| ()))
+        if let Some(session) = self.execution.as_mut() {
+            match self.scene.live(session).edit_membership(request) {
+                Ok(_) => {}
+                Err(noon::LiveSessionError::Publication(
+                    noon::ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
+                )) => {
+                    let pending = self
+                        .scene
+                        .live(session)
+                        .prepare_membership(request)
+                        .map_err(engine_error)?;
+                    return self.staged(pending, batch.bindings.clone()).map(Some);
+                }
+                Err(error) => return Err(engine_error(error)),
+            }
         } else {
-            self.scene
-                .edit_membership(request)
-                .map(|_| ())
-                .map_err(engine_error)
-        };
-        result?;
+            self.scene.edit_membership(request).map_err(engine_error)?;
+        }
         self.bound_ids
             .extend(batch.bindings.iter().map(|handle| handle.node_id()));
-        Ok(())
+        Ok(None)
     }
     #[pyo3(name = "containsMobject")]
     fn contains(&mut self, target: &MobjectHandle) -> PyResult<bool> {
@@ -2829,6 +2873,120 @@ impl Context {
         self.available()?;
         Ok(true)
     }
+    #[pyo3(name = "prepareEffectAddition")]
+    fn prepare_effect_addition(
+        &mut self,
+        target: &MobjectHandle,
+        definition: &crate::effects::EffectDefinition,
+        name: &str,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.available()?;
+        self.same_store(target)?;
+        let pending = self.with_live(|live| {
+            live.prepare_effect_attachments([(&target.handle, definition.definition(), name)])
+        })?;
+        self.staged(pending, Vec::new())
+    }
+    #[pyo3(name = "prepareFamilyEffectAddition")]
+    fn prepare_family_effect_addition(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        definition: &crate::effects::EffectDefinition,
+        name: &str,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let pending = self.with_live(|live| {
+            live.prepare_effect_attachments([(&target.family, definition.definition(), name)])
+        })?;
+        self.staged(pending, Vec::new())
+    }
+    #[pyo3(name = "prepareOrdinaryComposition")]
+    fn prepare_composition(
+        &mut self,
+        candidate: &Composition,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.available()?;
+        let pending = if self.execution.is_none() {
+            let mut session = self.bootstrap()?;
+            let pending = self
+                .scene
+                .live(&mut session)
+                .prepare_composition(&candidate.request(), candidate.play_options)
+                .map_err(engine_error)?;
+            self.execution = Some(session);
+            pending
+        } else {
+            self.with_live(|live| {
+                live.prepare_composition(&candidate.request(), candidate.play_options)
+            })?
+        };
+        self.staged(pending, candidate.bindings.clone())
+    }
+    fn publish_prepared_effects(
+        &mut self,
+        py: Python<'_>,
+        mut staged: PyRefMut<'_, crate::effects::StagedEffectPublication>,
+    ) -> PyResult<Option<Py<pyo3::types::PyDict>>> {
+        self.available()?;
+        let session = self
+            .execution
+            .as_ref()
+            .ok_or_else(|| engine_error("no execution session"))?;
+        if session.runtime_identity() != staged.runtime {
+            return Err(engine_error(noon::integration::AuthoringFailure::new(
+                "foreign_handle",
+                "shader.foreign_preparation",
+                "shader preparation belongs to another runtime",
+            )));
+        }
+        let pending = staged
+            .pending
+            .as_ref()
+            .ok_or_else(|| engine_error("effect publication is consumed"))?;
+        if !pending.programs().is_empty() {
+            if !self.prepare_shaders {
+                return Err(engine_error(noon::integration::AuthoringFailure::new("unsupported_operation", "shader.device_preparation_required", "live shader publication requires native GPU preparation; enable prepare_shaders")));
+            }
+            #[cfg(not(feature = "capture"))]
+            return Err(engine_error(noon::integration::AuthoringFailure::new(
+                "unsupported_operation",
+                "shader.device_unavailable",
+                "build the native extension with capture for live shader preparation",
+            )));
+            #[cfg(feature = "capture")]
+            {
+                if self.effect_preparer.is_none() {
+                    self.effect_preparer = Some(
+                        noon_export::SessionCapture::new(
+                            session,
+                            noon_export::CaptureOptions::new(1, 1),
+                        )
+                        .map_err(|e| engine_error(e.to_string()))?,
+                    );
+                }
+                self.effect_preparer
+                    .as_mut()
+                    .expect("effect device prepared")
+                    .prepare_effect_programs(session, pending.programs())
+                    .map_err(|e| engine_error(e.to_string()))?;
+            }
+        }
+        let pending = staged
+            .pending
+            .take()
+            .expect("pending checked before device preparation");
+        let segment = self.with_live(|live| live.publish_staged_effects(pending))?;
+        self.bound_ids
+            .extend(staged.bindings.iter().map(Mobject::node_id));
+        if let Some(segment) = segment {
+            self.segment = Some(segment);
+            self.segments += 1;
+            self.drive_impl(py).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
     #[pyo3(name = "beginOrdinaryComposition")]
     fn begin(&mut self, candidate: &Composition) -> PyResult<()> {
         self.available()?;
@@ -2850,6 +3008,185 @@ impl Context {
             .extend(candidate.bindings.iter().map(|handle| handle.node_id()));
         self.segments += 1;
         Ok(())
+    }
+    #[pyo3(name = "declareLiveTransformTo")]
+    fn declare_transform(
+        &self,
+        source: &MobjectHandle,
+        target: &MobjectHandle,
+        duration: f64,
+        easing: &str,
+    ) -> PyResult<crate::composition::DeclaredAnimation> {
+        self.available()?;
+        self.same_store(source)?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "declare live animations before beginning execution",
+            ));
+        }
+        self.scene
+            .declare_transform_to(
+                &source.handle,
+                &target.handle,
+                noon::AnimationOptions::new()
+                    .run_time(duration)
+                    .rate_func(crate::composition::rate(easing)?),
+            )
+            .map(|value| crate::composition::DeclaredAnimation { value })
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "beginLiveExecution")]
+    fn begin_live_execution(&mut self, duration: f64) -> PyResult<()> {
+        self.require_active()?;
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(engine_error(
+                "playback duration must be finite and positive",
+            ));
+        }
+        if self.handoff().is_some_and(|end| duration < end) {
+            return Err(engine_error(
+                "playback duration is shorter than the live handoff",
+            ));
+        }
+        if self.execution.is_none() {
+            let session = self.bootstrap()?;
+            self.execution = Some(session);
+        }
+        self.observation_horizon = Some(duration);
+        Ok(())
+    }
+    #[pyo3(name = "livePlayAnimation")]
+    fn play_declared(
+        &mut self,
+        animation: &crate::composition::DeclaredAnimation,
+    ) -> PyResult<f64> {
+        self.available()?;
+        let segment = self.with_live(|live| live.play_animation(&animation.value))?;
+        let end = segment.end_time();
+        self.segment = Some(segment);
+        self.segments += 1;
+        Ok(end)
+    }
+    #[pyo3(name = "liveWait")]
+    fn live_wait(&mut self, duration: f64) -> PyResult<f64> {
+        self.available()?;
+        let segment = self.with_live(|live| live.wait_segment(duration))?;
+        let end = segment.end_time();
+        self.segment = Some(segment);
+        self.segments += 1;
+        Ok(end)
+    }
+    #[pyo3(name = "liveAdvanceSegmentTo")]
+    fn advance_segment(&mut self, time: f64) -> PyResult<bool> {
+        self.require_active()?;
+        let segment = self
+            .segment
+            .ok_or_else(|| engine_error("no pending segment"))?;
+        self.with_live(|live| {
+            live.advance_segment_to(segment, time)?;
+            Ok(live.segment_state(segment).is_complete())
+        })
+    }
+    #[pyo3(name = "liveCompleteSegment")]
+    fn complete_segment(&mut self) -> PyResult<()> {
+        self.require_active()?;
+        let segment = self
+            .segment
+            .ok_or_else(|| engine_error("no pending segment"))?;
+        self.with_live(|live| live.complete_segment(segment))?;
+        self.segment = None;
+        Ok(())
+    }
+    #[pyo3(name = "liveEvaluate")]
+    fn evaluate(&mut self, time: f64) -> PyResult<()> {
+        self.require_active()?;
+        let horizon = self
+            .observation_horizon
+            .ok_or_else(|| engine_error("begin live execution before evaluating"))?;
+        let horizon = horizon.max(self.handoff().unwrap_or(0.0));
+        if !time.is_finite() || time < 0.0 || time > horizon {
+            return Err(engine_error(noon::integration::AuthoringFailure::new(
+                "invalid_input",
+                "python.live_time_outside_range",
+                "requested time is outside the live observation range",
+            )));
+        }
+        let session = self
+            .execution
+            .as_mut()
+            .ok_or_else(|| engine_error("no execution session"))?;
+        if time < session.frame().time {
+            session
+                .seek_with_store(&mut self.scene.integration_store().borrow_mut(), time)
+                .map_err(|e| engine_error(e.to_string()))?;
+        } else {
+            session
+                .advance_to(time)
+                .map_err(|e| engine_error(e.to_string()))?;
+        }
+        Ok(())
+    }
+    #[pyo3(name = "liveEffectiveMobject")]
+    fn effective_mobject(&mut self, target: &MobjectHandle) -> PyResult<CallbackTransform> {
+        self.same_store(target)?;
+        self.with_live(|live| live.effective(&target.handle))
+            .map(|value| CallbackTransform {
+                transform: value.transform,
+            })
+    }
+    #[pyo3(name = "liveSetTranslation")]
+    fn set_translation(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
+        self.same_store(target)?;
+        self.with_live(|live| live.set_translation(&target.handle, x, y).map(|_| ()))
+    }
+    #[pyo3(name = "liveSetScale")]
+    fn set_scale(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
+        self.same_store(target)?;
+        self.with_live(|live| live.set_scale(&target.handle, x, y).map(|_| ()))
+    }
+    #[pyo3(name = "liveSetRotation")]
+    fn set_rotation(&mut self, target: &MobjectHandle, angle: f64) -> PyResult<()> {
+        self.same_store(target)?;
+        self.with_live(|live| live.set_rotation(&target.handle, angle).map(|_| ()))
+    }
+    #[pyo3(name = "liveReplaceContent")]
+    fn replace_content(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
+        self.same_store(target)?;
+        self.same_store(source)?;
+        self.with_live(|live| {
+            live.replace_content(&target.handle, &source.handle)
+                .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveRemove")]
+    fn live_remove(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.same_store(target)?;
+        self.with_live(|live| live.remove(&target.handle).map(|_| ()))
+    }
+    #[pyo3(name = "liveBecomeMobject")]
+    fn become_mobject(
+        &mut self,
+        target: &MobjectHandle,
+        source: &MobjectHandle,
+        match_height: bool,
+        match_width: bool,
+        match_center: bool,
+        stretch: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.same_store(source)?;
+        let options = noon::ManimBecomeOptions {
+            match_height,
+            match_width,
+            match_center,
+            stretch,
+        };
+        self.with_live(|live| {
+            live.become_mobject(&target.handle, &source.handle, options)
+                .map(|_| ())
+        })
     }
     #[pyo3(name = "beginOrdinaryWait")]
     fn wait(&mut self, duration: f64) -> PyResult<()> {
@@ -2919,8 +3256,13 @@ impl Context {
         tx.clear_updaters(target.handle.node_id(), time);
         self.publish(tx)
     }
-    #[pyo3(signature = (sample_hz, retain_history=false))]
-    fn configure(&mut self, sample_hz: f64, retain_history: bool) -> PyResult<()> {
+    #[pyo3(signature = (sample_hz, retain_history=false, prepare_shaders=true))]
+    fn configure(
+        &mut self,
+        sample_hz: f64,
+        retain_history: bool,
+        prepare_shaders: bool,
+    ) -> PyResult<()> {
         if !sample_hz.is_finite() || sample_hz <= 0.0 {
             return Err(engine_error("sample rate must be positive and finite"));
         }
@@ -2929,6 +3271,7 @@ impl Context {
         }
         self.sample_hz = sample_hz;
         self.retain_history = retain_history;
+        self.prepare_shaders = prepare_shaders;
         Ok(())
     }
     fn retire(&mut self) -> PyResult<()> {
@@ -2946,6 +3289,10 @@ impl Context {
                     &mut self.scene.integration_store().borrow_mut(),
                 )
                 .map_err(|e| engine_error(e.to_string()))?;
+        }
+        #[cfg(feature = "capture")]
+        {
+            self.effect_preparer = None;
         }
         self.terminal = true;
         self.segment = None;

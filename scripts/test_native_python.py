@@ -35,7 +35,9 @@ class NativePythonTests(unittest.TestCase):
                      "ordinary_draw_border_then_fill", "ordinary_text_family_fade",
                      "ordinary_text_family_reveal", "ordinary_text_family_write", "ordinary_arc_geometry",
                      "manim_example_typst_text", "manim_example_math_typst", "ordinary_automatic_wait_text",
-                     "showcase_editorial_cover"):
+                     "showcase_editorial_cover", "live_affine_animation", "live_affine_completion",
+                     "live_semantic_scene", "live_content_switch", "ordinary_become_semantics",
+                     "shader_time", "showcase_wave_interference", "showcase_shader_material"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
@@ -73,6 +75,39 @@ class Demo(Scene):
             self.assertEqual(tuple(scene.circle.get_center()), (1.0, 0.0, 0.0))
         finally:
             close_scene(scene)
+
+    def test_manual_live_segments_preserve_rejection_and_replay(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        c = Circle(0.4, fill=RED, fill_opacity=1, stroke=None).shift(LEFT)
+        self.add(c)
+        animation = self.declare_live_transform_to(c, c.copy().shift(2*RIGHT), run_time=1, rate_func=linear)
+        live = self.live_execution(duration=2)
+        end = live.play(animation)
+        assert not live.advance_to(0.5)
+        for invalid in (live.complete, lambda: live.wait(1), lambda: live.evaluate(3),
+                        lambda: self.live_execution(duration=0.25)):
+            try:
+                invalid()
+            except (ValueError, RuntimeError):
+                pass
+            else:
+                raise AssertionError("invalid live operation was admitted")
+            assert tuple(c.get_center()) == (0.0, 0.0, 0.0)
+        assert not live.advance_to(end)
+        live.complete()
+        live.evaluate(1.5)
+        assert tuple(c.get_center()) == (1.0, 0.0, 0.0)
+"""
+        view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
+        try:
+            self.assertEqual(view.duration, 1.5)
+            first = view.capture(time=0.25, width=160, height=90)
+            self.assertNotEqual(first, view.capture(time=0.75, width=160, height=90))
+            self.assertEqual(first, view.capture(time=0.25, width=160, height=90))
+        finally:
+            view.close()
 
     def test_prepared_native_pixels_rewind_membership_and_preserve_output(self):
         source = """from noon import *
@@ -244,6 +279,62 @@ class Demo(MovingCameraScene):
                         first = pixels
                     else:
                         self.assertEqual(first, pixels)
+        finally:
+            view.close()
+
+    def test_native_shader_preparation_gates_and_replay_use_real_device_resources(self):
+        source = '''from noon import *
+import math
+schema = [ShaderParameter.scalar("gain", default=-0.0, minimum=0, maximum=1),
+          ShaderParameter.vector2("offset", default=(0, 1), minimum=(0, 0), maximum=(1, 1)),
+          ShaderParameter.color("tint", default=RED), ShaderParameter.boolean("enabled", default=True),
+          ShaderParameter.unsigned("steps", default=3)]
+wgsl = "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return vec4<f32>(p.tint.rgb * p.gain, 1.0); }"
+program = WgslEffectProgram(wgsl, parameters=schema)
+key = program.parameter("gain")
+definition = ShaderEffect(program)
+assert math.copysign(1, definition.value(key)) == -1
+assert definition.value(program.parameter("offset")) == (0.0, 1.0)
+assert definition.value(program.parameter("enabled")) is True
+assert definition.value(program.parameter("steps")) == 3
+other = WgslEffectProgram(wgsl, parameters=schema, coordinates="scene")
+try:
+    ShaderEffect(program, parameters={other.parameter("gain"): 1})
+except ValueError:
+    pass
+else:
+    raise AssertionError("foreign shader key was admitted")
+entering = Rectangle(width=2, height=2, fill=WHITE, fill_opacity=1, stroke=None).shift(3*LEFT)
+entering.add_effect(ShaderEffect(other, parameters={other.parameter("gain"): 1}), name="material")
+third = WgslEffectProgram(wgsl, parameters=schema, coordinates="pixels")
+appended = Rectangle(width=2, height=2, fill=WHITE, fill_opacity=1, stroke=None).shift(3*RIGHT)
+appended.add_effect(ShaderEffect(third, parameters={third.parameter("gain"): 1}), name="material")
+class Demo(Scene):
+    def construct(self):
+        panel = Rectangle(width=2, height=2, fill=WHITE, fill_opacity=1, stroke=None)
+        self.add(panel)
+        self.wait(0.25)
+        panel.add_effect(definition, name="material")
+        self.wait(0.25)
+        self.play(panel.animate.set_effect("material", parameters={key: 1}), Create(entering),
+                  run_time=1, rate_func=linear)
+        assert tuple(entering.get_center()) == (-3.0, 0.0, 0.0)
+        self.add(appended)
+        self.wait(0.25)
+'''
+        with self.assertRaises(NotImplementedError) as rejected:
+            asyncio.run(run_source(source, prepare_shaders=False))
+        self.assertEqual(rejected.exception.code, "shader.device_preparation_required")
+        view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
+        try:
+            first = view.capture(time=0.1, width=160, height=90)
+            before = first[(45*160+80)*4:(45*160+80)*4+3]
+            dark = view.capture(time=0.3, width=160, height=90)
+            after = view.capture(time=1.6, width=160, height=90)
+            self.assertTrue(all(channel > 240 for channel in before))
+            self.assertEqual(dark[(45*160+80)*4:(45*160+80)*4+3], bytes(3))
+            self.assertGreater(after[(45*160+80)*4], 200)
+            self.assertEqual(first, view.capture(time=0.1, width=160, height=90))
         finally:
             view.close()
 

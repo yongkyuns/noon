@@ -37,7 +37,8 @@ def main():
     async def run():
         scene = await run_source(args.source.read_text(encoding="utf8"),
                                  sample_hz=args.sample_hz, portable=args.portable_source,
-                                 filename=str(args.source), retain_history=not args.headless)
+                                 filename=str(args.source), retain_history=not args.headless,
+                                 prepare_shaders=not args.headless)
         if args.headless:
             close_scene(scene)
             return None

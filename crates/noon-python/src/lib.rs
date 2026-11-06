@@ -21,6 +21,7 @@ mod paints;
 mod path_input;
 mod path_query;
 mod plotting;
+mod shaders;
 mod signals;
 mod svg;
 #[cfg(feature = "native-text")]
@@ -68,6 +69,11 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<effects::EffectUpdate>()?;
     m.add_class::<effects::EffectDefinition>()?;
     m.add_class::<effects::EffectHandle>()?;
+    m.add_class::<effects::StagedEffectPublication>()?;
+    m.add_class::<shaders::ShaderParameter>()?;
+    m.add_class::<shaders::ShaderSchema>()?;
+    m.add_class::<shaders::ShaderProgram>()?;
+    m.add_class::<shaders::ShaderParameterKey>()?;
     m.add_class::<geometry::GeometryOptions>()?;
     m.add_class::<geometry::ArcMetadata>()?;
     m.add_class::<vector_path::AuthoringVectorPath>()?;
@@ -94,6 +100,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<paints::NoisePaint>()?;
     m.add_class::<paints::HatchPaint>()?;
     m.add_class::<composition::Composition>()?;
+    m.add_class::<composition::DeclaredAnimation>()?;
     m.add_class::<signals::ValueTrackerHandle>()?;
     m.add_class::<signals::TrackerPositionHandle>()?;
     m.add_class::<coordinates::CoordinateOptions>()?;

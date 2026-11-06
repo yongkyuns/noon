@@ -2,6 +2,7 @@
 use crate::engine_error;
 use noon::effects::{EffectParameterError, EffectRadius, Glow, GlowSource};
 use noon::Color;
+use noon_core::{ShaderEffect, ShaderValue};
 use pyo3::prelude::*;
 
 #[pyclass(unsendable, module = "_noon_native")]
@@ -19,6 +20,46 @@ pub struct EffectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl EffectUpdate {
+    #[pyo3(name = "setShaderScalar")]
+    pub fn set_shader_scalar(
+        &mut self,
+        key: &crate::shaders::ShaderParameterKey,
+        value: f64,
+    ) -> Result<(), PyErr> {
+        self.shader_write(key, ShaderValue::Scalar(value))
+    }
+    #[pyo3(name = "setShaderVector2")]
+    pub fn set_shader_vector2(
+        &mut self,
+        key: &crate::shaders::ShaderParameterKey,
+        value: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        self.shader_write(key, ShaderValue::Vector2(crate::shaders::pair(&value)?))
+    }
+    #[pyo3(name = "setShaderColor")]
+    pub fn set_shader_color(
+        &mut self,
+        key: &crate::shaders::ShaderParameterKey,
+        value: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        self.shader_write(key, ShaderValue::Color(crate::shaders::color(&value)?))
+    }
+    #[pyo3(name = "setShaderBoolean")]
+    pub fn set_shader_boolean(
+        &mut self,
+        key: &crate::shaders::ShaderParameterKey,
+        value: bool,
+    ) -> Result<(), PyErr> {
+        self.shader_write(key, ShaderValue::Boolean(value))
+    }
+    #[pyo3(name = "setShaderUnsigned")]
+    pub fn set_shader_unsigned(
+        &mut self,
+        key: &crate::shaders::ShaderParameterKey,
+        value: f64,
+    ) -> Result<(), PyErr> {
+        self.shader_write(key, ShaderValue::Unsigned(crate::shaders::unsigned(value)?))
+    }
     #[pyo3(name = "setThreshold")]
     pub fn set_threshold(&mut self, threshold: f64) -> Result<(), PyErr> {
         let update = self.value.clone().threshold(threshold);
@@ -124,6 +165,63 @@ impl EffectDefinition {
 
 #[pymethods]
 impl EffectDefinition {
+    #[staticmethod]
+    fn shader(program: &crate::shaders::ShaderProgram, update: &EffectUpdate) -> PyResult<Self> {
+        update
+            .value
+            .apply_to(ShaderEffect::new(program.value.clone()))
+            .map(|value| Self {
+                value: value.into(),
+            })
+            .map_err(noon::AuthoringError::from)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "shaderProgram")]
+    fn shader_program(&self) -> PyResult<crate::shaders::ShaderProgram> {
+        self.value
+            .as_shader()
+            .map(|v| crate::shaders::ShaderProgram {
+                value: v.program().clone(),
+            })
+            .ok_or_else(|| crate::shaders::invalid("expected a shader effect"))
+    }
+    #[pyo3(name = "shaderValue")]
+    fn shader_value(
+        &self,
+        py: Python<'_>,
+        key: &crate::shaders::ShaderParameterKey,
+    ) -> PyResult<Py<PyAny>> {
+        let effect = self
+            .value
+            .as_shader()
+            .ok_or_else(|| crate::shaders::invalid("expected a shader effect"))?;
+        if effect
+            .program()
+            .parameter(&key.value.definition().name)
+            .as_ref()
+            != Some(&key.value)
+        {
+            return Err(crate::shaders::invalid(
+                noon_core::ShaderProgramError::WrongProgram,
+            ));
+        }
+        Ok(match effect.values()[key.value.index()] {
+            ShaderValue::Scalar(v) => vec![v].into_pyobject(py)?.into_any().unbind(),
+            ShaderValue::Vector2(v) => v.to_vec().into_pyobject(py)?.into_any().unbind(),
+            ShaderValue::Color(c) => vec![
+                f64::from(c.red),
+                f64::from(c.green),
+                f64::from(c.blue),
+                f64::from(c.alpha),
+            ]
+            .into_pyobject(py)?
+            .into_any()
+            .unbind(),
+            ShaderValue::Boolean(v) => v.into_pyobject(py)?.to_owned().into_any().unbind(),
+            ShaderValue::Unsigned(v) => v.into_pyobject(py)?.into_any().unbind(),
+        })
+    }
+
     #[staticmethod]
     #[pyo3(name = "bloom")]
     pub fn bloom(update: &EffectUpdate) -> Result<EffectDefinition, PyErr> {
@@ -309,5 +407,35 @@ impl EffectHandle {
     pub fn authored_definition(&self) -> Result<EffectDefinition, PyErr> {
         let value = self.handle.authored_definition().map_err(engine_error)?;
         Ok(EffectDefinition { value })
+    }
+}
+
+impl EffectUpdate {
+    fn shader_write(
+        &mut self,
+        key: &crate::shaders::ShaderParameterKey,
+        value: ShaderValue,
+    ) -> Result<(), PyErr> {
+        let update = self.value.clone().shader_parameter(&key.value, value);
+        update
+            .validate()
+            .map_err(noon::AuthoringError::from)
+            .map_err(engine_error)?;
+        self.value = update;
+        Ok(())
+    }
+}
+
+/// Own the original shared transaction until actual device preparation succeeds.
+#[pyclass(unsendable, module = "_noon_native")]
+pub struct StagedEffectPublication {
+    pub(crate) pending: Option<noon::StagedEffectPublication>,
+    pub(crate) runtime: noon::integration::RuntimeIdentity,
+    pub(crate) bindings: Vec<noon::Mobject>,
+}
+#[pymethods]
+impl StagedEffectPublication {
+    fn free(&mut self) {
+        self.pending.take();
     }
 }

@@ -275,10 +275,13 @@ arcs/sectors/polygons/angles, retained PNG/JPEG/array images,
 built-in object/composed effects, GlowPulse/Dissolve, gradients, procedural
 paints, image fills, persistent path edits/queries, family iteration/slices/layout,
 coordinate families, preparation-only plots, moving 2D cameras and HDR
-bloom/emission, deterministic scalar bindings and section markers are covered by
-real native-extension examples and tests.
+bloom/emission, deterministic scalar bindings, section markers, explicit live
+segments/content replacement and typed WGSL materials are covered by real
+native-extension examples and tests.
 
-For execution without a window/GPU, add `--headless`. For native GPU output without
+For execution without a window/GPU, add `--headless`; this rejects late shader
+publication that requires device preparation. The Python equivalent is
+`run_source(..., prepare_shaders=False)`. For native GPU output without
 a display server, use `--snapshot frame.png --time 1 --width 640 --height 360`.
 Snapshots create a new PNG and refuse to overwrite an existing file. Python can
 also call `run_source(..., retain_history=True)` and `prepare_view(scene)`, then
@@ -286,9 +289,9 @@ also call `run_source(..., retain_history=True)` and `prepare_view(scene)`, then
 
 Arbitrary Python callbacks support the sampled `--headless` profile; prepared
 window playback rejects unrecorded callbacks or external input. Advanced plotting,
-shader preparation, spatial/audio bindings, and full gallery parity remain outside
-this CPython profile. Native Rust retains its existing broader support. A
-geometry-only build can omit native window/capture/resource dependencies with `--minimal`.
+spatial/audio bindings and full gallery parity remain outside this CPython profile.
+Native Rust retains its existing broader support. A geometry-only build can omit
+native window/capture/resource dependencies with `--minimal`.
 
 Validate the real extension with `PYTHONPATH=build/python python3
 scripts/test_native_python.py` and `python3 scripts/python_host_conformance.py`.
