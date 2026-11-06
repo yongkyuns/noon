@@ -127,7 +127,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     args[6]?.({ stage: "attached", capabilities: { commands: [], replay: prepared, audio: false, sections: false } });
     return endpoint;
   };
-  api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
+  api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "yieldWorkerTask", "posts", "errors", `
     const AUTHORING_CHANNEL = "noon.authoring", AUTHORING_PROTOCOL_VERSION = 8;
     const pyodidePromise = Promise.resolve({}), semanticContexts = new Map();
     let nextSemanticContext = 0, nextContinuationGeneration = 1, activeAuthoringRun = null;
@@ -150,7 +150,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   `)(options => createPreparedInterpreterDriver({ ...options,
     setTimeout(callback) { const id = ++taskId; tasks.set(id, callback); return id; },
     clearTimeout(id) { tasks.delete(id); },
-  }), () => execute(api), attachSemanticEngine, posts, errors);
+  }), () => execute(api), attachSemanticEngine, () => new Promise(setImmediate), posts, errors);
   const envelope = (type, fields) => ({ channel: "noon.authoring", protocolVersion: 8, type, ...fields });
   const continuationRequest = (type, fields = {}) => {
     const registration = posts.findLast(post => post.type === "semantic_continuation_registered");
