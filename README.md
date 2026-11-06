@@ -273,7 +273,7 @@ composition, Create/Fade, plain Text/Write, retained PNG/JPEG/array images,
 built-in object/composed effects, GlowPulse/Dissolve, gradients, procedural
 paints, image fills, persistent path edits/queries, family iteration/slices/layout,
 coordinate families, preparation-only plots, moving 2D cameras and HDR
-bloom/emission are covered by real native-extension examples and tests.
+bloom/emission and deterministic scalar bindings are covered by real native-extension examples and tests.
 
 For execution without a window/GPU, add `--headless`. For native GPU output without
 a display server, use `--snapshot frame.png --time 1 --width 640 --height 360`.

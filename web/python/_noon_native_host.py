@@ -95,6 +95,10 @@ noonResolveCreateAnimationOptions = _native.resolve_create_options
 noonResolveTransformAnimationOptions = _native.resolve_transform_options
 
 
+def noonCreateAuthoringValueTrackerHandle(initial):
+    return _arena().tracker(initial)
+
+
 def noonCreateAuthoringGeometryHandle(options):
     return _arena().geometry(options)
 

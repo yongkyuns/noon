@@ -27,7 +27,8 @@ class NativePythonTests(unittest.TestCase):
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
                      "showcase_glass_lens", "showcase_camera_follows_path",
                      "ordinary_family_arrangement", "top_level_family_arrangement", "ordinary_family_grid",
-                     "tutorial_positioning", "tutorial_composition"):
+                     "tutorial_positioning", "tutorial_composition", "ordinary_value_tracker_continuation",
+                     "ordinary_mixed_scalar_composition", "tutorial_value_tracker"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
@@ -174,6 +175,26 @@ class Demo(MovingCameraScene):
                 self.assertGreater(len(red), 100)
                 self.assertAlmostEqual(sum(red) / len(red), 159.5 + 22.5 * (2 - 2 * time), delta=1)
                 if time == 0.25:
+                    if first is None:
+                        first = pixels
+                    else:
+                        self.assertEqual(first, pixels)
+        finally:
+            view.close()
+
+    def test_native_scalar_binding_rewinds_across_a_persistent_write(self):
+        path = ROOT / "web/python/examples/ordinary_value_tracker_continuation.py"
+        view = prepare_view(asyncio.run(run_source(path.read_text(), filename=str(path),
+                                                  retain_history=True)))
+        try:
+            first = None
+            for time, expected_x in ((0.5, -1.5), (1.5, -0.5), (2.5, 1), (3.5, 2), (0.5, -1.5)):
+                pixels = view.capture(time=time, width=320, height=180)
+                white = [index // 4 % 320 for index in range(0, len(pixels), 4)
+                         if min(pixels[index:index + 3]) > 180]
+                self.assertGreater(len(white), 100)
+                self.assertAlmostEqual(sum(white) / len(white), 159.5 + 22.5 * expected_x, delta=1)
+                if time == 0.5:
                     if first is None:
                         first = pixels
                     else:

@@ -22,6 +22,12 @@ pub struct Store {
 }
 #[pymethods]
 impl Store {
+    fn tracker(&self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
+        noon::ValueTracker::detached(Rc::clone(&self.semantics), initial)
+            .map(|value| crate::signals::ValueTrackerHandle { value })
+            .map_err(engine_error)
+    }
+
     fn coordinates(
         &self,
         options: &crate::coordinates::CoordinateOptions,
@@ -334,6 +340,156 @@ impl Context {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl Context {
+    #[pyo3(name = "createValueTracker")]
+    fn create_tracker(&mut self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
+        self.available()?;
+        let value = if let Some(execution) = self.execution.as_mut() {
+            noon::integration::publish_value_tracker_creation(
+                self.scene.integration_store(),
+                self.scene.root(),
+                execution,
+                initial,
+            )
+        } else {
+            self.scene.value_tracker(initial)
+        };
+        value
+            .map(|value| crate::signals::ValueTrackerHandle { value })
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "associateValueTracker")]
+    fn associate_tracker(&mut self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<()> {
+        self.available()?;
+        if let Some(execution) = self.execution.as_mut() {
+            noon::integration::publish_value_tracker_association(
+                self.scene.integration_store(),
+                self.scene.root(),
+                execution,
+                &tracker.value,
+            )
+        } else {
+            self.scene.associate_value_tracker(&tracker.value)
+        }
+        .map_err(engine_error)
+    }
+    #[pyo3(name = "valueTrackerValue")]
+    fn tracker_value(&self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<f64> {
+        self.require_active()?;
+        if !tracker.value.is_in_store(self.scene.integration_store()) {
+            return Err(engine_error(noon::AuthoringError::ForeignStore));
+        }
+        self.scene
+            .integration_store()
+            .borrow()
+            .semantic_signal_state(tracker.value.node_id())
+            .map_err(noon::AuthoringError::from)
+            .map_err(engine_error)?;
+        if let Some(execution) = self.execution.as_ref() {
+            match execution
+                .effective_signal_value(tracker.value.node_id())
+                .ok_or_else(|| {
+                    engine_error("ValueTracker is not lowered into this execution session")
+                })? {
+                noon_core::ReactiveValue::Scalar(value) => Ok(f64::from(*value)),
+                _ => Err(engine_error("ValueTracker runtime signal is not scalar")),
+            }
+        } else {
+            self.scene
+                .value_tracker_value(&tracker.value)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "setValueTracker")]
+    fn set_tracker(
+        &mut self,
+        tracker: &crate::signals::ValueTrackerHandle,
+        value: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.set_value(&tracker.value, value))
+        } else {
+            self.scene
+                .set_value(&tracker.value, value)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "trackerPosition")]
+    fn tracker_position(
+        &self,
+        tracker: &crate::signals::ValueTrackerHandle,
+        dx: f64,
+        dy: f64,
+        x: f64,
+        y: f64,
+    ) -> PyResult<crate::signals::TrackerPositionHandle> {
+        self.available()?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "native signal bindings must be authored before execution",
+            ));
+        }
+        self.scene
+            .position_from_tracker(
+                &tracker.value,
+                noon::SemanticVec3::new(dx, dy, 0.),
+                noon::SemanticVec3::new(x, y, 0.),
+            )
+            .map(|value| crate::signals::TrackerPositionHandle { value })
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "bindTrackerPosition")]
+    fn bind_tracker_position(
+        &self,
+        target: &MobjectHandle,
+        position: &crate::signals::TrackerPositionHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "native signal bindings must be authored before execution",
+            ));
+        }
+        self.scene
+            .bind_position(&target.handle, &position.value)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "bindRotation")]
+    fn bind_tracker_rotation(
+        &self,
+        target: &MobjectHandle,
+        tracker: &crate::signals::ValueTrackerHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "native signal bindings must be authored before execution",
+            ));
+        }
+        self.scene
+            .bind_rotation(&target.handle, &tracker.value)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "bindOpacity")]
+    fn bind_tracker_opacity(
+        &self,
+        target: &MobjectHandle,
+        tracker: &crate::signals::ValueTrackerHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            return Err(engine_error(
+                "native signal bindings must be authored before execution",
+            ));
+        }
+        self.scene
+            .bind_opacity(&target.handle, &tracker.value)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "liveNextLayoutTo")]
     fn next_layout_to_anchor(
         &mut self,

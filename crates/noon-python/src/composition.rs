@@ -66,6 +66,7 @@ pub(crate) enum Child {
     ),
     FamilyReveal(noon::MobjectFamily, bool, AnimationOptions),
     MoveAlongPath(Mobject, Mobject, AnimationOptions),
+    ValueTracker(noon::ValueTracker, f64, AnimationOptions),
     Wait(f64),
     Add(Mobject, AnimationOptions),
     Nested(Composition),
@@ -151,6 +152,11 @@ impl Child {
             Self::MoveAlongPath(target, path, options) => Request::MoveAlongPath {
                 target,
                 path,
+                options: *options,
+            },
+            Self::ValueTracker(tracker, target, options) => Request::ValueTracker {
+                tracker,
+                target: *target,
                 options: *options,
             },
             Self::Wait(duration) => Request::Wait {
@@ -483,6 +489,28 @@ impl Composition {
             target.handle.clone(),
             path.handle.clone(),
             options(duration, easing)?,
+        ));
+        Ok(())
+    }
+    #[pyo3(name="appendValueTracker",signature=(tracker,target,duration,easing))]
+    fn value_tracker(
+        &mut self,
+        tracker: &crate::signals::ValueTrackerHandle,
+        target: f64,
+        duration: Option<f64>,
+        easing: Option<&str>,
+    ) -> PyResult<()> {
+        if !target.is_finite() {
+            return Err(engine_error("ValueTracker target must be finite"));
+        }
+        self.children.push(Child::ValueTracker(
+            tracker.value.clone(),
+            target,
+            AnimationOptions {
+                run_time: duration,
+                rate_func: easing.map(rate).transpose()?,
+                ..AnimationOptions::new()
+            },
         ));
         Ok(())
     }

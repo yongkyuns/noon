@@ -21,6 +21,7 @@ mod paints;
 mod path_input;
 mod path_query;
 mod plotting;
+mod signals;
 mod svg;
 #[cfg(feature = "native-text")]
 mod text;
@@ -89,6 +90,8 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<paints::NoisePaint>()?;
     m.add_class::<paints::HatchPaint>()?;
     m.add_class::<composition::Composition>()?;
+    m.add_class::<signals::ValueTrackerHandle>()?;
+    m.add_class::<signals::TrackerPositionHandle>()?;
     m.add_class::<coordinates::CoordinateOptions>()?;
     #[cfg(feature = "native-text")]
     m.add_class::<coordinates::NumberLabelOptions>()?;
