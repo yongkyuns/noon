@@ -262,7 +262,7 @@ test("delayed startup options admit one authoring request and unchanged Runs joi
     assert.equal(f.requests.length, 1);
     assert.equal(f.requests[0].source, "source");
     assert.equal(f.requests[0].options.preparedPlayback, true);
-    assert.equal(f.requests[0].options.preparationLookaheadSeconds, 1);
+    assert.equal(f.requests[0].options.preparationLookaheadSeconds, null);
     assert.equal(f.requests[0].sourceContext.playground.run_generation, payload.runGeneration);
   } finally {
     options.resolve({});

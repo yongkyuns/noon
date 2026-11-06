@@ -1316,6 +1316,12 @@ for frame or control delivery. Preparation yields only keep loading cancellable;
 they do not pace animation. Pause intent survives preparation, and loading time
 never becomes elapsed animation time.
 
+The authoring host's explicit positive `preparationLookaheadSeconds` retains its
+cooperative prefix-delivery contract for bounded streaming/reference hosts.
+The viewer default is `null`, meaning complete preparation before playback.
+This choice neither changes source admission nor promises independent execution
+of a Python producer and reader sharing one worker.
+
 An actual callback/native-input requirement releases this preparation hold and
 uses the original source at its existing frontier-bound handoff. Source failure
 retains only the accepted prefix. A source that never completes remains visibly

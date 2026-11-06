@@ -174,10 +174,10 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
         }));
       } finally { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); }
     },
-    start(sourceBody, requestId = 1, diagnosticPreparationTiming = false) {
+    start(sourceBody, requestId = 1, diagnosticPreparationTiming = false, preparationLookaheadSeconds = null) {
       execute = sourceBody;
       return api.handleRequest(envelope("run", { requestId, source: "test source", context: {},
-        preparedPlayback: true, preparationLookaheadSeconds: 0.75, diagnosticPreparationTiming }));
+        preparedPlayback: true, preparationLookaheadSeconds, diagnosticPreparationTiming }));
     },
     async attach(extra = {}) {
       const control = new MessageChannel(), render = new MessageChannel();
@@ -281,6 +281,20 @@ test("prepared source completion yields one host task before staging its suffix"
   assert.equal(h.events.includes("segment-complete"), true);
   assert.equal(h.counters.adopted, 1);
   assert.deepEqual(h.errors, []);
+  h.demand(true); await h.tick(); await done;
+  h.endpoint().stop();
+});
+
+test("an explicit finite lookahead retains cooperative prefix demand", async () => {
+  const h = host();
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  }, 1, false, 0.75);
+  await microtasks();
+  const initial = h.tick(); await h.attach(); await initial;
+  assert.equal(h.events.includes("prepare-before-playback"), false);
+  assert.equal(h.tasks.size, 0, "satisfied finite demand does not execute more source");
   h.demand(true); await h.tick(); await done;
   h.endpoint().stop();
 });

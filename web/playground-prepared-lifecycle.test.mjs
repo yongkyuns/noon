@@ -540,7 +540,7 @@ test("a viewer Run without qualification hooks unlocks incremental playback befo
   const f = fixture(); delete f.env.hooks.authoringRunOptions;
   const { promise, job } = await f.start(); await f.register();
   assert.equal(job.options.preparedPlayback, true);
-  assert.equal(job.options.preparationLookaheadSeconds, 1);
+  assert.equal(job.options.preparationLookaheadSeconds, null);
   assert.equal(job.options.diagnosticPreparationTiming, false);
   assert.equal(f.inspect().runInFlight, true); assert.equal(f.inspect().busyDepth, 0);
   assert.equal(f.inspect().playbackControls.controllable, true);

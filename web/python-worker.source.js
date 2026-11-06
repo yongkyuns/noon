@@ -1019,7 +1019,7 @@ function createPreparedSourceDriver(run) {
     needsPreparation() {
       const continuation = requirePreparedContinuation(run, run.continuation?.context);
       if (!continuation.preparedPlayer) return true; // Continue initial zero barriers cooperatively.
-      return invokePreparedEngine(() => continuation.preparedPlayer.needsPreparation(run.preparationLookaheadSeconds));
+      return invokePreparedEngine(() => continuation.preparedPlayer.needsPreparation(run.preparationLookaheadSeconds ?? 1));
     },
     async finishSource(resultJson, signal) {
       if (run.continuation === null) {
@@ -1476,7 +1476,7 @@ async function handleRequest(request) {
         preparationTimingOrdinal: 0,
         sourceTurnStartedAtMs: null,
         sourceSceneOnly: false,
-        preparationLookaheadSeconds: request.preparationLookaheadSeconds ?? 1,
+        preparationLookaheadSeconds: request.preparationLookaheadSeconds === undefined ? 1 : request.preparationLookaheadSeconds,
         preparedDriver: null, completedPreparedContextId: null,
       };
       activeAuthoringRun = run;
@@ -1750,7 +1750,7 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
     const receiver = createPreparedReceiver(request, entry, continuation, continuation.preparedPlayer);
     // Source and playback share this WASM host. Finish deterministic preparation
     // before its clock advances; ordinary frames then need no interpreter turns.
-    if (!continuation.preparedSourceFinished) {
+    if (!continuation.preparedSourceFinished && run.preparationLookaheadSeconds === null) {
       invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceBeforePlayback());
     }
     endpoint = await attachPreparedReceiver(request, entry, receiver, false);
@@ -2144,9 +2144,9 @@ function validateRequest(request) {
          (request.diagnosticPreparationTiming && request.preparedPlayback !== true))) {
       throw new Error("preparation timing diagnostics require prepared playback");
     }
-    if (request.preparationLookaheadSeconds !== undefined &&
+    if (request.preparationLookaheadSeconds != null &&
         (!Number.isFinite(request.preparationLookaheadSeconds) || request.preparationLookaheadSeconds <= 0)) {
-      throw new Error("preparationLookaheadSeconds must be positive and finite");
+      throw new Error("preparationLookaheadSeconds must be null or positive and finite");
     }
     return;
   }
