@@ -400,6 +400,102 @@ impl Context {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl Context {
+    #[pyo3(name = "callbackLineTarget")]
+    fn callback_line_target(
+        &self,
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+    ) -> PyResult<CallbackLineTarget> {
+        self.require_active()?;
+        let point = |x, y| {
+            noon::integration::authoring_xy_f64(x, y)
+                .map(|value| Vec2::new(value.x as f32, value.y as f32))
+                .map_err(engine_error)
+        };
+        Ok(CallbackLineTarget {
+            start: point(start_x, start_y)?,
+            end: point(end_x, end_y)?,
+            store: Rc::clone(self.scene.integration_store()),
+        })
+    }
+    #[pyo3(name = "callbackMatchLineTransform")]
+    fn callback_match_line_transform(
+        &self,
+        source: &MobjectHandle,
+        target: &CallbackLineTarget,
+    ) -> PyResult<CallbackTransform> {
+        self.require_active()?;
+        self.same_store(source)?;
+        if !Rc::ptr_eq(self.scene.integration_store(), &target.store) {
+            return Err(engine_error(noon::AuthoringError::ForeignStore));
+        }
+        source
+            .handle
+            .line_match_transform(target.start, target.end)
+            .map(|transform| CallbackTransform { transform })
+            .map_err(engine_error)
+    }
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(name="liveSetStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    fn set_style(
+        &mut self,
+        source: &MobjectHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        self.same_store(source)?;
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let update = noon::integration::style_update_with_background_stroke(
+            update,
+            background_stroke_enabled,
+            [
+                background_stroke_red,
+                background_stroke_green,
+                background_stroke_blue,
+                background_stroke_alpha,
+            ],
+            background_stroke_width,
+            background_stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.with_live(|live| live.set_style(&source.handle, update).map(|_| ()))
+    }
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="liveSetFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     fn set_family_style(

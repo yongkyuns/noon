@@ -40,10 +40,16 @@ class NativePythonTests(unittest.TestCase):
                      "shader_time", "showcase_wave_interference", "showcase_shader_material",
                      "noon_spatial_surface_lighting", "showcase_spatial_scene", "noon_spatial_three_d_axes",
                      "manim_example_three_d_camera_rotation", "manim_example_three_d_camera_illusion_rotation",
-                     "manim_example_three_d_surface_plot"):
+                     "manim_example_three_d_surface_plot", "live_line_match_callback",
+                     "manim_gallery_moving_dots", "showcase_reactive_relationships",
+                     "ordinary_animated_stroke_width"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
+                if name == "live_line_match_callback":
+                    line = scene.mobjects[-1]
+                    self.assertAlmostEqual(line.get_start().x, 2.0, delta=1e-5)
+                    self.assertAlmostEqual(line.get_end().x, 0.5, delta=1e-5)
                 close_scene(scene)
         for name, selection in (
             ("noon_spatial_surface", "SpatialSurface"), ("noon_spatial_surface", "CairoSpatialSurface"),
@@ -57,6 +63,43 @@ class NativePythonTests(unittest.TestCase):
                 close_scene(scene)
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
+
+    def test_native_style_edits_preserve_replay(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        line = Line(LEFT, RIGHT, color=WHITE, stroke_width=2)
+        self.add(line)
+        self.wait(1)
+        line.set_stroke(RED, width=20)
+        assert abs(line.get_stroke_width() - 20) < 1e-5
+        self.wait(1)
+"""
+        view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
+        try:
+            initial = view.capture(time=0.5, width=160, height=90)
+            self.assertNotEqual(initial, view.capture(time=1.5, width=160, height=90))
+            self.assertEqual(initial, view.capture(time=0.5, width=160, height=90))
+        finally:
+            view.close()
+
+    def test_callback_line_targets_reject_invalid_coordinates_and_foreign_owners(self):
+        first, second = _noon_native.Store(), _noon_native.Store()
+        context, other = first.context(), second.context()
+        try:
+            target = other.callbackLineTarget(0, 0, 1, 1)
+            line = first.geometry(_noon_native.GeometryOptions.line(0, 0, 1, 0))
+            with self.assertRaises(RuntimeError):
+                context.callbackMatchLineTransform(line, target)
+            for invalid in (float("nan"), float("inf"), 1e100):
+                with self.assertRaises(RuntimeError):
+                    context.callbackLineTarget(invalid, 0, 1, 1)
+            context.retire()
+            with self.assertRaises(RuntimeError):
+                context.callbackLineTarget(0, 0, 1, 1)
+        finally:
+            context.retire()
+            other.retire()
 
     def test_nested_introducers_publish_observable_native_handles(self):
         source = """from noon import *

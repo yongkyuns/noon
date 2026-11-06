@@ -2,6 +2,13 @@
 use crate::engine_error;
 use noon::{Color, Style, Transform2D};
 use pyo3::prelude::*;
+/// A phase-local operand, with no semantic node or execution identity.
+#[pyclass(unsendable, module = "_noon_native")]
+pub(crate) struct CallbackLineTarget {
+    pub(crate) start: noon::Vec2,
+    pub(crate) end: noon::Vec2,
+    pub(crate) store: std::rc::Rc<std::cell::RefCell<noon::integration::SemanticStore>>,
+}
 pub(crate) fn callback_color(
     label: &str,
     red: Option<f64>,

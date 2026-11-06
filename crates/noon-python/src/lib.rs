@@ -63,6 +63,7 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
+    m.add_class::<callback_values::CallbackLineTarget>()?;
     m.add_class::<image::ImageOptions>()?;
     m.add_class::<svg::SvgDefaults>()?;
     #[cfg(feature = "native-text")]

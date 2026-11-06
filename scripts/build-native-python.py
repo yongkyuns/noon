@@ -25,6 +25,16 @@ def publish_extension(built: Path, destination: Path) -> None:
         temporary = Path(file.name)
     try:
         shutil.copy2(built, temporary)
+        # Cargo can exit successfully after a failed post-link strip. Import in a
+        # fresh process before publication so a damaged image cannot replace the
+        # working extension, and never map the candidate into this build process.
+        subprocess.run([sys.executable, "-I", "-c",
+                        "import importlib.util, sys; "
+                        "from importlib.machinery import ExtensionFileLoader; "
+                        "loader = ExtensionFileLoader('_noon_native', sys.argv[1]); "
+                        "spec = importlib.util.spec_from_loader('_noon_native', loader); "
+                        "module = importlib.util.module_from_spec(spec); "
+                        "loader.exec_module(module)", str(temporary)], check=True)
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
