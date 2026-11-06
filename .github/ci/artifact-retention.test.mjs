@@ -6,6 +6,17 @@ import test from "node:test";
 
 const githubDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 
+test("Pages retries deploy the artifact uploaded by the same attempt", () => {
+  const workflow = readFileSync(join(githubDirectory, "workflows/pages.yml"), "utf8");
+  const upload = workflow.split("uses: actions/upload-pages-artifact@")[1]?.split("\n      - ")[0];
+  const deploy = workflow.split("uses: actions/deploy-pages@")[1]?.split("\n      - ")[0];
+  const name = upload?.match(/^\s+name:\s*(.+)$/m)?.[1];
+  assert.match(name ?? "", /\$\{\{\s*github\.run_attempt\s*\}\}/,
+    "each retry must have a distinct Pages artifact name");
+  assert.equal(deploy?.match(/^\s+artifact_name:\s*(.+)$/m)?.[1], name,
+    "deployment must select this attempt's uploaded artifact");
+});
+
 function* yamlFiles(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
