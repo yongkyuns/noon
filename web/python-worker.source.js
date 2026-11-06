@@ -45,6 +45,7 @@ import initNoonWeb, {
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { createPreparedInterpreterDriver } from "./prepared-interpreter-driver.js";
+import { createWorkerTaskYield } from "./worker-task-yield.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { withAuthoringDiagnostics, diagnosedHostCode, authoringDiagnosticPayload } from "./authoring-diagnostic-runtime.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
@@ -53,6 +54,7 @@ const AUTHORING_CHANNEL = "noon.authoring";
 const AUTHORING_PROTOCOL_VERSION = 8;
 const AUTHORING_STARTUP_METRICS_VERSION = 2;
 const moduleGraphReadyAt = performance.now();
+const yieldWorkerTask = createWorkerTaskYield();
 const authoringMilestones = {
   performanceTimeOriginMs: performance.timeOrigin,
   firstSceneContextCreatedAtMs: null,
@@ -135,19 +137,16 @@ async function initializePyodide() {
     if (!run?.sourceSceneOnly || !run.preparedPlayback ||
         !preparedPlayer || continuation.terminal || continuation.observedExecution ||
         continuation.callbackRequest != null || run.preparedDriver?.state() !== "running") return false;
-    return awaitOutsidePreparedSourceTurn(run, "cooperative-yield", () => new Promise((resolve, reject) => {
-      setTimeout(() => {
-        if (activeAuthoringRun !== run || !run.sourceSceneOnly || !run.preparedPlayback ||
-            run.preparedDriver?.state() !== "running" ||
-            run.continuation !== continuation || continuation.preparedPlayer !== preparedPlayer ||
-            continuation.terminal || continuation.observedExecution ||
-            continuation.callbackRequest != null) {
-          reject(new Error("prepared source continuation retired during cooperative yield"));
-          return;
-        }
-        resolve();
-      }, 0);
-    }));
+    return awaitOutsidePreparedSourceTurn(run, "cooperative-yield", async () => {
+      await yieldWorkerTask();
+      if (activeAuthoringRun !== run || !run.sourceSceneOnly || !run.preparedPlayback ||
+          run.preparedDriver?.state() !== "running" ||
+          run.continuation !== continuation || continuation.preparedPlayer !== preparedPlayer ||
+          continuation.terminal || continuation.observedExecution ||
+          continuation.callbackRequest != null) {
+        throw new Error("prepared source continuation retired during cooperative yield");
+      }
+    });
   };
   self.noonCreateCanonicalAuthoringSceneContext = () => {
     const context = authoringStore.createSceneContext();
@@ -1000,7 +999,7 @@ function createPreparedSourceDriver(run) {
         prepared = measurePreparationOperation(run, "segment-prepare",
           () => invokePreparedEngine(() => preparedPlayer.prepareSourceSegmentStep(context)));
         if (prepared !== undefined) break;
-        await new Promise(resolve => setTimeout(resolve, 0));
+        await yieldWorkerTask();
         requirePreparedContinuation(run, context, signal);
         if (run.continuation !== continuation || continuation.preparedPlayer !== preparedPlayer) {
           throw new Error("prepared source segment changed while completion was suspended");
