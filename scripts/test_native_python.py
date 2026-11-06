@@ -23,7 +23,9 @@ class NativePythonTests(unittest.TestCase):
                      "ordinary_path_refinement", "ordinary_path_selection", "ordinary_path_alignment",
                      "showcase_bezier_paths", "manim_parity_family_slices",
                      "coordinate_plotting", "animated_number_line", "live_coordinate_plotting",
-                     "number_plane", "polar_plane"):
+                     "number_plane", "polar_plane", "manim_example_moving_camera_center",
+                     "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
+                     "showcase_glass_lens", "showcase_camera_follows_path"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
@@ -151,6 +153,31 @@ class Demo(Scene):
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)
+
+    def test_native_camera_motion_and_rewind_use_the_same_publication(self):
+        source = """from noon import *
+class Demo(MovingCameraScene):
+    def construct(self):
+        dot = Circle(0.4, fill="#ff0000", fill_opacity=1, stroke=None).shift(2 * RIGHT)
+        self.add(dot)
+        self.play(self.camera.frame.animate.shift(2 * RIGHT), run_time=1, rate_func=linear)
+"""
+        view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
+        try:
+            first = None
+            for time in (0.25, 0.75, 0.25):
+                pixels = view.capture(time=time, width=320, height=180)
+                red = [index // 4 % 320 for index in range(0, len(pixels), 4)
+                       if pixels[index] > 180 and pixels[index + 1] < 60 and pixels[index + 2] < 60]
+                self.assertGreater(len(red), 100)
+                self.assertAlmostEqual(sum(red) / len(red), 159.5 + 22.5 * (2 - 2 * time), delta=1)
+                if time == 0.25:
+                    if first is None:
+                        first = pixels
+                    else:
+                        self.assertEqual(first, pixels)
+        finally:
+            view.close()
 
     def test_native_gradient_pixels_animate_and_rewind(self):
         path = ROOT / "web/python/examples/linear_gradient.py"

@@ -334,6 +334,72 @@ impl Context {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl Context {
+    #[pyo3(name = "liveSetFamilyObjectOpacity")]
+    fn family_object_opacity(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        value: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.with_live(|live| {
+            live.set_family_object_opacity(&target.family, value)
+                .map(|_| ())
+        })
+    }
+
+    #[pyo3(name = "createCameraFrame")]
+    fn camera_frame(&mut self, _id: &str) -> PyResult<MobjectHandle> {
+        self.available()?;
+        if self.execution.is_some() {
+            return Err(engine_error("camera initialization must precede execution"));
+        }
+        let handle = self.scene.camera_frame().map_err(engine_error)?;
+        self.bound_ids.insert(handle.node_id());
+        Ok(MobjectHandle::from_semantic_mobject(handle))
+    }
+    #[pyo3(name = "setViewColorProfile")]
+    fn view_color_profile(&mut self, target: &MobjectHandle, value: &str) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let value = noon::integration::camera_color_profile(value).map_err(engine_error)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.set_view_color_profile(&target.handle, value))
+        } else {
+            self.scene
+                .set_view_color_profile(&target.handle, value)
+                .map_err(engine_error)
+        }
+    }
+    #[pyo3(name = "liveSetEmission")]
+    fn emission(&mut self, target: &MobjectHandle, value: f64) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.with_live(|live| live.set_emission(&target.handle, value).map(|_| ()))
+    }
+    #[pyo3(name = "liveSetFamilyEmission")]
+    fn family_emission(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        value: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let emission = noon_core::Emission::new(value)
+            .map_err(noon::AuthoringError::Emission)
+            .map_err(engine_error)?;
+        self.with_live(|live| {
+            live.set_family_style(
+                &target.family,
+                noon::StyleUpdate {
+                    emission: Some(emission),
+                    ..Default::default()
+                },
+            )
+            .map(|_| ())
+        })
+    }
+
     #[pyo3(name = "queryNumberPlaneFrame")]
     fn effective_number_plane_frame(
         &mut self,

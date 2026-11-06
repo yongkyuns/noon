@@ -374,3 +374,16 @@ mod plot_error;
 pub use plot_error::{coordinate_failure, coordinate_math_failure, plot_failure, sampling_failure};
 mod plot_input;
 pub use plot_input::{data_points as plot_data_points, PlotSamplingInput};
+
+/// Decode the optional frontend spelling of an existing camera working profile.
+pub fn camera_color_profile(value: &str) -> Result<noon_core::ViewColorProfile, AuthoringFailure> {
+    match value {
+        "compatibility" => Ok(noon_core::ViewColorProfile::Compatibility),
+        "linear_hdr" => Ok(noon_core::ViewColorProfile::LinearHdr),
+        _ => Err(AuthoringFailure::new(
+            "invalid_input",
+            "camera.color_profile",
+            "view color profile must be compatibility or linear_hdr",
+        )),
+    }
+}

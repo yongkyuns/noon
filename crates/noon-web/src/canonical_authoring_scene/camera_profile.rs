@@ -5,15 +5,7 @@ use super::{CanonicalAuthoringScene, PlayerOwnership};
 pub(crate) fn view_color_profile(
     value: &str,
 ) -> Result<noon_core::ViewColorProfile, crate::AuthoringFailure> {
-    match value {
-        "compatibility" => Ok(noon_core::ViewColorProfile::Compatibility),
-        "linear_hdr" => Ok(noon_core::ViewColorProfile::LinearHdr),
-        _ => Err(crate::AuthoringFailure::new(
-            "invalid_input",
-            "camera.color_profile",
-            "view color profile must be compatibility or linear_hdr",
-        )),
-    }
+    noon::integration::camera_color_profile(value)
 }
 
 impl CanonicalAuthoringScene {

@@ -41,6 +41,16 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "setObjectOpacity")]
+    fn object_opacity(&self, value: f64) -> PyResult<()> {
+        self.family.set_object_opacity(value).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setEmission")]
+    fn emission(&self, value: f64) -> PyResult<()> {
+        self.family.set_emission(value).map_err(engine_error)
+    }
+
     #[cfg(feature = "native-text")]
     #[pyo3(name = "numberLabelFamily")]
     fn number_labels(

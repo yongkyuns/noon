@@ -15,6 +15,28 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "functionPlotRange")]
+    fn function_plot_range(&self) -> PyResult<Vec<f64>> {
+        self.handle
+            .function_plot_range()
+            .map(|v| v.to_vec())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setViewColorProfile")]
+    fn view_color_profile(&mut self, value: &str) -> PyResult<()> {
+        self.handle
+            .set_view_color_profile(
+                noon::integration::camera_color_profile(value).map_err(engine_error)?,
+            )
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setEmission")]
+    fn emission(&mut self, value: f64) -> PyResult<()> {
+        self.handle.set_emission(value).map_err(engine_error)
+    }
+
     #[pyo3(name = "prependMembers")]
     fn prepend_members(&self, batch: &MembershipBatch) -> PyResult<()> {
         if batch.kind != "add" {

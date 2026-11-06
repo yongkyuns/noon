@@ -65,6 +65,7 @@ pub(crate) enum Child {
         AnimationOptions,
     ),
     FamilyReveal(noon::MobjectFamily, bool, AnimationOptions),
+    MoveAlongPath(Mobject, Mobject, AnimationOptions),
     Wait(f64),
     Add(Mobject, AnimationOptions),
     Nested(Composition),
@@ -145,6 +146,11 @@ impl Child {
             Self::FamilyReveal(target, reverse, options) => Request::FamilyReveal {
                 target,
                 reverse: *reverse,
+                options: *options,
+            },
+            Self::MoveAlongPath(target, path, options) => Request::MoveAlongPath {
+                target,
+                path,
                 options: *options,
             },
             Self::Wait(duration) => Request::Wait {
@@ -464,6 +470,21 @@ impl Composition {
             ));
         }
         member.handle.validate().map_err(engine_error)
+    }
+    #[pyo3(name = "appendMoveAlongPath")]
+    fn move_along_path(
+        &mut self,
+        target: &MobjectHandle,
+        path: &MobjectHandle,
+        duration: f64,
+        easing: &str,
+    ) -> PyResult<()> {
+        self.children.push(Child::MoveAlongPath(
+            target.handle.clone(),
+            path.handle.clone(),
+            options(duration, easing)?,
+        ));
+        Ok(())
     }
     #[pyo3(name = "setCompositionRateFunction")]
     fn set_rate(&mut self, value: &str) -> PyResult<()> {

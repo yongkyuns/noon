@@ -13,6 +13,23 @@ impl GeometryOptions {
 }
 #[pymethods]
 impl GeometryOptions {
+    #[staticmethod]
+    #[pyo3(name="regularPolygram",signature=(n,density,radius,start_angle))]
+    fn regular_polygram(
+        n: u32,
+        density: u32,
+        radius: f64,
+        start_angle: Option<f64>,
+    ) -> PyResult<Self> {
+        noon::ManimGeometryOptions::regular_polygram(n, density, radius, start_angle)
+            .map(Self::from_options)
+            .map_err(engine_error)
+    }
+    #[getter(resolvedStartAngle)]
+    fn resolved_start_angle(&self) -> Option<f64> {
+        self.options.resolved_start_angle()
+    }
+
     #[pyo3(name = "setDrawEnabled")]
     fn set_draw_enabled(&mut self, enabled: bool) {
         self.options.set_draw_enabled(enabled);
