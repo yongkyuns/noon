@@ -325,7 +325,210 @@ impl Context {
     }
 }
 #[pymethods]
+#[allow(clippy::too_many_arguments)]
 impl Context {
+    #[pyo3(name = "associatePublishedMobjects")]
+    fn associate_published(&mut self, batch: &MembershipBatch) -> PyResult<()> {
+        self.available()?;
+        if batch.kind != "add" || !batch.members.is_empty() {
+            return Err(engine_error(
+                "published association accepts add binding reservations only",
+            ));
+        }
+        let execution = self.execution.as_ref().ok_or_else(|| {
+            engine_error("published association requires the local completed execution player")
+        })?;
+        if execution.publication_context().scene_revision() != self.scene.revision() {
+            return Err(engine_error(
+                "published association requires a coherent execution revision",
+            ));
+        }
+        for handle in &batch.bindings {
+            let target = MobjectHandle::from_semantic_mobject(handle.clone());
+            if !self.contains(&target)? {
+                return Err(engine_error(
+                    "published association target is not in this Scene",
+                ));
+            }
+        }
+        self.bound_ids
+            .extend(batch.bindings.iter().map(|handle| handle.node_id()));
+        Ok(())
+    }
+
+    #[pyo3(name = "liveStretchLayout")]
+    fn stretch_layout(
+        &mut self,
+        target: &LayoutAnchor,
+        factor: f64,
+        dimension: u32,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        let dimension = dimension.try_into().map_err(engine_error)?;
+        self.with_live(|live| {
+            live.stretch(
+                &target.anchor,
+                factor,
+                dimension,
+                crate::mobject::pivot_3d(x, y, z, point),
+            )
+            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "livePrependFamilyMembers")]
+    fn prepend_family_members(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        if batch.kind != "add" {
+            return Err(engine_error("member prepend requires an add batch"));
+        }
+        self.with_live(|live| live.prepend_family_members(&target.family, &batch.targets()))
+    }
+    #[pyo3(name = "livePrependObjectMembers")]
+    fn prepend_handle_members(
+        &mut self,
+        target: &MobjectHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_store(target)?;
+        if batch.kind != "add" {
+            return Err(engine_error("member prepend requires an add batch"));
+        }
+        self.with_live(|live| live.prepend_family_members(&target.handle, &batch.targets()))
+    }
+
+    #[pyo3(name = "queryMobjectVectorBoundaryPoints3D")]
+    fn mobject_vector_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let target = noon::MobjectTarget::from(&target.handle);
+        let value = if let Some(execution) = self.execution.as_ref() {
+            noon::integration::effective_vector_boundary_points_3d(
+                self.scene.integration_store(),
+                execution,
+                target,
+            )
+        } else {
+            target.vector_boundary_points_3d()
+        };
+        value
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryMobjectAllPoints3D")]
+    fn mobject_all_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let target = noon::MobjectTarget::from(&target.handle);
+        let value = if let Some(execution) = self.execution.as_ref() {
+            noon::integration::effective_all_points_3d(
+                self.scene.integration_store(),
+                execution,
+                target,
+            )
+        } else {
+            target.all_points_3d()
+        };
+        value
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryFamilyVectorBoundaryPoints3D")]
+    fn family_vector_boundary_points_3d(
+        &self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let target = noon::MobjectTarget::from(&target.family);
+        let value = if let Some(execution) = self.execution.as_ref() {
+            noon::integration::effective_vector_boundary_points_3d(
+                self.scene.integration_store(),
+                execution,
+                target,
+            )
+        } else {
+            target.vector_boundary_points_3d()
+        };
+        value
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryFamilyAllPoints3D")]
+    fn family_all_points_3d(&self, target: &crate::family::FamilyHandle) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let target = noon::MobjectTarget::from(&target.family);
+        let value = if let Some(execution) = self.execution.as_ref() {
+            noon::integration::effective_all_points_3d(
+                self.scene.integration_store(),
+                execution,
+                target,
+            )
+        } else {
+            target.all_points_3d()
+        };
+        value
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryMobjectPointCount")]
+    fn point_count(&mut self, target: &MobjectHandle) -> PyResult<usize> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.get_num_points(&target.handle))
+        } else {
+            target.handle.get_num_points().map_err(engine_error)
+        }
+    }
+
+    #[pyo3(name = "queryMobjectPointArray")]
+    fn object_point_array(&self, target: &MobjectHandle) -> PyResult<(Vec<f64>, Vec<usize>)> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let target = noon::MobjectTarget::from(&target.handle);
+        let value = if let Some(execution) = self.execution.as_ref() {
+            noon::integration::effective_point_array(
+                self.scene.integration_store(),
+                execution,
+                target,
+            )
+        } else {
+            target.point_array()
+        };
+        value
+            .map(crate::path_input::point_array)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "queryFamilyPointArray")]
+    fn family_point_array(
+        &self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<(Vec<f64>, Vec<usize>)> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let target = noon::MobjectTarget::from(&target.family);
+        let value = if let Some(execution) = self.execution.as_ref() {
+            noon::integration::effective_point_array(
+                self.scene.integration_store(),
+                execution,
+                target,
+            )
+        } else {
+            target.point_array()
+        };
+        value
+            .map(crate::path_input::point_array)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name="liveSetFillImage",signature=(target,paint,opacity))]
     fn live_fill_image(
         &mut self,
@@ -1198,27 +1401,628 @@ impl Context {
         let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
         self.with_live(|live| live.set_image_sampling(&target.handle, sampling))
     }
-    #[pyo3(name = "liveStartNewPath")]
-    fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
-        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
+    #[pyo3(name = "liveChangeAnchorMode")]
+    fn change_anchor_mode(&mut self, target: &MobjectHandle, smooth: bool) -> PyResult<()> {
         self.publish_path_edit(
             target,
-            noon::integration::BorrowedPathEdit::Start {
+            noon::integration::BorrowedPathEdit::AnchorMode {
                 object: &target.handle,
-                point,
+                smooth,
             },
         )
     }
-    #[pyo3(name = "liveAddLineTo")]
-    fn add_line_to(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
-        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Line {
-                object: &target.handle,
-                point,
+    #[pyo3(name = "liveChangeFamilyAnchorMode")]
+    fn change_family_anchor_mode(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        smooth: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let execution = self
+            .execution
+            .as_mut()
+            .ok_or_else(|| engine_error("no execution session"))?;
+        noon::integration::publish_borrowed_path_edit(
+            self.scene.integration_store(),
+            self.scene.root(),
+            execution,
+            noon::integration::BorrowedPathEdit::FamilyAnchorMode {
+                family: &target.family,
+                smooth,
             },
         )
+        .map_err(engine_error)
+    }
+    #[pyo3(name = "queryFamilyOwnPath")]
+    fn family_own_path(
+        &self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<crate::path_query::PathQuery> {
+        self.require_active()?;
+        self.same_family_store(target)?;
+        let value = if let Some(execution) = self.execution.as_ref() {
+            target.family.effective_own_path_query(execution)
+        } else {
+            target.family.own_path_query()
+        };
+        value
+            .map(crate::path_query::PathQuery::new)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "liveRescaleToFit")]
+    fn rescale_to_fit(
+        &mut self,
+        target: &LayoutAnchor,
+        length: f64,
+        dimension: u32,
+        stretch: bool,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        let dimension = dimension.try_into().map_err(engine_error)?;
+        self.with_live(|live| {
+            live.rescale_to_fit_with_pivot(
+                &target.anchor,
+                length,
+                dimension,
+                stretch,
+                crate::mobject::pivot_3d(x, y, z, point),
+            )
+        })
+    }
+    #[pyo3(name="liveStartNewPath", signature=(target ,x,y,z))]
+    fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64, z: f64) -> PyResult<()> {
+        let point = crate::path_input::point_3d(x, y, z)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Start3dWithStride {
+                object: &target.handle,
+                point,
+                stride: 4,
+            },
+        )
+    }
+    #[pyo3(name="liveStartNewPathWithStride", signature=(target ,x,y,z,stride))]
+    fn start_new_path_stride(
+        &mut self,
+        target: &MobjectHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        stride: i32,
+    ) -> PyResult<()> {
+        let point = crate::path_input::point_3d(x, y, z)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Start3dWithStride {
+                object: &target.handle,
+                point,
+                stride,
+            },
+        )
+    }
+    #[pyo3(name="liveAddLineTo", signature=(target ,x,y,z,stride=None))]
+    fn add_line_to(
+        &mut self,
+        target: &MobjectHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        stride: Option<i32>,
+    ) -> PyResult<()> {
+        let point = crate::path_input::point_3d(x, y, z)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Line3dWithStride {
+                object: &target.handle,
+                point,
+                stride: stride.unwrap_or(4),
+            },
+        )
+    }
+    #[pyo3(name="liveAddLineToWithSamples", signature=(target ,x,y,z,stride,samples))]
+    fn add_line_samples(
+        &mut self,
+        target: &MobjectHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        stride: i32,
+        samples: Vec<f64>,
+    ) -> PyResult<()> {
+        let point = crate::path_input::point_3d(x, y, z)?;
+        let samples: [f64; 4] = samples.try_into().map_err(|_| {
+            engine_error("add_line_to requires four constructor interpolation samples")
+        })?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Line3dWithSamples {
+                object: &target.handle,
+                point,
+                stride,
+                bezier_t_values: &samples,
+            },
+        )
+    }
+    #[pyo3(name="liveSetPoints", signature=(target ,values))]
+    fn set_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let points = crate::path_input::points_f64(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::RawPoints {
+                object: &target.handle,
+                points: &points,
+            },
+        )
+    }
+    #[pyo3(name="liveSetPoints3D", signature=(target ,values))]
+    fn set_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::RawPoints3d {
+                object: &target.handle,
+                points: &points,
+            },
+        )
+    }
+    #[pyo3(name="liveAppendPoints", signature=(target ,values))]
+    fn append_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let points = crate::path_input::points_f64(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AppendRawPoints {
+                object: &target.handle,
+                points: &points,
+            },
+        )
+    }
+    #[pyo3(name="liveAppendPoints3D", signature=(target ,values))]
+    fn append_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AppendRawPoints3d {
+                object: &target.handle,
+                points: &points,
+            },
+        )
+    }
+    #[pyo3(name="liveSetPointsAsCorners", signature=(target ,values))]
+    fn corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Corners3d {
+                object: &target.handle,
+                points: &points,
+            },
+        )
+    }
+    #[pyo3(name="liveAddPointsAsCorners", signature=(target ,values))]
+    fn append_corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AppendCorners3d {
+                object: &target.handle,
+                points: &points,
+            },
+        )
+    }
+    #[pyo3(name="liveAddCubicBezierCurves", signature=(target ,values))]
+    fn cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let curves = crate::path_input::cubic_curves_3d(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::CubicCurves3d {
+                object: &target.handle,
+                curves: &curves,
+            },
+        )
+    }
+    #[pyo3(name="liveSetCubicBezierCurves", signature=(target ,values))]
+    fn set_cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let curves = crate::path_input::cubic_curves_3d(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::SetCubicCurves3d {
+                object: &target.handle,
+                curves: &curves,
+            },
+        )
+    }
+    #[pyo3(name="liveSetPointsSmoothly", signature=(target ,values))]
+    fn smooth_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        let points = crate::path_input::points(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::SmoothCorners {
+                object: &target.handle,
+                points: &points,
+            },
+        )
+    }
+    #[pyo3(name="liveSetPointsAsCornersWithSamples", signature=(target ,values,samples))]
+    fn corners_samples(
+        &mut self,
+        target: &MobjectHandle,
+        values: Vec<f64>,
+        samples: Vec<f64>,
+    ) -> PyResult<()> {
+        let points = crate::path_input::points_3d(&values)?;
+        let samples: [f64; 4] = samples.try_into().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err("set_points_as_corners requires four samples")
+        })?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Corners3dWithSamples {
+                object: &target.handle,
+                points: &points,
+                bezier_t_values: &samples,
+            },
+        )
+    }
+    #[pyo3(name="liveAddPointsAsCornersWithStride", signature=(target ,values,stride,samples))]
+    fn append_corners_stride(
+        &mut self,
+        target: &MobjectHandle,
+        values: Vec<f64>,
+        stride: i32,
+        samples: Vec<f64>,
+    ) -> PyResult<()> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AppendCorners3dWithStride {
+                object: &target.handle,
+                points: &points,
+                stride,
+                bezier_t_values: &samples,
+            },
+        )
+    }
+    #[pyo3(name="liveClearPoints", signature=(target))]
+    fn clear_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Clear {
+                object: &target.handle,
+            },
+        )
+    }
+    #[pyo3(name="liveClosePath", signature=(target))]
+    fn close_path(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Close {
+                object: &target.handle,
+            },
+        )
+    }
+    #[pyo3(name="liveReverseDirection", signature=(target))]
+    fn reverse_direction(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Reverse {
+                object: &target.handle,
+            },
+        )
+    }
+    #[pyo3(name="liveReversePoints", signature=(target))]
+    fn reverse_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::ReversePoints {
+                object: &target.handle,
+            },
+        )
+    }
+    #[pyo3(name="liveMakeSmooth", signature=(target))]
+    fn make_smooth(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AnchorMode {
+                object: &target.handle,
+                smooth: true,
+            },
+        )
+    }
+    #[pyo3(name="liveMakeJagged", signature=(target))]
+    fn make_jagged(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AnchorMode {
+                object: &target.handle,
+                smooth: false,
+            },
+        )
+    }
+    #[pyo3(name="liveRepeatPoints", signature=(target ,count))]
+    fn repeat_points(&mut self, target: &MobjectHandle, count: usize) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::RepeatPoints {
+                object: &target.handle,
+                count,
+            },
+        )
+    }
+    #[pyo3(name="liveInsertNCurves", signature=(target ,additional))]
+    fn insert_curves(&mut self, target: &MobjectHandle, additional: usize) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Subdivide {
+                object: &target.handle,
+                additional,
+            },
+        )
+    }
+    #[pyo3(name="liveScaleHandleToAnchorDistances", signature=(target ,factor))]
+    fn scale_handles(&mut self, target: &MobjectHandle, factor: f64) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::ScaleHandles {
+                object: &target.handle,
+                factor,
+            },
+        )
+    }
+    #[pyo3(name="liveClosePathWithStride", signature=(target ,stride,tolerance,samples))]
+    fn close_path_stride(
+        &mut self,
+        target: &MobjectHandle,
+        stride: i32,
+        tolerance: f64,
+        samples: Vec<f64>,
+    ) -> PyResult<()> {
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::CloseWithStride {
+                object: &target.handle,
+                stride,
+                tolerance,
+                bezier_t_values: &samples,
+            },
+        )
+    }
+    #[pyo3(name="livePointwiseBecomePartial", signature=(target ,source,a,b))]
+    fn partial(
+        &mut self,
+        target: &MobjectHandle,
+        source: &MobjectHandle,
+        a: f64,
+        b: f64,
+    ) -> PyResult<()> {
+        self.same_store(source)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Partial {
+                object: &target.handle,
+                source: &source.handle,
+                a,
+                b,
+            },
+        )
+    }
+    #[pyo3(name="liveAppendVectorizedMobject", signature=(target ,source))]
+    fn append_vector(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
+        self.same_store(source)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AppendVectorized {
+                object: &target.handle,
+                source: &source.handle,
+            },
+        )
+    }
+    #[pyo3(name="liveAppendVectorizedMobjectWithStride", signature=(target ,source,stride))]
+    fn append_vector_stride(
+        &mut self,
+        target: &MobjectHandle,
+        source: &MobjectHandle,
+        stride: i32,
+    ) -> PyResult<()> {
+        self.same_store(source)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::AppendVectorizedWithStride {
+                object: &target.handle,
+                source: &source.handle,
+                stride,
+            },
+        )
+    }
+    #[pyo3(name="liveAddQuadraticBezierCurveTo", signature=(target ,control_x,control_y,control_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    fn path_quadratic(
+        &mut self,
+        target: &MobjectHandle,
+        control_x: f64,
+        control_y: f64,
+        control_z: f64,
+        anchor_x: f64,
+        anchor_y: f64,
+        anchor_z: f64,
+        stride: Option<i32>,
+    ) -> PyResult<()> {
+        let control = crate::path_input::point_3d(control_x, control_y, control_z)?;
+        let anchor = crate::path_input::point_3d(anchor_x, anchor_y, anchor_z)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Quadratic3dWithStride {
+                object: &target.handle,
+                control,
+                anchor,
+                stride: stride.unwrap_or(4),
+            },
+        )
+    }
+    #[pyo3(name="liveAddCubicBezierCurveTo", signature=(target ,control1_x,control1_y,control1_z,control2_x,control2_y,control2_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    fn path_cubic(
+        &mut self,
+        target: &MobjectHandle,
+        control1_x: f64,
+        control1_y: f64,
+        control1_z: f64,
+        control2_x: f64,
+        control2_y: f64,
+        control2_z: f64,
+        anchor_x: f64,
+        anchor_y: f64,
+        anchor_z: f64,
+        stride: Option<i32>,
+    ) -> PyResult<()> {
+        let control1 = crate::path_input::point_3d(control1_x, control1_y, control1_z)?;
+        let control2 = crate::path_input::point_3d(control2_x, control2_y, control2_z)?;
+        let anchor = crate::path_input::point_3d(anchor_x, anchor_y, anchor_z)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::Cubic3dWithStride {
+                object: &target.handle,
+                control1,
+                control2,
+                anchor,
+                stride: stride.unwrap_or(4),
+            },
+        )
+    }
+    #[pyo3(name="liveAddCubicBezierCurve", signature=(target ,anchor1_x,anchor1_y,anchor1_z,handle1_x,handle1_y,handle1_z,handle2_x,handle2_y,handle2_z,anchor2_x,anchor2_y,anchor2_z))]
+    fn path_curve(
+        &mut self,
+        target: &MobjectHandle,
+        anchor1_x: f64,
+        anchor1_y: f64,
+        anchor1_z: f64,
+        handle1_x: f64,
+        handle1_y: f64,
+        handle1_z: f64,
+        handle2_x: f64,
+        handle2_y: f64,
+        handle2_z: f64,
+        anchor2_x: f64,
+        anchor2_y: f64,
+        anchor2_z: f64,
+    ) -> PyResult<()> {
+        let anchor1 = crate::path_input::point_3d(anchor1_x, anchor1_y, anchor1_z)?;
+        let handle1 = crate::path_input::point_3d(handle1_x, handle1_y, handle1_z)?;
+        let handle2 = crate::path_input::point_3d(handle2_x, handle2_y, handle2_z)?;
+        let anchor2 = crate::path_input::point_3d(anchor2_x, anchor2_y, anchor2_z)?;
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::CubicCurve3d {
+                object: &target.handle,
+                anchor1,
+                handle1,
+                handle2,
+                anchor2,
+            },
+        )
+    }
+    #[pyo3(name="liveAddSmoothCurveTo", signature=(target ,values,stride=None))]
+    fn smooth_curve(
+        &mut self,
+        target: &MobjectHandle,
+        values: Vec<f64>,
+        stride: Option<i32>,
+    ) -> PyResult<()> {
+        let points = crate::path_input::points(&values)?;
+        let (handle2, anchor) = match points.as_slice() {
+            [anchor] => (None, *anchor),
+            [handle2, anchor] => (Some(*handle2), *anchor),
+            _ => {
+                return Err(engine_error(
+                    "Only call add_smooth_curve_to with 1 or 2 points",
+                ))
+            }
+        };
+        self.publish_path_edit(
+            target,
+            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
+                object: &target.handle,
+                handle2,
+                anchor,
+                stride: stride.unwrap_or(4),
+            },
+        )
+    }
+    #[pyo3(name = "liveSetFamilyPoints3D")]
+    fn set_family_points_3d(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let values = crate::path_input::points_3d(&values)?;
+        self.with_live(|live| live.set_family_points_3d(&target.family, &values))
+    }
+    #[pyo3(name = "liveAppendFamilyPoints3D")]
+    fn append_family_points_3d(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let values = crate::path_input::points_3d(&values)?;
+        self.with_live(|live| live.append_family_points_3d(&target.family, &values))
+    }
+    #[pyo3(name = "liveClearFamilyPoints")]
+    fn clear_family_points(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
+        self.same_family_store(target)?;
+        self.with_live(|live| live.clear_family_points(&target.family))
+    }
+    #[pyo3(name = "liveSetFamilyEmptyPointArray")]
+    fn empty_family_array(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let shape = crate::path_input::point_array_shape(&values)?;
+        self.with_live(|live| live.set_empty_point_array((&target.family).into(), shape))
+    }
+    #[pyo3(name = "liveSetEmptyPointArray")]
+    fn empty_point_array(&mut self, target: &MobjectHandle, dimensions: Vec<f64>) -> PyResult<()> {
+        self.same_store(target)?;
+        let shape = crate::path_input::point_array_shape(&dimensions)?;
+        self.with_live(|live| live.set_empty_point_array((&target.handle).into(), shape))
+    }
+    #[pyo3(name = "liveSubcurve")]
+    fn subcurve(&mut self, target: &MobjectHandle, a: f64, b: f64) -> PyResult<MobjectHandle> {
+        self.same_store(target)?;
+        self.with_live(|live| live.subcurve(&target.handle, a, b))
+            .map(MobjectHandle::from_semantic_mobject)
+    }
+    #[pyo3(name = "liveAlignRootPoints")]
+    fn align_root_points(&mut self, left: &LayoutAnchor, right: &LayoutAnchor) -> PyResult<()> {
+        self.with_live(|live| live.align_path_points(&left.anchor, &right.anchor))
+    }
+    #[pyo3(name = "liveAlignPoints")]
+    fn align_points(&mut self, left: &MobjectHandle, right: &MobjectHandle) -> PyResult<()> {
+        self.same_store(left)?;
+        self.same_store(right)?;
+        self.with_live(|live| {
+            live.align_path_points(
+                &noon::LayoutAnchor::from(&left.handle),
+                &noon::LayoutAnchor::from(&right.handle),
+            )
+        })
+    }
+    #[pyo3(name = "liveApplyMatrix")]
+    #[allow(clippy::too_many_arguments)]
+    fn apply_matrix(
+        &mut self,
+        target: &MobjectHandle,
+        values: Vec<f64>,
+        rows: usize,
+        columns: usize,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.same_store(target)?;
+        self.with_live(|live| live.apply_matrix(&target.handle, &values, rows, columns, x, y))
     }
     #[pyo3(name = "liveShift")]
     fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {

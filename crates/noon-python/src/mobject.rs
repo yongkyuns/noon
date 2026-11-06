@@ -1,5 +1,5 @@
 //! Store-scoped native handles; all geometry/state behavior is shared Rust.
-use crate::engine_error;
+use crate::{context::MembershipBatch, engine_error};
 use pyo3::prelude::*;
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
@@ -13,7 +13,194 @@ impl MobjectHandle {
     }
 }
 #[pymethods]
+#[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "prependMembers")]
+    fn prepend_members(&self, batch: &MembershipBatch) -> PyResult<()> {
+        if batch.kind != "add" {
+            return Err(engine_error("member prepend requires an add batch"));
+        }
+        self.handle
+            .prepend_many(&batch.targets())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name="splitIterator",signature=(include=None))]
+    fn split_iterator(&self, include: Option<bool>) -> PyResult<crate::family::FamilyIterator> {
+        crate::family::split_iterator(
+            noon::CompositeEntryHandle::Mobject(self.handle.clone()),
+            include,
+        )
+    }
+    #[pyo3(name="splitCount",signature=(include=None))]
+    fn split_count(&self, include: Option<bool>) -> PyResult<usize> {
+        crate::family::split_count(
+            noon::CompositeEntryHandle::Mobject(self.handle.clone()),
+            include,
+        )
+    }
+    #[pyo3(name="splitKeys",signature=(include=None))]
+    fn split_keys(&self, include: Option<bool>) -> PyResult<Vec<String>> {
+        crate::family::split_keys(
+            noon::CompositeEntryHandle::Mobject(self.handle.clone()),
+            include,
+        )
+    }
+    #[pyo3(name="splitAt",signature=(index,include=None))]
+    fn split_at(&self, py: Python<'_>, index: usize, include: Option<bool>) -> PyResult<Py<PyAny>> {
+        crate::family::split_at(
+            py,
+            noon::CompositeEntryHandle::Mobject(self.handle.clone()),
+            index,
+            include,
+        )
+    }
+    #[pyo3(name="prepareSlice",signature=(include=None))]
+    fn slice_plan(&self, include: Option<bool>) -> PyResult<crate::family::FamilySlicePlan> {
+        crate::family::slice_plan(
+            noon::CompositeEntryHandle::Mobject(self.handle.clone()),
+            include,
+        )
+    }
+    #[pyo3(name = "vectorBoundaryPoints3D")]
+    fn vector_boundary_points_3d(&self) -> PyResult<Vec<f64>> {
+        noon::MobjectTarget::from(&self.handle)
+            .vector_boundary_points_3d()
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "cubicBezierPointRanges")]
+    pub fn cubic_bezier_point_ranges(
+        &self,
+        point_count: u32,
+        points_per_curve: f64,
+    ) -> Result<Vec<u32>, PyErr> {
+        self.handle.validate().map_err(engine_error)?;
+        Ok(
+            noon::manim_cubic_bezier_point_ranges(point_count as usize, points_per_curve)
+                .into_iter()
+                .map(|index| index as u32)
+                .collect(),
+        )
+    }
+
+    #[pyo3(name = "subpathSplitIndices")]
+    pub fn subpath_split_indices(
+        &self,
+        points: Vec<f64>,
+        point_count: u32,
+        point_dimensions: u32,
+        compared_dimensions: u32,
+        absolute_tolerance: f64,
+    ) -> Result<Vec<u32>, PyErr> {
+        self.handle.validate().map_err(engine_error)?;
+        noon::manim_subpath_split_indices(
+            &points,
+            point_count as usize,
+            point_dimensions as usize,
+            compared_dimensions as usize,
+            absolute_tolerance,
+        )
+        .map(|indices| indices.into_iter().map(|index| index as u32).collect())
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "subpathRanges")]
+    pub fn subpath_ranges(
+        &self,
+        points: Vec<f64>,
+        point_count: u32,
+        point_dimensions: u32,
+        compared_dimensions: u32,
+        points_per_curve: f64,
+        absolute_tolerance: f64,
+        drop_short_ranges: bool,
+    ) -> Result<Vec<u32>, PyErr> {
+        self.handle.validate().map_err(engine_error)?;
+        noon::manim_subpath_ranges(
+            &points,
+            point_count as usize,
+            point_dimensions as usize,
+            compared_dimensions as usize,
+            points_per_curve,
+            absolute_tolerance,
+            drop_short_ranges,
+        )
+        .map(|indices| indices.into_iter().map(|index| index as u32).collect())
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "pointsAllClose")]
+    pub fn points_allclose(
+        &self,
+        left: Vec<f64>,
+        right: Vec<f64>,
+        absolute_tolerance: f64,
+    ) -> Result<bool, PyErr> {
+        self.handle.validate().map_err(engine_error)?;
+        if left.len() != right.len() {
+            return Err(engine_error(noon::AuthoringError::InvalidPointCoordinates(
+                left.len().max(right.len()),
+            )));
+        }
+        Ok(noon::manim_points_allclose(
+            &left,
+            &right,
+            absolute_tolerance,
+        ))
+    }
+
+    #[pyo3(name = "points2dClose")]
+    pub fn points_2d_close(
+        &self,
+        left: Vec<f64>,
+        right: Vec<f64>,
+        absolute_tolerance: f64,
+    ) -> Result<bool, PyErr> {
+        self.handle.validate().map_err(engine_error)?;
+        if left.len() < 2 || right.len() < 2 {
+            return Err(engine_error(noon::AuthoringError::InvalidPointCoordinates(
+                left.len().min(right.len()),
+            )));
+        }
+        Ok(noon::manim_points_2d_close(
+            [left[0], left[1]],
+            [right[0], right[1]],
+            absolute_tolerance,
+        ))
+    }
+
+    #[pyo3(name = "pointArray")]
+    fn point_array(&self) -> PyResult<(Vec<f64>, Vec<usize>)> {
+        noon::MobjectTarget::from(&self.handle)
+            .point_array()
+            .map(crate::path_input::point_array)
+            .map_err(engine_error)
+    }
+    #[getter(pointCount)]
+    fn point_count(&self) -> PyResult<usize> {
+        self.handle.get_num_points().map_err(engine_error)
+    }
+
+    #[pyo3(name = "backgroundStrokeColor")]
+    fn background_stroke_color(&self) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.handle
+            .background_stroke_color()
+            .map(|v| v.map(Into::into))
+            .map_err(engine_error)
+    }
+    #[getter(backgroundStrokeWidth)]
+    fn background_stroke_width(&self) -> PyResult<f64> {
+        self.handle.background_stroke_width().map_err(engine_error)
+    }
+    #[getter(backgroundStrokeOpacity)]
+    fn background_stroke_opacity(&self) -> PyResult<f64> {
+        self.handle
+            .background_stroke_opacity()
+            .map_err(engine_error)
+    }
+
     #[pyo3(name="setFillImage",signature=(paint,opacity))]
     fn fill_image(
         &self,
@@ -227,16 +414,381 @@ impl MobjectHandle {
             .map(crate::family::ColorObservation::from)
             .map_err(engine_error)
     }
+    #[pyo3(name = "applyMatrix")]
+    pub fn apply_matrix(
+        &mut self,
+        values: Vec<f64>,
+        rows: u32,
+        columns: u32,
+        about_x: f64,
+        about_y: f64,
+    ) -> Result<(), PyErr> {
+        self.handle
+            .apply_matrix(&values, rows as usize, columns as usize, about_x, about_y)
+            .map_err(engine_error)
+    }
+
+    /// Replace raw world-space points through the shared semantic transaction.
+    #[pyo3(name = "setPoints")]
+    pub fn set_points(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let points = crate::path_input::points_f64(&values)?;
+        self.handle.set_points_f64(&points).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setEmptyPointArray")]
+    pub fn set_empty_point_array(&mut self, dimensions: Vec<f64>) -> Result<(), PyErr> {
+        self.handle
+            .set_empty_point_array(crate::path_input::point_array_shape(&dimensions)?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setPoints3D")]
+    pub fn set_points_3d(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.handle.set_points_3d(&points).map_err(engine_error)
+    }
+
+    #[pyo3(name = "appendPoints")]
+    pub fn append_points(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let points = crate::path_input::points_f64(&values)?;
+        self.handle.append_points_f64(&points).map_err(engine_error)
+    }
+
+    #[pyo3(name = "appendPoints3D")]
+    pub fn append_points_3d(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.handle.append_points_3d(&points).map_err(engine_error)
+    }
+
+    /// Replace world-space corners through the shared semantic transaction.
+    #[pyo3(name = "setPointsAsCorners")]
+    pub fn set_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.handle
+            .set_points_as_corners_3d(&points)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setPointsAsCornersWithSamples")]
+    pub fn set_points_as_corners_with_samples(
+        &mut self,
+        values: Vec<f64>,
+        sample_values: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        let points = crate::path_input::points_3d(&values)?;
+        let sample_values: [f64; 4] = sample_values.try_into().map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err("set_points_as_corners requires four samples")
+        })?;
+        self.handle
+            .set_points_as_corners_3d_with_samples(&points, &sample_values)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "clearPoints")]
+    pub fn clear_points(&mut self) -> Result<(), PyErr> {
+        self.handle.clear_points().map_err(engine_error)
+    }
+
     #[pyo3(name = "startNewPath")]
-    fn start_new_path(&mut self, x: f64, y: f64) -> PyResult<()> {
-        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
-        self.handle.start_new_path(point).map_err(engine_error)
+    pub fn start_new_path(
+        &mut self,
+        point_x: f64,
+        point_y: f64,
+        point_z: f64,
+    ) -> Result<(), PyErr> {
+        let point = crate::path_input::point_3d(point_x, point_y, point_z)?;
+        self.handle.start_new_path_3d(point).map_err(engine_error)
     }
+
+    #[pyo3(name = "startNewPathWithStride")]
+    pub fn start_new_path_with_stride(
+        &mut self,
+        point_x: f64,
+        point_y: f64,
+        point_z: f64,
+        stride: i32,
+    ) -> Result<(), PyErr> {
+        let point = crate::path_input::point_3d(point_x, point_y, point_z)?;
+        self.handle
+            .start_new_path_3d_with_stride(point, stride)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "addLineTo")]
-    fn add_line_to(&mut self, x: f64, y: f64) -> PyResult<()> {
-        let point = noon::integration::authoring_path_point(x, y).map_err(engine_error)?;
-        self.handle.add_line_to(point).map_err(engine_error)
+    #[pyo3(signature=(point_x,point_y,point_z,stride=None))]
+    pub fn add_line_to(
+        &mut self,
+        point_x: f64,
+        point_y: f64,
+        point_z: f64,
+        stride: Option<i32>,
+    ) -> Result<(), PyErr> {
+        let point = crate::path_input::point_3d(point_x, point_y, point_z)?;
+        self.handle
+            .add_line_to_3d_with_stride(point, stride.unwrap_or(4))
+            .map_err(engine_error)
     }
+
+    #[pyo3(name = "addLineToWithSamples")]
+    pub fn add_line_to_with_samples(
+        &mut self,
+        point_x: f64,
+        point_y: f64,
+        point_z: f64,
+        stride: i32,
+        bezier_t_values: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        let point = crate::path_input::point_3d(point_x, point_y, point_z)?;
+        let bezier_t_values: [f64; 4] = bezier_t_values.try_into().map_err(|_| {
+            engine_error("add_line_to requires four constructor interpolation samples")
+        })?;
+        self.handle
+            .add_line_to_3d_with_stride_and_samples(point, stride, &bezier_t_values)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "addQuadraticBezierCurveTo")]
+    #[pyo3(signature=(control_x,control_y,control_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    pub fn add_quadratic_bezier_curve_to(
+        &mut self,
+        control_x: f64,
+        control_y: f64,
+        control_z: f64,
+        anchor_x: f64,
+        anchor_y: f64,
+        anchor_z: f64,
+        stride: Option<i32>,
+    ) -> Result<(), PyErr> {
+        let control = crate::path_input::point_3d(control_x, control_y, control_z)?;
+        let anchor = crate::path_input::point_3d(anchor_x, anchor_y, anchor_z)?;
+        self.handle
+            .add_quadratic_bezier_curve_to_3d_with_stride(control, anchor, stride.unwrap_or(4))
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "addCubicBezierCurveTo")]
+    #[pyo3(signature=(control1_x,control1_y,control1_z,control2_x,control2_y,control2_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    pub fn add_cubic_bezier_curve_to(
+        &mut self,
+        control1_x: f64,
+        control1_y: f64,
+        control1_z: f64,
+        control2_x: f64,
+        control2_y: f64,
+        control2_z: f64,
+        anchor_x: f64,
+        anchor_y: f64,
+        anchor_z: f64,
+        stride: Option<i32>,
+    ) -> Result<(), PyErr> {
+        let control1 = crate::path_input::point_3d(control1_x, control1_y, control1_z)?;
+        let control2 = crate::path_input::point_3d(control2_x, control2_y, control2_z)?;
+        let anchor = crate::path_input::point_3d(anchor_x, anchor_y, anchor_z)?;
+        self.handle
+            .add_cubic_bezier_curve_to_3d_with_stride(
+                control1,
+                control2,
+                anchor,
+                stride.unwrap_or(4),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "addSmoothCurveTo")]
+    #[pyo3(signature=(values,stride=None))]
+    pub fn add_smooth_curve_to(
+        &mut self,
+        values: Vec<f64>,
+        stride: Option<i32>,
+    ) -> Result<(), PyErr> {
+        let points = crate::path_input::points(&values)?;
+        let (handle2, anchor) = match points.as_slice() {
+            [anchor] => (None, *anchor),
+            [handle2, anchor] => (Some(*handle2), *anchor),
+            _ => {
+                return Err(engine_error(
+                    "Only call add_smooth_curve_to with 1 or 2 points",
+                ));
+            }
+        };
+        self.handle
+            .add_smooth_curve_to_with_stride(handle2, anchor, stride.unwrap_or(4))
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "scaleHandleToAnchorDistances")]
+    pub fn scale_handle_to_anchor_distances(&mut self, factor: f64) -> Result<(), PyErr> {
+        self.handle
+            .scale_handle_to_anchor_distances(factor)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "addCubicBezierCurve")]
+    pub fn add_cubic_bezier_curve(
+        &mut self,
+        anchor1_x: f64,
+        anchor1_y: f64,
+        anchor1_z: f64,
+        handle1_x: f64,
+        handle1_y: f64,
+        handle1_z: f64,
+        handle2_x: f64,
+        handle2_y: f64,
+        handle2_z: f64,
+        anchor2_x: f64,
+        anchor2_y: f64,
+        anchor2_z: f64,
+    ) -> Result<(), PyErr> {
+        let anchor1 = crate::path_input::point_3d(anchor1_x, anchor1_y, anchor1_z)?;
+        let handle1 = crate::path_input::point_3d(handle1_x, handle1_y, handle1_z)?;
+        let handle2 = crate::path_input::point_3d(handle2_x, handle2_y, handle2_z)?;
+        let anchor2 = crate::path_input::point_3d(anchor2_x, anchor2_y, anchor2_z)?;
+        self.handle
+            .add_cubic_bezier_curve_3d(anchor1, handle1, handle2, anchor2)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "addCubicBezierCurves")]
+    pub fn add_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let curves = crate::path_input::cubic_curves_3d(&values)?;
+        self.handle
+            .add_cubic_bezier_curves_3d(&curves)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setCubicBezierCurves")]
+    pub fn set_cubic_bezier_curves(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let curves = crate::path_input::cubic_curves_3d(&values)?;
+        self.handle
+            .set_cubic_bezier_curves_3d(&curves)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "addPointsAsCorners")]
+    pub fn add_points_as_corners(&mut self, values: Vec<f64>) -> Result<(), PyErr> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.handle
+            .add_points_as_corners_3d(&points)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "addPointsAsCornersWithStride")]
+    pub fn add_points_as_corners_with_stride(
+        &mut self,
+        values: Vec<f64>,
+        stride: i32,
+        bezier_t_values: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        let points = crate::path_input::points_3d(&values)?;
+        self.handle
+            .add_points_as_corners_3d_with_stride(&points, stride, &bezier_t_values)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "appendVectorizedMobject")]
+    pub fn append_vectorized_mobject(&mut self, source: &MobjectHandle) -> Result<(), PyErr> {
+        self.handle
+            .append_vectorized_mobject(&source.handle)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "appendVectorizedMobjectWithStride")]
+    pub fn append_vectorized_mobject_with_stride(
+        &mut self,
+        source: &MobjectHandle,
+        stride: i32,
+    ) -> Result<(), PyErr> {
+        self.handle
+            .append_vectorized_mobject_with_stride(&source.handle, stride)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setPointsSmoothly")]
+    pub fn set_points_smoothly(&mut self, coordinates: Vec<f64>) -> Result<(), PyErr> {
+        self.handle
+            .set_points_smoothly(&crate::path_input::points(&coordinates)?)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "makeSmooth")]
+    pub fn make_smooth(&mut self) -> Result<(), PyErr> {
+        self.handle.make_smooth().map_err(engine_error)
+    }
+    #[pyo3(name = "makeJagged")]
+    pub fn make_jagged(&mut self) -> Result<(), PyErr> {
+        self.handle.make_jagged().map_err(engine_error)
+    }
+    #[pyo3(name = "insertNCurves")]
+    pub fn insert_n_curves(&mut self, additional: u32) -> Result<(), PyErr> {
+        self.handle
+            .insert_n_curves(additional as usize)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "reverseDirection")]
+    pub fn reverse_direction(&mut self) -> Result<(), PyErr> {
+        self.handle.reverse_direction().map_err(engine_error)
+    }
+    #[pyo3(name = "reversePoints")]
+    pub fn reverse_points(&mut self) -> Result<(), PyErr> {
+        self.handle.reverse_points().map_err(engine_error)
+    }
+    #[pyo3(name = "repeatPoints")]
+    pub fn repeat_points(&mut self, count: u32) -> Result<(), PyErr> {
+        self.handle
+            .repeat_points(count as usize)
+            .map_err(engine_error)
+    }
+    pub fn subcurve(&self, a: f64, b: f64) -> Result<MobjectHandle, PyErr> {
+        self.handle
+            .subcurve(a, b)
+            .map(Self::from_semantic_mobject)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "alignPoints")]
+    pub fn align_points(&self, other: &MobjectHandle) -> Result<(), PyErr> {
+        self.handle
+            .align_points(&other.handle)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "pointwiseBecomePartial")]
+    pub fn pointwise_become_partial(
+        &self,
+        source: &MobjectHandle,
+        a: f64,
+        b: f64,
+    ) -> Result<(), PyErr> {
+        self.handle
+            .clone()
+            .pointwise_become_partial(&source.handle, a, b)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "closePath")]
+    pub fn close_path(&mut self) -> Result<(), PyErr> {
+        self.handle.close_path().map_err(engine_error)
+    }
+
+    #[pyo3(name = "closePathWithStride")]
+    pub fn close_path_with_stride(
+        &mut self,
+        stride: i32,
+        tolerance: f64,
+        bezier_t_values: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        self.handle
+            .close_path_with_stride(stride, tolerance, &bezier_t_values)
+            .map_err(engine_error)
+    }
+
+    /// Share another vector object’s geometry and transform while preserving
+    /// the source identity, paint, and painter priority.
+    #[pyo3(name = "matchPoints")]
+    pub fn match_points(&mut self, target: &MobjectHandle) -> Result<(), PyErr> {
+        self.handle
+            .match_points(&target.handle)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "pathQuery")]
     fn path_query(&self) -> PyResult<crate::path_query::PathQuery> {
         self.handle
@@ -299,8 +851,11 @@ impl MobjectHandle {
             .map_err(engine_error)?
             .1)
     }
-    pub fn shift(&mut self, x: f64, y: f64) -> Result<(), PyErr> {
-        self.handle.shift(x, y).map_err(engine_error)
+    #[pyo3(signature=(x,y,z=None))]
+    pub fn shift(&mut self, x: f64, y: f64, z: Option<f64>) -> Result<(), PyErr> {
+        self.handle
+            .shift_3d(noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)))
+            .map_err(engine_error)
     }
     #[pyo3(name = "moveTo")]
     pub fn move_to(&mut self, x: f64, y: f64) -> Result<(), PyErr> {
@@ -481,6 +1036,47 @@ impl LayoutAnchor {
 }
 #[pymethods]
 impl LayoutAnchor {
+    #[allow(clippy::too_many_arguments)]
+    fn stretch(
+        &self,
+        factor: f64,
+        dimension: u32,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.anchor
+            .stretch(
+                factor,
+                dimension.try_into().map_err(engine_error)?,
+                pivot_3d(x, y, z, point),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "rescaleToFit")]
+    #[allow(clippy::too_many_arguments)]
+    fn rescale_to_fit(
+        &self,
+        length: f64,
+        dimension: u32,
+        stretch: bool,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.anchor
+            .rescale_to_fit_with_pivot(
+                length,
+                dimension.try_into().map_err(engine_error)?,
+                stretch,
+                pivot_3d(x, y, z, point),
+            )
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "dimensionLength")]
     fn dimension_length(&self, dimension: u32) -> PyResult<f64> {
         self.anchor

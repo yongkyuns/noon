@@ -18,7 +18,10 @@ class NativePythonTests(unittest.TestCase):
                      "ordinary_text_write", "ordinary_fade_play", "shared_text", "raster_image",
                      "glow_pulse", "ordered_effects", "composed_effects", "noise_dissolve",
                      "linear_gradient", "radial_gradient", "noise_paint", "hatch_paint",
-                     "image_fill", "showcase_layered_effects", "showcase_painted_surfaces"):
+                     "image_fill", "showcase_layered_effects", "showcase_painted_surfaces",
+                     "ordinary_path_construction", "ordinary_path_editing", "ordinary_path_smoothing",
+                     "ordinary_path_refinement", "ordinary_path_selection", "ordinary_path_alignment",
+                     "showcase_bezier_paths", "manim_parity_family_slices"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
@@ -95,6 +98,32 @@ class Demo(Scene):
         view.close()
         with self.assertRaises(RuntimeError):
             view.capture()
+
+    def test_path_edits_keep_full_coordinates_and_reject_partial_writes(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        precise = 1 + 2**-40
+        path = VMobject().start_new_path((precise, 0, 0.25))
+        path.add_line_to((2, 1, 0.5))
+        assert tuple(path.get_all_points()[0]) == (precise, 0, 0.25)
+        self.add(path)
+        self.wait(0.1)
+        path.add_line_to((3, 0, 0.75))
+        before = [tuple(point) for point in path.get_all_points()]
+        assert before[0] == (precise, 0, 0.25)
+        assert before[-1] == (3, 0, 0.75)
+        try:
+            path.set_points([(float("nan"), 0, 0)] * 4)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid coordinates were admitted")
+        assert before == [tuple(point) for point in path.get_all_points()]
+        self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
 
     def test_native_gradient_pixels_animate_and_rewind(self):
         path = ROOT / "web/python/examples/linear_gradient.py"

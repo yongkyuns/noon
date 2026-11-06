@@ -17,6 +17,7 @@ mod image;
 mod mobject;
 mod options;
 mod paints;
+mod path_input;
 mod path_query;
 mod svg;
 #[cfg(feature = "native-text")]
@@ -69,6 +70,8 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<context::Context>()?;
     m.add_class::<context::MembershipBatch>()?;
     m.add_class::<family::FamilyHandle>()?;
+    m.add_class::<family::FamilyIterator>()?;
+    m.add_class::<family::FamilySlicePlan>()?;
     m.add_class::<family::FamilyCopy>()?;
     m.add_class::<family::FamilyLayoutObservation>()?;
     m.add_class::<family::ColorObservation>()?;

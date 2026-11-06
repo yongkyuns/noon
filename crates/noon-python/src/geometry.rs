@@ -13,6 +13,10 @@ impl GeometryOptions {
 }
 #[pymethods]
 impl GeometryOptions {
+    #[pyo3(name = "setDrawEnabled")]
+    fn set_draw_enabled(&mut self, enabled: bool) {
+        self.options.set_draw_enabled(enabled);
+    }
     #[staticmethod]
     #[pyo3(name = "svgDefaultTransport", signature = (width, fill_color, fill_opacity, stroke_color, stroke_opacity, stroke_width))]
     fn svg_default_transport(

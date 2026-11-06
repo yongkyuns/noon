@@ -17,7 +17,7 @@ def set_points_as_corners(value, points):
             "set_points_as_corners requires the supported four-point cubic stride"
         )
     if sample_values != [0.0, 1 / 3, 2 / 3, 1.0]:
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
 
         return edit_points(
             value,
@@ -384,7 +384,7 @@ def add_points_as_corners(value, points):
         raise NotImplementedError(
             "add_points_as_corners would leave uninitialized points for this stride"
         )
-    from pyodide.ffi import to_js
+    from _noon_host import array_value as to_js
 
     return edit_points(
         value,
@@ -429,7 +429,7 @@ def add_line_to(value, point):
         getattr(value, "_bezier_t_values", (0.0, 1 / 3, 2 / 3, 1.0))
     )
     if sample_values != [0.0, 1 / 3, 2 / 3, 1.0]:
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
 
         return edit_points(
             value,
@@ -644,7 +644,7 @@ def close_path(value):
     sample_values = list(getattr(value, "_bezier_t_values", (0.0, 1 / 3, 2 / 3, 1.0)))
     if len(sample_values) != 4:
         raise TypeError("close_path requires three constructor interpolation samples")
-    from pyodide.ffi import to_js
+    from _noon_host import array_value as to_js
 
     try:
         return edit_points(
@@ -724,7 +724,7 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
         coordinates = [_base._as_vec2(point) for point in points]
         values = [component for point in coordinates for component in (point.x, point.y)]
     if array:
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         values = [to_js(values)]
     from _manim_compat import _is_shared_family
     shared_family = _is_shared_family(value)

@@ -31,6 +31,131 @@ pub struct FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "prependMembers")]
+    fn prepend_members(&self, batch: &MembershipBatch) -> PyResult<()> {
+        if batch.kind != "add" {
+            return Err(engine_error("member prepend requires an add batch"));
+        }
+        self.family
+            .prepend_many(&batch.targets())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name="splitIterator",signature=(include=None))]
+    fn split_iterator(&self, include: Option<bool>) -> PyResult<crate::family::FamilyIterator> {
+        crate::family::split_iterator(
+            noon::CompositeEntryHandle::Family(self.family.clone()),
+            include,
+        )
+    }
+    #[pyo3(name="splitCount",signature=(include=None))]
+    fn split_count(&self, include: Option<bool>) -> PyResult<usize> {
+        crate::family::split_count(
+            noon::CompositeEntryHandle::Family(self.family.clone()),
+            include,
+        )
+    }
+    #[pyo3(name="splitKeys",signature=(include=None))]
+    fn split_keys(&self, include: Option<bool>) -> PyResult<Vec<String>> {
+        crate::family::split_keys(
+            noon::CompositeEntryHandle::Family(self.family.clone()),
+            include,
+        )
+    }
+    #[pyo3(name="splitAt",signature=(index,include=None))]
+    fn split_at(&self, py: Python<'_>, index: usize, include: Option<bool>) -> PyResult<Py<PyAny>> {
+        crate::family::split_at(
+            py,
+            noon::CompositeEntryHandle::Family(self.family.clone()),
+            index,
+            include,
+        )
+    }
+    #[pyo3(name="prepareSlice",signature=(include=None))]
+    fn slice_plan(&self, include: Option<bool>) -> PyResult<crate::family::FamilySlicePlan> {
+        crate::family::slice_plan(
+            noon::CompositeEntryHandle::Family(self.family.clone()),
+            include,
+        )
+    }
+    #[pyo3(name = "vectorBoundaryPoints3D")]
+    fn vector_boundary_points_3d(&self) -> PyResult<Vec<f64>> {
+        noon::MobjectTarget::from(&self.family)
+            .vector_boundary_points_3d()
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(signature=(x,y,z=None))]
+    fn shift(&self, x: f64, y: f64, z: Option<f64>) -> PyResult<()> {
+        self.family
+            .shift_3d(noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)))
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "pointCount")]
+    fn point_count(&self) -> PyResult<usize> {
+        noon::MobjectTarget::from(&self.family)
+            .get_num_points()
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "pointArray")]
+    fn point_array(&self) -> PyResult<(Vec<f64>, Vec<usize>)> {
+        noon::MobjectTarget::from(&self.family)
+            .point_array()
+            .map(crate::path_input::point_array)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setPoints")]
+    fn set_points_f64(&self, values: Vec<f64>) -> PyResult<()> {
+        self.family
+            .set_points_f64(&crate::path_input::points_f64(&values)?)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setPoints3D")]
+    fn set_points_3d(&self, values: Vec<f64>) -> PyResult<()> {
+        self.family
+            .set_points_3d(&crate::path_input::points_3d(&values)?)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "appendPoints")]
+    fn append_points_f64(&self, values: Vec<f64>) -> PyResult<()> {
+        self.family
+            .append_points_f64(&crate::path_input::points_f64(&values)?)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "appendPoints3D")]
+    fn append_points_3d(&self, values: Vec<f64>) -> PyResult<()> {
+        self.family
+            .append_points_3d(&crate::path_input::points_3d(&values)?)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "setEmptyPointArray")]
+    fn empty_array(&self, values: Vec<f64>) -> PyResult<()> {
+        self.family
+            .set_empty_point_array(crate::path_input::point_array_shape(&values)?)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "clearPoints")]
+    fn clear_points(&self) -> PyResult<()> {
+        self.family.clear_points().map_err(engine_error)
+    }
+    #[pyo3(name = "pathQuery")]
+    fn path_query(&self) -> PyResult<crate::path_query::PathQuery> {
+        self.family
+            .own_path_query()
+            .map(crate::path_query::PathQuery::new)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "makeSmooth")]
+    fn make_smooth(&self) -> PyResult<()> {
+        self.family.make_smooth().map_err(engine_error)
+    }
+    #[pyo3(name = "makeJagged")]
+    fn make_jagged(&self) -> PyResult<()> {
+        self.family.make_jagged().map_err(engine_error)
+    }
+
     #[pyo3(name = "setGlow")]
     fn set_glow(&self, update: &crate::effects::EffectUpdate) -> PyResult<()> {
         self.family
@@ -330,4 +455,152 @@ impl FamilyCopy {
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(engine_error)
     }
+}
+
+/// Native projection of the existing shared occurrence cursor and slice plan.
+#[pyclass(unsendable, module = "_noon_native")]
+pub struct FamilyIterator {
+    iterator: Option<noon::FamilyIterator>,
+}
+#[pymethods]
+impl FamilyIterator {
+    #[pyo3(name = "nextMember")]
+    fn next_member(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = self
+            .iterator
+            .as_mut()
+            .ok_or_else(|| engine_error("family iterator has been freed"))?
+            .next()
+            .transpose()
+            .map_err(engine_error)?;
+        entry_handle(py, value)
+    }
+    fn free(&mut self) {
+        self.iterator.take();
+    }
+}
+#[pyclass(unsendable, module = "_noon_native")]
+pub struct FamilySlicePlan {
+    plan: Option<noon::FamilySlicePlan>,
+}
+impl FamilySlicePlan {
+    fn value(&self) -> PyResult<&noon::FamilySlicePlan> {
+        self.plan
+            .as_ref()
+            .ok_or_else(|| engine_error("family slice plan has been freed"))
+    }
+}
+#[pymethods]
+impl FamilySlicePlan {
+    #[getter(includesSelf)]
+    fn includes_self(&self) -> PyResult<bool> {
+        Ok(self.value()?.includes_self())
+    }
+    #[getter(normalizationCount)]
+    fn normalization_count(&self) -> PyResult<usize> {
+        self.value()?.normalization_count().map_err(engine_error)
+    }
+    #[pyo3(name = "selectNormalized")]
+    fn select_normalized(&self, start: f64, stop: f64, step: f64) -> PyResult<Option<Vec<String>>> {
+        if [start, stop, step]
+            .iter()
+            .any(|v| !v.is_finite() || v.fract() != 0.)
+        {
+            return Err(engine_error(noon::integration::AuthoringFailure::new(
+                "invalid_input",
+                "authoring.invalid_slice_operand",
+                "slice bounds and step must be finite integers",
+            )));
+        }
+        self.value()?
+            .select_normalized(start as i64, stop as i64, step as i64)
+            .map(|entries| entries.map(|entries| entries.into_iter().map(entry_key).collect()))
+            .map_err(engine_error)
+    }
+    fn free(&mut self) {
+        self.plan.take();
+    }
+}
+pub(crate) fn entry_handle(
+    py: Python<'_>,
+    entry: Option<noon::CompositeEntryHandle>,
+) -> PyResult<Py<PyAny>> {
+    match entry {
+        None => Ok(py.None()),
+        Some(noon::CompositeEntryHandle::Mobject(handle)) => {
+            Ok(Py::new(py, MobjectHandle::from_semantic_mobject(handle))?.into_any())
+        }
+        Some(noon::CompositeEntryHandle::Family(family)) => {
+            Ok(Py::new(py, FamilyHandle { family })?.into_any())
+        }
+    }
+}
+fn entry_key(entry: noon::CompositeEntryHandle) -> String {
+    let node = match entry {
+        noon::CompositeEntryHandle::Mobject(handle) => handle.node_id(),
+        noon::CompositeEntryHandle::Family(handle) => handle.node_id(),
+    };
+    format!("{}:{}", node.slot(), node.generation())
+}
+pub(crate) fn inclusion(target: noon::MobjectTarget<'_>, include: Option<bool>) -> PyResult<bool> {
+    include.map_or_else(
+        || {
+            target
+                .get_num_points()
+                .map(|count| count != 0)
+                .map_err(engine_error)
+        },
+        Ok,
+    )
+}
+pub(crate) fn split_iterator(
+    target: noon::CompositeEntryHandle,
+    include: Option<bool>,
+) -> PyResult<FamilyIterator> {
+    let include = inclusion(target.as_target(), include)?;
+    target
+        .split_iter_with_self(include)
+        .map(|iterator| FamilyIterator {
+            iterator: Some(iterator),
+        })
+        .map_err(engine_error)
+}
+pub(crate) fn split_count(
+    target: noon::CompositeEntryHandle,
+    include: Option<bool>,
+) -> PyResult<usize> {
+    target
+        .split_count_with_self(inclusion(target.as_target(), include)?)
+        .map_err(engine_error)
+}
+pub(crate) fn split_keys(
+    target: noon::CompositeEntryHandle,
+    include: Option<bool>,
+) -> PyResult<Vec<String>> {
+    target
+        .split_members_with_self(inclusion(target.as_target(), include)?)
+        .map(|values| values.into_iter().map(entry_key).collect())
+        .map_err(engine_error)
+}
+pub(crate) fn split_at(
+    py: Python<'_>,
+    target: noon::CompositeEntryHandle,
+    index: usize,
+    include: Option<bool>,
+) -> PyResult<Py<PyAny>> {
+    entry_handle(
+        py,
+        target
+            .split_at_with_self(index, inclusion(target.as_target(), include)?)
+            .map_err(engine_error)?,
+    )
+}
+pub(crate) fn slice_plan(
+    target: noon::CompositeEntryHandle,
+    include: Option<bool>,
+) -> PyResult<FamilySlicePlan> {
+    target
+        .slice_plan_with_self(inclusion(target.as_target(), include)?)
+        .map(|plan| FamilySlicePlan { plan: Some(plan) })
+        .map_err(engine_error)
 }

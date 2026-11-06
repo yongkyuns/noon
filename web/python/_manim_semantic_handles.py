@@ -1564,7 +1564,7 @@ def _get_stroke_width(self, background=False):
 
 def _gradient_components(colors):
     # This only converts the language-boundary argument; Rust owns interpolation.
-    from pyodide.ffi import to_js
+    from _noon_host import array_value as to_js
     return to_js([component for color in colors for component in
                   (color.red, color.green, color.blue, color.alpha)])
 
