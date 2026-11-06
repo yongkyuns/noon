@@ -95,6 +95,7 @@ jobs:
         if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/upload-pages-artifact@v5
         with:
+          name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
           path: web
           include-hidden-files: true
           retention-days: 1
@@ -103,6 +104,8 @@ jobs:
         if: ${{ steps.scope.outputs.deploy != 'false' }}
         id: deployment
         uses: actions/deploy-pages@v5
+        with:
+          artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify deployed revision
         if: ${{ steps.scope.outputs.deploy != 'false' }}
