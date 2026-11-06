@@ -341,6 +341,8 @@ try {
                 crossOriginIsolated: window.crossOriginIsolated,
                 patch: { ...document.querySelector('#patch-status')?.dataset },
                 playback: { ...document.querySelector('.playback-controls')?.dataset },
+                timeline: { type: document.querySelector('.playback-scrubber')?.type,
+                  end: Number(document.querySelector('.playback-scrubber')?.max) },
                 playButtonDisabled: document.querySelector('.playback-controls .playback-toggle')?.disabled ?? null,
                 text: document.querySelector('#patch-status')?.value,
                 runtimeStatus: document.querySelector('#status-text')?.textContent,
@@ -352,6 +354,10 @@ try {
             }, Object.hasOwn(liveMathAnimations, entry.id));
             lastWorkerMessages = workerMessages;
             result.state = state;
+            if (expectedProfile?.dispositionKind === 'ordinary' &&
+                Number(state.playback.elapsedSeconds) > 0 && !result.firstPlaybackControls) {
+              result.firstPlaybackControls = { ...state.playback, ...state.timeline };
+            }
             assert.equal(state.selected, entry.id);
             assert.notEqual(state.patch.state, 'error', `${state.text}: ${state.runtimeStatus}`);
             assert.equal(state.metricsError, undefined);
@@ -545,6 +551,14 @@ try {
             };
             if (profileGateMode === 'strict') {
               validateShowcaseDiagnostics(expectedProfile, result.executionDiagnostics);
+              if (expectedProfile.dispositionKind === 'ordinary') {
+                const controls = result.firstPlaybackControls;
+                const started = result.executionDiagnostics.events.find(event => event.stage === 'playback-started');
+                assert.equal(controls?.type, 'range', 'first playback must show the timeline cursor');
+                assert.equal(controls.durationKnown, 'true');
+                assert.equal(controls.preparing, 'false');
+                assert.equal(controls.end, started.durationSeconds, 'first playback must show the full timeline');
+              }
               result.profileGate.status = 'matched';
               delete result.profileGate.reason;
             }
