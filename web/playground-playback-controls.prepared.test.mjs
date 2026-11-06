@@ -79,6 +79,27 @@ test("completed observed replay retires open-prefix controls without inventing a
   assert.deepEqual(f.errors, []);
 });
 
+test("preparation holds the existing timeline and preserves Pause before full playback", async () => {
+  const f = fixture(prepared({ time: 0, preparing: true, playing: true }));
+  const rail = f.range;
+  assert.equal(f.output.value, "Preparing animation…");
+  assert.equal(f.status.textContent, "Preparing animation…");
+  assert.equal(f.range.disabled, true);
+  assert.equal(f.restart.disabled, true);
+  assert.equal(f.toggle.disabled, false);
+  f.toggle.click(); await flush();
+  assert.equal(f.calls.some(call => call[0] === "pause"), true);
+  f.setState(prepared({ time: 0, preparing: false, playing: false,
+    preparedFrontier: 19, durationSeconds: 19 }));
+  assert.equal(f.range, rail);
+  assert.equal(f.range.disabled, false);
+  assert.equal(f.range.max, "19");
+  assert.equal(f.range.value, "0");
+  assert.equal(f.output.value, "0.00 / 19.00 s");
+  assert.equal(f.toggle.textContent, "Play");
+  assert.deepEqual(f.errors, []);
+});
+
 test("open history uses the same rail and Rust's inclusive selectable endpoint", async () => {
   const f = fixture(prepared({ time: 3, preparedFrontier: 4 }));
   assert.equal(f.controls.durationSeconds, null);

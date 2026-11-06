@@ -199,9 +199,11 @@ test("preparation timing is an opt-in prepared-run diagnostic", async () => {
   await ordinary;
 
   const prepared = client.run("prepared source", {}, { preparedPlayback: true,
-    diagnosticPreparationTiming: true, onSemanticContinuation() {} });
+    preparationLookaheadSeconds: null, diagnosticPreparationTiming: true, onSemanticContinuation() {} });
   await Promise.resolve();
   assert.equal(worker.messages[1].diagnosticPreparationTiming, true);
+  assert.equal(worker.messages[1].preparationLookaheadSeconds, null,
+    "the viewer can request complete preparation before playback");
   worker.emit("message", workerMessage("semantic_continuation_registered", {
     requestId: 1, generation: 5, duration: 0.5,
     semanticExecution: { context_id: "timed", continuation_generation: 5, prepared_playback: true },

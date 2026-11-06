@@ -33,6 +33,20 @@ const fourierEpicycles = await readFile(path.join(root, "scripts/fixtures/noon_f
 const fourierAudioCall = "        self.audio(AudioSource.small_discovery(), duration=34.65, gain=0.5, fade_in=1.5, fade_out=2.5)\n";
 const fourierWithAudio = Buffer.from(fourierEpicycles.toString().replace(
   "    def construct(self):\n", "    def construct(self):\n" + fourierAudioCall));
+const preparedAudioSource = `from noon import *
+
+class AudioWithOrdinaryPlay(Scene):
+    def construct(self):
+        self.audio(
+            AudioSource.small_discovery(),
+            duration=3.0,
+            gain=0.5,
+            fade_in=0.5,
+            fade_out=0.5,
+        )
+        self.play(Create(Circle(radius=0.5)), run_time=1.0)
+        self.wait(2.0)
+`;
 assert.equal(fourierWithAudio.toString().replace(fourierAudioCall, ""), fourierEpicycles.toString(),
   "combined Fourier fixture differs only by the documented first-statement soundtrack insertion");
 assert.notEqual(fourierWithAudio.toString(), fourierEpicycles.toString(), "combined fixture adds only the documented soundtrack call");
@@ -52,15 +66,24 @@ let fourierReferencePixels = null;
 const near = (actual, expected, label, tolerance = 1e-6) =>
   assert.ok(Math.abs(actual - expected) <= tolerance, `${label}: ${actual} != ${expected}`);
 
-async function record(name, action) {
-  const result = { name, status: "running" };
+async function record(name, action, preparationLookaheadSeconds = null) {
+  const result = { name, status: "running", preparationLookaheadSeconds };
   report.cases.push(result);
   try {
+    if (preparationLookaheadSeconds !== null) await page.evaluate(lookahead => {
+      const hooks = globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ ??= {};
+      if (hooks.authoringRunOptions !== undefined) throw new Error("conflicting audio source policy hook");
+      hooks.authoringRunOptions = () => ({ preparationLookaheadSeconds: lookahead });
+    }, preparationLookaheadSeconds);
     Object.assign(result, await action(), { status: "passed" });
     console.log(`[PASS] Python background audio: ${name}`);
   } catch (error) {
     Object.assign(result, { status: "failed", error: String(error.stack ?? error) });
     throw error;
+  } finally {
+    if (preparationLookaheadSeconds !== null) await page.evaluate(() => {
+      delete globalThis.__NOON_PLAYGROUND_TEST_HOOKS__.authoringRunOptions;
+    }).catch(() => {});
   }
 }
 
@@ -418,6 +441,7 @@ try {
     const originalRun = PythonAuthoringClient.prototype.run;
     PythonAuthoringClient.prototype.run = async function (source, context, options = {}) {
       const item = { phase: "source-run-start", generation: this.interpreterGeneration,
+        preparationLookaheadSeconds: options.preparationLookaheadSeconds,
         requestedProfile: options.preparedPlayback === true ? "incremental" : "observed" };
       trace(item);
       const onContinuation = options.onSemanticContinuation;
@@ -866,21 +890,34 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     };
   });
 
-  await record("open prepared Python audio starts from the displayed scene and extends its admitted voice", async () => {
-    const fixture = `from noon import *
+  await record("default finite prepared audio has its full timeline before Play", async () => {
+    const before = await state();
+    await page.evaluate(async source => {
+      document.querySelector("#python-scene-source").value = source;
+      await window.__noonExampleGallery.run();
+    }, preparedAudioSource);
+    const prepared = await state();
+    assert.equal(await page.evaluate(() => audioQualification.sourceTrace
+      .findLast(event => event.phase === "source-run-start").preparationLookaheadSeconds), null);
+    assert.equal(prepared.transport.preparedPlayback, true);
+    assert.equal(prepared.transport.preparing, false);
+    assert.equal(prepared.transport.durationSeconds, 3);
+    assert.equal(prepared.transport.preparedFrontier, 3);
+    assert.equal(prepared.transport.playing, false);
+    assert.equal(prepared.transport.time, 0);
+    assert.equal(prepared.starts.length, before.starts.length, "finite preparation stays silent");
+    assert.equal(await page.locator(".playback-scrubber").getAttribute("max"), "3");
+    const running = await play();
+    const voices = running.starts.slice(before.starts.length);
+    assert.equal(voices.length, 1, "Play starts the fully prepared soundtrack once");
+    await command("pause");
+    await quiet();
+    return { fixtureSha256: hash(preparedAudioSource), initial: prepared.transport,
+      startsBeforePlay: prepared.starts.length - before.starts.length, voice: voices[0] };
+  });
 
-class AudioWithOrdinaryPlay(Scene):
-    def construct(self):
-        self.audio(
-            AudioSource.small_discovery(),
-            duration=3.0,
-            gain=0.5,
-            fade_in=0.5,
-            fade_out=0.5,
-        )
-        self.play(Create(Circle(radius=0.5)), run_time=1.0)
-        self.wait(2.0)
-`;
+  await record("explicit open prepared audio extends its admitted voice", async () => {
+    const fixture = preparedAudioSource;
     assert.equal(hash(fixture), "a898089e0534e31a5a149daaff4fec95ffc7ba5d108125d8ba93b4e252e5a60b",
       "the open audio qualification uses the original issue fixture bytes");
     const before = await state();
@@ -898,16 +935,11 @@ class AudioWithOrdinaryPlay(Scene):
       if (window.audioQualification.sourceRunError) throw new Error(window.audioQualification.sourceRunError);
       return window.__noonExampleGallery?.runInFlight === true;
     }, null, { timeout: 90_000 });
-    await page.waitForFunction(() => {
-      const patch = document.querySelector("#patch-status");
-      if (window.audioQualification.sourceRunError) throw new Error(window.audioQualification.sourceRunError);
-      if (patch?.dataset.state === "error") throw new Error(patch.value || patch.textContent);
-      return patch?.dataset.state === "applied";
-    }, null, { timeout: 180_000 });
     await waitForBrowserObservation(page, async () => {
+      if (audioQualification.sourceRunError) throw new Error(audioQualification.sourceRunError);
       try {
         const result = await audioQualification.execution.state();
-        return result.hasAudio === true && result.preparedPlayback === true;
+        return result.hasAudio === true && result.preparedPlayback === true && result.durationSeconds === null;
       } catch {
         return false;
       }
@@ -951,9 +983,9 @@ class AudioWithOrdinaryPlay(Scene):
       voice: { node: firstVoice.node, firstStop: voiceStops[0].args[0], extendedStop: laterStops.at(-1).args[0] },
       displayedSceneBytes: shown.length,
     };
-  });
+  }, 1);
 
-  await record("original Fourier scene reaches finite source completion and replays retained frames", async () => {
+  await record("explicit finite-lookahead Fourier source completes and replays retained frames", async () => {
     assert.equal(hash(fourierEpicycles), "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9");
     const run = await runFourierSource("fourier", fourierEpicycles, false);
     assert.ok(run.attached.transport.preparedFrontier > run.attached.transport.time);
@@ -1026,9 +1058,9 @@ class AudioWithOrdinaryPlay(Scene):
       publication: terminalEvent?.publication ?? null,
       stages: [firstStage, secondStage, thirdStage], repeated,
       replayed: { time: replayed.time, metricsTime: Number(replayMetrics.metrics.time) } };
-  });
+  }, 1);
 
-  await record("Fourier plus the documented soundtrack shares one finite scene clock", async () => {
+  await record("explicit finite-lookahead Fourier soundtrack shares one scene clock", async () => {
     assert.equal(hash(fourierEpicycles), "7a09cda6039efdc9901a3241b0c514f634996187a0ea9b1f316e34dbbd1feed9");
     assert.equal(hash(fourierWithAudio), "d23682aff80b5e9a50e0c0b0c3444bb8ff94fa73218278a07e51077fcccac9d9");
     const run = await runFourierSource("combinedFourier", fourierWithAudio, true);
@@ -1224,7 +1256,7 @@ class AudioWithOrdinaryPlay(Scene):
         anchor: fadeAnchor.time, phase: fadePhase, gain: fadeGain },
       deviceTransitions: await page.evaluate(() => audioQualification.deviceTransitions),
       ended: ended.transport };
-  });
+  }, 1);
 
   assert.deepEqual(report.browserErrors, [], "no uncaught browser/WASM errors");
   assert.deepEqual(report.consoleErrors, [], "no browser audio/GPU errors");

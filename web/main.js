@@ -464,6 +464,7 @@ function playbackPresentation(playbackState, durationSeconds = playbackDurationS
   const time = playbackState?.time;
   const playing = playbackState?.playing === true;
   if (playbackState?.preparedPlayback === true) {
+    if (playbackState.preparing === true) return { label: "Preparing animation", state: "running" };
     if (playbackState.completed === true) return { label: "Finished", state: "ready" };
     if (!playing) return { label: "Paused", state: "ready" };
     if (playbackState.buffering) return { label: "Buffering", state: "running" };
@@ -1146,13 +1147,14 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
       } }), source);
       // Rust admits incremental playback or preserves the original source path.
       // The hook keeps live/prepared comparisons on this same viewer lifecycle.
-      const { preparedPlayback = true, preparationLookaheadSeconds = 1, diagnosticPreparationTiming = false } =
+      const { preparedPlayback = true, preparationLookaheadSeconds = null, diagnosticPreparationTiming = false } =
         await runPlaygroundTestHook("authoringRunOptions", {
           exampleId: example.id, runGeneration: runToken.runGeneration,
         }) ?? {};
       if (!isCurrentRun(runToken)) return recordStale(runToken, "before-authoring-options");
       if (typeof preparedPlayback !== "boolean" ||
-          !Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0 ||
+          (preparationLookaheadSeconds !== null &&
+           (!Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0)) ||
           typeof diagnosticPreparationTiming !== "boolean" || (diagnosticPreparationTiming && !preparedPlayback)) {
         throw new TypeError("invalid prepared source run options");
       }
@@ -1275,9 +1277,9 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
             } else setBusy(true);
             setPlaybackRuntimeStatus(
               result,
-              `${example.title} · Python source continuing`,
+              result.preparing === true ? example.title : `${example.title} · Python source continuing`,
             );
-            setRunPatchStatus(runToken, `Playing ${example.title}`, "running");
+            setRunPatchStatus(runToken, `${result.preparing === true ? "Preparing" : "Playing"} ${example.title}`, "running");
           },
         });
         runPhaseMetrics.sourceRunCompletedAtMs = performance.now();

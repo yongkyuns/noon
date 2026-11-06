@@ -171,6 +171,12 @@ try {
 
   await page.addInitScript(installStressObservation);
   await page.addInitScript(() => {
+    window.__stressSourceOwnershipGeneration = null;
+    window.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+      authoringRunOptions: ({ runGeneration }) =>
+        runGeneration === window.__stressSourceOwnershipGeneration
+          ? { preparationLookaheadSeconds: 1 } : {},
+    };
     window.addEventListener("DOMContentLoaded", () => {
       const status = document.querySelector("#status");
       if (!status) return;
@@ -260,11 +266,17 @@ try {
   assert.equal(diagnostics.snapshots.rows5Draft.runInFlight, false);
   assert.equal(diagnostics.snapshots.rows5Draft.runGeneration, diagnostics.snapshots.baseline.runGeneration);
 
-  await page.locator("#replace-scene").click();
   const rows5Generation = diagnostics.snapshots.rows5Draft.runGeneration + 1;
+  diagnostics.sourceOwnershipPreparation = {
+    runGeneration: rows5Generation, preparationLookaheadSeconds: 1,
+    purpose: "incremental reference to keep the 600-second source continuation active for draft-only edits",
+  };
+  await page.evaluate(generation => { window.__stressSourceOwnershipGeneration = generation; }, rows5Generation);
+  await page.locator("#replace-scene").click();
   diagnostics.snapshots.rows5Playing = await waitForLongSourcePlayback(
     page, rows5Generation, diagnostics.snapshots.baseline.objectCount,
   );
+  await page.evaluate(() => { window.__stressSourceOwnershipGeneration = null; });
   const sourceOwnedGeneration = diagnostics.snapshots.rows5Playing.runGeneration;
 
   await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > 2.05);

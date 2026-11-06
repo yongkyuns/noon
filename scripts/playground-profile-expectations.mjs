@@ -220,6 +220,15 @@ export function validateShowcaseDiagnostics(expected, diagnostics) {
     assert.ok(completion.contextId != null && completion.contextId === adoption.contextId &&
       completion.contextId === disposition[0].contextId,
     `${expected.id}: terminal evidence belongs to different source contexts`);
+    if (expected.dispositionKind === 'ordinary') {
+      const started = events.find(event => event.stage === 'playback-started');
+      assert.ok(started && events.indexOf(completion) < events.indexOf(started) &&
+        events.indexOf(adoption) < events.indexOf(started) && started.contextId === completion.contextId &&
+        started.preparing === false && Number.isFinite(started.durationSeconds) &&
+        started.durationSeconds > 0 && started.seekRange?.start === 0 &&
+        started.seekRange?.end === started.durationSeconds,
+      `${expected.id}: first playback must follow source completion with its full terminal timeline`);
+    }
   }
   if (expected.disposition === 'looped') {
     assert.ok(Number.isSafeInteger(disposition[0].loopCount) && disposition[0].loopCount >= 1,

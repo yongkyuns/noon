@@ -95,8 +95,9 @@ export class PythonAuthoringClient {
     if (diagnosticPreparationTiming && !preparedPlayback) {
       throw new Error("preparation timing diagnostics require prepared playback");
     }
-    if (!Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0) {
-      throw new TypeError("preparationLookaheadSeconds must be positive and finite");
+    if (preparationLookaheadSeconds !== null &&
+        (!Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0)) {
+      throw new TypeError("preparationLookaheadSeconds must be null or positive and finite");
     }
     if (preparedPlayback && onSemanticContinuation === null) {
       throw new Error("prepared playback requires a semantic continuation consumer");

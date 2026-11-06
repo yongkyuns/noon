@@ -26,11 +26,11 @@ function preparedSourceYieldHook(run, setTimer) {
   const end = source.indexOf("  self.noonCreateCanonicalAuthoringSceneContext =", start);
   assert.ok(start >= 0 && end > start, "prepared source yield hook boundaries must exist");
   const worker = {};
-  return new Function("self", "initialRun", "setTimeout", "awaitOutsidePreparedSourceTurn", `
+  return new Function("self", "initialRun", "yieldWorkerTask", "awaitOutsidePreparedSourceTurn", `
     let activeAuthoringRun = initialRun;
     ${source.slice(start, end)}
     return { hook: self.noonPreparedSourceYield, replaceRun: next => { activeAuthoringRun = next; } };
-  `)(worker, run, setTimer, (_run, _owner, operation) => operation());
+  `)(worker, run, () => new Promise(resolve => setTimer(resolve, 0)), (_run, _owner, operation) => operation());
 }
 
 test("cooperative source yield is disabled outside its attached prepared reader turn", () => {

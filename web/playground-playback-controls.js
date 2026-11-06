@@ -37,6 +37,7 @@ export class PlaygroundPlaybackControls {
   #nativeEndpointRange = null;
   #nativeEndpointCoordinate = null;
   #buffering = false;
+  #preparing = false;
   #seekNotice = null;
   #confirmedTimeSeconds = 0;
   #timeSeconds = 0;
@@ -175,6 +176,7 @@ export class PlaygroundPlaybackControls {
         this.#seekRange = state.seekRange;
         this.#durationSeconds = state.durationSeconds;
         this.#buffering = state.buffering;
+        this.#preparing = state.preparing === true;
         this.#hasAudio = state.hasAudio === true;
         this.#audioReady = state.audioReady === true;
         if (state.hasAudio === false) this.#audioReady = false;
@@ -273,12 +275,14 @@ export class PlaygroundPlaybackControls {
       this.#preparedFrontier = null;
       this.#seekRange = null;
       this.#buffering = false;
+      this.#preparing = false;
       if (observed && this.#controllable) this.setControllable(false);
     }
     if (prepared) {
       this.#preparedFrontier = state.preparedFrontier;
       this.#seekRange = state.seekRange;
       this.#buffering = state.buffering;
+      this.#preparing = state.preparing === true;
     }
     this.#confirmedTimeSeconds = this.#controllable && duration !== null ? Math.min(time, duration) : time;
     this.#timeSeconds = this.#confirmedTimeSeconds;
@@ -555,6 +559,7 @@ export class PlaygroundPlaybackControls {
       this.#seekRange = result.seekRange;
       this.#durationSeconds = result.durationSeconds;
       this.#buffering = result.buffering;
+      this.#preparing = result.preparing === true;
     }
     const receipt = result.presentationReceipt;
     const matches = Number.isSafeInteger(receipt?.session) && receipt.session >= 0 &&
@@ -654,6 +659,7 @@ export class PlaygroundPlaybackControls {
     this.#undoDragButton.hidden = !this.#undoDragSupported || this.#preparedFrontier !== null;
     this.#root.dataset.undoSupport = String(!this.#undoDragButton.hidden);
     this.#root.dataset.buffering = String(this.#buffering);
+    this.#root.dataset.preparing = String(this.#preparing);
     this.#root.dataset.durationKnown = String(this.#controllable && this.#durationSeconds !== null);
 
     this.#audioControls.hidden = !this.#hasAudio;
@@ -711,7 +717,7 @@ export class PlaygroundPlaybackControls {
           ? `${formatTime(time)} seconds elapsed · seeking unavailable`
           : `${formatTime(time)} seconds elapsed · available through ${formatTime(range.end)} seconds · total duration unknown`,
     );
-    this.#timeOutput.value = known
+    this.#timeOutput.value = this.#preparing ? "Preparing animation…" : known
       ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
       : this.#unavailableReason !== null && !this.#forwardPlayback ? `${formatTime(time)} s · completed` : `${formatTime(time)} / — s`;
   }
@@ -721,13 +727,13 @@ export class PlaygroundPlaybackControls {
     // Capability denial is not an unfinished command. A completed, non-replayable
     // scene stays disabled without displaying an indefinite wait cursor/aria-busy.
     const busy = this.#externalBusy || this.#commandPending || this.#seekActive || this.#transportActive;
-    const blockCommands = !this.#controllable || busy;
+    const blockCommands = !this.#controllable || busy || this.#preparing;
     this.#playButton.disabled = this.#externalBusy || (!this.#controllable && !this.#forwardPlayback) ||
       (this.#controllable && this.#durationSeconds === 0);
     this.#restartButton.disabled = blockCommands;
     this.#undoDragButton.disabled = blockCommands || this.#preparedFrontier !== null || !this.#canUndoTranslationDrag;
     const range = this.#currentSeekRange();
-    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending ||
+    this.#scrubber.disabled = this.#preparing || !this.#controllable || this.#externalBusy || this.#commandPending ||
       range === null || range.end < range.start ||
       (range.end === range.start && !(this.#preparedFrontier !== null &&
         this.#durationSeconds === null && this.#preparedFrontier > range.end));
@@ -747,7 +753,8 @@ export class PlaygroundPlaybackControls {
     if (this.#destroyed) return;
     const range = this.#currentSeekRange();
     const open = this.#preparedFrontier !== null && this.#durationSeconds === null;
-    const status = this.#unavailableReason !== null ? "Replay unavailable"
+    const status = this.#preparing ? "Preparing animation…"
+      : this.#unavailableReason !== null ? "Replay unavailable"
       : this.#seekNotice !== null ? this.#seekNotice
         : open ? `${this.#buffering ? "Buffering · " : ""}Available history: ${range === null ? "none" : `${formatTime(range.start)}–${formatTime(range.end)} s`} · total unknown`
           : !this.#stateObserved ? "Loading playback state"
@@ -779,6 +786,7 @@ function renderPlaybackPlaceholder(root) {
   root.removeAttribute("data-controllable");
   root.removeAttribute("data-elapsed-seconds");
   root.removeAttribute("data-buffering");
+  root.removeAttribute("data-preparing");
   root.removeAttribute("data-duration-known");
   root.removeAttribute("data-undo-support");
   root.removeAttribute("title");

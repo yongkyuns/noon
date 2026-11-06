@@ -210,6 +210,7 @@ function captureRunEvidence(evidence, beforeCount, source, observed, previousRun
   const { run, ready, proof } = assertRunEvidence(evidence, beforeCount, source, observed, previousRunGeneration);
   return { run: { workerId: run.workerId, requestId: run.requestId,
     sequence: run.sequence, sourceLength: run.source.length,
+    preparationLookaheadSeconds: run.preparationLookaheadSeconds,
     sourceSha256: createHash("sha256").update(run.source).digest("hex") }, ready, proof };
 }
 
@@ -563,7 +564,9 @@ try {
         worker.postMessage = (data, ...rest) => {
           if (data?.channel === "noon.authoring" && data.type === "run") {
             window.__recoveryAuthoringRuns.push({ workerId: id, requestId: data.requestId,
-              source: data.source, preparedPlayback: window.__recoveryPreparedPlayback, sequence: sequence++ });
+              source: data.source, preparedPlayback: window.__recoveryPreparedPlayback,
+              preparationLookaheadSeconds: data.preparationLookaheadSeconds,
+              sequence: sequence++ });
           }
           return originalPostMessage(data, ...rest);
         };
@@ -578,9 +581,14 @@ try {
       },
     });
     window.__recoveryPreparedPlayback = preparedPlayback;
+    window.__recoveryPreparationLookaheadSeconds = null;
     window.__NOON_PLAYGROUND_TEST_HOOKS__ = {
-      authoringRunOptions: () => window.__recoveryPreparedPlayback === null
-        ? {} : ({ preparedPlayback: window.__recoveryPreparedPlayback }),
+      authoringRunOptions: () => ({
+        ...(window.__recoveryPreparedPlayback === null
+          ? {} : { preparedPlayback: window.__recoveryPreparedPlayback }),
+        ...(window.__recoveryPreparationLookaheadSeconds === null
+          ? {} : { preparationLookaheadSeconds: window.__recoveryPreparationLookaheadSeconds }),
+      }),
     };
   }, { preparedPlayback: externalRoot ? null : !liveComparison });
   page = await context.newPage();
@@ -817,6 +825,10 @@ try {
     phase = "catalog-cancelled-to-first";
     await selectShowcase(page, "showcase-transform-ownership");
     await setEditorSource(page, navigationCancellationSource);
+    // This cancellation cohort exercises the still-active incremental Run.
+    // Restore null before selecting the destination so it uses the default
+    // complete-finite-source preparation policy.
+    await page.evaluate(() => { window.__recoveryPreparationLookaheadSeconds = 0.75; });
     const beforeCancelledRun = await workerEvidence(page);
     await page.locator("#replace-scene").click();
     await page.waitForFunction(count => {
@@ -827,15 +839,21 @@ try {
     }, beforeCancelledRun.runs.length, { timeout: 30_000 });
     const cancelledCandidate = (await workerEvidence(page)).runs[beforeCancelledRun.runs.length];
     assert.equal(cancelledCandidate.source, navigationCancellationSource);
+    assert.equal(cancelledCandidate.preparationLookaheadSeconds, 0.75,
+      "cancellation source must explicitly use the existing incremental preparation policy");
     diagnostics.snapshots.cancelledCatalogRun = {
       workerId: cancelledCandidate.workerId, requestId: cancelledCandidate.requestId,
       sourceSha256: createHash("sha256").update(cancelledCandidate.source).digest("hex"),
+      preparationPolicy: "incremental", preparationLookaheadSeconds: cancelledCandidate.preparationLookaheadSeconds,
     };
+    await page.evaluate(() => { window.__recoveryPreparationLookaheadSeconds = null; });
     const firstAfterCancellation = await selectShowcase(page, "showcase-first-scene",
       cancelledCandidate.requestId);
     diagnostics.snapshots.firstAfterCatalogCancellation = firstAfterCancellation;
     assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.exampleId, "showcase-first-scene",
       "the superseded Run must not replace the newer gallery selection");
+    assert.equal(firstAfterCancellation.runEvidence.run.preparationLookaheadSeconds, null,
+      "the destination selection must restore default complete-finite-source preparation");
     assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.patchState, "applied");
     assert.equal(diagnostics.snapshots.firstAfterCatalogCancellation.runRequestId,
       firstAfterCancellation.runEvidence.run.requestId,

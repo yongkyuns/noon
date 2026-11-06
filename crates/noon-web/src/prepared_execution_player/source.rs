@@ -38,7 +38,19 @@ pub(super) struct SourceDelivery {
     finished: bool,
 }
 
+impl SourceDelivery {
+    pub(super) fn finished(&self) -> bool {
+        self.finished
+    }
+}
+
 impl PreparedExecutionPlayer {
+    fn release_preparation_gate(&mut self) {
+        if self.playback.release_preparation() {
+            self.clock = crate::BrowserExecutionWakeClock::default();
+        }
+    }
+
     /// Existing logical prefix charges, not additive allocation or total-memory
     /// measurements. Source history, scalar schedules, interpreter/JS heaps, WASM
     /// capacity and renderer/GPU ownership require separate observations.
@@ -169,6 +181,7 @@ impl PreparedExecutionPlayer {
             crate::semantic_execution_player::PreparedPrefixAdvance::Required(requirement) => {
                 source.required = Some(requirement);
                 self.source = Some(source);
+                self.release_preparation_gate();
                 return Ok(Some(false));
             }
             crate::semantic_execution_player::PreparedPrefixAdvance::Advanced {
@@ -229,6 +242,7 @@ impl PreparedExecutionPlayer {
         source.finished = true;
         source.staged_navigation = Some(context.section_navigation_snapshot());
         if source.required.is_some() {
+            self.release_preparation_gate();
             return Ok(false);
         }
         let mut source = self.source.take().expect("validated source delivery");
@@ -323,6 +337,9 @@ impl PreparedExecutionPlayer {
     /// cancellation and releasing its source context; the reader stays usable.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = stopSourcePreparation))]
     pub fn stop_source_preparation(&mut self) {
+        if self.playback.stop_preparation() {
+            self.clock = crate::BrowserExecutionWakeClock::default();
+        }
         self.source = None;
     }
 }

@@ -38,6 +38,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   const alive = () => assert.equal(freed, false, "retired WASM handle must never be reused");
   const trap = operation => { if (operation === trapAt) throw new WebAssembly.RuntimeError(`trap during ${operation}`); };
   const player = {
+    prepareSourceBeforePlayback() { trap("preparation-hold"); events.push("prepare-before-playback"); },
     resetReceiver(session) { alive(); assert.ok(session > 3); events.push("reset-receiver"); },
     preparedPlaying: () => false,
     preparedPlaybackStateJson: () => JSON.stringify({ time: 1, frontier: 1 }),
@@ -127,7 +128,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
     args[6]?.({ stage: "attached", capabilities: { commands: [], replay: prepared, audio: false, sections: false } });
     return endpoint;
   };
-  api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "posts", "errors", `
+  api = new Function("createPreparedInterpreterDriver", "runAuthoringSource", "attachSemanticEngine", "yieldWorkerTask", "posts", "errors", `
     const AUTHORING_CHANNEL = "noon.authoring", AUTHORING_PROTOCOL_VERSION = 8;
     const pyodidePromise = Promise.resolve({}), semanticContexts = new Map();
     let nextSemanticContext = 0, nextContinuationGeneration = 1, activeAuthoringRun = null;
@@ -150,7 +151,7 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
   `)(options => createPreparedInterpreterDriver({ ...options,
     setTimeout(callback) { const id = ++taskId; tasks.set(id, callback); return id; },
     clearTimeout(id) { tasks.delete(id); },
-  }), () => execute(api), attachSemanticEngine, posts, errors);
+  }), () => execute(api), attachSemanticEngine, () => new Promise(setImmediate), posts, errors);
   const envelope = (type, fields) => ({ channel: "noon.authoring", protocolVersion: 8, type, ...fields });
   const continuationRequest = (type, fields = {}) => {
     const registration = posts.findLast(post => post.type === "semantic_continuation_registered");
@@ -173,10 +174,10 @@ function host({ demand = false, attachGate = null, completeError = null, trapAt 
         }));
       } finally { control.port1.close(); control.port2.close(); render.port1.close(); render.port2.close(); }
     },
-    start(sourceBody, requestId = 1, diagnosticPreparationTiming = false) {
+    start(sourceBody, requestId = 1, diagnosticPreparationTiming = false, preparationLookaheadSeconds = null) {
       execute = sourceBody;
       return api.handleRequest(envelope("run", { requestId, source: "test source", context: {},
-        preparedPlayback: true, preparationLookaheadSeconds: 0.75, diagnosticPreparationTiming }));
+        preparedPlayback: true, preparationLookaheadSeconds, diagnosticPreparationTiming }));
     },
     async attach(extra = {}) {
       const control = new MessageChannel(), render = new MessageChannel();
@@ -231,6 +232,7 @@ for (const loopDurationSeconds of [null, 1]) test(`production source completes e
   assert.equal(h.posts[0].semanticExecution.prepared_playback, true);
   const initial = h.tick();
   await h.attach({ loopDurationSeconds }); await initial;
+  assert.equal(h.events.filter(event => event === "prepare-before-playback").length, 1);
   assert.equal(h.counters.initial, 1);
   assert.equal(h.events.some(event => Array.isArray(event) && event[0] === "loop"), false,
     "the first barrier does not establish the loop period");
@@ -279,6 +281,20 @@ test("prepared source completion yields one host task before staging its suffix"
   assert.equal(h.events.includes("segment-complete"), true);
   assert.equal(h.counters.adopted, 1);
   assert.deepEqual(h.errors, []);
+  h.demand(true); await h.tick(); await done;
+  h.endpoint().stop();
+});
+
+test("an explicit finite lookahead retains cooperative prefix demand", async () => {
+  const h = host();
+  const done = h.start(async api => {
+    await api.awaitSemanticContinuation(h.context);
+    return h.result();
+  }, 1, false, 0.75);
+  await microtasks();
+  const initial = h.tick(); await h.attach(); await initial;
+  assert.equal(h.events.includes("prepare-before-playback"), false);
+  assert.equal(h.tasks.size, 0, "satisfied finite demand does not execute more source");
   h.demand(true); await h.tick(); await done;
   h.endpoint().stop();
 });
@@ -701,7 +717,7 @@ test("cancellation during observed attachment stops a late endpoint without revi
   assert.equal(h.counters.freed, 0); assert.equal(h.counters.initial, 0);
 });
 
-for (const trapAt of ["initial", "reader", "segment", "terminal", "reserve", "adopt", "demand"]) {
+for (const trapAt of ["initial", "reader", "preparation-hold", "segment", "terminal", "reserve", "adopt", "demand"]) {
   test(`direct prepared ${trapAt} trap retires the worker before any Rust cleanup`, async () => {
     const h = host({ demand: true, trapAt });
     const done = h.start(async api => {

@@ -891,6 +891,17 @@ async function main() {
           controls: { ...document.querySelector(".playback-controls")?.dataset },
           captureDiagnostics: window.__showcaseLiveReviewRun?.captureDiagnostics ?? null,
         })).catch(() => null);
+        let failureTimer;
+        result.failureExecution = await Promise.race([
+          page.evaluate(async () => {
+            const gallery = window.__noonExampleGallery;
+            const [state, metrics] = await Promise.all([gallery.executionState(), gallery.executionMetrics()]);
+            const { pngDataUrl: _png, ...readback } = metrics?.metrics?.showcaseRendererReadback ?? {};
+            return { state, readback };
+          }),
+          new Promise(resolve => { failureTimer = setTimeout(() => resolve({ timedOut: true }), 3000); }),
+        ]).catch(error => ({ error: String(error) }));
+        clearTimeout(failureTimer);
         await page.screenshot({ path: path.join(output, `${entry.id}-failure.png`) }).catch(() => {});
         console.error(`FAIL live ${entry.id}: ${result.error}`);
       } finally {

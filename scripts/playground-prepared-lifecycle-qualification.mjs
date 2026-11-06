@@ -83,7 +83,7 @@ const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "p
 const hash = value => createHash("sha256").update(value).digest("hex");
 const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
 const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
-  runOptions: "viewer defaults; no qualification run-options hook",
+  runOptions: "default null lookahead except prepared-lifecycle and prepared-failure fixtures, which use the existing 1 s incremental reference",
   sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; integer CSS origin; corner/shadow/border color normalized; unchanged backing size and full-canvas RGBA equality", cases: [] };
 report.staticInputSourceSha256 = hash(staticInputSource); report.zeroInputSourceSha256 = hash(zeroInputSource);
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
@@ -106,11 +106,29 @@ async function installFixture(page, evidence) {
   await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
   await page.addInitScript(() => {
-    // Count native worker construction without intercepting messages or work.
+    // Count native worker construction and record the actual authoring Run
+    // options without changing the message or its transfer list.
     globalThis.galleryWorkers = [];
+    globalThis.galleryAuthoringRunOptions = [];
     const NativeWorker = globalThis.Worker;
     globalThis.Worker = class extends NativeWorker {
       constructor(url, options) { super(url, options); galleryWorkers.push(options?.name ?? ""); }
+      postMessage(message, ...args) {
+        if (message?.channel === "noon.authoring" && message.type === "run") {
+          globalThis.galleryAuthoringRunOptions.push({
+            requestId: message.requestId,
+            exampleId: message.context?.playground?.example_id ?? null,
+            preparedPlayback: message.preparedPlayback ?? null,
+            preparationLookaheadSeconds: message.preparationLookaheadSeconds,
+          });
+        }
+        return super.postMessage(message, ...args);
+      }
+    };
+    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+      authoringRunOptions: ({ exampleId }) =>
+        exampleId === "prepared-lifecycle" || exampleId === "prepared-failure"
+          ? { preparationLookaheadSeconds: 1 } : {},
     };
   });
 }
@@ -532,10 +550,18 @@ try {
         assert.equal(largeInvocations, 1);
         assert.deepEqual(pageErrors, []);
         entry.checks.push("large-static-snapshot-all-7000-objects", "large-snapshot-shared-transferable-exact-pixels");
+        entry.postedRunOptions = await page.evaluate(() => globalThis.galleryAuthoringRunOptions);
+        assert.ok(entry.postedRunOptions.length > 0, "capture actual authoring Run payloads");
+        for (const options of entry.postedRunOptions) {
+          const expectedLookahead = ["prepared-lifecycle", "prepared-failure"].includes(options.exampleId) ? 1 : null;
+          assert.equal(options.preparationLookaheadSeconds, expectedLookahead,
+            `${options.exampleId}: actual posted preparation lookahead`);
+        }
         entry.status = "passed";
       } catch (error) {
         entry.status = "failed"; entry.error = String(error.stack ?? error);
         entry.pageErrors = pageErrors;
+        entry.postedRunOptions = await page.evaluate(() => globalThis.galleryAuthoringRunOptions).catch(() => []);
         entry.diagnostics = await page.evaluate(() => ({
           status: document.querySelector("#status")?.dataset,
           message: document.querySelector("#patch-status")?.value,

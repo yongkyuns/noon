@@ -1307,6 +1307,29 @@ The current implementation keeps the semantic context and its existing compiler/
 
 Required Python callbacks can hold authored progress at the shared barrier while the last coherent frame remains presentable. Playback with no host callbacks does not require per-frame interpreter execution. Source reruns currently replace a session; this diagram does not claim incremental hot-reload identity preservation.
 
+The finite deterministic viewer completes source preparation before advancing
+playback. Completed prefixes still use the existing bounded Rust history reader,
+but its initial sample and clock remain held until actual terminal adoption.
+The first playback therefore has the full validated timeline and uses the same
+completed-history path as subsequent replay, with no Python preparation competing
+for frame or control delivery. Preparation yields only keep loading cancellable;
+they do not pace animation. Pause intent survives preparation, and loading time
+never becomes elapsed animation time.
+
+The authoring host's explicit positive `preparationLookaheadSeconds` retains its
+cooperative prefix-delivery contract for bounded streaming/reference hosts.
+The viewer default is `null`, meaning complete preparation before playback.
+This choice neither changes source admission nor promises independent execution
+of a Python producer and reader sharing one worker.
+
+An actual callback/native-input requirement releases this preparation hold and
+uses the original source at its existing frontier-bound handoff. Recoverable
+source failure retains only the accepted prefix. A source that never completes remains visibly
+preparing and cancellable; neither a duration hint nor a timeout manufactures a
+terminal timeline or silently starts source-paced playback. Concurrent streaming
+across independent WASM contexts would require a separately qualified execution
+history transport; the renderer delta channel is not such a transport.
+
 A `WebAssembly.RuntimeError` crossing the Python authoring adapter retires that
 worker through its existing fatal-error channel. Rust borrows and publication
 state cannot be recovered after a trap; queued requests and late results are

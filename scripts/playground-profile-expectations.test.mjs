@@ -38,6 +38,9 @@ function diagnosticsFor(expected) {
     { sequence: events.length, stage: 'source-complete', contextId },
     { sequence: events.length + 1, stage: 'terminal-adopted', contextId },
   );
+  if (expected.dispositionKind === 'ordinary') events.push({ sequence: events.length,
+    stage: 'playback-started', contextId, time: 0.01, preparing: false,
+    durationSeconds: 19, seekRange: { start: 0, end: 19 } });
   events.push({ sequence: events.length, stage: 'disposition', disposition: expected.disposition,
     contextId, capabilities: dispositionCapabilities,
     ...(expected.disposition === 'looped' ? { loopCount: 1 } : {}) });
@@ -66,6 +69,25 @@ test('inventory binds all 33 unchanged showcase IDs, paths and exact source byte
 test('inventory rejects a missing case and a changed source hash', () => {
   assert.throws(() => validateShowcaseInventory(manifest.entries.slice(1), readSource), /catalog IDs differ/);
   assert.throws(() => validateShowcaseInventory(manifest.entries, () => Buffer.from('changed bytes')), /source hash changed/);
+});
+
+test('ordinary first playback rejects unfinished source or a partial timeline', () => {
+  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-dynamic-scene');
+  for (const change of [
+    trace => { trace.events = trace.events.filter(event => event.stage !== 'playback-started'); },
+    trace => { trace.events.find(event => event.stage === 'playback-started').durationSeconds = null; },
+    trace => { trace.events.find(event => event.stage === 'playback-started').preparing = true; },
+    trace => { trace.events.find(event => event.stage === 'playback-started').seekRange.end = 5.9; },
+    trace => {
+      const started = trace.events.splice(trace.events.findIndex(event => event.stage === 'playback-started'), 1)[0];
+      trace.events.splice(1, 0, started);
+    },
+  ]) {
+    const trace = diagnosticsFor(expected);
+    change(trace);
+    trace.events.forEach((event, sequence) => { event.sequence = sequence; });
+    assert.throws(() => validateShowcaseDiagnostics(expected, trace), /first playback must follow source completion/);
+  }
 });
 
 test('runtime package identity records clean source revision and file hashes for profile gating', () => {
