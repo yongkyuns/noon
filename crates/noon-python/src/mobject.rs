@@ -39,6 +39,14 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "angleValue")]
+    fn angle_value(&self, degrees: bool) -> PyResult<f64> {
+        self.handle.angle_value(degrees).map_err(engine_error)
+    }
+    #[pyo3(name = "setAngleValue")]
+    fn set_angle_value(&mut self, radians: f64) -> PyResult<()> {
+        self.handle.set_angle_value(radians).map_err(engine_error)
+    }
     #[pyo3(name = "manimLineEndpoints")]
     fn line_endpoints(&self) -> PyResult<LineEndpoints> {
         self.handle

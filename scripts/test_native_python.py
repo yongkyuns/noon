@@ -33,7 +33,9 @@ class NativePythonTests(unittest.TestCase):
                      "manim_example_spin_in_from_nothing", "manim_parity_shrink_to_center",
                      "manim_compatible_family_indicate", "ordinary_focus_on", "line_passing_flash",
                      "ordinary_draw_border_then_fill", "ordinary_text_family_fade",
-                     "ordinary_text_family_reveal", "ordinary_text_family_write"):
+                     "ordinary_text_family_reveal", "ordinary_text_family_write", "ordinary_arc_geometry",
+                     "manim_example_typst_text", "manim_example_math_typst", "ordinary_automatic_wait_text",
+                     "showcase_editorial_cover"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
@@ -174,6 +176,31 @@ class Demo(Scene):
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)
+
+    def test_native_typst_resources_and_sections_survive_live_admission_and_rewind(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        self.next_section("Title")
+        self.add(Typst("*Native*", color=YELLOW).shift(LEFT))
+        self.wait(1)
+        self.next_section("Math")
+        self.add(MathTypst("frac(x, 2)", color=BLUE).shift(RIGHT))
+        self.wait(1)
+"""
+        scene = asyncio.run(run_source(source, retain_history=True))
+        self.assertEqual(scene.sections, [
+            {"name": "Title", "type": "normal", "time": 0.0},
+            {"name": "Math", "type": "normal", "time": 1.0},
+        ])
+        view = prepare_view(scene)
+        try:
+            first = view.capture(time=0.5, width=160, height=90)
+            second = view.capture(time=1.5, width=160, height=90)
+            self.assertNotEqual(first, second)
+            self.assertEqual(first, view.capture(time=0.5, width=160, height=90))
+        finally:
+            view.close()
 
     def test_native_camera_motion_and_rewind_use_the_same_publication(self):
         source = """from noon import *

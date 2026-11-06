@@ -50,7 +50,7 @@ except ImportError:  # Import remains possible for source-only CPython tests.
     _create_bundled_native_font_face = None
 
 try:
-    from pyodide.ffi import to_js as _to_js
+    from _noon_host import byte_buffer as _to_js
 except ImportError:  # Import remains possible for source-only CPython tests.
     _to_js = None
 

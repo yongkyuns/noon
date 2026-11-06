@@ -25,6 +25,8 @@ mod signals;
 mod svg;
 #[cfg(feature = "native-text")]
 mod text;
+#[cfg(feature = "typst")]
+mod typst;
 mod vector_path;
 mod viewer;
 
@@ -67,6 +69,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<effects::EffectDefinition>()?;
     m.add_class::<effects::EffectHandle>()?;
     m.add_class::<geometry::GeometryOptions>()?;
+    m.add_class::<geometry::ArcMetadata>()?;
     m.add_class::<vector_path::AuthoringVectorPath>()?;
     m.add_class::<path_query::PathQuery>()?;
     m.add_class::<context::Store>()?;

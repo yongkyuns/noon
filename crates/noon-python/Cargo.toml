@@ -6,8 +6,9 @@ license = "MIT"
 description = "Native CPython binding to the shared Noon authoring and execution API"
 
 [features]
-default = ["window", "capture", "native-text", "bundled-fonts", "image-decode"]
+default = ["window", "capture", "native-text", "bundled-fonts", "image-decode", "typst"]
 native-text = ["noon/native-text"]
+typst = ["noon/typst"]
 bundled-fonts = ["native-text", "noon/bundled-fonts"]
 image-decode = ["noon/image-decode"]
 window = ["dep:noon-native"]

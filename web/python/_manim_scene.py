@@ -822,7 +822,8 @@ def _canonical_next_section(scene: _base.Scene, name: str, section_type: object)
 
 
 def _canonical_sections(scene: _base.Scene) -> list[dict[str, object]]:
-    return json.loads(str(engine_call(_context(scene).sectionsJson, operation="Scene.sections")))
+    from _noon_host import decode_callback
+    return decode_callback(engine_call(_context(scene).sectionsJson, operation="Scene.sections"))
 
 
 def _begin_async_continuation_construct(scene: _base.Scene) -> None:

@@ -89,6 +89,10 @@ if hasattr(_native, "FontFace"):
     def noonCreateAuthoringMarkupTextHandle(*args):
         return _arena().markup_text(*args)
 
+if hasattr(_native.Store, "typst"):
+    def noonCreateAuthoringTypstHandle(*args):
+        return _arena().typst(*args)
+
 noonResolveAnimationOptions = _native.resolve_animation_options
 noonResolveGlowPulseAnimationOptions = _native.resolve_glow_pulse_options
 noonResolveCreateAnimationOptions = _native.resolve_create_options

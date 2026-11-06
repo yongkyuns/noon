@@ -22,6 +22,10 @@ pub struct Store {
 }
 #[pymethods]
 impl Store {
+    #[cfg(feature = "typst")]
+    fn typst(&self, source: &str, math: bool, size: f64) -> PyResult<MobjectHandle> {
+        crate::typst::authored(self, source, math, size)
+    }
     fn tracker(&self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
         noon::ValueTracker::detached(Rc::clone(&self.semantics), initial)
             .map(|value| crate::signals::ValueTrackerHandle { value })
@@ -1591,6 +1595,37 @@ impl Context {
             self, source, family, size, spacing, r, g, b, a, opacity, None, face, true,
         )
     }
+    #[pyo3(name = "liveSetAngleValue")]
+    fn set_angle_value(&mut self, target: &MobjectHandle, radians: f64) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        if self.execution.is_some() {
+            self.with_live(|live| live.set_angle_value(&target.handle, radians))
+                .map(|_| ())
+        } else {
+            target
+                .handle
+                .clone()
+                .set_angle_value(radians)
+                .map_err(engine_error)
+        }
+    }
+    #[cfg(feature = "typst")]
+    #[pyo3(name = "liveCreateManimTypst")]
+    #[allow(clippy::too_many_arguments)]
+    fn typst(
+        &mut self,
+        source: &str,
+        math: bool,
+        size: f64,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        opacity: f64,
+    ) -> PyResult<MobjectHandle> {
+        crate::typst::live(self, source, math, size, red, green, blue, alpha, opacity)
+    }
     #[pyo3(name = "liveExecutionOwnership")]
     fn ownership(&self) -> PyResult<&'static str> {
         self.require_active()?;
@@ -1603,6 +1638,45 @@ impl Context {
     #[pyo3(name = "requireActive")]
     fn check_active(&self) -> PyResult<()> {
         self.require_active()
+    }
+    #[pyo3(name = "nextSection")]
+    fn next_section(&mut self, name: &str, skip: bool) -> PyResult<()> {
+        self.available()?;
+        let time = self.handoff().unwrap_or_else(|| self.scene.time());
+        self.scene
+            .next_section_at(
+                name,
+                if skip {
+                    noon::SectionType::Skip
+                } else {
+                    noon::SectionType::Normal
+                },
+                time,
+            )
+            .map(|_| ())
+            .map_err(engine_error)
+    }
+    // The shared facade decodes browser transport only; native rows remain typed.
+    #[pyo3(name = "sectionsJson")]
+    fn sections(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        self.require_active()?;
+        self.scene
+            .sections()
+            .iter()
+            .map(|section| {
+                let row = pyo3::types::PyDict::new(py);
+                row.set_item("name", &section.name)?;
+                row.set_item(
+                    "type",
+                    match section.section_type {
+                        noon::SectionType::Normal => "normal",
+                        noon::SectionType::Skip => "skip",
+                    },
+                )?;
+                row.set_item("time", section.time)?;
+                Ok(row.into_any().unbind())
+            })
+            .collect()
     }
     #[pyo3(name = "authoredDuration")]
     fn duration(&self) -> f64 {

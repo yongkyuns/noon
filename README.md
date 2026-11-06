@@ -270,11 +270,13 @@ and the arrow keys seek. Source executes once; bounded deterministic history
 supports playback and rewind. Ordinary synchronous, portable and explicit async
 constructs use the same Python facade as Pyodide. Geometry, affine animation,
 composition, Create/Fade, grow/shrink, indication, focus, passing flashes,
-border/fill, plain Text and family Write/reveal, retained PNG/JPEG/array images,
+border/fill, plain Text and family Write/reveal, Typst/MathTypst,
+arcs/sectors/polygons/angles, retained PNG/JPEG/array images,
 built-in object/composed effects, GlowPulse/Dissolve, gradients, procedural
 paints, image fills, persistent path edits/queries, family iteration/slices/layout,
 coordinate families, preparation-only plots, moving 2D cameras and HDR
-bloom/emission and deterministic scalar bindings are covered by real native-extension examples and tests.
+bloom/emission, deterministic scalar bindings and section markers are covered by
+real native-extension examples and tests.
 
 For execution without a window/GPU, add `--headless`. For native GPU output without
 a display server, use `--snapshot frame.png --time 1 --width 640 --height 360`.
