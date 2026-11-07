@@ -51,24 +51,72 @@ class Demo(Scene):
         self.wait(0.5)
 ```
 
-The public Rust `Scene` and `Mobject` API authors directly into the same semantic store used by the WASM handles:
+Rust scene authoring uses ordinary sequential code and the same semantic operations
+as Python. `Scene::script` turns `play` and `wait` awaits into the engine's existing
+completion boundaries:
 
 ```rust
-use noon::Scene;
+use noon::{Color, Create, Scene, Vec2};
 
-let mut scene = Scene::new();
-let mut circle = scene.circle(0.6)?;
-circle.shift(-2.0, 0.0)?;
-circle.set_fill(0.0, 0.0, 1.0, 0.5)?;
-let mut square = scene.square(1.2)?;
-square.next_to_handle(&circle, 1.0, 0.0, 0.25)?;
-scene.add(&circle)?;
-scene.add(&square)?;
-let session = scene.execution_session()?;
-assert_eq!(session.frame().objects.len(), 2);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Scene::script(|scene| async move {
+        let circle = scene.circle(0.6)?;
+        scene.set_fill(&circle, Color::BLUE, 0.5)?;
+        scene.shift(&circle, Vec2::new(-2.0, 0.0))?;
+        let square = scene.square(1.2)?;
+        scene.set_color(&square, Color::PINK)?;
+
+        scene.play((Create::new(&circle), Create::new(&square))).await?;
+        scene.play((
+            circle.animate().shift(Vec2::new(2.0, 0.0)),
+            square.animate().rotate(std::f64::consts::FRAC_PI_4),
+        )).await?;
+        scene.wait(0.5).await?;
+        Ok(())
+    })?;
+    noon_native::run_live_program(program)?;
+    Ok(())
+}
 ```
 
-Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
+Tuples, arrays and vectors play their animations in parallel. Use `play_with(request,
+AnimationOptions::new().run_time(2.0))` for explicit timing. Animation builders own
+their handles and arguments; they capture the current effective state when play
+starts. Saving a Rust builder across an earlier play therefore uses that play's
+completed state. Python's `.animate` target is copied when the builder is created.
+The method-target rotation uses point correspondence, as in Python's `.animate.rotate`.
+
+Updaters are owned by the scene and return a registration that can be removed at
+the current authored time:
+
+```rust
+let turn = scene.add_updater(&line, |target, frame| {
+    target.rotate_about_origin(frame.dt())
+})?;
+scene.wait(2.0).await?;
+scene.remove_updater(&turn)?;
+```
+
+The updater target reads and writes the current ordered effective callback phase.
+Ordinary scene edits change persistent authored state. `scene.authored(&object)`
+and `scene.effective(&object)` make that observation choice explicit.
+
+`Scene::script` runs initial setup through the first await, lowers that scene once,
+then lets the native or direct Rust/WASM host drive it. The same owner is available
+to rendering and input while the script waits. Async helper functions can compose
+these boundaries; pending external futures and simultaneous independent scene
+awaits are rejected. Compose concurrent animations in one `play` instead. Arbitrary
+source code remains opaque for replay/preparation admission.
+
+The initial fluent animation slice supports individual planar objects, `Create`,
+`FadeOut`, and animated shift/fill/scale/rotation. Shared engine admission still
+applies, including the restriction on first updater registration for targets added
+after execution bootstrap. Constructors create detached handles; `add` or an
+introducing animation attaches them, and stale/foreign handles return errors.
+See the paired [MovingAround](crates/noon/src/example_scenes/moving_around.rs) and
+[RotationUpdater](crates/noon/src/example_scenes/live_updater_lifecycle.rs) sources,
+or [shared_authoring.rs](crates/noon/examples/shared_authoring.rs) for explicit typed
+lowering and execution integration.
 
 ### Paints, effects and shader materials
 

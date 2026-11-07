@@ -1,115 +1,62 @@
 //! Sequential counterpart of the exact Python RotationUpdater gallery source.
-use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, RustHostCallbackTable,
-    Scene, Vec2,
-};
-use noon_core::{HostCallbackId, SemanticMutationTransaction};
+use crate::{Color, LiveProgram, Scene, SceneScript, ScriptError, Vec2};
 
-const FORTH: HostCallbackId = HostCallbackId::new(1);
-const BACK: HostCallbackId = HostCallbackId::new(2);
+pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
+    Scene::script(|scene| async move {
+        let reference = scene.line(Vec2::ZERO, Vec2::new(-1.0, 0.0))?;
+        scene.set_color(&reference, Color::WHITE)?;
+        let moving = scene.line(Vec2::ZERO, Vec2::new(-1.0, 0.0))?;
+        scene.set_color(&moving, Color::YELLOW)?;
 
-pub struct RotationUpdater {
-    moving: Mobject,
-    stage: u8,
-}
+        let forth = scene.add_updater(&moving, |target, frame| {
+            target.rotate_about_origin(frame.dt())
+        })?;
+        scene.add(&reference)?;
+        scene.add(&moving)?;
+        scene.wait(2.0).await?;
+        scene.remove_updater(&forth)?;
 
-impl LiveContinuation for RotationUpdater {
-    type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
-        match self.stage {
-            0 => {}
-            1 => {
-                let mut tx = SemanticMutationTransaction::new();
-                tx.remove_updater(self.moving.node_id(), FORTH, 2.0);
-                tx.add_updater(self.moving.node_id(), BACK, 2.0, None);
-                live.apply(tx).map_err(|e| e.to_string())?;
-            }
-            2 => {
-                let mut tx = SemanticMutationTransaction::new();
-                tx.remove_updater(self.moving.node_id(), BACK, 4.0);
-                live.apply(tx).map_err(|e| e.to_string())?;
-            }
-            3 => return Ok(ContinuationStep::Finished),
-            _ => unreachable!(),
-        }
-        let duration = if self.stage == 2 { 0.5 } else { 2.0 };
-        self.stage += 1;
-        live.wait_segment(duration)
-            .map(ContinuationStep::Await)
-            .map_err(|e| e.to_string())
-    }
-}
-
-pub fn program() -> Result<(LiveProgram<RotationUpdater>, RustHostCallbackTable), String> {
-    let mut scene = Scene::new();
-    let mut reference = scene
-        .line((0.0, 0.0), (-1.0, 0.0))
-        .map_err(|error| error.to_string())?;
-    reference
-        .set_color(1.0, 1.0, 1.0, 1.0)
-        .map_err(|error| error.to_string())?;
-    let mut moving = scene
-        .line((0.0, 0.0), (-1.0, 0.0))
-        .map_err(|error| error.to_string())?;
-    moving
-        .set_color(1.0, 1.0, 0.0, 1.0)
-        .map_err(|error| error.to_string())?;
-    scene.add(&reference).map_err(|error| error.to_string())?;
-    scene.add(&moving).map_err(|error| error.to_string())?;
-    let mut callbacks = RustHostCallbackTable::new();
-    for (id, sign) in [(FORTH, 1.0), (BACK, -1.0)] {
-        callbacks
-            .insert(id, move |context| {
-                let transform = context
-                    .target_transform_rotated_about_point(sign * context.delta_time(), Vec2::ZERO)
-                    .map_err(std::io::Error::other)?;
-                context
-                    .set_target_transform(transform)
-                    .map_err(std::io::Error::other)
-            })
-            .map_err(|e| e.to_string())?;
-    }
-    callbacks
-        .add_updater(
-            &mut scene.integration_store().borrow_mut(),
-            moving.node_id(),
-            FORTH,
-            0.0,
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-    Ok((
-        scene
-            .into_live_program(RotationUpdater { moving, stage: 0 })
-            .map_err(|e| e.to_string())?,
-        callbacks,
-    ))
+        let back = scene.add_updater(&moving, |target, frame| {
+            target.rotate_about_origin(-frame.dt())
+        })?;
+        scene.wait(2.0).await?;
+        scene.remove_updater(&back)?;
+        scene.wait(0.5).await?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LiveProgramStatus;
+    use crate::{LiveProgramStatus, RustHostCallbackTable};
 
     #[test]
     fn live_rotation_updater_reverses_then_stops_without_replaying_source() {
-        let (mut program, mut callbacks) = program().unwrap();
+        let mut program = program().unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
         let identity = program.session().runtime_identity();
-        for end in [2.0, 4.0, 4.5] {
-            assert!(matches!(
-                program.resume().unwrap(),
-                LiveProgramStatus::Awaiting(_)
-            ));
-            let middle = if end == 2.0 {
-                1.0
-            } else if end == 4.0 {
-                3.0
-            } else {
-                4.25
+        let mut object_order = None;
+        for (start, middle, end, middle_angle, end_angle) in [
+            (0.0, 1.0, 2.0, 1.0, 2.0),
+            (2.0, 3.0, 4.0, 1.0, 0.0),
+            (4.0, 4.25, 4.5, 0.0, 0.0),
+        ] {
+            let LiveProgramStatus::Awaiting(segment) = program.resume().unwrap() else {
+                panic!("updater source must await each authored wait");
             };
+            assert!(!segment.is_complete());
+            assert_eq!(program.session().frame().time, start);
             program.drive_to(&mut callbacks, middle).unwrap();
-            let angle = program.session().frame().objects[1].transform.rotation;
-            assert!((angle - if end == 4.5 { 0.0 } else { 1.0 }).abs() < 1e-5);
+            let frame = program.session().frame();
+            assert_eq!(frame.time, middle);
+            assert_eq!(frame.objects.len(), 2);
+            let current_order = [frame.objects[0].id, frame.objects[1].id];
+            assert_eq!(*object_order.get_or_insert(current_order), current_order);
+            assert_eq!(frame.objects[0].style.stroke, Some(Color::WHITE));
+            assert_eq!(frame.objects[1].style.stroke, Some(Color::YELLOW));
+            assert!(frame.objects[0].transform.rotation.abs() < 1e-5);
+            assert!((frame.objects[1].transform.rotation - middle_angle).abs() < 1e-5);
             if let LiveProgramStatus::PublicationPending(expected) =
                 program.drive_to(&mut callbacks, end).unwrap()
             {
@@ -117,12 +64,17 @@ mod tests {
                 assert_eq!(expected, publication);
                 program.admit_publication(publication).unwrap();
             }
+            assert_eq!(program.session().frame().time, end);
+            assert!(
+                (program.session().frame().objects[1].transform.rotation - end_angle).abs() < 1e-5
+            );
             assert_eq!(program.session().runtime_identity(), identity);
+            assert!(callbacks.is_empty());
         }
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
         let frame = program.session().frame();
         assert_eq!(frame.time, 4.5);
-        assert!((frame.objects[1].transform.rotation).abs() < 1e-5);
+        assert!(frame.objects[1].transform.rotation.abs() < 1e-5);
         assert_eq!(frame.objects.len(), 2);
     }
 }

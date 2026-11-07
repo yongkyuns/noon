@@ -511,6 +511,11 @@ impl RustHostCallbackTable {
         self.last_advance_completed_callback_phase
     }
 
+    /// Preserve the host's timing observation when the live source owns callables.
+    pub(crate) fn record_completed_callback_phase(&mut self, completed: bool) {
+        self.last_advance_completed_callback_phase = completed;
+    }
+
     pub fn insert<F, E>(
         &mut self,
         id: HostCallbackId,
@@ -542,6 +547,21 @@ impl RustHostCallbackTable {
 
     pub fn is_empty(&self) -> bool {
         self.callbacks.is_empty()
+    }
+
+    /// Allocate lookup identity for scene-owned source callbacks. Installed
+    /// callbacks are retained for the source lifetime, so historical semantic
+    /// references cannot observe a different callable under a reused identity.
+    pub(crate) fn next_script_id(&self) -> Option<HostCallbackId> {
+        self.callbacks
+            .last_key_value()
+            .map_or(Some(1), |(id, _)| id.get().checked_add(1))
+            .map(HostCallbackId::new)
+    }
+
+    /// Roll back a callable whose semantic registration was never published.
+    pub(crate) fn discard_script_callback(&mut self, id: HostCallbackId) {
+        self.callbacks.remove(&id);
     }
 
     /// Author one semantic occurrence for an already installed host callable.

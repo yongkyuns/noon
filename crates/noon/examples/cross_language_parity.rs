@@ -7,11 +7,14 @@ use noon::{
 };
 use serde_json::json;
 
-fn emit<C: LiveContinuation<Error = String>>(
+fn emit<C: LiveContinuation>(
     name: &str,
     mut program: LiveProgram<C>,
     times: &[f64],
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    C::Error: std::fmt::Display,
+{
     let mut callbacks = RustHostCallbackTable::new();
     let mut frames = Vec::new();
     for &time in times {
@@ -146,7 +149,7 @@ fn main() -> Result<(), String> {
     )?;
     emit(
         "manim_gallery_moving_around",
-        example_scenes::moving_around::program()?,
+        example_scenes::moving_around::program().map_err(|error| error.to_string())?,
         &[0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.25, 3.5, 4.0],
     )?;
     emit(

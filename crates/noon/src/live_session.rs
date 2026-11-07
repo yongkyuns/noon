@@ -2280,9 +2280,19 @@ impl<'a> LiveSession<'a> {
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, LiveSessionError> {
         let request = self.execution_composition_request(request)?;
+        self.declare_and_activate_semantic_composition(&request, play_options)
+    }
+
+    /// Consume a prepared direct-Rust request through the same declaration and
+    /// publication transaction as the borrowed composition facade.
+    pub(crate) fn declare_and_activate_semantic_composition(
+        &mut self,
+        request: &crate::execution_session::SemanticCompositionRequest,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
         let mut store = self.store.borrow_mut();
         self.session
-            .declare_and_activate_composition(&mut store, self.root, &request, play_options)
+            .declare_and_activate_composition(&mut store, self.root, request, play_options)
             .map_err(Into::into)
     }
 
