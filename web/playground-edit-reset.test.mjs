@@ -11,12 +11,17 @@ const resetStart = main.indexOf('resetButton.addEventListener("click"');
 const resetEnd = main.indexOf('sceneSourceEditor.addEventListener(\n  "focus"', resetStart);
 const editorStart = main.indexOf("let sourceComposing = false;");
 const editorEnd = main.indexOf('window.addEventListener("popstate"', editorStart);
+const requestStart = main.indexOf("function requestSceneRun(");
+const requestEnd = main.indexOf("async function selectExample(", requestStart);
 assert.ok(runStatusStart >= 0 && runStatusEnd > runStatusStart);
 assert.ok(setRunStatusEnd > runStatusEnd);
 assert.ok(resetStart >= 0 && resetEnd > resetStart && editorStart >= 0 && editorEnd > editorStart);
 
-function editorHarness({ playState, activeSource = "source used by active run" }) {
+function editorHarness({ playState, deferRun, activeSource = "source used by active run" }) {
   const handlers = new Map();
+  const timers = new Map();
+  const submitted = [];
+  let nextTimer = 0;
   const example = { id: "one", title: "One" };
   const context = {
     sceneSourceEditor: {
@@ -26,6 +31,26 @@ function editorHarness({ playState, activeSource = "source used by active run" }
     resetButton: {
       disabled: false,
       addEventListener(name, callback) { handlers.set(`reset:${name}`, callback); },
+    },
+    autoRunCheckbox: {
+      checked: false,
+      addEventListener(name, callback) { handlers.set(`auto-run:${name}`, callback); },
+    },
+    autoRunTimer: null,
+    autoRunEpoch: 0,
+    setTimeout(callback, delay) {
+      assert.equal(delay, 500);
+      timers.set(++nextTimer, callback);
+      return nextTimer;
+    },
+    clearTimeout(id) { timers.delete(id); },
+    runRequestRouter: {
+      request(isCurrent = () => true) {
+        const source = context.sceneSourceEditor.value;
+        const start = () => { if (isCurrent()) submitted.push(source); };
+        if (deferRun) deferRun(start);
+        else start();
+      },
     },
     draftStatus: { value: "", dataset: {} },
     patchStatus: { value: "active execution status", dataset: { runGeneration: "17", state: "playing" } },
@@ -43,21 +68,29 @@ function editorHarness({ playState, activeSource = "source used by active run" }
     playback: { state: playState, runGeneration: 17 },
     worker: { interpreterGeneration: 4 },
     canvas: { style: { visibility: "visible" } },
-    runCalls: 0,
     stopCalls: 0,
   };
   vm.runInNewContext(
     main.slice(runStatusStart, runStatusEnd) +
+      main.slice(requestStart, requestEnd) +
       main.slice(resetStart, resetEnd) +
       main.slice(editorStart, editorEnd),
     context,
   );
-  return { context, handlers };
+  return {
+    context, handlers, submitted, timers,
+    expireTimers() {
+      for (const [id, fire] of timers) {
+        timers.delete(id);
+        fire();
+      }
+    },
+  };
 }
 
 for (const playState of ["playing", "paused", "buffering", "completed", "error"]) {
   test(`editing and Reset leave the ${playState} run and its status untouched`, () => {
-    const { context, handlers } = editorHarness({ playState });
+    const { context, handlers, timers, submitted } = editorHarness({ playState });
     const runIdentity = context.activeRunIdentity;
     const playback = { ...context.playback };
     const worker = context.worker;
@@ -81,24 +114,73 @@ for (const playState of ["playing", "paused", "buffering", "completed", "error"]
     assert.deepEqual(context.playback, playback);
     assert.equal(context.worker, worker);
     assert.equal(context.canvas.style.visibility, visibility);
-    assert.equal(context.runCalls, 0);
+    assert.equal(timers.size, 0);
+    assert.deepEqual(submitted, []);
     assert.equal(context.stopCalls, 0);
   });
 }
 
-test("IME composition updates draft status without replacing the active source", () => {
-  const { context, handlers } = editorHarness({ playState: "playing" });
+test("Auto-run waits for IME composition and submits the latest draft once", () => {
+  const { context, handlers, expireTimers, timers, submitted } = editorHarness({ playState: "playing" });
   const activeRun = context.activeRunIdentity;
+  context.autoRunCheckbox.checked = true;
+  context.sceneSourceEditor.value = "first edit";
+  handlers.get("input")({ isComposing: false });
+  assert.equal(timers.size, 1);
   handlers.get("compositionstart")();
   context.sceneSourceEditor.value = "composing text";
   handlers.get("input")({ isComposing: true });
+  assert.equal(timers.size, 0);
   handlers.get("compositionend")();
   assert.equal(context.drafts.get("one"), "composing text");
-  assert.equal(context.draftStatus.dataset.state, "unapplied");
+  context.sceneSourceEditor.value = "final text";
+  handlers.get("input")({ isComposing: false });
+  assert.equal(timers.size, 1);
+  assert.match(context.draftStatus.value, /Auto-run pending/);
   assert.equal(context.activeRunIdentity, activeRun);
   assert.equal(context.patchStatus.value, "active execution status");
-  assert.equal(context.runCalls, 0);
-  assert.equal(context.stopCalls, 0);
+  assert.deepEqual(submitted, []);
+  expireTimers();
+  assert.equal(timers.size, 0);
+  assert.deepEqual(submitted, ["final text"]);
+});
+
+test("turning off Auto-run or pressing Run cancels the pending timer", () => {
+  const { context, handlers, expireTimers, timers, submitted } = editorHarness({ playState: "paused" });
+  handlers.get("input")({ isComposing: false });
+  context.autoRunCheckbox.checked = true;
+  handlers.get("auto-run:change")();
+  assert.equal(timers.size, 1);
+  context.autoRunCheckbox.checked = false;
+  handlers.get("auto-run:change")();
+  expireTimers();
+  assert.match(context.draftStatus.value, /Run to apply/);
+  assert.deepEqual(submitted, []);
+  context.autoRunCheckbox.checked = true;
+  handlers.get("auto-run:change")();
+  assert.equal(timers.size, 1);
+  context.requestSceneRun();
+  expireTimers();
+  assert.deepEqual(submitted, ["initial draft"]);
+});
+
+test("an Auto-run queued behind source retirement yields to a newer draft", () => {
+  const queued = [];
+  const { context, handlers, expireTimers, submitted } = editorHarness({
+    playState: "playing",
+    deferRun: start => queued.push(start),
+  });
+  context.autoRunCheckbox.checked = true;
+  handlers.get("input")({ isComposing: false });
+  expireTimers();
+  assert.equal(queued.length, 1);
+  context.sceneSourceEditor.value = "newer draft";
+  handlers.get("input")({ isComposing: false });
+  queued.shift()();
+  assert.deepEqual(submitted, []);
+  expireTimers();
+  queued.shift()();
+  assert.deepEqual(submitted, ["newer draft"]);
 });
 
 test("late status from the active run cannot overwrite a newer selected draft", () => {
@@ -113,6 +195,7 @@ test("late status from the active run cannot overwrite a newer selected draft", 
     selectedExampleId: "two",
     sceneSourceEditor: { value: "new selection draft" },
     currentExample: () => ({ id: "two", title: "Two" }),
+    autoRunTimer: null,
     isCurrentRun: token => token === activeRun,
   };
   vm.runInNewContext(statusCode, context);
@@ -147,6 +230,7 @@ test("a failed Run before runtime adoption keeps the displayed run identity", ()
     selectedExampleId: "two",
     sceneSourceEditor: { value: "another draft" },
     currentExample: () => ({ id: "two", title: "Two" }),
+    autoRunTimer: null,
   };
   vm.runInNewContext(main.slice(runStatusStart, runStatusEnd), context);
   context.updateDraftStatus();
@@ -154,13 +238,13 @@ test("a failed Run before runtime adoption keeps the displayed run identity", ()
   assert.equal(context.activeRunIdentity.exampleId, "one");
 });
 
-test("editor lifecycle has no automatic source replacement path", () => {
+test("editor input submits only through the existing Run router", () => {
   const editorStart = main.indexOf('sceneSourceEditor.addEventListener("input"');
   const editorEnd = main.indexOf('window.addEventListener("popstate"', editorStart);
   const editor = main.slice(editorStart, editorEnd);
-  assert.doesNotMatch(main, /sourceRestart|createSourceRestart/);
   assert.doesNotMatch(editor, /runScene\(|requestSceneRun\(|retireActiveRunForReplacement\(|invalidateRun\(|terminate\(/);
   assert.match(editor, /drafts\.set\(example\.id, sceneSourceEditor\.value\)/);
+  assert.match(main.slice(requestStart, requestEnd), /return runRequestRouter\.request\(\)/);
   assert.match(main.slice(resetStart, resetEnd), /sceneSourceEditor\.value = canonicalSource/);
   assert.match(main, /run: \(source, exampleId, selectionGeneration\) => runScene\(source, exampleId, selectionGeneration\)/);
 });

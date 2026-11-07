@@ -211,7 +211,7 @@ Transform semantics are authored in Rust and lowered into renderer-independent e
 
 ## Live authoring
 
-Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. A rerun replaces the session; it does not currently qualify incremental hot reload or identity preservation between independently authored scenes. Within a running session, shared Rust semantics own object identity and mutations.
+Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. Turn on **Auto-run** to submit edits after a 500 ms pause. Both use the same full scene restart. Within a running session, shared Rust semantics own object identity and mutations.
 
 Python loads lazily in a separate Pyodide worker. The normal playground does not serialize scene documents or allocate frontend semantic identities. Source continuations attach early so Rust execution can release each `play()`/`wait()` barrier. Direct Rust/WASM examples do not require Python.
 

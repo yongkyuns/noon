@@ -26,6 +26,8 @@ const runStart = main.indexOf("async function runScene(");
 const runEnd = main.indexOf("const runRequestRouter =", runStart);
 const discardStart = main.indexOf("function discardEarlyContinuationRuntime(");
 const discardEnd = main.indexOf("async function supersedeActiveSourceContinuation()", discardStart);
+const cancelAutoRunStart = main.indexOf("function cancelAutoRun(");
+const cancelAutoRunEnd = main.indexOf("function scheduleAutoRun(", cancelAutoRunStart);
 const hideStart = main.indexOf('  window.addEventListener(\n    "pagehide"');
 const hideEnd = main.indexOf("\n} catch (error) {", hideStart);
 assert.ok(runStart >= 0 && runEnd > runStart && hideStart >= 0 && hideEnd > hideStart);
@@ -50,6 +52,7 @@ function navigationFixture() {
     },
     __NOON_PLAYGROUND_TEST_HOOKS__: { authoringRunOptions: () => ({ preparedPlayback: false }) },
     window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" },
+    autoRunTimer: null, autoRunEpoch: 0, clearTimeout,
     generations: new PlaygroundGeneration(), status: { dataset: {} }, patchStatus: { dataset: {} },
     player: null, playerNeedsRestart: false, playbackControls: null, runtimePreparation: null,
     authoringWorkers: null, preparedPlaybackPlayer: null,
@@ -108,6 +111,7 @@ function navigationFixture() {
   });
   vm.runInNewContext(
     main.slice(hookStart, hookEnd) + main.slice(profileStart, profileEnd) +
+      main.slice(cancelAutoRunStart, cancelAutoRunEnd) +
       main.slice(discardStart, discardEnd) + main.slice(runStart, runEnd) + main.slice(hideStart, hideEnd),
     context,
   );
@@ -228,10 +232,16 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
   assert.equal(f.clients.length, 3, "a permanently retired document must not start another worker");
 });
 
-test("navigation after a draft change does not create an authoring request", async () => {
+test("navigation cancels a pending Auto-run across cached restoration", () => {
   const f = navigationFixture();
   f.context.sceneSourceEditor.value = "unsubmitted draft";
+  const cancelled = [];
+  f.context.autoRunTimer = 7;
+  f.context.clearTimeout = id => cancelled.push(id);
   f.dispatch("pagehide", true); f.dispatch("pageshow", true);
+  assert.deepEqual(cancelled, [7]);
+  assert.equal(f.context.autoRunTimer, null);
+  assert.equal(f.context.autoRunEpoch, 1);
   assert.equal(f.diagnosticInvalidations, 1);
   assert.equal(f.diagnosticDisposals, 0);
   assert.equal(f.clients.length, 0, "restoration must not launch a cancelled edit timer");
