@@ -268,7 +268,7 @@ async function previewPixels(page, frozen = false) {
   }, frozen);
 }
 
-async function pauseAndRecordPreview(page) {
+async function pauseAndRecordPreview(page, { sampleTime = null } = {}) {
   const toggle = page.locator(".playback-toggle");
   const duration = Number(await page.locator(".playback-scrubber").getAttribute("max"));
   if (duration === 0) {
@@ -278,6 +278,30 @@ async function pauseAndRecordPreview(page) {
   } else {
     assert.equal(await toggle.isEnabled(), true, "a positive replay interval must remain controllable");
     if (await toggle.getAttribute("aria-label") === "Pause animation") await toggle.click();
+    await page.waitForFunction(() => {
+      const controls = document.querySelector(".playback-controls");
+      return controls?.dataset.busy === "false" && controls.dataset.playing === "false";
+    });
+  }
+  if (sampleTime !== null) {
+    assert.ok(sampleTime > 0 && sampleTime < duration, "the preview sample must be inside the authored interval");
+    // CreateCircle begins with almost no visible geometry after every loop. Use
+    // its public replay control to select a meaningful reference, then require
+    // the renderer's receipt rather than the scrubber's optimistic target.
+    const scrubber = page.locator(".playback-scrubber");
+    assert.equal(await scrubber.isEnabled(), true, "the preview sample must be seekable");
+    await scrubber.evaluate((input, time) => {
+      input.value = String(time);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }, sampleTime);
+    await page.waitForFunction(async time => {
+      const controls = document.querySelector(".playback-controls");
+      const renderer = (await window.__noonExampleGallery.executionMetrics()).metrics;
+      const sample = renderer.latestPresentationSample;
+      return controls?.dataset.busy === "false" && controls.dataset.playing === "false" &&
+        renderer.presentedFrames > 0 && renderer.time === time && sample?.time === time &&
+        sample.session === renderer.presentedSession && Number.isSafeInteger(sample.sequence);
+    }, sampleTime);
   }
   // Observe the compositor after pause or exact-zero completion.
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -617,7 +641,7 @@ try {
   assert.notEqual(diagnostics.snapshots.baseline.patchSequence, "");
   await page.screenshot({ path: path.join(artifactDir, "baseline.png"), fullPage: true });
 
-  diagnostics.previewBaseline = await pauseAndRecordPreview(page);
+  diagnostics.previewBaseline = await pauseAndRecordPreview(page, { sampleTime: 0.5 });
   const draftBaseline = await snapshot(page);
   const canonicalSource = await page.evaluate(() => document.querySelector("#python-scene-source").value);
   phase = "draft-only-ime-reset";
