@@ -420,6 +420,7 @@ export class PlaygroundPlaybackControls {
     this.#gestureRange = {
       ...range,
       nativeEnd: this.#nativeRangeEndpoint(range),
+      open: this.#preparedFrontier !== null && this.#durationSeconds === null,
       pointerId: event.pointerId ?? null,
     };
   };
@@ -735,6 +736,8 @@ export class PlaygroundPlaybackControls {
   #renderTime() {
     if (this.#destroyed) return;
     const known = this.#controllable && this.#durationSeconds !== null;
+    const open = this.#controllable && this.#preparedFrontier !== null && this.#durationSeconds === null;
+    const openRail = this.#gestureRange?.open ?? open;
     const time = known ? Math.min(this.#timeSeconds, this.#durationSeconds) : this.#timeSeconds;
     this.#root.dataset.elapsedSeconds = String(time);
     const range = this.#gestureRange ?? this.#currentSeekRange();
@@ -742,6 +745,15 @@ export class PlaygroundPlaybackControls {
       this.#scrubber.value = range === null ? "0" :
         String(Math.min(Math.max(this.#desiredSeek ?? time, range.start), range.end));
     }
+    // The rail uses the same bounds as the thumb. The striped cap sits outside
+    // those bounds while the total duration is unknown.
+    const hasReadyRange = (open || known) && range !== null && range.end > range.start;
+    const position = hasReadyRange
+      ? (Number(this.#scrubber.value) - range.start) / (range.end - range.start) : 0;
+    this.#scrubber.style.setProperty("--played", `${100 * Math.min(1, Math.max(0, position))}%`);
+    const buffered = openRail ? (hasReadyRange ? "open" : "empty")
+      : hasReadyRange ? "complete" : "none";
+    if (this.#root.dataset.buffered !== buffered) this.#root.dataset.buffered = buffered;
     this.#scrubber.setAttribute(
       "aria-valuetext",
       known
@@ -750,9 +762,21 @@ export class PlaygroundPlaybackControls {
           ? `${formatTime(time)} seconds elapsed · seeking unavailable`
           : `${formatTime(time)} seconds elapsed · available through ${formatTime(range.end)} seconds · total duration unknown`,
     );
-    this.#timeOutput.value = this.#preparing ? "Preparing animation…" : known
-      ? `${formatTime(time)} / ${formatTime(this.#durationSeconds)} s`
-      : this.#unavailableReason !== null && !this.#forwardPlayback ? `${formatTime(time)} s · completed` : `${formatTime(time)} / — s`;
+    const bufferedTime = open && range !== null ? formatTime(this.#preparedFrontier) : null;
+    const endTime = known ? formatTime(this.#durationSeconds) : bufferedTime === null ? "—" : `${bufferedTime}+`;
+    const readout = !known && this.#unavailableReason !== null && !this.#forwardPlayback
+      ? `${formatTime(time)} s · completed` : `${formatTime(time)} / ${endTime} s`;
+    this.#timeOutput.value = readout;
+    const title = bufferedTime === null ? ""
+      : `Buffered through ${bufferedTime} s · total duration unknown`;
+    if (this.#timeOutput.title !== title) this.#timeOutput.title = title;
+    if (this.#gestureRange === null) {
+      // Reserve room for the longest playhead time on this rail. Changing
+      // digits or admitting more history must not shift a held pointer target.
+      const longestTime = known ? endTime : bufferedTime;
+      const railReadout = longestTime === null ? readout : `${longestTime} / ${endTime} s`;
+      this.#timeOutput.style.width = `${Math.max(railReadout.length, readout.length)}ch`;
+    }
   }
 
   #renderDisabled() {
@@ -819,6 +843,7 @@ function renderPlaybackPlaceholder(root) {
   root.removeAttribute("data-controllable");
   root.removeAttribute("data-elapsed-seconds");
   root.removeAttribute("data-buffering");
+  root.removeAttribute("data-buffered");
   root.removeAttribute("data-preparing");
   root.removeAttribute("data-duration-known");
   root.removeAttribute("data-undo-support");
@@ -839,10 +864,13 @@ function renderPlaybackPlaceholder(root) {
 
   scrubber.max = "1";
   scrubber.value = "0";
+  scrubber.style.removeProperty("--played");
   scrubber.disabled = true;
   scrubber.setAttribute("aria-label", "Animation playhead unavailable until Run");
   timeOutput.setAttribute("aria-label", "Animation time unavailable until Run");
   timeOutput.value = "0.00 / —";
+  timeOutput.title = "";
+  timeOutput.style.width = "";
   undoDragButton.hidden = true;
   liveStatus.textContent = "Loading playback state";
   liveStatus.removeAttribute("title");
@@ -880,7 +908,8 @@ function ensurePlaybackMarkup(root) {
   undoDragButton.textContent = "Undo drag";
   undoDragButton.setAttribute("aria-label", "Undo the most recent drag");
   const timeline = child(root, ".playback-timeline", "div", "playback-timeline");
-  const scrubber = child(timeline, ".playback-scrubber", "input", "playback-scrubber");
+  const rail = child(timeline, ".playback-rail", "div", "playback-rail");
+  const scrubber = child(rail, ".playback-scrubber", "input", "playback-scrubber");
   scrubber.type = "range";
   scrubber.min = "0";
   scrubber.step = "any";
@@ -972,18 +1001,64 @@ function installStyles() {
       min-width: 0;
       min-height: 2.5rem;
     }
+    .playback-rail {
+      display: flex;
+      align-items: center;
+      --rail-height: 0.375rem;
+      --thumb-size: 0.75rem;
+      --ready-color: #30394a;
+    }
+    .playback-controls:is([data-buffered="open"], [data-buffered="complete"]) .playback-rail {
+      --ready-color: #8392aa;
+    }
+    .playback-controls:is([data-buffered="open"], [data-buffered="empty"]) .playback-rail::after {
+      content: "";
+      flex: 0 0 0.8rem;
+      height: var(--rail-height);
+      margin-inline-start: 0.15rem;
+      border-radius: 0.2rem;
+      background: repeating-linear-gradient(135deg, #30394a 0 2px, #505e75 2px 4px);
+    }
     .playback-scrubber {
+      appearance: none;
+      flex: 1;
       width: 100%;
       min-width: 0;
-      accent-color: var(--accent);
+      height: 1.5rem;
+      margin: 0;
+      background: linear-gradient(to right, var(--accent-strong) var(--played, 0%), var(--ready-color) 0)
+        center / calc(100% - var(--thumb-size)) var(--rail-height) no-repeat;
       cursor: pointer;
     }
+    .playback-scrubber::-webkit-slider-runnable-track { height: var(--rail-height); }
+    .playback-scrubber::-moz-range-track { height: var(--rail-height); background: transparent; }
+    .playback-scrubber::-webkit-slider-thumb {
+      appearance: none;
+      width: var(--thumb-size);
+      height: var(--thumb-size);
+      margin-top: calc((var(--rail-height) - var(--thumb-size)) / 2);
+      border-radius: 50%;
+      background: var(--accent-strong);
+    }
+    .playback-scrubber::-moz-range-thumb {
+      width: var(--thumb-size);
+      height: var(--thumb-size);
+      border: 0;
+      border-radius: 50%;
+      background: var(--accent-strong);
+    }
+    .playback-slot .playback-scrubber:disabled,
+    .playback-controls .playback-scrubber:disabled { opacity: 1; }
+    .playback-scrubber:disabled::-webkit-slider-thumb { background: #8392aa; }
+    .playback-scrubber:disabled::-moz-range-thumb { background: #8392aa; }
     .playback-time {
       min-width: 6.2rem;
       color: #b9c3d6;
       font: 0.68rem ui-monospace, SFMono-Regular, Menlo, monospace;
       text-align: right;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .playback-slot button:disabled,
     .playback-slot input:disabled,
@@ -999,6 +1074,12 @@ function installStyles() {
       font-size: 0.68rem;
       white-space: nowrap;
       text-overflow: ellipsis;
+    }
+    .playback-controls:is([data-buffered="open"], [data-buffered="empty"]) .playback-live-status {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      clip-path: inset(50%);
     }
     .playback-slot [hidden],
     .playback-controls [hidden] { display: none !important; }
