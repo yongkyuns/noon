@@ -331,6 +331,11 @@ and Sound. Both native examples also enable these keyboard controls:
 | Up / Down | Increase or decrease viewer volume by five percentage points |
 | M | Mute or restore the retained viewer volume |
 
+The browser playground uses the same shortcuts when its playback panel is
+focused. Focused sliders, buttons, menus and the source editor retain their usual
+keyboard behavior. Shortcuts use unmodified keys, ignore key repeats, and respect
+the available replay range; section and audio commands require those capabilities.
+
 Seek, section navigation and Restart preserve play/pause state. A paused seek
 presents the target without starting sound. Playback waits for that picture and
 the preceding release before admitting a fresh device anchor. Ordinary starts

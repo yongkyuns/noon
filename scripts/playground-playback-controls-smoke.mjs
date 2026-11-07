@@ -238,8 +238,11 @@ try {
       resume: async () => ({ time: 0, playing: true }),
       seek: async (time) => ({ time, playing: true }),
       restartPlayback: async () => ({ time: 0, playing: true }),
+      setAudioVolume: value => window.__controlsAudioCalls.push(["volume", value]),
+      setAudioMuted: value => window.__controlsAudioCalls.push(["muted", value]),
     };
     window.__controlsGesturePauseCalls = 0;
+    window.__controlsAudioCalls = [];
     const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 4 });
     window.__controlsGestureRegression = { controls, preview, state: { time: 0, playing: true, durationSeconds: 4 } };
     controls.sync(window.__controlsGestureRegression.state);
@@ -264,6 +267,18 @@ try {
   await page.waitForFunction(() => window.__controlsGesturePauseCalls === 1);
   assert.equal(await page.evaluate(() => window.__controlsGesturePauseCalls), 1,
     "unchanged control state during a pointer gesture must preserve the pause click");
+  await page.evaluate(() => {
+    window.__controlsGestureRegression.controls.sync({ time: 0, playing: false,
+      hasAudio: true, audioVolume: 0.98, audioMuted: false });
+  });
+  const audioPanel = page.locator(".playback-controls").last();
+  await audioPanel.press("ArrowUp");
+  await audioPanel.press("ArrowDown");
+  await audioPanel.press("KeyM");
+  await audioPanel.press("KeyM");
+  assert.deepEqual(await page.evaluate(() => window.__controlsAudioCalls),
+    [["volume", 1], ["volume", 0.95], ["muted", true], ["muted", false]]);
+  assert.equal(await audioPanel.getByRole("slider", { name: "Music volume" }).inputValue(), "0.95");
   await page.evaluate(() => {
     const { controls, preview } = window.__controlsGestureRegression;
     controls.destroy();
@@ -442,7 +457,7 @@ class Lesson(Scene):
     window.__noonShortcutEdges = [];
     for (const type of ["keydown", "keyup"]) {
       window.addEventListener(type, event => {
-        if (["Space", "ArrowLeft", "ArrowRight", "Home"].includes(event.code)) {
+        if (["Space", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "ArrowUp", "ArrowDown", "KeyM"].includes(event.code)) {
           window.__noonShortcutEdges.push(`${type}:${event.code}`);
         }
       });
@@ -457,13 +472,13 @@ class Lesson(Scene):
   await cueMarkers.nth(0).press("Enter");
   await waitForMetricNear(page, 0);
   assert.equal(await previous.isDisabled(), true);
-  await panel.press("ArrowRight");
+  await panel.press("PageDown");
   await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
   assert.equal(await keyPoints.inputValue(), "1");
   await next.click();
   await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
   assert.equal(await keyPoints.inputValue(), "2");
-  await panel.press("ArrowLeft");
+  await panel.press("PageUp");
   await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
   await keyPoints.selectOption("0");
   await waitForMetricNear(page, 0);
@@ -484,6 +499,15 @@ class Lesson(Scene):
   await waitForMetricNear(page, 0);
   diagnostics.keyPoints = { count: 3, clickableMarkers: true, nextTime: Number(initial.scrubberMax) + 1, silent: true, staticWaitClock: true };
   await panel.press("ArrowRight");
+  const forwardTime = Math.min(5, Number(rerun.scrubberMax));
+  await waitForMetricNear(page, forwardTime);
+  assert.equal(await panel.getAttribute("data-playing"), "false");
+  await panel.press("ArrowLeft");
+  await waitForMetricNear(page, 0);
+  await panel.press("ArrowUp");
+  await panel.press("ArrowDown");
+  await panel.press("KeyM");
+  await panel.press("PageDown");
   await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
   await panel.press("Home");
   await waitForMetricNear(page, 0);
@@ -497,10 +521,10 @@ class Lesson(Scene):
   });
   const nativeRangeTime = Number(await panel.getAttribute("data-elapsed-seconds"));
   assert.ok(nativeRangeTime < Number(initial.scrubberMax) / 2,
-    "a focused slider keeps native fine seeking instead of jumping to a cue");
+    "a focused slider keeps native fine seeking instead of seeking five seconds");
   await panel.press("Home");
   await waitForMetricNear(page, 0);
-  diagnostics.keyboard = { keys: ["Space", "ArrowLeft", "ArrowRight", "Home"], sceneEdges: [], nativeRangeTime };
+  diagnostics.keyboard = { keys: ["Space", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "ArrowUp", "ArrowDown", "KeyM"], sceneEdges: [], nativeRangeTime, forwardTime };
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
