@@ -47,7 +47,7 @@ export function installPythonEditorTools(textarea, format) {
   const summary = document.createElement("summary");
   summary.textContent = "Shortcuts";
   const helpText = document.createElement("div");
-  helpText.textContent = "Ctrl/Cmd+Enter: run now · Shift+Alt+F: format · In the enhanced editor: Ctrl/Cmd+F: find and replace · Ctrl/Cmd+[: indent less · Ctrl/Cmd+]: indent more · Ctrl/Cmd+Z: undo. Edits restart the preview after a typing pause.";
+  helpText.textContent = "Ctrl/Cmd+Enter: run now · Shift+Alt+F: format · In the enhanced editor: Ctrl/Cmd+F: find and replace · Ctrl/Cmd+[: indent less · Ctrl/Cmd+]: indent more · Ctrl/Cmd+Z: undo. Turn on Auto-run to rerun after a typing pause.";
   help.append(summary, helpText);
   toolbar.append(help);
   const output = document.createElement("output");

@@ -174,6 +174,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     let playerNeedsRestart = false, busyDepth = 0, galleryPage = 0, playbackDurationSeconds = 4;
     let runtimeRecoveryPromise = null, runtimeFailureRevision = 0;
     let rendererBackend = "", playbackPending = null, metricsEpoch = 0;
+    const autoRunTimer = null;
     const currentExample = () => env.example;
     const resetPresentationRate = () => {};
     const updateGalleryPagerControls = () => {};

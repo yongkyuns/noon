@@ -184,6 +184,15 @@
         gap: 0.38rem;
       }
 
+      .auto-run-option {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        color: #d5dbea;
+        font-size: 0.76rem;
+        white-space: nowrap;
+      }
+
       .secondary-button,
       .primary-button {
         appearance: none;
@@ -484,6 +493,10 @@
           <div class="pane-toolbar">
             <span class="file-label">main.py</span>
             <div class="actions">
+              <label class="auto-run-option">
+                <input id="auto-run" type="checkbox" autocomplete="off">
+                Auto-run
+              </label>
               <button id="replace-scene" class="primary-button" type="button" disabled>
                 Run
               </button>

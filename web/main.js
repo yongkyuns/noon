@@ -24,6 +24,7 @@ const status = document.querySelector("#status");
 const statusText = document.querySelector("#status-text");
 const draftStatus = document.querySelector("#draft-status");
 const sceneButton = document.querySelector("#replace-scene");
+const autoRunCheckbox = document.querySelector("#auto-run");
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
 const recoverButton = document.querySelector("#preview-recover");
@@ -396,6 +397,8 @@ let metricsPending = null;
 let playbackPending = null;
 let metricsNextPollAt = 0;
 let metricsEpoch = 0;
+let autoRunTimer = null;
+let autoRunEpoch = 0;
 
 function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
@@ -419,9 +422,11 @@ function updateDraftStatus(example = currentExample()) {
       : activeRunIdentity.outcome === "complete" ? "last Run" : "current Run";
     draftStatus.value = `${example.title} draft matches the ${outcome}`;
   } else if (activeRunIdentity !== null) {
-    draftStatus.value = `${example.title} draft not applied · ${activeRunIdentity.title} remains active · Run to apply`;
+    const action = autoRunTimer === null ? "Run to apply" : "Auto-run pending";
+    draftStatus.value = `${example.title} draft not applied · ${activeRunIdentity.title} remains active · ${action}`;
   } else {
-    draftStatus.value = `${example.title} draft ready · Run to preview`;
+    const action = autoRunTimer === null ? "Run to preview" : "Auto-run pending";
+    draftStatus.value = `${example.title} draft ready · ${action}`;
   }
 }
 
@@ -1516,6 +1521,7 @@ const runRequestRouter = createRunRequestRouter({
 });
 
 function requestSceneRun() {
+  cancelAutoRun();
   return runRequestRouter.request();
 }
 
@@ -1528,6 +1534,7 @@ async function selectExample(
     throw new Error(`Unknown example ${id}`);
   }
 
+  cancelAutoRun();
   const requestToken = generations.beginSelectionRequest(id);
   const releaseBusy = beginBusy();
   let selectionToken = null;
@@ -1549,6 +1556,7 @@ async function selectExample(
       return recordStale(selectionToken, "after-prior-run");
     }
 
+    cancelAutoRun();
     if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
       drafts.set(selectedExampleId, sceneSourceEditor.value);
     }
@@ -1612,6 +1620,7 @@ resetButton.addEventListener("click", () => {
   drafts.delete(example.id);
   sceneSourceEditor.value = canonicalSource;
   resetButton.disabled = true;
+  scheduleAutoRun();
   updateDraftStatus(example);
 });
 sceneSourceEditor.addEventListener(
@@ -1622,9 +1631,36 @@ sceneSourceEditor.addEventListener(
   { once: true },
 );
 let sourceComposing = false;
-sceneSourceEditor.addEventListener("compositionstart", () => { sourceComposing = true; });
+function cancelAutoRun() {
+  autoRunEpoch += 1;
+  if (autoRunTimer !== null) clearTimeout(autoRunTimer);
+  autoRunTimer = null;
+}
+
+function scheduleAutoRun() {
+  cancelAutoRun();
+  if (!autoRunCheckbox.checked || sourceComposing || currentExample() === null) return;
+  const epoch = autoRunEpoch;
+  autoRunTimer = setTimeout(() => {
+    autoRunTimer = null;
+    // The router can wait for an older run to retire before starting this one.
+    void runRequestRouter.request(() => epoch === autoRunEpoch);
+  }, 500);
+}
+
+autoRunCheckbox.addEventListener("change", () => {
+  if (autoRunCheckbox.checked && draftStatus.dataset.state === "unapplied") scheduleAutoRun();
+  else cancelAutoRun();
+  updateDraftStatus();
+});
+sceneSourceEditor.addEventListener("compositionstart", () => {
+  sourceComposing = true;
+  cancelAutoRun();
+  updateDraftStatus();
+});
 sceneSourceEditor.addEventListener("compositionend", () => {
   sourceComposing = false;
+  scheduleAutoRun();
   updateDraftStatus();
 });
 sceneSourceEditor.addEventListener("input", (event) => {
@@ -1632,6 +1668,8 @@ sceneSourceEditor.addEventListener("input", (event) => {
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
   if (example) {
+    if (event.isComposing) cancelAutoRun();
+    else scheduleAutoRun();
     updateDraftStatus(example);
   }
 });
@@ -1846,6 +1884,7 @@ try {
     (event) => {
       // Retiring a worker rejects its pending requests. Invalidate their run
       // before teardown so navigation cannot publish a Python failure.
+      cancelAutoRun();
       generations.invalidateRun();
       activeSourceContinuation = null;
       diagnosticPanel.invalidate();
