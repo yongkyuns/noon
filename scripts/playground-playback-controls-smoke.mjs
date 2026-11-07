@@ -279,6 +279,34 @@ try {
   assert.deepEqual(await page.evaluate(() => window.__controlsAudioCalls),
     [["volume", 1], ["volume", 0.95], ["muted", true], ["muted", false]]);
   assert.equal(await audioPanel.getByRole("slider", { name: "Music volume" }).inputValue(), "0.95");
+  const buffered = await audioPanel.evaluate(panel => {
+    const { controls } = window.__controlsGestureRegression;
+    const rail = panel.querySelector(".playback-rail");
+    const input = panel.querySelector(".playback-scrubber");
+    const snapshot = () => ({
+      striped: getComputedStyle(rail, "::after").backgroundImage.includes("repeating-linear-gradient"),
+      played: Math.round(100 * parseFloat(input.style.getPropertyValue("--played"))) / 100,
+      time: panel.querySelector(".playback-time").value,
+      statusClipped: getComputedStyle(panel.querySelector(".playback-live-status")).clipPath !== "none",
+    });
+    const state = { time: 1, playing: false, preparedPlayback: true, replaySupported: true,
+      preparedFrontier: 4, seekRange: { start: 0, end: 3.9999999999999996 },
+      durationSeconds: null, buffering: true };
+    controls.sync(state);
+    const open = snapshot();
+    controls.sync({ ...state, preparedFrontier: 8, seekRange: { start: 0, end: 8 },
+      durationSeconds: 8, buffering: false });
+    return { open, complete: snapshot() };
+  });
+  assert.deepEqual(buffered, {
+    open: { striped: true, played: 25, time: "1.00 / 4.00+ s", statusClipped: true },
+    complete: { striped: false, played: 12.5, time: "1.00 / 8.00 s", statusClipped: false },
+  });
+  await page.emulateMedia({ forcedColors: "active" });
+  const forcedTrack = await audioPanel.locator(".playback-scrubber").evaluate(input =>
+    getComputedStyle(input).backgroundImage);
+  assert.match(forcedTrack, /^linear-gradient/, "forced colors must keep the scrubber track visible");
+  await page.emulateMedia({ forcedColors: "none" });
   await page.evaluate(() => {
     const { controls, preview } = window.__controlsGestureRegression;
     controls.destroy();

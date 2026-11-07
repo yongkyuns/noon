@@ -6,7 +6,10 @@ export class Element extends EventTarget {
     this.tagName = tag.toUpperCase();
     this.children = [];
     this.dataset = {};
-    this.style = {};
+    this.style = {
+      setProperty(name, value) { this[name] = value; },
+      removeProperty(name) { delete this[name]; },
+    };
     this.attributes = new Map();
     this.className = "";
     this.value = "";

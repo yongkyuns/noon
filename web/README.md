@@ -48,6 +48,10 @@ and **M** toggles mute without changing the volume. These match the native viewe
 Use unmodified keys; holding a key does not repeat commands. Focused buttons,
 menus, sliders and the Python editor retain their normal keys.
 
+The timeline shows played time in purple and prepared time in gray. While the
+duration is unknown, the striped end and a readout such as `0.00 / 4.00+ s`
+show that four seconds are ready and preparation can continue.
+
 Previous/Next use the nearest boundary strictly before/after the playhead,
 without wrapping or an epsilon. Same-time cues use the first declaration;
 duplicate names and skip sections remain available in the jump menu. Explicit

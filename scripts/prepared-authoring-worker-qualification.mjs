@@ -185,7 +185,7 @@ try {
         assert.equal(await seekInput.isEnabled(), true);
         assert.ok(Number(await seekInput.getAttribute("max")) < initial.preparedFrontier,
           "the open history slider must stop before its exclusive frontier");
-        assert.equal(await page.locator(".playback-time").textContent(), "0.00 / — s");
+        assert.equal(await page.locator(".playback-time").textContent(), "0.00 / 1.00+ s");
         const selectableEnd = Number(await seekInput.getAttribute("max"));
         const rejectedFrontier = await page.evaluate(async frontier => {
           const before = await preparedAuthoring.execution.state();
