@@ -3409,3 +3409,6 @@ pub mod pointer_selection;
 pub mod latex_text;
 
 pub mod polynomial_rates;
+
+#[cfg(feature = "wgsl-effects")]
+pub mod scan_band;

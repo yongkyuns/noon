@@ -247,3 +247,6 @@ fn public_composed_group_pixels_cover_live_attachment_membership_and_retirement(
 
 #[cfg(feature = "wgsl-effects")]
 mod shader;
+
+#[cfg(feature = "wgsl-effects")]
+mod scan_band;

@@ -80,6 +80,39 @@ function reference(image, time) {
   assert.equal(actual[3], 255);
   return { expected, actual, maximumError, runtimeBuild: identity.buildId };
 }
+// Independent subpixel integration, deliberately different from the WGSL CDF.
+function scanBandReference(image, time) {
+  const phase = time / 2, sin = Math.sin(0.37), cos = Math.cos(0.37);
+  let maximumError = 0, probes = 0, edges = 0;
+  for (const localX of [4 * (phase - 0.6), 4 * (phase - 0.4), 4 * (phase - 0.5)]) {
+    if (Math.abs(localX) > 1.7) continue; // Keep source coverage unambiguous.
+    for (const localY of [-0.5, 0, 0.5]) {
+      const world = [cos * localX - sin * localY, sin * localX + cos * localY];
+      const px = Math.floor(image.width / 2 + world[0] * image.height / 8);
+      const py = Math.floor(image.height / 2 - world[1] * image.height / 8);
+      for (const shift of [-1, 0, 1]) {
+        const x = px + shift, y = py, n = 128;
+        let hits = 0;
+        for (let sy = 0; sy < n; sy++) for (let sx = 0; sx < n; sx++) {
+          const wx = (x + (sx + 0.5) / n - image.width / 2) * 8 / image.height;
+          const wy = (image.height / 2 - y - (sy + 0.5) / n) * 8 / image.height;
+          const local = 0.5 + (cos * wx + sin * wy) / 4;
+          if (Math.abs(local - phase) <= 0.1) hits++;
+        }
+        const expected = Math.round(128 * hits / (n * n));
+        const at = 4 * (y * image.width + x);
+        const actual = [...image.data.subarray(at, at + 4)];
+        const error = Math.max(...[expected, expected, 0, 255].map((v, c) => Math.abs(v - actual[c])));
+        assert.ok(error <= 2, `ScanBand t=${time} pixel=${x},${y}: ${actual} expected yellow=${expected}`);
+        maximumError = Math.max(maximumError, error);
+        edges += Number(hits > 0 && hits < n * n);
+        probes++;
+      }
+    }
+  }
+  assert.ok(probes >= 9 && edges >= 1, "ScanBand must qualify discontinuous edges");
+  return { probes, edges, subpixelGrid: 128, maximumError, runtimeBuild: identity.buildId };
+}
 // The CPU-authored program stays valid. Corrupt only the real device descriptor
 // to prove that compilation failure cannot publish the staged semantic batch.
 async function qualifyLatePreparation(context, baseUrl, backend) {
@@ -328,9 +361,14 @@ await qualifyPairedAuthoring({
       id: `shader-fade-${sampleTime}`, file: "shader_material_fade.py", source: fadeSource,
       factory: "createDirectShaderFadeSmokeRenderer", duration: 7, sampleTime, playback: "live",
       boundaries: [0.5, 1.5, 3.5, 4, 6, 6.5], stopAtSourceCompletion: sampleTime === 7,
+    })),
+    ...(sourceMode === "portable" ? [0, 0.5, 1, 2] : []).map(sampleTime => ({
+      id: `scan-band-${sampleTime}`, file: "scan_band.py", factory: "createDirectScanBandSmokeRenderer",
+      duration: 2, sampleTime, objectCount: 1,
     }))],
   qualifyPixels({ fixture, rust, python }) {
-    const check = fixture.id.startsWith("shader-fade-") ? fadeReference : reference;
+    const check = fixture.id.startsWith("scan-band-") ? scanBandReference
+      : fixture.id.startsWith("shader-fade-") ? fadeReference : reference;
     return { rust: check(rust, fixture.sampleTime), python: check(python, fixture.sampleTime) };
   },
   async qualifyLifecycle(context, baseUrl, backend) {
