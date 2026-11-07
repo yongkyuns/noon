@@ -1,4 +1,6 @@
 #[cfg(target_arch = "wasm32")]
+pub(crate) use noon::integration::family_color;
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn gradient_colors(
     values: &[f64],
 ) -> Result<Vec<noon::Color>, crate::authoring_error::AuthoringFailure> {
@@ -41,52 +43,7 @@ pub(crate) fn radial_gradient_colors(
 }
 
 #[cfg(target_arch = "wasm32")]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn style_update(
-    fill_enabled: bool,
-    fill_red: f64,
-    fill_green: f64,
-    fill_blue: f64,
-    fill_alpha: f64,
-    fill_opacity: Option<f64>,
-    stroke_enabled: bool,
-    stroke_red: f64,
-    stroke_green: f64,
-    stroke_blue: f64,
-    stroke_alpha: f64,
-    stroke_width: Option<f64>,
-    stroke_opacity: Option<f64>,
-) -> Result<noon::StyleUpdate, String> {
-    Ok(noon::StyleUpdate {
-        fill_color: family_color(fill_enabled, fill_red, fill_green, fill_blue, fill_alpha)?,
-        fill_opacity,
-        stroke_color: family_color(
-            stroke_enabled,
-            stroke_red,
-            stroke_green,
-            stroke_blue,
-            stroke_alpha,
-        )?,
-        stroke_width,
-        stroke_opacity,
-        ..noon::StyleUpdate::default()
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn style_update_with_background_stroke(
-    mut update: noon::StyleUpdate,
-    enabled: bool,
-    rgba: [f64; 4],
-    width: Option<f64>,
-    opacity: Option<f64>,
-) -> Result<noon::StyleUpdate, String> {
-    let [red, green, blue, alpha] = rgba;
-    update.background_stroke_color = family_color(enabled, red, green, blue, alpha)?;
-    update.background_stroke_width = width;
-    update.background_stroke_opacity = opacity;
-    Ok(update)
-}
+pub(crate) use noon::integration::{style_update, style_update_with_background_stroke};
 
 #[cfg(target_arch = "wasm32")]
 use noon::integration::authoring_render_f64 as render_f64;
@@ -130,31 +87,6 @@ pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_s
     }
     result.push(&wasm_bindgen::JsValue::from(children));
     result
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn family_color(
-    enabled: bool,
-    red: f64,
-    green: f64,
-    blue: f64,
-    alpha: f64,
-) -> Result<Option<noon::Color>, String> {
-    if !enabled {
-        return Ok(None);
-    }
-    if ![red, green, blue, alpha]
-        .iter()
-        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-    {
-        return Err("family color components must be finite and between zero and one".into());
-    }
-    Ok(Some(noon::Color::rgba(
-        red as f32,
-        green as f32,
-        blue as f32,
-        alpha as f32,
-    )))
 }
 
 #[cfg(target_arch = "wasm32")]

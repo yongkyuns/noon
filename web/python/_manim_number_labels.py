@@ -10,10 +10,10 @@ import _manim_semantic_handles as _shared
 from _noon_errors import engine_call
 
 try:
-    from js import noonNumberPlaneDecimalCoordinateLabelFamilies as _plane_decimal_labels
-    from js import noonNumberLineDecimalNumberLabelFamily as _line_decimal_labels
-    from js import noonAxesDecimalCoordinateLabelFamilies as _axes_decimal_labels
-    from js import noonDecimalNumberLabelMembers as _decimal_members
+    from _noon_host import noonNumberPlaneDecimalCoordinateLabelFamilies as _plane_decimal_labels
+    from _noon_host import noonNumberLineDecimalNumberLabelFamily as _line_decimal_labels
+    from _noon_host import noonAxesDecimalCoordinateLabelFamilies as _axes_decimal_labels
+    from _noon_host import noonDecimalNumberLabelMembers as _decimal_members
 except ImportError:
     _plane_decimal_labels = None
     _line_decimal_labels = _axes_decimal_labels = _decimal_members = None

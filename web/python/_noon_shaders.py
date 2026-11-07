@@ -54,7 +54,7 @@ class ShaderParameter(_Immutable):
     def _make(cls, method, name, *args):
         if not isinstance(name, str):
             raise TypeError("shader parameter name must be a string")
-        from js import noonShaderParameter
+        from _noon_host import noonShaderParameter
         value = object.__new__(cls)
         value._parameter = engine_call(getattr(noonShaderParameter, method), name, *args)
         return value
@@ -66,13 +66,13 @@ class ShaderParameter(_Immutable):
 
     @classmethod
     def vector2(cls, name, *, default, minimum, maximum, unit="unitless"):
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         return cls._make("vector2", name, to_js(_vector(default)),
                          to_js(_vector(minimum)), to_js(_vector(maximum)), unit)
 
     @classmethod
     def color(cls, name, *, default):
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         return cls._make("color", name, to_js(_color(default)))
 
     @classmethod
@@ -106,7 +106,7 @@ class WgslEffectProgram(_Immutable):
             raise TypeError("WGSL source and coordinates must be strings")
         if not isinstance(authored_time, bool) or not isinstance(seed, bool):
             raise TypeError("shader dependencies require booleans")
-        from js import noonShaderSchema
+        from _noon_host import noonShaderSchema
         schema = engine_call(noonShaderSchema, coordinates, authored_time, seed)
         try:
             for parameter in parameters:
@@ -135,7 +135,7 @@ class _ShaderParameterKey(_Immutable):
 def _write_parameters(update, parameters):
     if not isinstance(parameters, Mapping):
         raise TypeError("parameters require a mapping from program-bound keys to typed values")
-    from pyodide.ffi import to_js
+    from _noon_host import array_value as to_js
     for key, value in parameters.items():
         if not isinstance(key, _ShaderParameterKey):
             raise TypeError("shader parameter keys come from program.parameter(name)")
@@ -163,7 +163,7 @@ class ShaderEffect(_Immutable):
     def __init__(self, program, *, parameters=None, seed=None):
         if not isinstance(program, WgslEffectProgram):
             raise TypeError("ShaderEffect requires a prepared WgslEffectProgram")
-        from js import noonShaderEffect
+        from _noon_host import noonShaderEffect
         with _update(parameters=parameters, seed=seed) as update:
             self._definition = engine_call(noonShaderEffect, program._program, update)
 
@@ -188,7 +188,7 @@ class ShaderEffect(_Immutable):
             raise TypeError("shader parameter keys come from program.parameter(name)")
         value = engine_call(self._definition.shaderValue, key._key)
         kind = str(key._key.kind)
-        if kind in ("scalar", "vector2", "color"):
+        if kind in ("scalar", "vector2", "color") and hasattr(value, "to_py"):
             value = value.to_py()
         if kind == "scalar":
             return float(value[0])

@@ -73,6 +73,31 @@ impl SessionCapture {
         })
     }
 
+    /// Prepare immutable modules on this host's real device before the caller
+    /// publishes a staged effect transaction. This consumes no frame or source
+    /// continuation; the ordinary live publication still validates the request.
+    pub fn prepare_effect_programs(
+        &mut self,
+        session: &ExecutionSession,
+        programs: &[noon_core::WgslEffectProgram],
+    ) -> Result<(), SessionCaptureError> {
+        if self.failed {
+            return Err(SessionCaptureError::Inactive);
+        }
+        if session.runtime_identity() != self.runtime {
+            return Err(SessionCaptureError::WrongRuntime);
+        }
+        check_settled(session, &self.options)?;
+        let result = self
+            .gpu
+            .prepare_effect_modules(programs)
+            .map_err(SessionCaptureError::Capture);
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
     /// Render/consume a required publication without reading or emitting pixels.
     /// Useful for off-grid endpoint barriers; it is not an extra video frame.
     pub fn render(

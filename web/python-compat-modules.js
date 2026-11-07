@@ -1,4 +1,5 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_noon_host.py", runtimePath: "/tmp/_noon_host.py", label: "Noon language host binding" },
   { sourcePath: "python/_manim_typing.py", runtimePath: "/tmp/_manim_typing.py", label: "Noon lazy Python type namespace" },
   { sourcePath: "python/_manim_typing_values.py", runtimePath: "/tmp/_manim_typing_values.py", label: "Noon Python type aliases" },
   { sourcePath: "python/_manim_user_vector_bases.py", runtimePath: "/tmp/_manim_user_vector_bases.py", label: "Noon explicit Python vector basis helpers" },

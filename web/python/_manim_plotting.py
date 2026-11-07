@@ -22,16 +22,26 @@ import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 from _noon_errors import engine_call
 
+from _noon_host import array_value as _to_js
 try:
-    from js import noonAuthoringCoordinateOptions as _coordinate_options
-    from js import noonCreateAuthoringCoordinateHandle as _create_coordinates
-    from js import noonAuthoringBarChartOptions as _bar_chart_options
-    from js import noonCreateAuthoringBarChart as _create_bar_chart
-    from js import noonBarChartLabels as _bar_labels
-    from js import noonPlotSamplingPlan as _sampling_plan
-    from pyodide.ffi import to_js as _to_js, jsnull as _jsnull
+    from pyodide.ffi import jsnull as _jsnull
 except ImportError:
-    _coordinate_options = _create_coordinates = _bar_chart_options = _create_bar_chart = _bar_labels = _sampling_plan = _to_js = _jsnull = None
+    _jsnull = None
+try:
+    from _noon_host import noonAuthoringCoordinateOptions as _coordinate_options
+    from _noon_host import noonCreateAuthoringCoordinateHandle as _create_coordinates
+except ImportError:
+    _coordinate_options = _create_coordinates = None
+try:
+    from _noon_host import noonAuthoringBarChartOptions as _bar_chart_options
+    from _noon_host import noonCreateAuthoringBarChart as _create_bar_chart
+    from _noon_host import noonBarChartLabels as _bar_labels
+except ImportError:
+    _bar_chart_options = _create_bar_chart = _bar_labels = None
+try:
+    from _noon_host import noonPlotSamplingPlan as _sampling_plan
+except ImportError:
+    _sampling_plan = None
 
 
 class _NumberLabel(NamedTuple):

@@ -19,7 +19,7 @@ class Angle(_compat.VMobject):
         quadrant = tuple(quadrant)
         if len(quadrant) != 2:
             raise ValueError("Angle quadrant requires two values")
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         points = [line1.get_start(), line1.get_end(), line2.get_start(), line2.get_end()]
         values = dict(kwargs)
         components = _sector_component_count(values.pop("num_components", 9))

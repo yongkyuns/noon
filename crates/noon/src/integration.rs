@@ -26,6 +26,7 @@ mod forward_sample;
 mod frame_grid;
 mod path_edits;
 mod pixel_readback;
+pub mod spatial_input;
 
 pub use export_frames::{
     ExportAudioGrid, ExportAudioGridError, ExportEndReason, ExportFrame, ExportFrameOptions,
@@ -325,3 +326,68 @@ pub fn publish_family_align_to(
 ) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
     crate::family_layout::publish_align_family_to(store, root, execution, family, target, axis)
 }
+
+mod vector_path;
+pub use crate::binding_error::AuthoringFailure;
+pub use crate::binding_options::*;
+pub use vector_path::{authoring_path_point, AuthoringVectorPath};
+
+mod image_options;
+pub use image_options::image_sampling;
+#[cfg(feature = "native-text")]
+mod text_options;
+#[cfg(feature = "native-text")]
+pub use text_options::{native_text_options, text_color_channel};
+
+pub fn family_color(
+    enabled: bool,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Option<crate::Color>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    if ![red, green, blue, alpha]
+        .iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+    {
+        return Err("family color components must be finite and between zero and one".into());
+    }
+    Ok(Some(crate::Color::rgba(
+        red as f32,
+        green as f32,
+        blue as f32,
+        alpha as f32,
+    )))
+}
+
+mod effect_options;
+pub use effect_options::{effect_color, effect_update, mask_parameters};
+
+mod paint_options;
+pub use paint_options::{
+    hatch_paint, image_mapping, linear_gradient, noise_paint, radial_gradient,
+};
+
+mod plot_error;
+pub use plot_error::{coordinate_failure, coordinate_math_failure, plot_failure, sampling_failure};
+mod plot_input;
+pub use plot_input::{data_points as plot_data_points, PlotSamplingInput};
+
+/// Decode the optional frontend spelling of an existing camera working profile.
+pub fn camera_color_profile(value: &str) -> Result<noon_core::ViewColorProfile, AuthoringFailure> {
+    match value {
+        "compatibility" => Ok(noon_core::ViewColorProfile::Compatibility),
+        "linear_hdr" => Ok(noon_core::ViewColorProfile::LinearHdr),
+        _ => Err(AuthoringFailure::new(
+            "invalid_input",
+            "camera.color_profile",
+            "view color profile must be compatibility or linear_hdr",
+        )),
+    }
+}
+
+mod style_input;
+pub use style_input::{style_update, style_update_with_background_stroke};

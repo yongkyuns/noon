@@ -11,7 +11,7 @@ import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 
 try:
-    from js import (
+    from _noon_host import (
         noonAuthoringSampleSpaceOptions as _sample_space_options,
         noonCreateAuthoringSampleSpaceHandle as _create_sample_space,
     )

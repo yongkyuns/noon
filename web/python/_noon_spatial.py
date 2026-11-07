@@ -19,7 +19,7 @@ from _manim_semantic_handles import (
 )
 
 try:
-    from js import (
+    from _noon_host import (
         noonAuthoringMeshOptions as _mesh_options,
         noonSurfaceSamplingPlan as _surface_plan,
         noonAuthoringMeshFamilyOptions as _mesh_family_options,
@@ -51,7 +51,7 @@ def _angular_range(value, name):
 
 
 def _bulk(values):
-    from pyodide.ffi import to_js
+    from _noon_host import array_value as to_js
     return to_js(memoryview(values if isinstance(values, array) and values.typecode == "d" else array("d", values)))
 
 
@@ -230,7 +230,7 @@ class Mesh3D(_WorldMobject):
     @classmethod
     def polyhedron(cls, vertices, triangular_faces, **options):
         _mesh_arguments(options)
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         points = array("d", (v for point in vertices for v in _vector(point)))
         faces = array("I")
         for face in triangular_faces:

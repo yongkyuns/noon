@@ -17,3 +17,5 @@ __pycache__/
 /node_modules
 
 /tools/python-editor/node_modules
+
+/build/python/

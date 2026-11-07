@@ -1,150 +1,43 @@
-//! Thin WASM value adapters for shared Rust spatial authoring operations.
-//!
-//! This API exposes explicitly indexed mesh/surface operations. Cairo Surface
-//! mode retains the bounded sampled appearance profile; it does not claim
-//! general Cairo parity for arbitrary mesh topology.
-
+//! Thin WASM adapters to the shared Rust spatial inputs and operations.
 #![cfg(target_arch = "wasm32")]
-
 use crate::authoring_error::{js_error, AuthoringFailure};
 use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore};
-use noon::{
-    CairoSurfaceGrid, Color, MeshOptions, SemanticPaint, SemanticSpatialMaterial,
-    SpatialPathOptions, SurfaceSample, UvSurfacePlan, WorldAffineEdit,
-};
-use noon_core::{MeshResource, SemanticVec3, SemanticWorldTransform3D};
+use noon::integration::spatial_input as input;
+use noon::WorldAffineEdit;
+use noon_core::{SemanticVec3, SemanticWorldTransform3D};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
-
 fn invalid(code: &'static str, message: impl ToString) -> JsValue {
     js_error(AuthoringFailure::new("input", code, message))
 }
-
 pub(crate) fn vec3(values: &[f64], field: &str) -> Result<SemanticVec3, JsValue> {
-    if values.len() != 3 {
-        return Err(invalid(
-            "spatial.invalid_vector",
-            format!("{field} requires 3 values"),
-        ));
-    }
-    Ok(SemanticVec3::new(values[0], values[1], values[2]))
+    input::vec3(values, field).map_err(js_error)
 }
-
 pub(crate) fn about(values: &[f64]) -> Result<Option<SemanticVec3>, JsValue> {
-    if values.is_empty() {
-        Ok(None)
-    } else {
-        vec3(values, "about").map(Some)
-    }
+    input::about(values).map_err(js_error)
 }
-
-pub(crate) fn color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<Color, JsValue> {
-    let values = [red, green, blue, alpha];
-    if values
-        .iter()
-        .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
-    {
-        return Err(invalid(
-            "spatial.invalid_color",
-            "color channels must be finite and in [0, 1]",
-        ));
-    }
-    Ok(Color::rgba(
-        red as f32,
-        green as f32,
-        blue as f32,
-        alpha as f32,
-    ))
+pub(crate) fn color(r: f64, g: f64, b: f64, a: f64) -> Result<noon::Color, JsValue> {
+    input::color(r, g, b, a).map_err(js_error)
 }
-
-fn paint(options: &mut MeshOptions, value: Color) {
-    options.style.fill = Some(SemanticPaint::Solid(value));
-}
-
-fn with_opacity(options: &mut MeshOptions, opacity: f64) -> Result<(), JsValue> {
-    if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
-        return Err(invalid(
-            "spatial.invalid_opacity",
-            "opacity must be finite and in [0, 1]",
-        ));
-    }
-    options.style.fill_opacity = opacity;
-    Ok(())
-}
-
-pub(crate) fn transform_values(transform: SemanticWorldTransform3D) -> Vec<f64> {
-    let t = transform.translation;
-    let s = transform.scale;
-    let [w, x, y, z] = transform.rotation.components();
-    vec![t.x, t.y, t.z, w, x, y, z, s.x, s.y, s.z]
-}
-
+pub(crate) use input::transform_values;
 pub(crate) fn world_transform_from_values(
     values: &[f64],
 ) -> Result<SemanticWorldTransform3D, JsValue> {
-    if values.len() != 10 {
-        return Err(invalid(
-            "spatial.invalid_transform",
-            "world transform requires 10 values",
-        ));
-    }
-    let translation = SemanticVec3::new(values[0], values[1], values[2]);
-    let rotation =
-        noon_core::SemanticRotation3D::from_components(values[3], values[4], values[5], values[6])
-            .ok_or_else(|| {
-                invalid(
-                    "spatial.invalid_transform",
-                    "world rotation must be a finite nonzero quaternion",
-                )
-            })?;
-    let scale = SemanticVec3::new(values[7], values[8], values[9]);
-    SemanticWorldTransform3D::new(translation, rotation, scale).ok_or_else(|| {
-        invalid(
-            "spatial.invalid_transform",
-            "world transform values must be finite",
-        )
-    })
-}
-
-fn mesh_options(geometry: MeshResource) -> MeshOptions {
-    MeshOptions::new(geometry)
-}
-
-fn flattened_surface_samples<'a>(
-    points: &'a [f64],
-    normals: &'a [f64],
-) -> impl Iterator<Item = SurfaceSample> + 'a {
-    let mut positions = points.chunks_exact(3);
-    let mut normal_values = normals.chunks_exact(3);
-    std::iter::from_fn(move || {
-        let position = positions.next()?;
-        let position = SemanticVec3::new(position[0], position[1], position[2]);
-        if normals.is_empty() {
-            Some(SurfaceSample::position(position))
-        } else {
-            let normal = normal_values.next()?;
-            Some(SurfaceSample::with_normal(
-                position,
-                SemanticVec3::new(normal[0], normal[1], normal[2]),
-            ))
-        }
-    })
-}
-
-fn flattened_cairo_surface_samples(points: &[f64]) -> impl Iterator<Item = SemanticVec3> + '_ {
-    points
-        .chunks_exact(3)
-        .map(|point| SemanticVec3::new(point[0], point[1], point[2]))
+    input::world_transform_from_values(values).map_err(js_error)
 }
 
 #[wasm_bindgen]
 pub struct WasmMeshOptions {
-    pub(crate) options: MeshOptions,
+    pub(crate) value: input::SpatialMeshInput,
 }
-
+impl From<input::SpatialMeshInput> for WasmMeshOptions {
+    fn from(value: input::SpatialMeshInput) -> Self {
+        Self { value }
+    }
+}
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 impl WasmMeshOptions {
-    /// Generic native geometry conventions; this is not full Manim class parity.
     pub fn sphere(
         radius: f64,
         u_cells: usize,
@@ -154,15 +47,9 @@ impl WasmMeshOptions {
         v_start: f64,
         v_end: f64,
     ) -> Result<Self, JsValue> {
-        noon_geometry::sphere_mesh_range(
-            radius,
-            [u_cells, v_cells],
-            [u_start, u_end],
-            [v_start, v_end],
-        )
-        .map(mesh_options)
-        .map(|options| Self { options })
-        .map_err(|e| invalid("spatial.invalid_mesh", e))
+        input::SpatialMeshInput::sphere(radius, u_cells, v_cells, u_start, u_end, v_start, v_end)
+            .map(Into::into)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = line3D)]
     pub fn line_3d(
@@ -171,60 +58,28 @@ impl WasmMeshOptions {
         thickness: f64,
         segments: usize,
     ) -> Result<Self, JsValue> {
-        noon::line_3d_mesh(
-            vec3(start, "start")?,
-            vec3(end, "end")?,
-            thickness,
-            segments,
-        )
-        .map(mesh_options)
-        .map(|options| Self { options })
-        .map_err(|e| invalid("spatial.invalid_mesh", e))
+        input::SpatialMeshInput::line_3d(start, end, thickness, segments)
+            .map(Into::into)
+            .map_err(js_error)
     }
 
-    /// Explicit triangular faces preserve winding and use flat normals.
     pub fn polyhedron(vertices: &[f64], faces: &[u32]) -> Result<Self, JsValue> {
-        let (vertices, vertex_tail) = vertices.as_chunks::<3>();
-        let (faces, face_tail) = faces.as_chunks::<3>();
-        if !vertex_tail.is_empty() || !face_tail.is_empty() {
-            return Err(invalid(
-                "spatial.invalid_mesh",
-                "polyhedron inputs require triples",
-            ));
-        }
-        if vertices.len() > noon_geometry::MAX_SURFACE_VERTICES
-            || faces.len() > noon_geometry::MAX_SURFACE_CELLS
-        {
-            return Err(invalid(
-                "spatial.invalid_mesh",
-                "polyhedron exceeds the bounded mesh size",
-            ));
-        }
-        let vertices = vertices
-            .iter()
-            .map(|v| SemanticVec3::new(v[0], v[1], v[2]))
-            .collect::<Vec<_>>();
-        noon::triangular_polyhedron_mesh(&vertices, faces)
-            .map(mesh_options)
-            .map(|options| Self { options })
-            .map_err(|e| invalid("spatial.invalid_mesh", e))
+        input::SpatialMeshInput::polyhedron(vertices, faces)
+            .map(Into::into)
+            .map_err(js_error)
     }
 
     pub fn cube(size: f64) -> Result<Self, JsValue> {
-        noon::cube_mesh(size)
-            .map(mesh_options)
-            .map(|options| Self { options })
-            .map_err(|e| invalid("spatial.invalid_mesh", e))
-    }
-    pub fn prism(x: f64, y: f64, z: f64) -> Result<Self, JsValue> {
-        noon::prism_mesh(SemanticVec3::new(x, y, z))
-            .map(mesh_options)
-            .map(|options| Self { options })
-            .map_err(|e| invalid("spatial.invalid_mesh", e))
+        input::SpatialMeshInput::cube(size)
+            .map(Into::into)
+            .map_err(js_error)
     }
 
-    /// Six indexed prism faces for one semantic family. Cairo appearance data
-    /// is retained only when shade_in_3d is selected.
+    pub fn prism(x: f64, y: f64, z: f64) -> Result<Self, JsValue> {
+        input::SpatialMeshInput::prism(x, y, z)
+            .map(Into::into)
+            .map_err(js_error)
+    }
     #[wasm_bindgen(js_name = prismFaces)]
     pub fn prism_faces(
         x: f64,
@@ -232,26 +87,11 @@ impl WasmMeshOptions {
         z: f64,
         shade_in_3d: bool,
     ) -> Result<WasmMeshFamilyOptions, JsValue> {
-        let size = SemanticVec3::new(x, y, z);
-        let faces = if shade_in_3d {
-            noon_geometry::prism_faces_cairo(size)
-        } else {
-            noon_geometry::prism_faces(size)
-        }
-        .map_err(|error| invalid("spatial.invalid_mesh", error))?;
-        let mut options = faces.into_iter().map(mesh_options).collect::<Vec<_>>();
-        if shade_in_3d {
-            for option in &mut options {
-                option.material = SemanticSpatialMaterial::CairoSurface;
-            }
-        }
-        Ok(WasmMeshFamilyOptions {
-            options,
-            cells: Vec::new(),
-            circle_caps: Vec::new(),
-            axial_pose: None,
-        })
+        input::SpatialMeshInput::prism_faces(x, y, z, shade_in_3d)
+            .map(Into::into)
+            .map_err(js_error)
     }
+
     pub fn cylinder(
         radius: f64,
         height: f64,
@@ -260,17 +100,18 @@ impl WasmMeshOptions {
         angle_start: f64,
         angle_end: f64,
     ) -> Result<Self, JsValue> {
-        noon_geometry::cylinder_mesh_range(
+        input::SpatialMeshInput::cylinder(
             radius,
             height,
             segments,
             show_ends,
-            [angle_start, angle_end],
+            angle_start,
+            angle_end,
         )
-        .map(mesh_options)
-        .map(|options| Self { options })
-        .map_err(|e| invalid("spatial.invalid_mesh", e))
+        .map(Into::into)
+        .map_err(js_error)
     }
+
     pub fn cone(
         radius: f64,
         height: f64,
@@ -279,40 +120,26 @@ impl WasmMeshOptions {
         angle_start: f64,
         angle_end: f64,
     ) -> Result<Self, JsValue> {
-        noon_geometry::cone_mesh_range(
-            radius,
-            height,
-            segments,
-            show_base,
-            [angle_start, angle_end],
-        )
-        .map(mesh_options)
-        .map(|options| Self { options })
-        .map_err(|e| invalid("spatial.invalid_mesh", e))
+        input::SpatialMeshInput::cone(radius, height, segments, show_base, angle_start, angle_end)
+            .map(Into::into)
+            .map_err(js_error)
     }
-    /// Configure the inert pose before a mesh is admitted to its semantic owner.
     #[wasm_bindgen(js_name = setAxialPose)]
     pub fn set_axial_pose(&mut self, direction: &[f64], offset: f64) -> Result<(), JsValue> {
-        self.options.transform =
-            SemanticWorldTransform3D::from_axial_direction(vec3(direction, "direction")?, offset)
-                .ok_or_else(|| {
-                invalid(
-                    "spatial.invalid_direction",
-                    "axial pose requires a finite nonzero direction and finite offset",
-                )
-            })?;
-        Ok(())
+        self.value
+            .set_axial_pose(direction, offset)
+            .map_err(js_error)
     }
+
     pub fn torus(
         major_radius: f64,
         minor_radius: f64,
         u_cells: usize,
         v_cells: usize,
     ) -> Result<Self, JsValue> {
-        noon::torus_mesh(major_radius, minor_radius, [u_cells, v_cells])
-            .map(mesh_options)
-            .map(|options| Self { options })
-            .map_err(|e| invalid("spatial.invalid_mesh", e))
+        input::SpatialMeshInput::torus(major_radius, minor_radius, u_cells, v_cells)
+            .map(Into::into)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = setColor)]
     pub fn set_color(
@@ -322,66 +149,42 @@ impl WasmMeshOptions {
         blue: f64,
         alpha: f64,
     ) -> Result<(), JsValue> {
-        let value = color(red, green, blue, alpha)?;
-        paint(&mut self.options, value);
-        Ok(())
+        self.value
+            .set_color(red, green, blue, alpha)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = setOpacity)]
     pub fn set_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
-        with_opacity(&mut self.options, opacity)
+        self.value.set_opacity(opacity).map_err(js_error)
     }
     #[wasm_bindgen(js_name = setPointLit)]
     pub fn set_point_lit(&mut self, enabled: bool) {
-        self.options.material = if enabled {
-            SemanticSpatialMaterial::PointLit
-        } else {
-            SemanticSpatialMaterial::Unlit
-        };
+        self.value.set_point_lit(enabled)
     }
 }
 
 #[wasm_bindgen]
 pub struct WasmMeshFamilyOptions {
-    pub(crate) options: Vec<MeshOptions>,
-    pub(crate) cells: Vec<[usize; 2]>,
-    circle_caps: Vec<CircleCapRequest>,
-    axial_pose: Option<(SemanticVec3, f64)>,
+    pub(crate) value: input::SpatialMeshFamilyInput,
 }
-
-struct CircleCapRequest {
-    radius: f64,
-    local_z: f64,
-    color: Color,
-    shade_in_3d: bool,
+impl From<input::SpatialMeshFamilyInput> for WasmMeshFamilyOptions {
+    fn from(value: input::SpatialMeshFamilyInput) -> Self {
+        Self { value }
+    }
 }
-
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 impl WasmMeshFamilyOptions {
     #[wasm_bindgen(getter)]
     pub fn len(&self) -> usize {
-        self.options.len()
+        self.value.len()
     }
-    /// Stage one shared local-+Z axial pose on every family member before
-    /// semantic publication. Direction and offset validation is Rust-owned.
     #[wasm_bindgen(js_name = setAxialPose)]
     pub fn set_axial_pose(&mut self, direction: &[f64], offset: f64) -> Result<(), JsValue> {
-        let direction = vec3(direction, "direction")?;
-        let transform = SemanticWorldTransform3D::from_axial_direction(direction, offset)
-            .ok_or_else(|| {
-                invalid(
-                    "spatial.invalid_direction",
-                    "axial pose requires a finite nonzero direction and finite offset",
-                )
-            })?;
-        for options in &mut self.options {
-            options.transform = transform;
-        }
-        self.axial_pose = Some((direction, offset));
-        Ok(())
+        self.value
+            .set_axial_pose(direction, offset)
+            .map_err(js_error)
     }
-
-    /// Add an ordinary retained Circle path cap to the same family/resource
-    /// transaction as sampled surface cells. `local_z` is along local +Z.
     #[wasm_bindgen(js_name = addCircleCap)]
     pub fn add_circle_cap(
         &mut self,
@@ -393,62 +196,9 @@ impl WasmMeshFamilyOptions {
         alpha: f64,
         shade_in_3d: bool,
     ) -> Result<(), JsValue> {
-        if !radius.is_finite() || radius <= 0.0 || !local_z.is_finite() {
-            return Err(invalid(
-                "spatial.invalid_circle_cap",
-                "cap radius must be positive and local offset finite",
-            ));
-        }
-        let color = color(red, green, blue, alpha)?;
-        self.circle_caps.push(CircleCapRequest {
-            radius,
-            local_z,
-            color,
-            shade_in_3d,
-        });
-        Ok(())
-    }
-
-    pub(crate) fn into_parts(
-        mut self,
-    ) -> Result<(Vec<MeshOptions>, Vec<SpatialPathOptions>), JsValue> {
-        self.retain_surface_roles()?;
-        let (direction, offset) = self
-            .axial_pose
-            .unwrap_or((SemanticVec3::new(0.0, 0.0, 1.0), 0.0));
-        let mut paths = Vec::with_capacity(self.circle_caps.len());
-        for cap in self.circle_caps {
-            let transform =
-                SemanticWorldTransform3D::from_axial_direction(direction, offset + cap.local_z)
-                    .ok_or_else(|| {
-                        invalid("spatial.invalid_direction", "invalid cap axial pose")
-                    })?;
-            let options =
-                SpatialPathOptions::circle(cap.radius, transform, cap.color, cap.shade_in_3d)
-                    .map_err(js_error)?;
-            paths.push(options);
-        }
-        Ok((self.options, paths))
-    }
-    pub(crate) fn retain_surface_roles(&mut self) -> Result<(), JsValue> {
-        if self.options.len() < self.cells.len() {
-            return Err(invalid(
-                "spatial.invalid_surface_roles",
-                "UV roles must correspond one-for-one with surface cells",
-            ));
-        }
-        for (options, cell) in self
-            .options
-            .iter_mut()
-            .take(self.cells.len())
-            .zip(&self.cells)
-        {
-            options.surface_uv_cell = Some(*cell);
-        }
-        Ok(())
-    }
-    pub(crate) fn has_surface_roles(&self) -> bool {
-        !self.cells.is_empty()
+        self.value
+            .add_circle_cap(radius, local_z, red, green, blue, alpha, shade_in_3d)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = setFill)]
     pub fn set_fill(
@@ -459,18 +209,9 @@ impl WasmMeshFamilyOptions {
         alpha: f64,
         opacity: f64,
     ) -> Result<(), JsValue> {
-        let fill = color(red, green, blue, alpha)?;
-        if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
-            return Err(invalid(
-                "spatial.invalid_opacity",
-                "opacity must be finite and in [0, 1]",
-            ));
-        }
-        for options in &mut self.options {
-            paint(options, fill);
-            options.style.fill_opacity = opacity;
-        }
-        Ok(())
+        self.value
+            .set_fill(red, green, blue, alpha, opacity)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = setStroke)]
     pub fn set_stroke(
@@ -482,59 +223,17 @@ impl WasmMeshFamilyOptions {
         width: f64,
         opacity: f64,
     ) -> Result<(), JsValue> {
-        let stroke = color(red, green, blue, alpha)?;
-        if !width.is_finite() || width < 0.0 {
-            return Err(invalid(
-                "spatial.invalid_stroke_width",
-                "stroke width must be finite and non-negative",
-            ));
-        }
-        if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
-            return Err(invalid(
-                "spatial.invalid_opacity",
-                "opacity must be finite and in [0, 1]",
-            ));
-        }
-        for options in &mut self.options {
-            options.style.stroke = Some(SemanticPaint::Solid(stroke));
-            options.style.stroke_width = width;
-            options.style.stroke_opacity = opacity;
-            options.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
-        }
-        Ok(())
+        self.value
+            .set_stroke(red, green, blue, alpha, width, opacity)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = setPointLit)]
     pub fn set_point_lit(&mut self, enabled: bool) {
-        let material = if enabled {
-            SemanticSpatialMaterial::PointLit
-        } else {
-            SemanticSpatialMaterial::Unlit
-        };
-        for options in &mut self.options {
-            options.material = material;
-        }
+        self.value.set_point_lit(enabled)
     }
     #[wasm_bindgen(js_name = setCairoSurface)]
     pub fn set_cairo_surface(&mut self, enabled: bool) -> Result<(), JsValue> {
-        if enabled
-            && self
-                .options
-                .iter()
-                .any(|options| options.geometry.cairo_appearance().is_none())
-        {
-            return Err(invalid(
-                "spatial.invalid_cairo_surface_material",
-                "CairoSurface requires a Cairo-sampled appearance on every mesh cell",
-            ));
-        }
-        for options in &mut self.options {
-            if enabled {
-                options.material = SemanticSpatialMaterial::CairoSurface;
-            } else if options.material == SemanticSpatialMaterial::CairoSurface {
-                options.material = SemanticSpatialMaterial::Unlit;
-            }
-        }
-        Ok(())
+        self.value.set_cairo_surface(enabled).map_err(js_error)
     }
     #[wasm_bindgen(js_name = setCheckerboard)]
     pub fn set_checkerboard(
@@ -543,45 +242,23 @@ impl WasmMeshFamilyOptions {
         second: &[f64],
         opacity: f64,
     ) -> Result<(), JsValue> {
-        if first.len() != 4 || second.len() != 4 {
-            return Err(invalid(
-                "spatial.invalid_color",
-                "checkerboard colors require RGBA quadruples",
-            ));
-        }
-        if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
-            return Err(invalid(
-                "spatial.invalid_opacity",
-                "opacity must be finite and in [0, 1]",
-            ));
-        }
-        let a = color(first[0], first[1], first[2], first[3])?;
-        let b = color(second[0], second[1], second[2], second[3])?;
-        if self.options.len() < self.cells.len() {
-            return Err(invalid(
-                "spatial.invalid_surface_roles",
-                "UV roles must correspond one-for-one with surface cells",
-            ));
-        }
-        for (options, [u, v]) in self
-            .options
-            .iter_mut()
-            .take(self.cells.len())
-            .zip(&self.cells)
-        {
-            paint(options, if (u % 2 + v % 2) % 2 == 0 { a } else { b });
-            options.style.fill_opacity = opacity;
-        }
-        Ok(())
+        self.value
+            .set_checkerboard(first, second, opacity)
+            .map_err(js_error)
     }
 }
 
 #[wasm_bindgen]
 pub struct WasmSurfaceSamplingPlan {
-    plan: UvSurfacePlan,
+    pub(crate) value: input::SurfaceSamplingInput,
 }
-
+impl From<input::SurfaceSamplingInput> for WasmSurfaceSamplingPlan {
+    fn from(value: input::SurfaceSamplingInput) -> Self {
+        Self { value }
+    }
+}
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 impl WasmSurfaceSamplingPlan {
     #[wasm_bindgen(constructor)]
     pub fn new(
@@ -592,41 +269,24 @@ impl WasmSurfaceSamplingPlan {
         u_cells: usize,
         v_cells: usize,
     ) -> Result<Self, JsValue> {
-        UvSurfacePlan::new([u_min, u_max], [v_min, v_max], [u_cells, v_cells])
-            .map(|plan| Self { plan })
-            .map_err(|e| invalid("spatial.invalid_surface", e))
+        input::SurfaceSamplingInput::new(u_min, u_max, v_min, v_max, u_cells, v_cells)
+            .map(Into::into)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = parameters)]
     pub fn parameters(&self) -> Vec<f64> {
-        self.plan.coordinates().flat_map(|(u, v)| [u, v]).collect()
+        self.value.parameters()
     }
     #[wasm_bindgen(js_name = cairoParameters)]
     pub fn cairo_parameters(&self) -> Vec<f64> {
-        self.plan
-            .cairo_coordinates()
-            .flat_map(|(u, v)| [u, v])
-            .collect()
+        self.value.cairo_parameters()
     }
     #[wasm_bindgen(js_name = finishMesh)]
     pub fn finish_mesh(&self, points: &[f64], normals: &[f64]) -> Result<WasmMeshOptions, JsValue> {
-        let expected =
-            self.plan.vertex_count().checked_mul(3).ok_or_else(|| {
-                invalid("spatial.invalid_surface", "surface payload is too large")
-            })?;
-        if points.len() != expected || (!normals.is_empty() && normals.len() != expected) {
-            return Err(invalid(
-                "spatial.invalid_surface_samples",
-                format!("expected {expected} position and optional normal components"),
-            ));
-        }
-        let grid = self
-            .plan
-            .finish_samples(flattened_surface_samples(points, normals))
-            .map_err(|e| invalid("spatial.invalid_surface_samples", e))?;
-        grid.into_mesh_resource()
-            .map(mesh_options)
-            .map(|options| WasmMeshOptions { options })
-            .map_err(|e| invalid("spatial.invalid_surface", e))
+        self.value
+            .finish_mesh(points, normals)
+            .map(Into::into)
+            .map_err(js_error)
     }
     #[wasm_bindgen(js_name = finishCells)]
     pub fn finish_cells(
@@ -634,78 +294,29 @@ impl WasmSurfaceSamplingPlan {
         points: &[f64],
         normals: &[f64],
     ) -> Result<WasmMeshFamilyOptions, JsValue> {
-        let expected =
-            self.plan.vertex_count().checked_mul(3).ok_or_else(|| {
-                invalid("spatial.invalid_surface", "surface payload is too large")
-            })?;
-        if points.len() != expected || (!normals.is_empty() && normals.len() != expected) {
-            return Err(invalid(
-                "spatial.invalid_surface_samples",
-                format!("expected {expected} position and optional normal components"),
-            ));
-        }
-        let grid = self
-            .plan
-            .finish_unlit_samples(flattened_surface_samples(points, normals))
-            .map_err(|e| invalid("spatial.invalid_surface_samples", e))?;
-        let cell_count = grid.plan().cell_count();
-        let mut options = Vec::with_capacity(cell_count);
-        let mut cells = Vec::with_capacity(cell_count);
-        for cell in grid.cells() {
-            let uv_cell = cell.uv_cell;
-            let mesh = cell
-                .into_mesh_resource()
-                .map_err(|e| invalid("spatial.invalid_surface", e))?;
-            options.push(mesh_options(mesh));
-            cells.push(uv_cell);
-        }
-        Ok(WasmMeshFamilyOptions {
-            options,
-            cells,
-            circle_caps: Vec::new(),
-            axial_pose: None,
-        })
+        self.value
+            .finish_cells(points, normals)
+            .map(Into::into)
+            .map_err(js_error)
     }
-
     #[wasm_bindgen(js_name = finishCairoCells)]
     pub fn finish_cairo_cells(&self, points: &[f64]) -> Result<WasmMeshFamilyOptions, JsValue> {
-        let expected = self
-            .plan
-            .cell_count()
-            .checked_mul(16)
-            .and_then(|count| count.checked_mul(3))
-            .ok_or_else(|| invalid("spatial.invalid_surface", "surface payload is too large"))?;
-        if points.len() != expected {
-            return Err(invalid(
-                "spatial.invalid_surface_samples",
-                format!("expected {expected} Cairo position components"),
-            ));
-        }
-        let grid: CairoSurfaceGrid = self
-            .plan
-            .finish_cairo_samples(flattened_cairo_surface_samples(points))
-            .map_err(|e| invalid("spatial.invalid_surface_samples", e))?;
-        let mut options = Vec::with_capacity(self.plan.cell_count());
-        let mut cells = Vec::with_capacity(self.plan.cell_count());
-        for (cell, appearance) in grid.cells() {
-            let uv_cell = cell.uv_cell;
-            let mesh = cell
-                .into_mesh_resource()
-                .map_err(|e| invalid("spatial.invalid_surface", e))?
-                .with_cairo_appearance(appearance)
-                .map_err(|e| invalid("spatial.invalid_surface", e))?;
-            options.push(mesh_options(mesh));
-            cells.push(uv_cell);
-        }
-        Ok(WasmMeshFamilyOptions {
-            options,
-            cells,
-            circle_caps: Vec::new(),
-            axial_pose: None,
-        })
+        self.value
+            .finish_cairo_cells(points)
+            .map(Into::into)
+            .map_err(js_error)
     }
 }
-
+impl WasmMeshFamilyOptions {
+    pub(crate) fn has_surface_roles(&self) -> bool {
+        self.value.has_surface_roles()
+    }
+    pub(crate) fn into_parts(
+        self,
+    ) -> Result<(Vec<noon::MeshOptions>, Vec<noon::SpatialPathOptions>), JsValue> {
+        self.value.into_parts().map_err(js_error)
+    }
+}
 #[wasm_bindgen]
 impl WasmAuthoringStore {
     #[wasm_bindgen(js_name = createMesh)]
@@ -713,7 +324,7 @@ impl WasmAuthoringStore {
         &self,
         candidate: WasmMeshOptions,
     ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-        noon::Mobject::from_mesh(Rc::clone(&self.semantics), candidate.options)
+        noon::Mobject::from_mesh(Rc::clone(&self.semantics), candidate.value.into_options())
             .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
             .map_err(js_error)
     }
@@ -860,37 +471,5 @@ impl WasmAuthoringFamilyHandle {
                 about: about(about_values)?,
             })
             .map_err(js_error)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vector_and_color_conversion_is_exact_and_validated() {
-        assert_eq!(
-            vec3(&[1.0, 2.0, 3.0], "test").unwrap(),
-            SemanticVec3::new(1.0, 2.0, 3.0)
-        );
-        assert!(vec3(&[1.0, 2.0], "test").is_err());
-        assert!(color(1.1, 0.0, 0.0, 1.0).is_err());
-        assert!(color(0.0, f64::NAN, 0.0, 1.0).is_err());
-        assert_eq!(about(&[]).unwrap(), None);
-    }
-
-    #[test]
-    fn transform_adapter_has_documented_component_order() {
-        let q = noon_core::SemanticRotation3D::from_components(0.5, 0.5, 0.5, 0.5).unwrap();
-        let value = SemanticWorldTransform3D::new(
-            SemanticVec3::new(1.0, 2.0, 3.0),
-            q,
-            SemanticVec3::new(4.0, 5.0, 6.0),
-        )
-        .unwrap();
-        assert_eq!(
-            transform_values(value),
-            vec![1.0, 2.0, 3.0, 0.5, 0.5, 0.5, 0.5, 4.0, 5.0, 6.0]
-        );
     }
 }

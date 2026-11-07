@@ -75,29 +75,7 @@ pub(crate) enum SceneMembershipBatchKind {
     BringToBack,
 }
 
-// The browser binding constructs these policies; native builds validate the
-// same batch type without exposing the JS constructor.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-#[derive(Clone, Copy)]
-pub(crate) enum SpatialMembershipPolicy {
-    Assign(noon_core::SemanticSpatialCompositionDomain),
-    DefaultWorld,
-}
-
-impl SpatialMembershipPolicy {
-    fn apply_scene(
-        self,
-        scene: &mut noon::Scene,
-        targets: &[noon::MobjectTarget<'_>],
-    ) -> Result<(), AuthoringFailure> {
-        match self {
-            Self::Assign(domain) => scene.add_all_in_spatial_composition_domain(targets, domain),
-            Self::DefaultWorld => scene.add_all_world_mobjects(targets),
-        }
-        .map(|_| ())
-        .map_err(Into::into)
-    }
-}
+pub(crate) use noon::integration::spatial_input::SpatialMembershipPolicy;
 
 pub(crate) struct SceneMembershipBatch {
     kind: SceneMembershipBatchKind,

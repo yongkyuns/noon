@@ -118,7 +118,7 @@ def map_engine_error(error: Exception, *, operation: str | None = None) -> Excep
     """Map only the typed Noon boundary. Unknown/ordinary Python errors pass through."""
     if isinstance(error, NoonError):
         return error
-    original = getattr(error, "js_error", None)
+    original = getattr(error, "js_error", error)
     diagnostic = _diagnostic(original)
     if diagnostic is None:
         return error
@@ -130,7 +130,7 @@ def raise_engine_error(error: Exception, *, operation: str | None = None) -> NoR
     original = getattr(error, "js_error", None)
     if original is not None:
         try:
-            from js import noonReportEngineTrap
+            from _noon_host import noonReportEngineTrap
         except ImportError:
             pass
         else:

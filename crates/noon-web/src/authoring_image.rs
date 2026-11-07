@@ -119,38 +119,9 @@ impl WasmImageMapping {
         scale: &[f64],
         rotation: f64,
     ) -> Result<Self, JsValue> {
-        let invalid = |message: &str| {
-            js_error(crate::AuthoringFailure::new(
-                "invalid_input",
-                "paint.image_mapping",
-                message,
-            ))
-        };
-        let fit = match fit {
-            "cover" => noon::ImageFit::Cover,
-            "contain" => noon::ImageFit::Contain,
-            "stretch" => noon::ImageFit::Stretch,
-            _ => return Err(invalid("image fit must be cover, contain, or stretch")),
-        };
-        let address = match address {
-            "transparent" => noon::ImageAddressMode::Transparent,
-            "clamp" => noon::ImageAddressMode::Clamp,
-            "repeat" => noon::ImageAddressMode::Repeat,
-            _ => {
-                return Err(invalid(
-                    "image address must be transparent, clamp, or repeat",
-                ))
-            }
-        };
-        let pair = |value: &[f64]| -> Result<[f64; 2], JsValue> {
-            value
-                .try_into()
-                .map_err(|_| invalid("image mapping requires two coordinates per vector"))
-        };
-        let transform = noon::ImageUvTransform::new(pair(translation)?, pair(scale)?, rotation)
-            .map_err(|error| invalid(&error.to_string()))?;
-        let value = noon::ImageMapping::new(fit, pair(alignment)?, address, transform)
-            .map_err(|error| invalid(&error.to_string()))?;
+        let value =
+            noon::integration::image_mapping(fit, alignment, address, translation, scale, rotation)
+                .map_err(js_error)?;
         Ok(Self { value })
     }
 }
