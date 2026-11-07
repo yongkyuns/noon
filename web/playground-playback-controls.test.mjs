@@ -19,6 +19,13 @@ function fixture(withDragUndo = false, durationSeconds = 2) {
   return { controls, player, preview, calls, errors, range: preview.querySelector(".playback-scrubber"), output: preview.querySelector(".playback-time") };
 }
 
+function key(controls, code, options = {}, target = controls.element, type = "keydown") {
+  const event = Object.assign(new Event(type, { cancelable: true }), { code, ...options });
+  Object.defineProperty(event, "target", { value: target });
+  controls.element.dispatchEvent(event);
+  return event;
+}
+
 test("source-owned progress moves despite busy/paused flags, without permitting playback commands", async () => {
   const f = fixture();
   f.controls.setControllable(false);
@@ -428,35 +435,79 @@ test("focused panel shortcuts reuse admitted buttons and leave native controls a
   f.controls.sync(state(0));
   f.player.resume = async () => { f.calls.push("resume"); return state(0, true); };
   f.player.seekSection = async previous => { f.calls.push(previous ? "previous" : "next"); return state(previous ? 0 : 0.5); };
-  const key = (code, options = {}, target = root, type = "keydown") => {
-    const event = Object.assign(new Event(type, { cancelable: true }), { code, ...options });
-    Object.defineProperty(event, "target", { value: target });
-    root.dispatchEvent(event);
-    return event;
-  };
+  const press = (...args) => key(f.controls, ...args);
   assert.equal(root.getAttribute("tabindex"), "0");
   assert.match(root.getAttribute("aria-keyshortcuts"), /ArrowRight/);
-  assert.equal(key("Space").defaultPrevented, true); await flush();
-  key("Space", { repeat: true }); key("Space", {}, root, "keyup"); await flush();
+  assert.equal(press("Space").defaultPrevented, true); await flush();
+  press("Space", { repeat: true }); press("Space", {}, root, "keyup"); await flush();
   assert.deepEqual(f.calls, ["resume"]);
-  key("Space"); await flush();
-  key("ArrowRight"); await flush();
+  press("Space"); await flush();
+  press("PageDown"); await flush();
   const atEnd = f.calls.length;
-  key("ArrowRight"); await flush();
+  press("PageDown"); await flush();
   assert.equal(f.calls.length, atEnd, "the disabled boundary button admits no shortcut");
-  key("ArrowLeft"); await flush();
-  key("Home"); await flush();
+  press("PageUp"); await flush();
+  press("Home"); await flush();
   assert.deepEqual(f.calls, ["resume", "pause", "next", "previous", "restartPlayback"]);
   for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) {
-    assert.equal(key("Space", options).defaultPrevented, false);
+    assert.equal(press("Space", options).defaultPrevented, false);
   }
-  assert.equal(key("ArrowRight", {}, f.range).defaultPrevented, false);
-  assert.equal(key("KeyA").defaultPrevented, false);
-  f.controls.setBusy(true); key("Space"); await flush();
-  f.controls.setBusy(false); f.controls.setControllable(false); key("Home"); await flush();
+  assert.equal(press("ArrowRight", {}, f.range).defaultPrevented, false);
+  assert.equal(press("KeyA").defaultPrevented, false);
+  f.controls.setBusy(true); press("Space"); await flush();
+  f.controls.setBusy(false); f.controls.setControllable(false); press("Home"); await flush();
   assert.equal(f.calls.length, 5, "busy and source-owned playback retain their command gates");
   f.controls.destroy();
-  assert.equal(key("Space").defaultPrevented, false);
+  assert.equal(press("Space").defaultPrevented, false);
   assert.equal(root.getAttribute("tabindex"), null);
   assert.equal(root.getAttribute("aria-keyshortcuts"), null);
+});
+
+test("panel arrows seek five seconds within the playback range without requiring sections", async () => {
+  const f = fixture(false, 12);
+  let playing = true;
+  f.player.seek = async time => { f.calls.push(time); return { time, playing }; };
+  f.controls.sync({ time: 3, playing });
+  key(f.controls, "ArrowRight"); await flush();
+  assert.equal(f.controls.element.dataset.playing, "true");
+  key(f.controls, "ArrowRight"); await flush();
+  playing = false;
+  f.controls.sync({ time: 12, playing });
+  key(f.controls, "ArrowLeft"); await flush();
+  key(f.controls, "ArrowLeft"); await flush();
+  key(f.controls, "ArrowLeft"); await flush();
+  assert.deepEqual(f.calls, [8, 12, 7, 2, 0]);
+  assert.equal(f.controls.element.dataset.playing, "false");
+  for (const code of ["ArrowRight", "PageDown", "ArrowUp", "KeyM"]) {
+    key(f.controls, code, { repeat: true });
+    key(f.controls, code, { ctrlKey: true });
+    key(f.controls, code, {}, f.controls.element, "keyup");
+  }
+  f.controls.setBusy(true); key(f.controls, "ArrowRight");
+  f.controls.setBusy(false); f.controls.setControllable(false); key(f.controls, "ArrowRight");
+  await flush();
+  assert.deepEqual(f.calls, [8, 12, 7, 2, 0]);
+  assert.deepEqual(f.errors, []);
+});
+
+test("panel audio keys clamp five-percent volume steps and preserve volume across mute", () => {
+  const f = fixture();
+  const volume = f.preview.querySelector(".playback-volume-label").children[0];
+  f.player.setAudioVolume = value => f.calls.push(["volume", value]);
+  f.player.setAudioMuted = value => f.calls.push(["muted", value]);
+  key(f.controls, "ArrowUp"); key(f.controls, "KeyM");
+  assert.deepEqual(f.calls, [], "silent scenes do not admit audio shortcuts");
+  f.controls.sync({ time: 0, playing: false, hasAudio: true, audioVolume: 0.98, audioMuted: false });
+  key(f.controls, "ArrowUp");
+  key(f.controls, "ArrowDown");
+  key(f.controls, "KeyM"); key(f.controls, "KeyM");
+  assert.equal(volume.value, "0.95");
+  f.controls.sync({ time: 0, playing: false, audioVolume: 0.02 });
+  key(f.controls, "ArrowDown");
+  assert.deepEqual(f.calls, [["volume", 1], ["volume", 0.95], ["muted", true], ["muted", false], ["volume", 0]]);
+  key(f.controls, "ArrowUp", {}, volume);
+  f.controls.setBusy(true);
+  key(f.controls, "ArrowUp"); key(f.controls, "KeyM");
+  assert.equal(f.calls.length, 5);
+  assert.deepEqual(f.errors, []);
 });

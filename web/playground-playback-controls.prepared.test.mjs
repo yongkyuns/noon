@@ -126,6 +126,40 @@ test("empty open history keeps the rail visible and unavailable", () => {
   assert.match(f.status.textContent, /Available history: none/);
 });
 
+test("keyboard seeking uses the admitted history range and coalesces through the existing seek lane", async () => {
+  const end = nextDown(12);
+  const f = fixture(prepared({ time: 6, preparedFrontier: 12, seekRange: { start: 2, end } }));
+  const press = code => {
+    f.controls.element.dispatchEvent(Object.assign(new Event("keydown", { cancelable: true }), { code }));
+  };
+  const pending = deferred();
+  const seek = f.player.seek;
+  f.player.seek = time => {
+    f.calls.push(["pending", time]);
+    return pending.promise;
+  };
+  press("ArrowRight"); press("ArrowRight");
+  assert.deepEqual(f.calls, [["pending", 11]]);
+  f.player.seek = seek;
+  pending.resolve(prepared({ time: 11, preparedFrontier: 12, seekRange: { start: 2, end } }));
+  await flush();
+  assert.deepEqual(f.calls, [["pending", 11], ["seek", end]]);
+  press("ArrowLeft"); await flush();
+  press("ArrowLeft"); await flush();
+  press("ArrowLeft"); await flush();
+  assert.equal(f.calls.at(-1)[1], 2, "rewind respects the retained start");
+  for (const state of [
+    prepared({ seekRange: null }),
+    prepared({ time: 0, preparing: true }),
+  ]) {
+    f.setState(state);
+    const before = f.calls.length;
+    press("ArrowRight"); await flush();
+    assert.equal(f.calls.length, before);
+  }
+  assert.deepEqual(f.errors, []);
+});
+
 test("buffering is not a command lock and pausing preserves the observed time", async () => {
   const f = fixture(prepared({ playing: true, buffering: true }));
   assert.equal(f.controls.element.dataset.buffering, "true");

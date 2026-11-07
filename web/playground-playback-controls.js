@@ -87,8 +87,8 @@ export class PlaygroundPlaybackControls {
     this.#root.className = "playback-controls";
     this.#root.setAttribute("aria-label", "Animation playback controls");
     this.#root.setAttribute("tabindex", "0");
-    this.#root.setAttribute("aria-keyshortcuts", "Space ArrowLeft ArrowRight Home");
-    this.#root.setAttribute("aria-description", "When this panel is focused: Space plays or pauses, Left and Right navigate key points, Home restarts.");
+    this.#root.setAttribute("aria-keyshortcuts", "Space ArrowLeft ArrowRight PageUp PageDown Home ArrowUp ArrowDown M");
+    this.#root.setAttribute("aria-description", "When this panel is focused: Space plays or pauses, Left and Right seek five seconds, Page Up and Page Down navigate key points, Home restarts, Up and Down adjust volume by five percent, M toggles mute.");
     this.#root.addEventListener("keydown", this.#handleKeyboard);
     this.#root.addEventListener("keyup", this.#handleKeyboard);
     this.#root.dataset.undoSupport = String(this.#undoDragSupported);
@@ -349,21 +349,50 @@ export class PlaygroundPlaybackControls {
   #handleKeyboard = event => {
     // Native buttons, menus and the scrubber keep their own keyboard behavior.
     if (event.target !== this.#root) return;
-    const button = {
+    const control = {
       Space: this.#playButton,
       Home: this.#restartButton,
-      ArrowLeft: this.#previousSection,
-      ArrowRight: this.#nextSection,
+      ArrowLeft: this.#scrubber,
+      ArrowRight: this.#scrubber,
+      PageUp: this.#previousSection,
+      PageDown: this.#nextSection,
+      ArrowUp: this.#volume,
+      ArrowDown: this.#volume,
+      KeyM: this.#muteButton,
     }[event.code];
-    if (!button) return;
+    if (!control) return;
     // Neither edge of a viewer shortcut may reach scene-native key bindings.
     event.stopPropagation();
     if (event.type !== "keydown" || event.defaultPrevented || event.isComposing ||
         event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     event.preventDefault();
-    if (event.repeat || button.disabled ||
-        (event.code.startsWith("Arrow") && this.#sectionControls.hidden)) return;
-    button.click();
+    if (event.repeat || control.disabled) return;
+    switch (event.code) {
+      case "ArrowLeft":
+      case "ArrowRight": {
+        const range = this.#currentSeekRange();
+        if (range === null) return;
+        const step = event.code === "ArrowLeft" ? -5 : 5;
+        this.#queueSeek(Math.min(Math.max(this.#timeSeconds + step, range.start), range.end));
+        break;
+      }
+      case "ArrowUp":
+      case "ArrowDown":
+        if (this.#audioControls.hidden) return;
+        this.#volume.value = String(Math.min(Math.max(Number(this.#volume.value) +
+          (event.code === "ArrowUp" ? 0.05 : -0.05), 0), 1));
+        this.#handleVolume();
+        break;
+      case "KeyM":
+        if (!this.#audioControls.hidden) control.click();
+        break;
+      case "PageUp":
+      case "PageDown":
+        if (!this.#sectionControls.hidden) control.click();
+        break;
+      default:
+        control.click();
+    }
   };
 
   #handleToggle = () => {
@@ -480,13 +509,17 @@ export class PlaygroundPlaybackControls {
     if (range.end === range.start &&
         !(this.#preparedFrontier !== null && this.#durationSeconds === null &&
           this.#preparedFrontier > range.end)) return;
+    this.#queueSeek(target);
+  };
+
+  #queueSeek(target) {
     this.#timeSeconds = target;
     this.#desiredSeek = target;
     this.#seekNotice = `Seeking to ${formatTime(target)} s · waiting for display`;
     this.#renderTime();
     this.#renderStatus();
     void this.#drainSeek();
-  };
+  }
 
   async #runCommand(operation, allowForward = false) {
     if (this.#destroyed || (!this.#controllable && !(allowForward && this.#forwardPlayback)) || this.#externalBusy || this.#commandPending || this.#seekActive || this.#transportActive) return;
