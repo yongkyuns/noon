@@ -84,14 +84,16 @@ That definition has several consequences:
 - Object queries read the current `SemanticObjectState` from the store.
 - Object edits stage canonical semantic mutations; the handle never becomes an independent mutable mirror.
 
-`Scene` follows the same pattern. It stores the shared semantic arena, one family root ID, and an authoring cursor:
+`Scene` follows the same pattern. It owns the shared semantic arena, one family
+root ID, an authoring cursor, and the optional execution component lowered from
+that scene. The important ownership fields are:
 
-```text
-Scene
-├── store: Rc<RefCell<SemanticStore>>
-├── root: SemanticNodeId
-└── cursor: f64
-```
+| Field | Role |
+| --- | --- |
+| `store: Rc<RefCell<SemanticStore>>` | Shared authored semantic arena |
+| `root: SemanticNodeId` | Scene's family root in that arena |
+| `cursor: f64` | Authoring cursor |
+| `execution: Option<ExecutionSession>` | The scene's running execution component after bootstrap |
 
 See [`crates/noon/src/scene.rs`](../crates/noon/src/scene.rs). `Scene::circle`, `Scene::rectangle`, `Scene::line`, `Scene::path`, text constructors, etc. create detached semantic nodes in that shared store; `Scene::add` changes membership of the existing node rather than copying it into a second scene container.
 
@@ -132,7 +134,17 @@ Most persistent `Mobject` methods follow the same shape:
 5. `stage_state_changes` emits canonical transaction operations such as `replace_content`, `set_property`, or `replace_style`;
 6. the transaction applies atomically to `SemanticStore`.
 
-Before execution bootstrap, these are authored edits. After an `ExecutionSession` exists, use `Scene::live(&mut session)`/`LiveSession` for supported live changes so authored and effective publication stay coherent. Raw mutable store access is an integration escape hatch, not a live-edit API.
+Raw handle edits are authored operations. Ordinary persistent edits use
+`Scene::set_color`, `Scene::set_fill`, `Scene::set_fill_opacity`, and `Scene::shift`
+before and after Scene-owned execution bootstrap. These methods prepare the same
+shared semantic transaction and pass it through `Scene::apply_semantic_transaction`;
+running execution validates and publishes its derived changes atomically.
+`ScriptScene` delegates these edits to that Scene without choosing a cold or live
+feature API. Authored/base queries and coherent effective queries remain explicit.
+
+`Scene::live(&mut session)` is for an explicitly borrowed external execution
+component and callback/host integration. Raw mutable store access is an
+integration escape hatch, not a live-edit API.
 
 ## Semantic object representation
 
@@ -364,6 +376,20 @@ It does **not** lower through an SVG `d` string. SVG/debug/export representation
 
 ## Execution/session types around the object path
 
+### `SceneScript` and `ScriptScene`
+
+`Scene::script` adapts an ordinary compiled Rust future to sequential authoring.
+`SceneScript` owns that source and its host callback table. `ScriptScene` is a weak,
+scoped capability: each synchronous operation borrows the same Scene only while
+the source is being polled. It contains no independent semantic state and cannot
+retain a stopped source. Persistent edits delegate to Scene-owned operations.
+
+`play` and `wait` yield the existing `LiveProgram` completion/publication boundary.
+An owned `AnimationRequest` retains handles and requested edits, then captures
+effective state when play admits it. It allocates no semantic target or animation
+identity while being constructed. The shared composition transaction stages and
+publishes those identities atomically at admission.
+
 ### `ExecutionSession`
 
 `ExecutionSession` is the typed orchestration bridge between the authored store and one runtime. Its fields are deliberately derived/runtime structures: store identity, `SemanticExecutionIndex`, reachability, execution slots, spatial index, reactive projection, signal timeline, one `SceneInstance`, callback/completion state, etc.
@@ -372,7 +398,11 @@ It explicitly does **not** own or mirror `SemanticStore`. This matters for live 
 
 ### `LiveSession`
 
-`Scene::live(&mut ExecutionSession)` returns the public live-operation facade. Use it for supported persistent edits, membership changes, animation activation/completion, effective queries, and other operations that must publish semantic and execution changes coherently.
+`Scene::live(&mut ExecutionSession)` returns the borrowed execution facade for
+external-session and callback/host integration. It supplies capabilities such as
+explicit animation activation/completion, and retains operations required by
+those integration callers. Ordinary supported construction, membership, persistent
+edits and queries use Scene-owned routes; sequential sources use `ScriptScene`.
 
 The facade should not accumulate a parallel scene model. If a new live feature seems to require copying semantic state into `LiveSession`, look for a semantic transaction + lowering/publication solution first.
 

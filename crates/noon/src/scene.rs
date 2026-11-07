@@ -2,6 +2,7 @@
 mod audio;
 mod execution;
 mod image;
+mod object_edits;
 mod sections;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,

@@ -25,8 +25,9 @@
 //! arrays and vectors compose simultaneous animations in one play.
 //!
 //! [`Scene`] and [`Mobject`] also support explicit authoring. Scene-owned operations such as
-//! geometry creation, family translation and linear/grid arrangement use the same
-//! route before and after execution bootstrap. Raw handle edits remain authored
+//! geometry creation, color/fill edits, translation and linear/grid arrangement use
+//! the same route before and after execution bootstrap. [`ScriptScene`] delegates
+//! its persistent edits to these Scene-owned operations. Raw handle edits remain authored
 //! operations; they do not publish to an already running execution.
 //!
 //! [`Scene::live`] and [`LiveContinuation`] are explicit execution integration

@@ -137,26 +137,7 @@ impl ScriptScene {
 
     /// Publish a persistent recoloring without changing enabled layer opacity.
     pub fn set_color(&self, object: &Mobject, color: Color) -> Result<(), ScriptError> {
-        self.with_scene(|scene| {
-            scene.require_object(object)?;
-            if scene.running_execution().is_none() {
-                object.clone().set_color(
-                    f64::from(color.red),
-                    f64::from(color.green),
-                    f64::from(color.blue),
-                    f64::from(color.alpha),
-                )?;
-                return Ok(());
-            }
-            scene.owned_live().set_color(
-                object,
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                f64::from(color.alpha),
-            )?;
-            Ok(())
-        })
+        self.with_scene(|scene| Ok(scene.set_color(object, color)?))
     }
 
     /// Publish a persistent fill color and explicit layer opacity.
@@ -166,55 +147,16 @@ impl ScriptScene {
         color: Color,
         opacity: f64,
     ) -> Result<(), ScriptError> {
-        self.with_scene(|scene| {
-            scene.require_object(object)?;
-            if scene.running_execution().is_none() {
-                object.clone().set_fill(
-                    f64::from(color.red),
-                    f64::from(color.green),
-                    f64::from(color.blue),
-                    opacity,
-                )?;
-                return Ok(());
-            }
-            scene.owned_live().set_fill(
-                object,
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                opacity,
-            )?;
-            Ok(())
-        })
+        self.with_scene(|scene| Ok(scene.set_fill(object, color, opacity)?))
     }
 
     pub fn set_fill_opacity(&self, object: &Mobject, opacity: f64) -> Result<(), ScriptError> {
-        self.with_scene(|scene| {
-            scene.require_object(object)?;
-            if scene.running_execution().is_none() {
-                object.clone().set_fill_opacity(opacity)?;
-                return Ok(());
-            }
-            scene.owned_live().set_fill_opacity(object, opacity)?;
-            Ok(())
-        })
+        self.with_scene(|scene| Ok(scene.set_fill_opacity(object, opacity)?))
     }
 
     /// Publish a persistent scene-space translation.
     pub fn shift(&self, object: &Mobject, delta: Vec2) -> Result<(), ScriptError> {
-        self.with_scene(|scene| {
-            scene.require_object(object)?;
-            if scene.running_execution().is_none() {
-                object
-                    .clone()
-                    .shift(f64::from(delta.x), f64::from(delta.y))?;
-                return Ok(());
-            }
-            scene
-                .owned_live()
-                .shift(object, f64::from(delta.x), f64::from(delta.y))?;
-            Ok(())
-        })
+        self.with_scene(|scene| Ok(scene.shift(object, delta)?))
     }
 
     /// Play one request, or a tuple/collection of requests in parallel.

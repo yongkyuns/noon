@@ -101,6 +101,23 @@ The updater target reads and writes the current ordered effective callback phase
 Ordinary scene edits change persistent authored state. `scene.authored(&object)`
 and `scene.effective(&object)` make that observation choice explicit.
 
+The same persistent `set_color`, `set_fill`, `set_fill_opacity`, and `shift`
+operations are available on an ordinary `Scene` before and after its owned
+execution begins. For example, synchronous setup uses the same calls:
+
+```rust
+let mut scene = Scene::new();
+let circle = scene.circle(0.6)?;
+scene.set_fill(&circle, Color::BLUE, 0.5)?;
+scene.shift(&circle, Vec2::new(-2.0, 0.0))?;
+scene.add(&circle)?;
+```
+
+The script capability delegates these edits to its `Scene`. Validation and atomic
+publication stay in that shared operation path, including while execution is
+running. Borrowed `LiveSession` operations serve explicit external-session and
+callback integration.
+
 `Scene::script` runs initial setup through the first await, lowers that scene once,
 then lets the native or direct Rust/WASM host drive it. The same owner is available
 to rendering and input while the script waits. Async helper functions can compose
