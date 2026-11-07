@@ -1049,8 +1049,19 @@ function installStyles() {
     }
     .playback-slot .playback-scrubber:disabled,
     .playback-controls .playback-scrubber:disabled { opacity: 1; }
-    .playback-scrubber:disabled::-webkit-slider-thumb { background: #8392aa; }
-    .playback-scrubber:disabled::-moz-range-thumb { background: #8392aa; }
+    .playback-scrubber:disabled::-webkit-slider-thumb { background: var(--ready-color); }
+    .playback-scrubber:disabled::-moz-range-thumb { background: var(--ready-color); }
+    @media (forced-colors: active) {
+      .playback-scrubber {
+        forced-color-adjust: none;
+        --accent-strong: Highlight;
+        --ready-color: GrayText;
+      }
+      .playback-controls:is([data-buffered="open"], [data-buffered="empty"]) .playback-rail::after {
+        forced-color-adjust: none;
+        background: repeating-linear-gradient(135deg, Canvas 0 2px, CanvasText 2px 4px);
+      }
+    }
     .playback-time {
       min-width: 6.2rem;
       color: #b9c3d6;

@@ -302,6 +302,11 @@ try {
     open: { striped: true, played: 25, time: "1.00 / 4.00+ s", statusClipped: true },
     complete: { striped: false, played: 12.5, time: "1.00 / 8.00 s", statusClipped: false },
   });
+  await page.emulateMedia({ forcedColors: "active" });
+  const forcedTrack = await audioPanel.locator(".playback-scrubber").evaluate(input =>
+    getComputedStyle(input).backgroundImage);
+  assert.match(forcedTrack, /^linear-gradient/, "forced colors must keep the scrubber track visible");
+  await page.emulateMedia({ forcedColors: "none" });
   await page.evaluate(() => {
     const { controls, preview } = window.__controlsGestureRegression;
     controls.destroy();
