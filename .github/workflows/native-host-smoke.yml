@@ -197,8 +197,9 @@ jobs:
           NOON_NATIVE_HDR_ARTIFACTS: ${{ github.workspace }}/native-hdr-proof
           NOON_PLAYBACK_EVIDENCE_DIR: ${{ github.workspace }}/native-hdr-proof/playback
         run: |
-          cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture
-          cargo test -p noon-native --features wgsl-effects --lib native_incremental_handoff_pixels_match_original_observed_source -- --ignored --nocapture
+          # Keep independent GPU device lifecycles serial and failure logs attributable.
+          cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture --test-threads=1
+          cargo test -p noon-native --features wgsl-effects --lib native_incremental_handoff_pixels_match_original_observed_source -- --ignored --nocapture --test-threads=1
       - name: Present authored camera Bloom through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \

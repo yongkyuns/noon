@@ -19,6 +19,7 @@ where
 {
     let mut views = Vec::new();
     for size in [[320, 180], [240, 160]] {
+        eprintln!("native/capture {name} {size:?}: begin export");
         let mut frames = Vec::new();
         noon_export::capture_frames(
             &mut factory().unwrap(),
@@ -42,6 +43,7 @@ where
             frames.len() >= 4,
             "{name}: source must provide real temporal coverage"
         );
+        eprintln!("native/capture {name} {size:?}: begin native playback");
         let mut source =
             PlaybackExecutionSource::new(factory().unwrap(), RustHostCallbackTable::new()).unwrap();
         let mut draw = Draw::new(device, queue);
@@ -314,6 +316,7 @@ fn finite_glow_seek_matches_forward_capture() {
     for active in [1, 100] {
         for property in [Property::Intensity, Property::Radius] {
             for size in [[320, 180], [240, 160]] {
+                eprintln!("native seek/capture {active} {property:?} {size:?}: forward capture");
                 let mut forward = session(active, property, 10.0).unwrap();
                 let mut capture = noon_export::SessionCapture::new(
                     forward.session(),
@@ -338,6 +341,7 @@ fn finite_glow_seek_matches_forward_capture() {
                     .iter()
                     .any(|p| p[..3] != [0, 0, 0]));
                 assert_ne!(expected[0], expected[4], "animated glow must change pixels");
+                eprintln!("native seek/capture {active} {property:?} {size:?}: native seeks");
                 let mut source = StaticExecutionSource::new(
                     session(active, property, 10.0).unwrap(),
                     RustHostCallbackTable::new(),

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::mem::size_of;
@@ -248,6 +249,12 @@ fn assert_duration_and_samples(fixture: &Fixture, end: u32, before: &[u8], befor
     let moov = top_atom(&after, *b"moov");
     let mvhd = child(&after, moov, *b"mvhd").unwrap();
     let (video, audio) = tracks(&after, moov).unwrap();
+    let (_, original_audio) = tracks(before, top_atom(before, *b"moov")).unwrap();
+    assert_eq!(
+        &before[original_audio.stts.start..original_audio.stts.end],
+        &after[audio.stts.start..audio.stts.end],
+        "AAC sample timing must remain unchanged",
+    );
     let movie_scale = u32_at(&after, mvhd.payload() + 12).unwrap();
     assert_eq!(movie_scale % fixture.rate.numerator(), 0);
     assert_eq!(movie_scale % AUDIO_RATE, 0);
@@ -315,25 +322,37 @@ fn assert_duration_and_samples(fixture: &Fixture, end: u32, before: &[u8], befor
             },
         );
     }
+    // The edit bounds presentation independently of the coded AAC packets.
+    let audio_stream = String::from_utf8(media_command(
+        "ffprobe",
+        &[
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=time_base,start_pts,duration_ts",
+            "-of",
+            "default=noprint_wrappers=1:nokey=0",
+        ],
+        &fixture.path,
+    ))
+    .unwrap();
+    let stream_fields: BTreeMap<_, _> = audio_stream
+        .lines()
+        .map(|line| line.split_once('=').unwrap())
+        .collect();
+    assert_eq!(stream_fields["time_base"], "1/48000");
+    assert_eq!(stream_fields["start_pts"], "0");
+    assert_eq!(
+        stream_fields["duration_ts"].parse::<u64>().unwrap(),
+        audio_end,
+        "demuxed audio presentation must end at the exact complete-sample boundary",
+    );
     let after_audio = decode(&fixture.path, true, false);
     if audio_end == 0 {
         // A movie shorter than one complete 48 kHz sample has an exact container
         // endpoint but no presented audio samples; it is not an audible clip.
-        let duration = media_command(
-            "ffprobe",
-            &[
-                "-v",
-                "error",
-                "-select_streams",
-                "a:0",
-                "-show_entries",
-                "stream=duration_ts",
-                "-of",
-                "csv=p=0",
-            ],
-            &fixture.path,
-        );
-        assert_eq!(String::from_utf8(duration).unwrap().trim(), "0");
         assert!(after_audio.is_empty());
     } else {
         let audio_packets = packets(&fixture.path, "a:0");
@@ -341,8 +360,20 @@ fn assert_duration_and_samples(fixture: &Fixture, end: u32, before: &[u8], befor
             audio_packets[0],
             (-i64::from(AAC_FRAME), u64::from(AAC_FRAME))
         );
+        for (index, &(pts, duration)) in audio_packets.iter().enumerate() {
+            assert_eq!(pts, (index as i64 - 1) * i64::from(AAC_FRAME));
+            assert!((1..=u64::from(AAC_FRAME)).contains(&duration));
+            if index + 1 < audio_packets.len() {
+                assert_eq!(duration, u64::from(AAC_FRAME));
+            }
+        }
         let &(last_pts, last_duration) = audio_packets.last().unwrap();
-        assert_eq!(last_pts as u64 + last_duration, audio_end);
+        let last_pts = u64::try_from(last_pts).unwrap();
+        // Demuxers may retain the stts duration for this boundary packet rather
+        // than shorten it to the edit. It must cover the exact presentation end,
+        // remain within the original PCM span, and not start after the edit.
+        assert!(last_pts < audio_end);
+        assert!((audio_end..=fixture.pcm_frames()).contains(&(last_pts + last_duration)));
     }
     let accepted_bytes = audio_end as usize * 2 * size_of::<f32>();
     // AAC decodes whole 1024-sample frames. Compare the admitted presentation
