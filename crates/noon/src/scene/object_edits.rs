@@ -2,7 +2,7 @@
 
 use crate::{
     family_authoring::FamilyTranslation,
-    semantic_mobject::{edit_color, edit_fill, edit_fill_opacity},
+    semantic_mobject::{edit_color, edit_fill, edit_fill_opacity, edit_stroke_width},
     AuthoringError, Mobject, Scene,
 };
 use noon_core::{Color, SemanticMutationTransaction, SemanticStyle, SemanticVec3, Vec2};
@@ -54,6 +54,11 @@ impl Scene {
         opacity: f64,
     ) -> Result<(), AuthoringError> {
         self.edit_object_style(object, |style| edit_fill_opacity(style, opacity))
+    }
+
+    /// Set persistent stroke width through the shared paint and publication rules.
+    pub fn set_stroke_width(&mut self, object: &Mobject, width: f64) -> Result<(), AuthoringError> {
+        self.edit_object_style(object, |style| edit_stroke_width(style, width))
     }
 
     /// Translate an object's own content and unique descendants in one publication.

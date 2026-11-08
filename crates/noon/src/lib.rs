@@ -24,8 +24,43 @@
 //! Owned animation requests capture effective state when play starts. Tuples,
 //! arrays and vectors compose simultaneous animations in one play.
 //!
+//! Families use the same capability before and after a boundary:
+//!
+//! ```no_run
+//! use noon::{FamilyArrangeOptions, FamilyGridOptions, Scene};
+//! # fn example() -> Result<(), noon::ScriptError> {
+//! let program = Scene::script(|scene| async move {
+//!     let first = scene.circle(0.4)?;
+//!     let second = scene.square(0.8)?;
+//!     let group = scene.family([&first, &second])?;
+//!     scene.arrange_family_with_options(
+//!         &group,
+//!         &FamilyArrangeOptions::new(1.0, 0.0, 0.3, true),
+//!     )?;
+//!     scene.add(&group)?;
+//!     scene.wait(0.5).await?;
+//!     let third = scene.circle(0.3)?;
+//!     scene.add_family_members(&group, [&third])?;
+//!     scene.arrange_family_in_grid_with_options(
+//!         &group,
+//!         &FamilyGridOptions { columns: Some(2), ..Default::default() },
+//!     )?;
+//!     scene.wait(0.5).await?;
+//!     Ok(())
+//! })?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Mixed groups accept [`MobjectTarget::Object`] and [`MobjectTarget::Family`].
+//! Membership edits preserve handles and use one atomic publication. Layout
+//! observes authored bounds during setup and effective bounds during execution.
+//! [`ScriptScene::effective_layout`] and [`ScriptScene::effective_family_layout`]
+//! explicitly query the current publication. Fluent animation requests currently
+//! target individual planar objects; family method targets remain unsupported.
+//!
 //! [`Scene`] and [`Mobject`] also support explicit authoring. Scene-owned operations such as
-//! geometry creation, color/fill edits, translation and linear/grid arrangement use
+//! geometry/family creation, membership, paint edits, translation and linear/grid arrangement use
 //! the same route before and after execution bootstrap. [`ScriptScene`] delegates
 //! its persistent edits to these Scene-owned operations. Raw handle edits remain authored
 //! operations; they do not publish to an already running execution.

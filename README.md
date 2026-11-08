@@ -101,7 +101,7 @@ The updater target reads and writes the current ordered effective callback phase
 Ordinary scene edits change persistent authored state. `scene.authored(&object)`
 and `scene.effective(&object)` make that observation choice explicit.
 
-The same persistent `set_color`, `set_fill`, `set_fill_opacity`, and `shift`
+The same persistent `set_color`, `set_fill`, `set_fill_opacity`, `set_stroke_width`, and `shift`
 operations are available on an ordinary `Scene` before and after its owned
 execution begins. For example, synchronous setup uses the same calls:
 
@@ -118,6 +118,39 @@ publication stay in that shared operation path, including while execution is
 running. Borrowed `LiveSession` operations serve explicit external-session and
 callback integration.
 
+Families use the same scene capability for construction, membership, and layout.
+Objects can be grouped directly from an array of references. The group remains a
+semantic family, including when a member is shared with another group:
+
+```rust
+let first = scene.circle(0.4)?;
+let second = scene.square(0.8)?;
+let group = scene.family([&first, &second])?;
+scene.arrange_family_with_options(
+    &group,
+    &FamilyArrangeOptions::new(1.0, 0.0, 0.3, true),
+)?;
+scene.add(&group)?;
+scene.wait(0.5).await?;
+
+let third = scene.circle(0.3)?;
+scene.add_family_members(&group, [&third])?;
+scene.arrange_family_in_grid_with_options(
+    &group,
+    &FamilyGridOptions { columns: Some(2), ..Default::default() },
+)?;
+```
+
+Import `FamilyArrangeOptions` and `FamilyGridOptions` from `noon` for this example.
+Mixed object/family collections use `MobjectTarget::Object(&object)` and
+`MobjectTarget::Family(&family)`. Construction accepts arrays, vectors, and borrowed
+slices of these typed targets. `remove_family_members` detaches direct members;
+`remove(&group)` detaches the group from the scene. Both preserve semantic identity.
+Layout uses authored bounds during setup and current effective bounds after
+execution starts. `effective_layout(&object)` and `effective_family_layout(&group)`
+read the current publication; cold scenes return an explicit error for these
+effective queries.
+
 `Scene::script` runs initial setup through the first await, lowers that scene once,
 then lets the native or direct Rust/WASM host drive it. The same owner is available
 to rendering and input while the script waits. Async helper functions can compose
@@ -130,8 +163,11 @@ The initial fluent animation slice supports individual planar objects, `Create`,
 applies, including the restriction on first updater registration for targets added
 after execution bootstrap. Constructors create detached handles; `add` or an
 introducing animation attaches them, and stale/foreign handles return errors.
-See the paired [MovingAround](crates/noon/src/example_scenes/moving_around.rs) and
-[RotationUpdater](crates/noon/src/example_scenes/live_updater_lifecycle.rs) sources,
+Families can be constructed and laid out in scripts; fluent family animation
+requests remain a separate follow-up. See the paired
+[MovingAround](crates/noon/src/example_scenes/moving_around.rs),
+[RotationUpdater](crates/noon/src/example_scenes/live_updater_lifecycle.rs), and
+[family arrangement](crates/noon/src/example_scenes/family_arrangement.rs) sources,
 or [shared_authoring.rs](crates/noon/examples/shared_authoring.rs) for explicit typed
 lowering and execution integration.
 

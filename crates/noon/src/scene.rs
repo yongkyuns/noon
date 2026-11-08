@@ -1,6 +1,7 @@
 //! Direct authoring scope over one family in the shared semantic store.
 mod audio;
 mod execution;
+mod family;
 mod image;
 mod object_edits;
 mod sections;

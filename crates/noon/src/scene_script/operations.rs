@@ -7,8 +7,8 @@ use noon_core::{HostCallbackId, SemanticMutationTransaction};
 use super::{ScriptBoundary, ScriptBridge, ScriptError, ScriptScene};
 use crate::{
     AnimationOptions, Color, ContinuationStep, EffectiveMobjectState, IntoAnimationRequest,
-    ManimGeometryOptions, Mobject, RustHostCallbackContext, SemanticObjectState, SemanticStyle,
-    Vec2, VectorPath,
+    ManimGeometryOptions, Mobject, MobjectTarget, RustHostCallbackContext, SemanticObjectState,
+    SemanticStyle, Vec2, VectorPath,
 };
 
 /// A scene-owned updater registration. Removing it is an explicit authored action.
@@ -112,12 +112,20 @@ impl ScriptScene {
         self.with_scene(|scene| Ok(scene.path(path, style)?))
     }
 
-    pub fn add(&self, object: &Mobject) -> Result<(), ScriptError> {
-        self.with_scene(|scene| Ok(scene.add(object)?))
+    /// Add an object or family through the Scene's shared membership rules.
+    pub fn add<'a>(&self, target: impl Into<MobjectTarget<'a>>) -> Result<(), ScriptError> {
+        self.with_scene(|scene| {
+            scene.add_many(&[target.into()])?;
+            Ok(())
+        })
     }
 
-    pub fn remove(&self, object: &Mobject) -> Result<(), ScriptError> {
-        self.with_scene(|scene| Ok(scene.remove(object)?))
+    /// Detach an object or family while preserving its semantic identity.
+    pub fn remove<'a>(&self, target: impl Into<MobjectTarget<'a>>) -> Result<(), ScriptError> {
+        self.with_scene(|scene| {
+            scene.remove_many(&[target.into()])?;
+            Ok(())
+        })
     }
 
     /// Read the persistent base declaration, independent of animation/updaters.
@@ -152,6 +160,10 @@ impl ScriptScene {
 
     pub fn set_fill_opacity(&self, object: &Mobject, opacity: f64) -> Result<(), ScriptError> {
         self.with_scene(|scene| Ok(scene.set_fill_opacity(object, opacity)?))
+    }
+
+    pub fn set_stroke_width(&self, object: &Mobject, width: f64) -> Result<(), ScriptError> {
+        self.with_scene(|scene| Ok(scene.set_stroke_width(object, width)?))
     }
 
     /// Publish a persistent scene-space translation.

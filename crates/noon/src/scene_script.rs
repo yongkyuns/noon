@@ -19,6 +19,7 @@ use crate::{
     RustHostCallbackError, RustHostCallbackTable, Scene,
 };
 
+mod family;
 mod operations;
 pub use operations::{UpdaterFrame, UpdaterRegistration, UpdaterTarget};
 

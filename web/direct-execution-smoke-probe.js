@@ -1775,23 +1775,37 @@ async function directFamilyArrangementProof(expectedBackend) {
   try {
     renderer.resize(canvas.width, canvas.height);
     await settleDirectPublication(renderer, 0);
+    let identities;
+    let final;
     for (const [wallTime, first, second] of [
       [0, [-1, 0], [1, 0]],
+      [250, [-1, 0], [1, 0]],
       [500, [0.35, 0.7], [1, 0.7]],
+      [1000, [0.35, 0.7], [1, 0.7]],
     ]) {
       renderer.advanceDirectRealtime(wallTime);
-      await settleDirectPublication(renderer, wallTime);
+      final = await settleDirectPublication(renderer, wallTime);
+      const frame = JSON.parse(renderer.debugSelectionFrameJson());
+      const objectIds = frame.objects.map(object => object.id);
+      identities ??= objectIds;
       const blue = await sampleRenderedColor(canvas, ...first);
       const yellow = await sampleRenderedColor(canvas, ...second);
-      if (blue.blue <= blue.red + 30 || yellow.red <= yellow.blue + 30) {
-        throw new Error(`direct family arrangement missed shared members: ${JSON.stringify({wallTime, blue, yellow})}`);
+      const cleared = wallTime >= 500
+        ? await Promise.all([-1, 1].map(x => sampleRenderedColor(canvas, x, 0))) : [];
+      if (renderer.time() !== wallTime / 1000 || frame.objects.length !== 2 ||
+          objectIds.some((id, index) => id !== identities[index]) ||
+          frame.objects.some((object, index) => {
+            const expected = [first, second][index];
+            return Math.abs(object.center[0] - expected[0]) > 1e-5 ||
+              Math.abs(object.center[1] - expected[1]) > 1e-5;
+          }) || blue.blue <= blue.red + 30 || yellow.red <= yellow.blue + 30 ||
+          cleared.some(color => Math.max(color.red, color.green, color.blue) > 30)) {
+        throw new Error(`direct family arrangement missed timing, identity or shared member pixels: ${JSON.stringify({wallTime, frame, blue, yellow, cleared})}`);
       }
-      samples.push({ wallTime, blue, yellow });
+      samples.push({ wallTime, objectIds, blue, yellow, cleared });
     }
-    renderer.advanceDirectRealtime(1000);
-    const wake = await settleDirectPublication(renderer, 1000);
     if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 1
-        || renderer.objectCount() !== 2 || wake.cadence !== "idle") {
+        || renderer.objectCount() !== 2 || final.cadence !== "idle") {
       throw new Error("direct family arrangement did not finish one coherent continuation");
     }
     return samples;

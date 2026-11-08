@@ -4,11 +4,12 @@ use noon_core::{SemanticPaint, RIGHT, UP};
 
 type Edit = fn(&mut Scene, &Mobject) -> Result<(), AuthoringError>;
 
-const VALID_EDITS: [Edit; 4] = [
+const VALID_EDITS: [Edit; 5] = [
     |scene, object| scene.set_color(object, Color::YELLOW),
     |scene, object| scene.set_fill(object, Color::BLUE, 0.5),
     |scene, object| scene.set_fill_opacity(object, 0.3),
     |scene, object| scene.shift(object, RIGHT),
+    |scene, object| scene.set_stroke_width(object, 2.0),
 ];
 
 fn bootstrap(scene: &mut Scene) {
@@ -49,9 +50,10 @@ fn persistent_edits_share_cold_and_running_semantics_and_remain_local() {
         scene.set_fill(&object, Color::BLUE, 0.6).unwrap();
         scene.set_fill_opacity(&object, 0.25).unwrap();
         scene.set_color(&object, Color::YELLOW).unwrap();
+        scene.set_stroke_width(&object, 2.0).unwrap();
         scene.shift(&object, RIGHT * 2.0 + UP).unwrap();
 
-        assert_eq!(scene.revision().get(), before_revision.get() + 4);
+        assert_eq!(scene.revision().get(), before_revision.get() + 5);
         assert_eq!(scene.integration_store().borrow().len(), before_nodes);
         assert_eq!(
             scene
@@ -72,6 +74,7 @@ fn persistent_edits_share_cold_and_running_semantics_and_remain_local() {
             Some(SemanticPaint::Solid(Color::YELLOW))
         );
         assert_eq!(authored.style.fill_opacity, 0.25);
+        assert_eq!(authored.style.stroke_width, 2.0);
         for (sibling, before) in unrelated.iter().zip(&unrelated_states) {
             assert_eq!(&sibling.state().unwrap(), before);
         }
@@ -118,11 +121,12 @@ fn persistent_edits_share_cold_and_running_semantics_and_remain_local() {
 
 #[test]
 fn invalid_foreign_and_stale_edits_leave_both_authorities_unchanged() {
-    let invalid: [Edit; 4] = [
+    let invalid: [Edit; 5] = [
         |scene, object| scene.set_color(object, Color::rgba(f32::NAN, 0.5, 0.5, 1.0)),
         |scene, object| scene.set_fill(object, Color::BLUE, f64::NAN),
         |scene, object| scene.set_fill_opacity(object, f64::INFINITY),
         |scene, object| scene.shift(object, Vec2::new(f32::INFINITY, 1.0)),
+        |scene, object| scene.set_stroke_width(object, -0.5),
     ];
     for running in [false, true] {
         let mut scene = Scene::new();

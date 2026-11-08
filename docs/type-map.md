@@ -135,12 +135,21 @@ Most persistent `Mobject` methods follow the same shape:
 6. the transaction applies atomically to `SemanticStore`.
 
 Raw handle edits are authored operations. Ordinary persistent edits use
-`Scene::set_color`, `Scene::set_fill`, `Scene::set_fill_opacity`, and `Scene::shift`
+`Scene::set_color`, `Scene::set_fill`, `Scene::set_fill_opacity`,
+`Scene::set_stroke_width`, and `Scene::shift`
 before and after Scene-owned execution bootstrap. These methods prepare the same
 shared semantic transaction and pass it through `Scene::apply_semantic_transaction`;
 running execution validates and publishes its derived changes atomically.
 `ScriptScene` delegates these edits to that Scene without choosing a cold or live
 feature API. Authored/base queries and coherent effective queries remain explicit.
+
+`Scene::add_family_members` and `Scene::remove_family_members` prepare the existing
+shared family membership transaction and use that same publication route. Family
+creation, linear/grid arrangement, and anchored placement also remain Scene-owned
+operations. `Scene::effective_layout` and the external `LiveSession` query share
+one object-layout implementation, including descendant traversal and render-override
+admission; `effective_family_layout` uses the existing family query. These queries
+observe a coherent publication and do not store a second bounds representation.
 
 `Scene::live(&mut session)` is for an explicitly borrowed external execution
 component and callback/host integration. Raw mutable store access is an
@@ -383,6 +392,14 @@ It does **not** lower through an SVG `d` string. SVG/debug/export representation
 scoped capability: each synchronous operation borrows the same Scene only while
 the source is being polled. It contains no independent semantic state and cannot
 retain a stopped source. Persistent edits delegate to Scene-owned operations.
+
+Family construction accepts borrowed object collections or mixed `MobjectTarget`
+collections. Scene attachment/detachment accepts either an object or a family;
+family membership, linear/grid arrangement, anchored placement, and effective
+layout queries delegate to the same shared operations. The capability does not
+copy family topology or perform its own layout traversal. The existing nested,
+aliased family-arrangement example runs as one sequential source on native and
+direct Rust/WASM hosts.
 
 `play` and `wait` yield the existing `LiveProgram` completion/publication boundary.
 An owned `AnimationRequest` retains handles and requested edits, then captures

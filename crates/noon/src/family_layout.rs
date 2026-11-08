@@ -548,6 +548,46 @@ pub(crate) fn union_bounds(total: &mut Option<Bounds2D64>, next: Option<Bounds2D
     }
 }
 
+/// Observe an object's own content and descendants at one effective publication.
+pub(crate) fn effective_mobject_layout(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    object: &Mobject,
+) -> Result<crate::EffectiveMobjectLayout, AuthoringError> {
+    crate::MobjectTarget::Object(object).require_store(store)?;
+    if object.has_members()? {
+        let anchor = LayoutAnchor::from(object);
+        let (_, bounds) = effective_anchor_layout_measure(store, execution, &anchor, false)?;
+        let (_, boundary) = effective_anchor_layout_measure(store, execution, &anchor, true)?;
+        return Ok(crate::EffectiveMobjectLayout {
+            center: bounds_critical_point(boundary, 0.0, 0.0),
+            width: bounds.map_or(0.0, Bounds2D64::width),
+            height: bounds.map_or(0.0, Bounds2D64::height),
+            publication: execution.publication_context(),
+        });
+    }
+    let store_ref = store.borrow();
+    let observed = execution
+        .effective_semantic_object(&store_ref, object.node_id())
+        .map_err(AuthoringError::from)?;
+    if !observed.authored_content_layout_applicable() {
+        return Err(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
+        ));
+    }
+    let transform = observed.object.transform;
+    let publication = observed.publication;
+    drop(store_ref);
+    let bounds = object.layout_bounds_at(transform)?;
+    let boundary = object.boundary_bounds_at(transform)?;
+    Ok(crate::EffectiveMobjectLayout {
+        center: crate::semantic_mobject::boundary_center(boundary, (0.0, 0.0)),
+        width: bounds.map_or(0.0, Bounds2D64::width),
+        height: bounds.map_or(0.0, Bounds2D64::height),
+        publication,
+    })
+}
+
 /// Observe one semantic family's effective layout from an existing coherent execution.
 ///
 /// Reachable leaves use Runtime's current affine. Detached leaves preserve their exact

@@ -25,7 +25,7 @@ fn admit_if_pending(program: &mut LiveProgram<SceneScript>) {
     }
 }
 
-fn finish_wait(program: &mut LiveProgram<SceneScript>, time: f64) {
+pub(super) fn finish_wait(program: &mut LiveProgram<SceneScript>, time: f64) {
     program
         .drive_to(&mut RustHostCallbackTable::new(), time)
         .unwrap();

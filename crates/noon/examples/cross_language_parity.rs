@@ -176,7 +176,7 @@ fn main() -> Result<(), String> {
     )?;
     emit(
         "ordinary_family_arrangement",
-        example_scenes::family_arrangement::program()?,
+        example_scenes::family_arrangement::program().map_err(|error| error.to_string())?,
         &[0.0, 0.25, 0.5, 0.75, 1.0],
     )?;
     emit(
