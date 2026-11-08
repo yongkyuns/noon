@@ -41,9 +41,11 @@ export function assertFirstPass(entry, observed, expectedBackend, naturalCapture
       assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, naturalCapture.rendererReceipt?.time);
     }
     const elapsed = Number(naturalCapture.controls?.elapsedSeconds);
-    assert.ok(Number.isFinite(elapsed) && elapsed >= naturalCapture.holdStart &&
-      elapsed <= naturalCapture.authoredDuration + 8 * Number.EPSILON * Math.max(1, entry.duration),
-    "first-pass picture was not captured in the declared terminal hold");
+    assert.ok(Number.isFinite(elapsed), "first-pass controls have no finite elapsed time");
+    const observedTime = naturalCapture.executionState?.time;
+    assert.ok(Number.isFinite(observedTime) && observedTime >= naturalCapture.holdStart &&
+      observedTime <= naturalCapture.authoredDuration + 8 * Number.EPSILON * Math.max(1, entry.duration),
+    "first-pass Rust observation is outside the declared terminal hold");
   } else {
     const elapsed = Number(observed.controls?.elapsedSeconds);
     const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration);
@@ -156,14 +158,15 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
     context: diagnostics.context, runRequestId: diagnostics.runRequestId,
     interpreterGeneration: diagnostics.interpreterGeneration };
   const alreadyCaptured = window.__showcaseLiveReviewFirstPass;
+  // Controls cache an earlier observation; admit hold timing only from the fresh
+  // Rust state and matching presentation proof below.
   if (!alreadyCaptured && diagnostics?.context?.exampleId === exampleId &&
       Number.isSafeInteger(diagnostics.runRequestId) &&
       Number.isSafeInteger(diagnostics.interpreterGeneration) &&
       events.some((event) => event.stage === "attached" && event.publication) &&
       diagnostics.context.runGeneration === runGeneration &&
       controls?.busy === "false" &&
-      controls.playing === "true" && Number.isFinite(elapsed) &&
-      elapsed >= holdStart && elapsed <= duration + 8 * Number.EPSILON * Math.max(1, duration)) {
+      controls.playing === "true" && Number.isFinite(elapsed)) {
     const runIdentity = {
       interpreterGeneration: diagnostics.interpreterGeneration,
       runRequestId: diagnostics.runRequestId,
@@ -202,7 +205,6 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
       runRequestId: current.runRequestId, interpreterGeneration: current.interpreterGeneration };
     if (captureControls.busy !== "false" ||
         captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
-        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
         current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
         current?.runRequestId !== runIdentity.runRequestId ||
         JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||

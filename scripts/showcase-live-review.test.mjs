@@ -531,15 +531,17 @@ test("closed Rust endpoint admits a matching in-hold receipt but rejects open, l
   }
 });
 
-test("looping first pass accepts a held compositor screenshot only with matching before/after Rust proof", async () => {
+test("looping first pass accepts stale controls only with matching Rust-held screenshot proof", async () => {
   const lesson = { id: "showcase-example", duration: 8, still_intervals: [[6, 8]] };
+  const staleElapsed = 5.9;
   const held = { publication: { session: 7, sequence: 5 }, evaluatedTime: 5.9514,
     time: 7.5, validUntil: 8 };
   const { page } = preparedAudioPage({
     run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
       time: 0, playing: true, durationSeconds: 8 } },
     observations: [
-      { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, heldScreenshotResult: {
+      { elapsed: staleElapsed, frontier: 8, publishedTime: 5.9514, objectCount: 626,
+        controls: { playing: "true" }, heldScreenshotResult: {
         pngDataUrl: "data:image/png;base64,cGFnZQ==", screenshotStartedAtEpochMs: 11,
         screenshotReturnedAtEpochMs: 12, screenshotBounds: { x: 0, y: 0, width: 960, height: 540 },
         before: { executionState: { time: 7.5, preparedPlayback: true, loopCount: 0, playing: true, buffering: false,
@@ -558,12 +560,22 @@ test("looping first pass accepts a held compositor screenshot only with matching
   const result = await runOrdinaryGallery(page, 100, lesson, { rendererReadback: {} });
   assert.deepEqual(JSON.parse(JSON.stringify(result.firstPassCapture.heldPresentation)),
     { ...held, observedTime: 7.5 });
+  assert.equal(result.firstPassCapture.controls.elapsedSeconds, String(staleElapsed),
+    "capture preserves the stale controls snapshot");
+  assert.equal(result.firstPassCapture.executionState.time, 7.5);
   assert.equal(result.firstPassCapture.rendererReceipt.time, 5.9514,
     "capture retains the real renderer receipt rather than relabeling its time");
   assert.equal(result.firstPassCapture.captureKind, "compositor-screenshot");
   assert.equal(result.firstPassCapture.pngDataUrl, "data:image/png;base64,cGFnZQ==");
   assert.deepEqual({ ...result.firstPassCapture.compositorScreenshot.bounds },
     { x: 0, y: 0, width: 960, height: 540 });
+  assertFirstPass(lesson, { ...observed(), backend: "WebGL2" },
+    "WebGL2", result.firstPassCapture);
+  assert.throws(() => assertFirstPass(lesson, { ...observed(), backend: "WebGL2" }, "WebGL2", {
+    ...result.firstPassCapture,
+    controls: { ...result.firstPassCapture.controls, elapsedSeconds: "7.5" },
+    executionState: { ...result.firstPassCapture.executionState, time: staleElapsed },
+  }), /Rust observation is outside the declared terminal hold/);
   for (const invalid of [
     { ...held, publication: { session: 7, sequence: 4 } },
     { ...held, validUntil: 7.5 },
@@ -572,7 +584,8 @@ test("looping first pass accepts a held compositor screenshot only with matching
       run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
         time: 0, playing: true, durationSeconds: 8 } },
       observations: [
-        { elapsed: 7.5, publishedTime: 5.9514, controls: { playing: "true" }, preparedPlayback: {
+        { elapsed: staleElapsed, frontier: 8, publishedTime: 5.9514, objectCount: 626,
+          controls: { playing: "true" }, preparedPlayback: {
           observation: { loopCount: 0, heldPresentation: invalid }, observedTime: 7.5 } },
         { elapsed: 0.1, publishedTime: 0.1, looped: true },
       ],
@@ -679,7 +692,7 @@ test("dense first-pass composition is checked against the captured hold, not the
   const dense = { ...entry, performance: true, still_intervals: [[7, 8]] };
   const postWrap = { ...observed(), objectCount: 0,
     controls: { ...observed().controls, elapsedSeconds: "0.1" } };
-  const capture = { authoredDuration: 8, holdStart: 7,
+  const capture = { authoredDuration: 8, holdStart: 7, executionState: { time: 7.5 },
     controls: { elapsedSeconds: "7.5" }, rendererReceipt: { time: 7.5, objectCount: 627 } };
   assertFirstPass(dense, postWrap, "WebGPU", capture);
   assert.throws(() => assertFirstPass(dense, postWrap, "WebGPU", {
