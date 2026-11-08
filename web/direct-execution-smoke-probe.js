@@ -1776,23 +1776,33 @@ async function directFamilyArrangementProof(expectedBackend) {
     renderer.resize(canvas.width, canvas.height);
     await settleDirectPublication(renderer, 0);
     let identities;
+    let initialPublication;
     let final;
-    for (const [wallTime, first, second] of [
-      [0, [-1, 0], [1, 0]],
-      [250, [-1, 0], [1, 0]],
-      [500, [0.35, 0.7], [1, 0.7]],
-      [1000, [0.35, 0.7], [1, 0.7]],
+    // Static waits retain the last publication until their timer is due.
+    for (const [wallTime, sceneTime, delayMs, first, second] of [
+      [0, 0, 500, [-1, 0], [1, 0]],
+      [250, 0, 250, [-1, 0], [1, 0]],
+      [500, 0.5, 500, [0.35, 0.7], [1, 0.7]],
+      [1000, 1, null, [0.35, 0.7], [1, 0.7]],
     ]) {
       renderer.advanceDirectRealtime(wallTime);
       final = await settleDirectPublication(renderer, wallTime);
       const frame = JSON.parse(renderer.debugSelectionFrameJson());
       const objectIds = frame.objects.map(object => object.id);
       identities ??= objectIds;
+      const publication = JSON.stringify(frame.publication);
+      initialPublication ??= publication;
+      const expectedCadence = delayMs === null ? "idle" : "timer";
+      const validDelay = delayMs === null ? final.delayMs === null
+        : Number.isFinite(final.delayMs) && Math.abs(final.delayMs - delayMs) <= 1e-6;
       const blue = await sampleRenderedColor(canvas, ...first);
       const yellow = await sampleRenderedColor(canvas, ...second);
       const cleared = wallTime >= 500
         ? await Promise.all([-1, 1].map(x => sampleRenderedColor(canvas, x, 0))) : [];
-      if (renderer.time() !== wallTime / 1000 || frame.objects.length !== 2 ||
+      if (renderer.time() !== sceneTime || frame.time !== sceneTime ||
+          final.cadence !== expectedCadence || !validDelay ||
+          (wallTime < 500 && publication !== initialPublication) ||
+          frame.objects.length !== 2 ||
           objectIds.some((id, index) => id !== identities[index]) ||
           frame.objects.some((object, index) => {
             const expected = [first, second][index];
@@ -1800,9 +1810,9 @@ async function directFamilyArrangementProof(expectedBackend) {
               Math.abs(object.center[1] - expected[1]) > 1e-5;
           }) || blue.blue <= blue.red + 30 || yellow.red <= yellow.blue + 30 ||
           cleared.some(color => Math.max(color.red, color.green, color.blue) > 30)) {
-        throw new Error(`direct family arrangement missed timing, identity or shared member pixels: ${JSON.stringify({wallTime, frame, blue, yellow, cleared})}`);
+        throw new Error(`direct family arrangement missed timing, identity or shared member pixels: ${JSON.stringify({wallTime, sceneTime, wake: final, frame, blue, yellow, cleared})}`);
       }
-      samples.push({ wallTime, objectIds, blue, yellow, cleared });
+      samples.push({ wallTime, sceneTime: renderer.time(), wake: final, objectIds, blue, yellow, cleared });
     }
     if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 1
         || renderer.objectCount() !== 2 || final.cadence !== "idle") {
