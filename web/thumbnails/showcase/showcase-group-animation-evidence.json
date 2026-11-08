@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "26d6d6517895aac99e022cfd2a68fa0494c662c7",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "26d6d6517895aac99e022cfd2a68fa0494c662c7",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "edb37eab37e894a0eca9be2a7eb3cfdf7dad6b207d245c5e892d68d7be5cf9d4"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "24e1ce9e53f6b7747402dfa988411eefffa74a76ab16ed26cb147fdbcc7be158"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "09bf481be0944efb31d92cdc253c4a6e63678120a85b6e5262b0b3ce26860bd3"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "24f2145b8e48fd3c2b08af7802ac167a49e681b57afcddbdf0f0b8a21b56a379"
+  },
+  "posters": [
+    {
+      "id": "showcase-group-animation",
+      "captureBuildId": "24f2145b8e48fd3c2b08af7802ac167a49e681b57afcddbdf0f0b8a21b56a379",
+      "sourceSha256": "76e215c8c82339c4c3f705c5b57c95346a4e947f6df80e9420941339e6f02181",
+      "thumbnailTime": 6.5,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 3875,
+        "pngSha256": "41aadd9443a09e0417feb2d77eb95fa5a1ac2f478c8d6712e0bacbb877bdd29f",
+        "pixelSha256": "319a3437ab213642da53c28f1ca9e1c519658567c8ed789b6221075e6a9a8889"
+      },
+      "sample": {
+        "requestedTime": 6.500000001,
+        "publishedTime": 6.5,
+        "authoredDuration": 6.5,
+        "sourceCompleted": true,
+        "sourceState": "completed",
+        "completionProbe": true
+      }
+    }
+  ]
+}
