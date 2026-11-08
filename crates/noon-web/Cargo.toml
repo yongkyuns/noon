@@ -13,6 +13,8 @@ wgsl-effects = ["noon/wgsl-effects"]
 default = ["renderer", "wgsl-effects", "prepared-prefix"]
 # Explicit release-profile qualification only; production builds omit the fixtures.
 renderer-smoke = ["renderer", "wgsl-effects"]
+# Experimental synchronous Rust source stacks require a JSPI-capable browser.
+blocking-scene = ["renderer", "web-sys/AbortController", "web-sys/AbortSignal"]
 # Opt-in typed replay fixtures for optimized qualification, not production exports.
 replay-smoke = []
 # Bounded incremental history; source/runtime admission controls its use.

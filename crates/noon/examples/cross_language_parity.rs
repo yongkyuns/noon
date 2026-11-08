@@ -7,6 +7,10 @@ use noon::{
 };
 use serde_json::json;
 
+mod cross_language_parity {
+    pub mod blocking;
+}
+
 fn emit<C: LiveContinuation>(
     name: &str,
     mut program: LiveProgram<C>,
@@ -127,6 +131,7 @@ fn transform_path_arc_program() -> Result<LiveProgram<TransformPathArc>, String>
 }
 
 fn main() -> Result<(), String> {
+    cross_language_parity::blocking::emit()?;
     emit(
         "ordinary_affine_play",
         example_scenes::ordinary_affine_continuation_program()?,

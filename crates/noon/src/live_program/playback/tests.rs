@@ -6,6 +6,38 @@ use std::{
     rc::Rc,
 };
 
+#[test]
+fn idle_external_source_stays_observed_without_preparation_or_implicit_completion() {
+    let program = crate::integration::BlockingSceneSetup::new()
+        .into_program()
+        .unwrap();
+    let identity = program.session().runtime_identity();
+    let publication = program.session().publication_context();
+    let mut player = program.into_playback().unwrap();
+    assert_eq!(
+        player.with_observed_program(|program| program.boundary_complete()),
+        Some(true)
+    );
+    let mut callbacks = RustHostCallbackTable::new();
+    for _ in 0..4 {
+        assert!(!player.prepare_until(&mut callbacks, 10.0).unwrap());
+        player.advance_to(&mut callbacks, 10.0).unwrap();
+        let session = player.session().unwrap();
+        assert_eq!(session.frame().time, 0.0);
+        assert_eq!(session.publication_context(), publication);
+        assert_eq!(session.runtime_identity(), identity);
+    }
+    player
+        .with_observed_program(LiveProgram::finish_authoring)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        player.with_observed_program(|program| program.status()),
+        Some(LiveProgramStatus::Finished)
+    );
+    assert_eq!(player.session().unwrap().runtime_identity(), identity);
+}
+
 #[cfg(feature = "wgsl-effects")]
 #[test]
 fn late_shader_resources_pause_the_prepared_source_without_reader_handoff() {

@@ -124,29 +124,118 @@ mod wasm {
             value: NativeInputValue,
         ) -> Result<(), JsValue>;
         fn emit_native_event(&mut self, occurrence: NativeEventOccurrence) -> Result<(), JsValue>;
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_with_scene(
+            &mut self,
+            operation: &mut crate::blocking_scene::AuthoringOperation<'_>,
+        ) -> Result<(), noon::ScriptError>;
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_begin(
+            &mut self,
+            boundary: noon::integration::BlockingBoundary,
+        ) -> Result<(), noon::ScriptError>;
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_complete(&self) -> Result<bool, noon::ScriptError>;
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_finish(&mut self) -> Result<(), noon::ScriptError>;
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_cancel(&mut self) -> Result<(), noon::ScriptError>;
     }
 
-    struct DirectLiveProgramAdapter<C> {
+    trait AuthoringAccess<C> {
+        #[cfg(feature = "blocking-scene")]
+        fn with_scene(
+            _program: &mut LiveProgram<C>,
+            _operation: &mut crate::blocking_scene::AuthoringOperation<'_>,
+        ) -> Result<(), noon::ScriptError> {
+            Err(noon::ScriptError::Inactive)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn begin(
+            _program: &mut LiveProgram<C>,
+            _boundary: noon::integration::BlockingBoundary,
+        ) -> Result<(), noon::ScriptError> {
+            Err(noon::ScriptError::Inactive)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn complete(_program: &LiveProgram<C>) -> Result<bool, noon::ScriptError> {
+            Err(noon::ScriptError::Inactive)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn finish(_program: &mut LiveProgram<C>) -> Result<(), noon::ScriptError> {
+            Err(noon::ScriptError::Inactive)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn cancel(_program: &mut LiveProgram<C>) -> Result<(), noon::ScriptError> {
+            Err(noon::ScriptError::Inactive)
+        }
+    }
+
+    struct NoAuthoring;
+    impl<C> AuthoringAccess<C> for NoAuthoring {}
+
+    #[cfg(feature = "blocking-scene")]
+    struct BlockingAuthoring;
+
+    #[cfg(feature = "blocking-scene")]
+    impl AuthoringAccess<noon::integration::BlockingContinuation> for BlockingAuthoring {
+        fn with_scene(
+            program: &mut LiveProgram<noon::integration::BlockingContinuation>,
+            operation: &mut crate::blocking_scene::AuthoringOperation<'_>,
+        ) -> Result<(), noon::ScriptError> {
+            program.with_authoring_scene(operation)
+        }
+        fn begin(
+            program: &mut LiveProgram<noon::integration::BlockingContinuation>,
+            boundary: noon::integration::BlockingBoundary,
+        ) -> Result<(), noon::ScriptError> {
+            program.begin_boundary(boundary)
+        }
+        fn complete(
+            program: &LiveProgram<noon::integration::BlockingContinuation>,
+        ) -> Result<bool, noon::ScriptError> {
+            Ok(program.boundary_complete())
+        }
+        fn finish(
+            program: &mut LiveProgram<noon::integration::BlockingContinuation>,
+        ) -> Result<(), noon::ScriptError> {
+            program.finish_authoring()
+        }
+        fn cancel(
+            program: &mut LiveProgram<noon::integration::BlockingContinuation>,
+        ) -> Result<(), noon::ScriptError> {
+            program.cancel_authoring()
+        }
+    }
+
+    struct DirectLiveProgramAdapter<C, A = NoAuthoring> {
         program: LiveProgram<C>,
         callbacks: RustHostCallbackTable,
+        authoring: std::marker::PhantomData<A>,
     }
 
-    impl<C> DirectLiveProgramAdapter<C>
+    impl<C, A> DirectLiveProgramAdapter<C, A>
     where
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
+        A: AuthoringAccess<C> + 'static,
     {
         fn new_with_callbacks(
             mut program: LiveProgram<C>,
             mut callbacks: RustHostCallbackTable,
         ) -> Result<Self, JsValue> {
             program.require_effect_resource_preparation();
-            let status = program.resume().map_err(js_error)?;
+            let status = if program.can_resume() {
+                program.resume().map_err(js_error)?
+            } else {
+                program.status()
+            };
             if !matches!(
                 status,
                 LiveProgramStatus::Awaiting(_)
                     | LiveProgramStatus::Finished
                     | LiveProgramStatus::PreparingResources
+                    | LiveProgramStatus::ReadyToResume
             ) {
                 return Err(js_message(
                     "direct live continuation did not begin at an await or finished state",
@@ -160,11 +249,15 @@ mod wasm {
                     .drive_to(&mut callbacks, initial_time)
                     .map_err(js_error)?;
             }
-            Ok(Self { program, callbacks })
+            Ok(Self {
+                program,
+                callbacks,
+                authoring: std::marker::PhantomData,
+            })
         }
 
         fn resume_if_ready(&mut self) -> Result<bool, JsValue> {
-            if matches!(self.program.status(), LiveProgramStatus::ReadyToResume) {
+            if self.program.can_resume() {
                 self.program.resume().map_err(js_error)?;
                 return Ok(true);
             }
@@ -172,11 +265,38 @@ mod wasm {
         }
     }
 
-    impl<C> DirectLiveProgram for DirectLiveProgramAdapter<C>
+    impl<C, A> DirectLiveProgram for DirectLiveProgramAdapter<C, A>
     where
         C: LiveContinuation + 'static,
         C::Error: std::fmt::Display,
+        A: AuthoringAccess<C> + 'static,
     {
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_with_scene(
+            &mut self,
+            operation: &mut crate::blocking_scene::AuthoringOperation<'_>,
+        ) -> Result<(), noon::ScriptError> {
+            A::with_scene(&mut self.program, operation)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_begin(
+            &mut self,
+            boundary: noon::integration::BlockingBoundary,
+        ) -> Result<(), noon::ScriptError> {
+            A::begin(&mut self.program, boundary)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_complete(&self) -> Result<bool, noon::ScriptError> {
+            A::complete(&self.program)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_finish(&mut self) -> Result<(), noon::ScriptError> {
+            A::finish(&mut self.program)
+        }
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_cancel(&mut self) -> Result<(), noon::ScriptError> {
+            A::cancel(&mut self.program)
+        }
         fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
             self.program.pending_effect_programs()
         }
@@ -327,7 +447,7 @@ mod wasm {
         }
     }
 
-    impl<C: LiveContinuation> BrowserPointerTarget for DirectLiveProgramAdapter<C>
+    impl<C: LiveContinuation, A> BrowserPointerTarget for DirectLiveProgramAdapter<C, A>
     where
         C::Error: std::fmt::Display,
     {
@@ -434,11 +554,36 @@ mod wasm {
         {
             Ok(Self {
                 authority: DirectSourceAuthority::Program(Box::new(
-                    DirectLiveProgramAdapter::new_with_callbacks(program, callbacks)?,
+                    DirectLiveProgramAdapter::<C>::new_with_callbacks(program, callbacks)?,
                 )),
                 next_native_event_sequence: 0,
                 browser_pointer_binding: None,
             })
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        fn from_blocking_program(
+            program: LiveProgram<noon::integration::BlockingContinuation>,
+        ) -> Result<Self, JsValue> {
+            Ok(Self {
+                authority: DirectSourceAuthority::Program(Box::new(DirectLiveProgramAdapter::<
+                    _,
+                    BlockingAuthoring,
+                >::new_with_callbacks(
+                    program,
+                    RustHostCallbackTable::new(),
+                )?)),
+                next_native_event_sequence: 0,
+                browser_pointer_binding: None,
+            })
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        fn blocking_program(&mut self) -> Result<&mut dyn DirectLiveProgram, noon::ScriptError> {
+            match &mut self.authority {
+                DirectSourceAuthority::Program(program) => Ok(program.as_mut()),
+                _ => Err(noon::ScriptError::Inactive),
+            }
         }
 
         // Only live source variants have an authored session. A prepared reader
@@ -1767,31 +1912,14 @@ mod wasm {
         /// dirtiness remain derived from the authoritative ExecutionSession.
         #[wasm_bindgen(js_name = directWakeDirectiveJson)]
         pub fn direct_wake_directive_json(&mut self, wall_time_ms: f64) -> Result<String, JsValue> {
-            self.require_ready_audio_device()?;
-            let (plan, scene_time) = self.direct_wake_observation();
-            let directive = self
-                .direct_wake_clock
-                .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
-                .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
-            self.start_audio_at_anchor(plan)?;
-            let (cadence, delay_ms) = if self.source.interactions_active() {
-                ("animation-frame", None)
-            } else {
-                match directive.wake() {
-                    BrowserHostWake::AnimationFrame => ("animation-frame", None),
-                    BrowserHostWake::TimerAfterMilliseconds(delay_ms) => ("timer", Some(delay_ms)),
-                    BrowserHostWake::Idle => ("idle", None),
-                }
+            let (present_now, wake) = self.direct_wake_directive(wall_time_ms)?;
+            let (cadence, delay_ms) = match wake {
+                BrowserHostWake::AnimationFrame => ("animation-frame", None),
+                BrowserHostWake::TimerAfterMilliseconds(delay_ms) => ("timer", Some(delay_ms)),
+                BrowserHostWake::Idle => ("idle", None),
             };
             serde_json::to_string(&DirectWakeDirectiveJson {
-                present_now: self.drawable
-                    && (directive.present_now()
-                        || self.source.pending_effect_programs().is_some()
-                        || self.surface_frame_pending
-                        || self
-                            .pointer_presentation
-                            .needs_refresh(self.source.pointer_target())
-                        || self.selection_pending()),
+                present_now,
                 cadence,
                 delay_ms,
             })
@@ -2193,6 +2321,91 @@ mod wasm {
     }
 
     impl WasmExecutionCanvasRenderer {
+        /// The Rust host consumes this typed observation directly. Only the
+        /// existing JavaScript diagnostics/scheduling export serializes it.
+        pub(crate) fn direct_wake_directive(
+            &mut self,
+            wall_time_ms: f64,
+        ) -> Result<(bool, BrowserHostWake), JsValue> {
+            self.require_ready_audio_device()?;
+            let (plan, scene_time) = self.direct_wake_observation();
+            let directive = self
+                .direct_wake_clock
+                .directive_for_source(plan, wall_time_ms, scene_time, self.source.source_active())
+                .ok_or_else(|| js_message("direct execution wake clock received invalid time"))?;
+            self.start_audio_at_anchor(plan)?;
+            let wake = if self.source.interactions_active() {
+                BrowserHostWake::AnimationFrame
+            } else {
+                directive.wake()
+            };
+            let present_now = self.drawable
+                && (directive.present_now()
+                    || self.source.pending_effect_programs().is_some()
+                    || self.surface_frame_pending
+                    || self
+                        .pointer_presentation
+                        .needs_refresh(self.source.pointer_target())
+                    || self.selection_pending());
+            Ok((present_now, wake))
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        pub(crate) async fn create_from_blocking_program(
+            canvas: OffscreenCanvas,
+            program: LiveProgram<noon::integration::BlockingContinuation>,
+        ) -> Result<Self, JsValue> {
+            let source = DirectExecutionSource::from_blocking_program(program)?;
+            let camera = source.inspection_camera().map_err(js_error)?;
+            Self::create_with_source(canvas, source, camera.center, camera.height).await
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        pub(crate) fn blocking_with_scene(
+            &mut self,
+            operation: &mut crate::blocking_scene::AuthoringOperation<'_>,
+        ) -> Result<(), noon::ScriptError> {
+            self.source
+                .blocking_program()?
+                .blocking_with_scene(operation)
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        pub(crate) fn blocking_begin(
+            &mut self,
+            boundary: noon::integration::BlockingBoundary,
+        ) -> Result<(), noon::ScriptError> {
+            self.source.blocking_program()?.blocking_begin(boundary)
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        pub(crate) fn blocking_complete(&mut self) -> Result<bool, noon::ScriptError> {
+            self.source.blocking_program()?.blocking_complete()
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        pub(crate) fn blocking_finish(&mut self) -> Result<(), noon::ScriptError> {
+            self.source.blocking_program()?.blocking_finish()
+        }
+
+        #[cfg(all(
+            feature = "blocking-scene",
+            any(debug_assertions, feature = "renderer-smoke")
+        ))]
+        pub(crate) fn blocking_clock_anchor(&self) -> Option<(f64, f64)> {
+            self.direct_wake_clock.debug_anchor()
+        }
+
+        #[cfg(feature = "blocking-scene")]
+        pub(crate) fn blocking_cancel(&mut self) -> Result<(), noon::ScriptError> {
+            let result = self.source.blocking_program()?.blocking_cancel();
+            self.effect_program_task.cancel();
+            self.prepared_effect_modules = None;
+            self.direct_wake_clock = BrowserExecutionWakeClock::default();
+            self.sampled_scene_target = None;
+            result
+        }
+
         /// Install the independent reader as this canvas's sole presentation owner.
         /// The producer remains outside the host. No scene/history crosses JavaScript.
         #[cfg(feature = "prepared-prefix")]

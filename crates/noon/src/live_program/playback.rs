@@ -79,9 +79,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
         self.require_effect_resource_preparation();
         // An attached, already-started program has no promised past history.
         // Continue that exact owner instead of rewinding or replaying its body.
-        let source = if self.status() != LiveProgramStatus::ReadyToResume
-            || self.session().frame().time > 0.0
-        {
+        let source = if !self.can_resume() || self.session().frame().time > 0.0 {
             Source::Observed(self)
         } else {
             Source::Preparing(
@@ -98,6 +96,21 @@ impl<C: LiveContinuation> LiveProgram<C> {
     }
 }
 impl<C: LiveContinuation> PlaybackProgram<C> {
+    /// Borrow the original observed source for one bounded integration operation.
+    ///
+    /// This never forces a preparation handoff or supplies a replacement owner.
+    /// External authoring uses it only after its idle relay selected observed
+    /// execution. The borrow must end before a platform wait or suspension.
+    pub fn with_observed_program<R>(
+        &mut self,
+        operation: impl FnOnce(&mut LiveProgram<C>) -> R,
+    ) -> Option<R> {
+        match &mut self.source {
+            Source::Observed(program) => Some(operation(program)),
+            Source::Preparing(_) => None,
+        }
+    }
+
     /// The active runtime for read-only metadata. Before initial readiness this
     /// is the canonical bootstrap projection, not permission to present it. A
     /// failure before bootstrap can leave no runtime; it cannot be resumed.
@@ -235,7 +248,7 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
             ));
         }
         if let Source::Observed(program) = &mut self.source {
-            if program.status() != LiveProgramStatus::ReadyToResume {
+            if !program.can_resume() {
                 return Ok(false);
             }
             program.resume().map_err(PlaybackProgramError::Program)?;
@@ -301,7 +314,7 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
             if let Source::Observed(program) = &mut self.source {
                 // Only an initially required source is still unresumed. A late
                 // requirement retains its already-returned pending segment.
-                if program.status() == LiveProgramStatus::ReadyToResume {
+                if program.can_resume() {
                     program.resume().map_err(PlaybackProgramError::Program)?;
                 }
                 Self::settle_frontier(program, callbacks)?;

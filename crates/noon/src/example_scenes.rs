@@ -11,6 +11,7 @@ pub mod background_audio;
 pub mod background_music_lesson;
 #[cfg(all(feature = "native-text", feature = "latex"))]
 pub mod bar_chart;
+pub mod blocking_authoring;
 pub mod blur;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;

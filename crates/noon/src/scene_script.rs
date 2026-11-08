@@ -19,8 +19,13 @@ use crate::{
     RustHostCallbackError, RustHostCallbackTable, Scene,
 };
 
+mod blocking;
+mod blocking_program;
 mod family;
 mod operations;
+pub use blocking::BlockingScene;
+pub use blocking::{BlockingBoundary, BlockingSceneHost};
+pub use blocking_program::{BlockingContinuation, BlockingSceneSetup};
 pub use operations::{UpdaterFrame, UpdaterRegistration, UpdaterTarget};
 
 #[cfg(test)]
@@ -52,6 +57,10 @@ pub enum ScriptError {
     ForeignUpdaterRegistration,
     /// No additional host callable identity can be allocated in this source.
     CallbackIdentityExhausted,
+    /// The host closed or cancelled a synchronous authoring invocation.
+    Cancelled,
+    /// A platform host failed while servicing a synchronous scene boundary.
+    Host(String),
 }
 
 impl std::fmt::Display for ScriptError {
@@ -89,6 +98,8 @@ impl std::fmt::Display for ScriptError {
             Self::CallbackIdentityExhausted => formatter.write_str(
                 "this scene script has exhausted its host callback identities",
             ),
+            Self::Cancelled => formatter.write_str("scene authoring was cancelled by its host"),
+            Self::Host(message) => formatter.write_str(message),
         }
     }
 }
@@ -109,7 +120,9 @@ impl Error for ScriptError {
             | Self::CompletedBoundary
             | Self::InvalidBoundary
             | Self::ForeignUpdaterRegistration
-            | Self::CallbackIdentityExhausted => None,
+            | Self::CallbackIdentityExhausted
+            | Self::Cancelled
+            | Self::Host(_) => None,
         }
     }
 }
@@ -159,12 +172,7 @@ impl ScriptScene {
         &self,
         operation: impl FnOnce(&mut Scene) -> Result<T, ScriptError>,
     ) -> Result<T, ScriptError> {
-        let bridge = self.bridge.upgrade().ok_or(ScriptError::Inactive)?;
-        let mut bridge = bridge
-            .try_borrow_mut()
-            .map_err(|_| ScriptError::Reentrant)?;
-        let scene = bridge.scene.as_mut().ok_or(ScriptError::Inactive)?;
-        operation(scene)
+        self.with_scene_and_callbacks(|scene, _callbacks| operation(scene))
     }
 
     pub(super) fn with_scene_and_callbacks<T>(
@@ -175,6 +183,18 @@ impl ScriptScene {
         let mut bridge = bridge
             .try_borrow_mut()
             .map_err(|_| ScriptError::Reentrant)?;
+        if let Some(host) = &bridge.host {
+            let host = host.upgrade().ok_or(ScriptError::Inactive)?;
+            drop(bridge);
+            let mut operation = Some(operation);
+            let mut result = None;
+            host.with_scene(&mut |scene, callbacks| {
+                let operation = operation.take().ok_or(ScriptError::Reentrant)?;
+                result = Some(operation(scene, callbacks)?);
+                Ok(())
+            })?;
+            return result.ok_or(ScriptError::Inactive);
+        }
         let ScriptBridge {
             scene, callbacks, ..
         } = &mut *bridge;
@@ -221,6 +241,9 @@ pub(super) struct ScriptBridge {
     pub(super) scene: Option<Scene>,
     pub(super) callbacks: Option<RustHostCallbackTable>,
     boundary: Option<RequestedBoundary>,
+    // A synchronous source borrows its host's canonical owner only for one
+    // ordinary operation. The weak reference cannot keep a retired host alive.
+    host: Option<Weak<dyn BlockingSceneHost>>,
 }
 
 type BoundaryOperation = dyn FnOnce(&mut Scene) -> Result<ContinuationStep, ScriptError>;
@@ -372,6 +395,7 @@ impl Scene {
             scene: None,
             callbacks: None,
             boundary: None,
+            host: None,
         }));
         let scene = ScriptScene {
             bridge: Rc::downgrade(&bridge),

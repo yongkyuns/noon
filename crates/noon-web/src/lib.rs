@@ -84,6 +84,10 @@ mod authoring_table;
 mod authoring_tangent_line;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod background_audio_example;
+#[cfg(all(feature = "blocking-scene", target_arch = "wasm32"))]
+mod blocking_scene;
+#[cfg(all(feature = "blocking-scene", target_arch = "wasm32"))]
+pub use blocking_scene::*;
 #[cfg(any(target_arch = "wasm32", test))]
 mod browser_pointer_input;
 mod canonical_authoring_scene;

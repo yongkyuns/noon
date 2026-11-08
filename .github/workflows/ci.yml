@@ -27,6 +27,18 @@ on:
       - "scripts/shared-authoring-smoke.mjs"
       - "scripts/callback-continuation-proof*.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/blocking-scene-qualification.mjs"
+      - "web/blocking-scene-probe.js"
+      - "crates/noon-web/Cargo.toml"
+      - "crates/noon-web/src/lib.rs"
+      - "crates/noon-web/src/blocking_scene*"
+      - "crates/noon-web/src/blocking_scene/**"
+      - "crates/noon/src/lib.rs"
+      - "crates/noon/src/integration.rs"
+      - "crates/noon/src/scene_script*"
+      - "crates/noon/src/scene_script/**"
+      - "crates/noon/src/live_program*"
+      - "crates/noon/src/live_program/**"
       - "scripts/table-*"
       - "scripts/manim-table-*"
       - "fixtures/manim-v0.21/table-*"
@@ -455,6 +467,49 @@ jobs:
             web/ci-Cargo.lock
           if-no-files-found: error
           retention-days: 1
+
+      - name: Build separate synchronous authoring WASM package
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          mkdir -p browser-smoke-artifacts/blocking-scene
+          test ! -e browser-smoke-artifacts/blocking-scene/pkg
+          wasm-pack build crates/noon-web --target web \
+            --out-dir ../../browser-smoke-artifacts/blocking-scene/pkg \
+            --dev --no-opt --features renderer-smoke,blocking-scene --locked \
+            2>&1 | tee browser-smoke-artifacts/blocking-scene/build.log
+          node .github/ci/wasm-build.mjs verify
+
+      - name: Cache synchronous authoring Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install synchronous authoring browser dependencies
+        timeout-minutes: 10
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          bash scripts/ci-install-playwright-browser.sh chromium
+
+      - name: Qualify ordinary Rust helpers in the JSPI browser host
+        timeout-minutes: 5
+        env:
+          NOON_BLOCKING_SCENE_PACKAGE: ${{ github.workspace }}/browser-smoke-artifacts/blocking-scene/pkg
+          NOON_BLOCKING_SCENE_ARTIFACTS: ${{ github.workspace }}/browser-smoke-artifacts/blocking-scene
+          NOON_BROWSER_SMOKE_BACKEND: webgpu
+        run: node scripts/blocking-scene-qualification.mjs
+
+      - name: Preserve synchronous browser authoring evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: blocking-scene-browser-qualification
+          path: |
+            browser-smoke-artifacts/blocking-scene
+            !browser-smoke-artifacts/blocking-scene/pkg/**
+          if-no-files-found: warn
+          retention-days: 3
 
   browser-authoring:
     name: Browser authoring

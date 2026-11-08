@@ -73,6 +73,15 @@ pub trait LiveContinuation {
     /// ahead of presentation; the engine cannot infer this from compiled code.
     const EFFECTS: ContinuationEffects = ContinuationEffects::Opaque;
 
+    /// Whether this source currently has work for one continuation invocation.
+    ///
+    /// Ordinary compiled continuations are ready at every admitted boundary.
+    /// An externally driven authoring stack may remain idle until it supplies
+    /// its next boundary. Observing readiness must not execute source code.
+    fn is_ready(&self) -> bool {
+        true
+    }
+
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error>;
 
     /// Resume with the owning scene available to compiled async authoring.
@@ -533,6 +542,35 @@ impl<C: LiveContinuation> LiveProgram<C> {
         }
     }
 
+    /// Whether both the completion barrier and the source permit one resume.
+    ///
+    /// A ready completion barrier does not manufacture work for an externally
+    /// driven source whose next boundary has not yet been submitted.
+    pub fn can_resume(&self) -> bool {
+        self.phase == LiveProgramPhase::ReadyToResume && self.continuation.is_ready()
+    }
+
+    /// Lend the existing owner only while an external author has no queued work.
+    /// The closure must return before its platform host waits or suspends.
+    pub(crate) fn with_external_authoring<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Scene, &mut C) -> R,
+    ) -> Result<R, LiveProgramError<C::Error>> {
+        if self.phase != LiveProgramPhase::ReadyToResume || self.continuation.is_ready() {
+            return Err(self.invalid_state("edit an externally driven source"));
+        }
+        Ok(operation(&mut self.scene, &mut self.continuation))
+    }
+
+    /// Retire this source even when cleanup reports an error. No later source
+    /// operation may repair or resume a cancelled invocation implicitly.
+    pub(crate) fn cancel_external_authoring(&mut self) -> Result<(), LiveProgramError<C::Error>> {
+        let result = self.retire_execution_source();
+        self.pending_effects = None;
+        self.phase = LiveProgramPhase::Terminal;
+        result
+    }
+
     /// Renderer integration enables mandatory preparation for later shader
     /// introductions. Detached/headless semantic construction stays device-free.
     pub fn require_effect_resource_preparation(&mut self) {
@@ -582,7 +620,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// A returned segment becomes the only segment this program can drive. A
     /// continuation error terminally closes the program and is never retried.
     pub fn resume(&mut self) -> Result<LiveProgramStatus, LiveProgramError<C::Error>> {
-        if self.phase != LiveProgramPhase::ReadyToResume {
+        if !self.can_resume() {
             return Err(self.invalid_state("resume authoring"));
         }
         // An unwinding source must not be retried. The async adapter restores the

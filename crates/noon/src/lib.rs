@@ -1,5 +1,11 @@
 //! Direct Rust authoring and coherent live execution for Noon.
 //!
+//! [`BlockingScene`] also supports ordinary synchronous helper functions through
+//! a platform runner. Its `play` and `wait` return only after logical completion
+//! and publication admission while the host continues rendering and input.
+//! The native desktop prototype is `noon_native::run_scene`; direct WASM support
+//! is opt-in through the browser host's experimental `blocking-scene` feature.
+//!
 //! Start with [`Scene::script`] for sequential animation authoring:
 //!
 //! ```no_run
@@ -405,8 +411,8 @@ pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, I
 pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
 pub use scene_script::{
-    SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame, UpdaterRegistration,
-    UpdaterTarget,
+    BlockingScene, SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame,
+    UpdaterRegistration, UpdaterTarget,
 };
 #[cfg(test)]
 mod gradient_authoring_tests;
@@ -503,8 +509,9 @@ pub mod prelude {
         UvSurfacePlan,
     };
     pub use crate::{
-        parallel, Animate, AnimationRequest, Create, FadeOut, IntoAnimationRequest, SceneScript,
-        ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame, UpdaterRegistration, UpdaterTarget,
+        parallel, Animate, AnimationRequest, BlockingScene, Create, FadeOut, IntoAnimationRequest,
+        SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame, UpdaterRegistration,
+        UpdaterTarget,
     };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,

@@ -158,6 +158,56 @@ these boundaries; pending external futures and simultaneous independent scene
 awaits are rejected. Compose concurrent animations in one `play` instead. Arbitrary
 source code remains opaque for replay/preparation admission.
 
+#### Synchronous Rust authoring prototype
+
+Desktop hosts also expose `noon_native::run_scene`, which accepts ordinary Rust
+functions. `play` and `wait` keep the author at that statement until its existing
+logical completion and publication boundary has been admitted. The host continues
+servicing rendering, input, and updaters through its normal event handlers.
+
+```rust
+use noon::{BlockingScene, Color, Mobject, ScriptError, Vec2};
+
+fn move_right(scene: &BlockingScene, square: &Mobject) -> Result<(), ScriptError> {
+    scene.play(square.animate().shift(Vec2::new(1.0, 0.0)))?;
+    scene.wait(0.25)?;
+    Ok(())
+}
+
+fn construct(scene: &BlockingScene) -> Result<(), ScriptError> {
+    let square = scene.square(1.0)?;
+    scene.set_fill(&square, Color::BLUE, 1.0)?;
+    scene.add(&square)?;
+    for _ in 0..2 {
+        move_right(scene, &square)?;
+    }
+    assert!((scene.effective_layout(&square)?.center.0 - 2.0).abs() < 1e-5);
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    noon_native::run_scene(construct)?;
+    Ok(())
+}
+```
+
+The desktop runner currently targets Windows, Linux, and macOS and owns the window
+event loop on its calling thread. It uses one scene/runtime and one realtime clock;
+it does not spawn an authoring thread or precompute the source's future decisions.
+Closing the host during a wait returns cancellation rather than a completed play.
+
+The direct WASM prototype uses the same ordinary Rust source with WebAssembly
+JS Promise Integration (JSPI). Enable `noon-web/blocking-scene` explicitly to build
+that host. Such a package requires a JSPI-capable browser at module initialization;
+the default browser package keeps its existing requirements. The browser host
+suspends the author's call stack and carries only completion notifications across
+the browser boundary. All scene/runtime operations remain typed Rust calls.
+
+This is an opt-in host prototype, not a replacement for the portable async path.
+The same source function is exercised by the
+[synchronous authoring example](crates/noon/src/example_scenes/blocking_authoring.rs)
+and its [Python counterpart](web/python/examples/ordinary_blocking_authoring.py).
+
 The initial fluent animation slice supports individual planar objects, `Create`,
 `FadeOut`, and animated shift/fill/scale/rotation. Shared engine admission still
 applies, including the restriction on first updater registration for targets added
