@@ -12,7 +12,7 @@ import { NONREPLAYABLE_SHOWCASE_CAPABILITIES } from "../web/showcase-gallery.js"
 import { qualifyGlowViewport } from "./showcase-glow-viewport.mjs";
 import { holdPlaygroundPreload, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { assertCaptureTime, validateCaptureIntervals } from "./showcase-capture-checks.mjs";
-import { assertRendererReadback, installAuthoringRendererReadback } from "./showcase-renderer-readback.mjs";
+import { assertRendererReadback, assertReadbackBeforeFirstWrap, installAuthoringRendererReadback } from "./showcase-renderer-readback.mjs";
 
 const REVIEW_CANVAS_VIEWPORT = { width: 960, height: 540 };
 
@@ -39,6 +39,14 @@ export function assertFirstPass(entry, observed, expectedBackend, naturalCapture
         "held terminal proof is outside its Rust-owned validity interval");
     } else {
       assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, naturalCapture.rendererReceipt?.time);
+    }
+    if (naturalCapture.firstWrap) {
+      assertReadbackBeforeFirstWrap(naturalCapture.rendererReadback, naturalCapture.firstWrap, {
+        attachedPublication: naturalCapture.attached.publication,
+        holdStart: naturalCapture.holdStart, duration: naturalCapture.authoredDuration,
+        minimumObjectCount: entry.performance ? 600 : 1,
+      });
+      return;
     }
     const elapsed = Number(naturalCapture.controls?.elapsedSeconds);
     assert.ok(Number.isFinite(elapsed), "first-pass controls have no finite elapsed time");
@@ -298,6 +306,19 @@ function stopObserver(page, { requestedAtEpochMs, runGeneration }) {
   }, { requestedAtEpochMs, runGeneration }).catch(() => {});
 }
 
+async function readTerminalRendererCopy(page, timeoutMs) {
+  return page.evaluate(async (timeoutMs) => {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+      const metrics = await window.__noonExampleGallery.executionMetrics();
+      const value = metrics?.metrics?.showcaseRendererReadback;
+      if (value?.status !== "pending") return value ?? null;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return null;
+  }, timeoutMs);
+}
+
 export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null,
   { expectColdStart = false, rendererReadback = null } = {}) {
   const started = performance.now();
@@ -428,7 +449,26 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
           });
           const disposition = observed.diagnostics?.events?.find((event) => event.stage === "disposition")?.disposition;
           if (disposition === "looped") {
-            const capture = observed.capture;
+            let capture = observed.capture;
+            let readback = null;
+            if (capture === null && rendererReadback !== null) {
+              readback = await readTerminalRendererCopy(page, Math.max(1, deadlineMs - (performance.now() - started)));
+              if (readback !== null) {
+                const firstWrap = observed.diagnostics.events.find(event => event.stage === "disposition");
+                const attached = observed.diagnostics.events.find(event => event.stage === "attached");
+                assertReadbackBeforeFirstWrap(readback, firstWrap, {
+                  attachedPublication: attached?.publication, holdStart: terminalHold[0], duration,
+                  minimumObjectCount: entry.performance ? 600 : 1,
+                });
+                capture = { captureKind: "renderer-owned", firstWrap, attached,
+                  interpreterGeneration: observed.diagnostics.interpreterGeneration,
+                  runRequestId: observed.diagnostics.runRequestId, context: observed.diagnostics.context,
+                  acceptedRunGeneration, authoredDuration: duration, holdStart: terminalHold[0],
+                  runRequestedAtEpochMs: kickoff.requestedAtEpochMs,
+                  rendererReceipt: readback, proofReceipt: firstWrap.publication,
+                  capturedAtEpochMs: performance.timeOrigin + performance.now() };
+              }
+            }
             assert.ok(capture, "first traversal wrapped before its terminal hold picture was captured");
             assert.equal(observed.selectedExampleId, entry.id, "terminal capture belongs to a different gallery selection");
             assert.equal(capture.interpreterGeneration, observed.diagnostics.interpreterGeneration,
@@ -452,17 +492,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
             assertNaturalFirstPassPublication(entry, duration,
               capture.heldPresentation?.observedTime ?? capture.rendererReceipt.time);
             if (capture.captureKind === "renderer-owned") {
-              const readback = await page.evaluate(async (timeoutMs) => {
-                const gallery = window.__noonExampleGallery;
-                const deadline = performance.now() + timeoutMs;
-                while (performance.now() < deadline) {
-                  const metrics = await gallery.executionMetrics();
-                  const value = metrics?.metrics?.showcaseRendererReadback;
-                  if (value?.status === "ready" || value?.status === "error") return value;
-                  await new Promise((resolve) => setTimeout(resolve, 25));
-                }
-                return null;
-              }, Math.max(1, deadlineMs - (performance.now() - started)));
+              readback ??= await readTerminalRendererCopy(page, Math.max(1, deadlineMs - (performance.now() - started)));
               assertRendererReadback(readback, {
                 attachedPublication: capture.attached.publication,
                 proofReceipt: capture.proofReceipt,
@@ -476,7 +506,7 @@ export async function runOrdinaryGallery(page, deadlineMs = 360000, entry = null
                 session: readback.session, sequence: readback.sequence, time: readback.time,
                 objectCount: readback.objectCount,
               };
-              capture.rendererReadback = { ...readback, pngDataUrl: undefined };
+              capture.rendererReadback = readback;
               capture.pngDataUrl = readback.pngDataUrl;
             }
             firstPassCapture = capture;
@@ -739,9 +769,12 @@ async function main() {
           firstPassBytes = Buffer.from(firstPassRun.firstPassCapture.pngDataUrl.slice("data:image/png;base64,".length), "base64");
           await writeFile(firstPassPath, firstPassBytes);
           result.firstPassCapture = {
-            method: "unseeked terminal hold before first loop wrap",
+            method: firstPassRun.firstPassCapture.firstWrap
+              ? "unseeked terminal hold bounded by first-wrap publication"
+              : "unseeked terminal hold before first loop wrap",
             executionState: firstPassRun.firstPassCapture.executionState,
             proofReceipt: firstPassRun.firstPassCapture.proofReceipt ?? null,
+            firstWrap: firstPassRun.firstPassCapture.firstWrap ?? null,
             controls: firstPassRun.firstPassCapture.controls,
             interpreterGeneration: firstPassRun.firstPassCapture.interpreterGeneration,
             runRequestId: firstPassRun.firstPassCapture.runRequestId,
@@ -749,7 +782,8 @@ async function main() {
             attachedPublication: firstPassRun.firstPassCapture.attached.publication,
             rendererReceipt: firstPassRun.firstPassCapture.rendererReceipt,
             heldPresentation: firstPassRun.firstPassCapture.heldPresentation,
-            rendererReadback: firstPassRun.firstPassCapture.rendererReadback ?? null,
+            rendererReadback: firstPassRun.firstPassCapture.rendererReadback
+              ? { ...firstPassRun.firstPassCapture.rendererReadback, pngDataUrl: undefined } : null,
             compositorScreenshot: firstPassRun.firstPassCapture.compositorScreenshot ?? null,
             captureKind: firstPassRun.firstPassCapture.captureKind ?? "held-html",
             rendererReceiptScope: "renderer publication sample; does not prove physical scanout",

@@ -138,7 +138,7 @@ export function decorateAuthoringRenderController(source, { holdStart, duration 
           rejectReadback(error);
         }
       }`;
-  const metrics = `            if (__showcaseRendererReadback !== null && __showcaseRendererReadback.status !== "pending") {
+  const metrics = `            if (__showcaseRendererReadback !== null) {
               metrics.showcaseRendererReadback = __showcaseRendererReadback;
             }` + "\n" + METRICS_MARKER;
   const instrumented = source.replace(INITIAL_MARKER, initial)
@@ -211,4 +211,19 @@ export function assertRendererReadback(readback, { attachedPublication, proofRec
   "renderer readback timing is incomplete");
   assert.ok(Number.isSafeInteger(readback.objectCount) && readback.objectCount >= minimumObjectCount,
     "renderer readback has an incomplete composition");
+}
+
+// A delayed main-thread observer may first see the loop after the renderer has
+// already copied the terminal picture. Rust's first-wrap publication bounds that
+// copy without inferring playback time from wall clocks or accepting a later loop.
+export function assertReadbackBeforeFirstWrap(readback, firstWrap, args) {
+  assert.equal(firstWrap?.disposition, "looped");
+  assert.equal(firstWrap.loopCount, 1, "readback proof missed the first loop");
+  assert.ok(Number.isFinite(firstWrap.time) && firstWrap.time >= 0 && firstWrap.time < args.holdStart,
+    "first-wrap observation reached a later terminal hold");
+  assert.ok(Number.isFinite(firstWrap.publication?.time) && firstWrap.publication.time >= 0 &&
+    firstWrap.publication.time < args.holdStart, "first-wrap publication reached a later terminal hold");
+  assertRendererReadback(readback, { ...args, proofReceipt: firstWrap.publication });
+  assert.ok(readback.sequence < firstWrap.publication.sequence,
+    "terminal readback does not precede the first-wrap publication");
 }
