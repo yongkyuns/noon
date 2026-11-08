@@ -5,10 +5,15 @@
 
 use crate::execution_session::SemanticCompositionRequest;
 use crate::semantic_mobject::{
-    authoring_render_f64, edit_fill, rotate_affine_about_point, scale_state_about_center,
-    state_center,
+    authoring_render_f64, edit_color, edit_fill, rotate_affine_about_point,
+    scale_state_about_center, state_center,
 };
-use crate::{ExecutionSegment, LiveSession, LiveSessionError, Mobject};
+use crate::{
+    CompositeEntryHandle, ExecutionSegment, LiveSession, LiveSessionError, Mobject, MobjectFamily,
+};
+
+mod group;
+pub(crate) use group::FamilyMethodTarget;
 use noon_core::{
     AnimationOptions, Color, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticFadeEndpoint, SemanticOrientation, SemanticTransformInterpolation, Vec2,
@@ -162,7 +167,7 @@ tuple_request!(A a, B b, C c, D d, E e, F f);
 tuple_request!(A a, B b, C c, D d, E e, F f, G g);
 tuple_request!(A a, B b, C c, D d, E e, F f, G g, H h);
 
-/// Chained edits that describe one animation target for a single planar object.
+/// Chained edits describing one target for a planar object or flat vector family.
 ///
 /// The source is captured from coherent effective state when play admits this
 /// request. Retaining a builder across earlier plays therefore applies its edits
@@ -171,12 +176,15 @@ tuple_request!(A a, B b, C c, D d, E e, F f, G g, H h);
 ///
 /// Edits are applied in chain order, then animated as one target. In particular,
 /// [`Self::rotate`] uses point correspondence for vector content; it is not the
-/// procedural angular path of an explicit Rotate animation. Roots containing
-/// family members are rejected until owned family target authoring is supported.
+/// procedural angular path of an explicit Rotate animation. Families use the
+/// existing family transform interpolation and a shared geometry-center pivot.
+/// A family must already be added to the scene; a play may contain one family
+/// target with timing-only composition nodes. Nested/content-owning groups,
+/// effects, and table/graph metadata are unsupported.
 #[derive(Clone, Debug)]
 #[must_use = "animation requests do nothing until passed to scene.play"]
 pub struct Animate {
-    source: Mobject,
+    source: CompositeEntryHandle,
     methods: Vec<Method>,
     options: AnimationOptions,
 }
@@ -185,6 +193,7 @@ pub struct Animate {
 enum Method {
     Shift(Vec2),
     SetFill(Color),
+    SetColor(Color),
     Scale(f64),
     Rotate(f64),
 }
@@ -197,7 +206,19 @@ impl Mobject {
     /// method-target interpolation semantics.
     pub fn animate(&self) -> Animate {
         Animate {
-            source: self.clone(),
+            source: CompositeEntryHandle::Mobject(self.clone()),
+            methods: Vec::new(),
+            options: AnimationOptions::new(),
+        }
+    }
+}
+
+impl MobjectFamily {
+    /// Describe animated edits of a flat vector family, captured at play admission.
+    /// Members retain their semantic identity and share scale/rotation pivots.
+    pub fn animate(&self) -> Animate {
+        Animate {
+            source: CompositeEntryHandle::Family(self.clone()),
             methods: Vec::new(),
             options: AnimationOptions::new(),
         }
@@ -214,6 +235,12 @@ impl Animate {
     /// Set fill RGB and opacity from this RGBA color, preserving the stroke.
     pub fn set_fill(mut self, color: Color) -> Self {
         self.methods.push(Method::SetFill(color));
+        self
+    }
+
+    /// Recolor fill and stroke while preserving their opacities.
+    pub fn set_color(mut self, color: Color) -> Self {
+        self.methods.push(Method::SetColor(color));
         self
     }
 
@@ -243,14 +270,24 @@ impl Animate {
         self,
         live: &LiveSession<'_>,
     ) -> Result<SemanticCompositionRequest, LiveSessionError> {
-        live.require_mobject(&self.source)?;
-        if self.source.has_members()? {
+        let source = match &self.source {
+            CompositeEntryHandle::Family(family) => {
+                return Ok(SemanticCompositionRequest::FamilyMethodTarget {
+                    source: family.node_id(),
+                    target: Box::new(FamilyMethodTarget::capture(live, family, &self.methods)?),
+                    options: self.options,
+                });
+            }
+            CompositeEntryHandle::Mobject(source) => source,
+        };
+        live.require_mobject(source)?;
+        if source.has_members()? {
             return Err(LiveSessionError::Mobject(
                 "owned animate requests currently require a single object without family members"
                     .into(),
             ));
         }
-        let mut target = live.capture_mobject_state(&self.source)?;
+        let mut target = live.capture_mobject_state(source)?;
         let source_rotation = target
             .transform
             .planar_rotation()
@@ -271,6 +308,13 @@ impl Animate {
                             target.transform.translation.y + y,
                         )?;
                     }
+                    Method::SetColor(color) => edit_color(
+                        &mut target.style,
+                        f64::from(color.red),
+                        f64::from(color.green),
+                        f64::from(color.blue),
+                        f64::from(color.alpha),
+                    )?,
                     Method::SetFill(color) => edit_fill(
                         &mut target.style,
                         f64::from(color.red),
@@ -312,13 +356,13 @@ impl Animate {
         let rotation_changed = (source_rotation - target_rotation).abs()
             > 1e-12_f64.max(1e-9 * source_rotation.abs().max(target_rotation.abs()));
         let interpolation =
-            if rotation_changed && !live.requires_content_boundary((&self.source).into())? {
+            if rotation_changed && !live.requires_content_boundary((source).into())? {
                 SemanticTransformInterpolation::PointCorrespondence
             } else {
                 SemanticTransformInterpolation::Affine
             };
         Ok(SemanticCompositionRequest::MethodTarget {
-            source: self.source.node_id(),
+            source: source.node_id(),
             target_state: Box::new(target),
             interpolation,
             options: self.options,

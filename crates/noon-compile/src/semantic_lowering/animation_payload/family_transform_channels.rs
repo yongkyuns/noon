@@ -200,7 +200,7 @@ pub fn lower_prepared_family_transform_channels(
 
     for occurrence in activation.occurrences() {
         let source_ref: SemanticTransactionNodeRef = occurrence.source.into();
-        let target_ref: SemanticTransactionNodeRef = occurrence.target_state.into();
+        let target_ref: SemanticTransactionNodeRef = occurrence.target_state;
         let source = prepared.object_state(source_ref).map_err(|error| {
             PreparedFamilyTransformChannelError::Target {
                 animation: occurrence.animation,
@@ -270,7 +270,10 @@ pub fn lower_prepared_family_transform_channels(
                 occurrence_index: occurrence.occurrence_index,
                 anchor_execution_object_id: occurrence.source_execution_object_id,
                 source: occurrence.source,
-                target_state: occurrence.target_state,
+                target_state: occurrence
+                    .target_state
+                    .existing()
+                    .expect("padding requires an existing unequal-family endpoint"),
                 effective_source: occurrence.effective_source.clone(),
                 tracks,
             });
@@ -414,7 +417,7 @@ fn payload_error(
 ) -> PreparedFamilyTransformChannelError {
     let animation = occurrence.animation;
     let target: SemanticTransactionNodeRef = occurrence.source.into();
-    let target_state: SemanticTransactionNodeRef = occurrence.target_state.into();
+    let target_state: SemanticTransactionNodeRef = occurrence.target_state;
     let error = match issue {
         AffinePayloadIssue::InvalidEffectiveTransform => {
             PreparedSemanticAnimationLoweringError::InvalidEffectiveTransform { animation, target }

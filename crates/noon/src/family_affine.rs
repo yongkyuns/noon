@@ -149,92 +149,7 @@ impl FamilyAffine {
                 .semantic_object_state_checked(leaf)
                 .map_err(AuthoringError::from)?;
             let mut next = previous.clone();
-            match self {
-                Self::Scale(..) | Self::Scale3d(..) | Self::StretchDepth(..) => {
-                    let (factors, _) = self.scale_factors().expect("scale variant");
-                    factors.lower_xy_f32().map_err(AuthoringError::from)?;
-                    let (local_x, local_y) = crate::dimension_fit::world_scale_factors(
-                        previous
-                            .transform
-                            .planar_rotation()
-                            .ok_or(AuthoringError::NonFiniteObjectState)?,
-                        factors.x,
-                        factors.y,
-                    )?;
-                    next.transform.scale.x *= local_x;
-                    next.transform.scale.y *= local_y;
-                    if factors.z != 1.0
-                        && depth::scale_changes_local_depth(store, previous.content)?
-                    {
-                        next.transform.scale.z *= factors.z;
-                    }
-                    next.transform.translation.x =
-                        (previous.transform.translation.x - pivot.0) * factors.x + pivot.0;
-                    next.transform.translation.y =
-                        (previous.transform.translation.y - pivot.1) * factors.y + pivot.1;
-                    next.transform.translation.z =
-                        (previous.transform.translation.z - depth_pivot) * factors.z + depth_pivot;
-                    next.transform
-                        .scale
-                        .lower_xy_f32()
-                        .map_err(AuthoringError::from)?;
-                    next.transform
-                        .translation
-                        .lower_xy_f32()
-                        .map_err(AuthoringError::from)?;
-                }
-                Self::Flip(axis, _) if axis.z == 0.0 => {
-                    let norm = axis.x.hypot(axis.y);
-                    let (x, y) = (axis.x / norm, axis.y / norm);
-                    let (c, s) = (x * x - y * y, 2.0 * x * y);
-                    let (dx, dy) = (
-                        previous.transform.translation.x - pivot.0,
-                        previous.transform.translation.y - pivot.1,
-                    );
-                    next.transform.translation.x = pivot.0 + c * dx + s * dy;
-                    next.transform.translation.y = pivot.1 + s * dx - c * dy;
-                    // F(axis) R(theta) D(sx, sy) = R(2*axis-theta) D(sx, -sy).
-                    next.transform.orientation = noon_core::SemanticOrientation::Planar(
-                        2.0 * y.atan2(x)
-                            - previous
-                                .transform
-                                .planar_rotation()
-                                .ok_or(AuthoringError::NonFiniteObjectState)?,
-                    );
-                    next.transform.scale.y = -previous.transform.scale.y;
-                    next.transform
-                        .translation
-                        .lower_xy_f32()
-                        .map_err(AuthoringError::from)?;
-                    authoring_render_f64(
-                        "flip rotation result",
-                        next.transform
-                            .planar_rotation()
-                            .ok_or(AuthoringError::NonFiniteObjectState)?,
-                    )?;
-                }
-                Self::Rotate(_, _) | Self::Flip(_, _) => {
-                    let angle = match self {
-                        Self::Rotate(angle, _) => angle,
-                        _ => std::f64::consts::PI,
-                    };
-                    let (translation, rotation) = rotate_affine_about_point(
-                        (
-                            previous.transform.translation.x,
-                            previous.transform.translation.y,
-                        ),
-                        previous
-                            .transform
-                            .planar_rotation()
-                            .ok_or(AuthoringError::NonFiniteObjectState)?,
-                        angle,
-                        pivot,
-                    )?;
-                    next.transform.translation.x = translation.0;
-                    next.transform.translation.y = translation.1;
-                    next.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
-                }
-            }
+            self.apply_to_state(store, &mut next, pivot, depth_pivot)?;
             stage_state_changes(&mut transaction, leaf, previous, &next);
         }
         if let (Some((factors, _)), Some(scope)) = (self.scale_factors(), scope) {
@@ -252,6 +167,95 @@ impl FamilyAffine {
             }
         }
         Ok(transaction)
+    }
+    /// Apply the same leaf edit to an unpublished candidate target.
+    pub(crate) fn apply_to_state(
+        self,
+        store: &SemanticStore,
+        next: &mut noon_core::SemanticObjectState,
+        pivot: (f64, f64),
+        depth_pivot: f64,
+    ) -> Result<(), AuthoringError> {
+        let previous = next.transform;
+        match self {
+            Self::Scale(..) | Self::Scale3d(..) | Self::StretchDepth(..) => {
+                let (factors, _) = self.scale_factors().expect("scale variant");
+                factors.lower_xy_f32().map_err(AuthoringError::from)?;
+                let (local_x, local_y) = crate::dimension_fit::world_scale_factors(
+                    previous
+                        .planar_rotation()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
+                    factors.x,
+                    factors.y,
+                )?;
+                next.transform.scale.x *= local_x;
+                next.transform.scale.y *= local_y;
+                if factors.z != 1.0 && depth::scale_changes_local_depth(store, next.content)? {
+                    next.transform.scale.z *= factors.z;
+                }
+                next.transform.translation.x =
+                    (previous.translation.x - pivot.0) * factors.x + pivot.0;
+                next.transform.translation.y =
+                    (previous.translation.y - pivot.1) * factors.y + pivot.1;
+                next.transform.translation.z =
+                    (previous.translation.z - depth_pivot) * factors.z + depth_pivot;
+                next.transform
+                    .scale
+                    .lower_xy_f32()
+                    .map_err(AuthoringError::from)?;
+                next.transform
+                    .translation
+                    .lower_xy_f32()
+                    .map_err(AuthoringError::from)?;
+            }
+            Self::Flip(axis, _) if axis.z == 0.0 => {
+                let norm = axis.x.hypot(axis.y);
+                let (x, y) = (axis.x / norm, axis.y / norm);
+                let (c, s) = (x * x - y * y, 2.0 * x * y);
+                let (dx, dy) = (
+                    previous.translation.x - pivot.0,
+                    previous.translation.y - pivot.1,
+                );
+                next.transform.translation.x = pivot.0 + c * dx + s * dy;
+                next.transform.translation.y = pivot.1 + s * dx - c * dy;
+                // F(axis) R(theta) D(sx, sy) = R(2*axis-theta) D(sx, -sy).
+                next.transform.orientation = noon_core::SemanticOrientation::Planar(
+                    2.0 * y.atan2(x)
+                        - previous
+                            .planar_rotation()
+                            .ok_or(AuthoringError::NonFiniteObjectState)?,
+                );
+                next.transform.scale.y = -previous.scale.y;
+                next.transform
+                    .translation
+                    .lower_xy_f32()
+                    .map_err(AuthoringError::from)?;
+                authoring_render_f64(
+                    "flip rotation result",
+                    next.transform
+                        .planar_rotation()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
+                )?;
+            }
+            Self::Rotate(_, _) | Self::Flip(_, _) => {
+                let angle = match self {
+                    Self::Rotate(angle, _) => angle,
+                    _ => std::f64::consts::PI,
+                };
+                let (translation, rotation) = rotate_affine_about_point(
+                    (previous.translation.x, previous.translation.y),
+                    previous
+                        .planar_rotation()
+                        .ok_or(AuthoringError::NonFiniteObjectState)?,
+                    angle,
+                    pivot,
+                )?;
+                next.transform.translation.x = translation.0;
+                next.transform.translation.y = translation.1;
+                next.transform.orientation = noon_core::SemanticOrientation::Planar(rotation);
+            }
+        }
+        Ok(())
     }
 }
 

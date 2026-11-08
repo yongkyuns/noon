@@ -84,7 +84,7 @@ AnimationOptions::new().run_time(2.0))` for explicit timing. Animation builders 
 their handles and arguments; they capture the current effective state when play
 starts. Saving a Rust builder across an earlier play therefore uses that play's
 completed state. Python's `.animate` target is copied when the builder is created.
-The method-target rotation uses point correspondence, as in Python's `.animate.rotate`.
+Single-object method-target rotation uses point correspondence, as in Python's `.animate.rotate`.
 
 Updaters are owned by the scene and return a registration that can be removed at
 the current authored time:
@@ -131,6 +131,8 @@ scene.arrange_family_with_options(
     &FamilyArrangeOptions::new(1.0, 0.0, 0.3, true),
 )?;
 scene.add(&group)?;
+scene.play(group.animate().shift(Vec2::new(1.0, 0.0)).scale(0.8)).await?;
+scene.play(group.animate().rotate(0.25).set_color(Color::ORANGE)).await?;
 scene.wait(0.5).await?;
 
 let third = scene.circle(0.3)?;
@@ -142,6 +144,15 @@ scene.arrange_family_in_grid_with_options(
 ```
 
 Import `FamilyArrangeOptions` and `FamilyGridOptions` from `noon` for this example.
+Owned group animation currently supports one added flat vector family per play,
+with fixed topology and shared scale/rotation pivots. It uses the existing family
+transform interpolation, member lag, and completion rules. Nested/content-owning
+groups, effects, table/graph metadata, and mixing a group target with other animation
+leaves fail explicitly. The paired [Rust](crates/noon/src/example_scenes/group_animation.rs)
+and [Python](web/python/examples/ordinary_group_animation.py) diagram tutorial is
+available as **Move the whole diagram** in the demo gallery; run its native version
+with `cargo run -p noon-native --example ordinary_group_animation`.
+
 Mixed object/family collections use `MobjectTarget::Object(&object)` and
 `MobjectTarget::Family(&family)`. Construction accepts arrays, vectors, and borrowed
 slices of these typed targets. `remove_family_members` detaches direct members;

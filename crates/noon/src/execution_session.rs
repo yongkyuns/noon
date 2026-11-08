@@ -205,6 +205,12 @@ pub(crate) enum SemanticCompositionRequest {
         interpolation: noon_core::SemanticTransformInterpolation,
         options: AnimationOptions,
     },
+    /// An owned flat-family endpoint staged in the admission transaction.
+    FamilyMethodTarget {
+        source: SemanticNodeId,
+        target: Box<crate::animation_request::FamilyMethodTarget>,
+        options: AnimationOptions,
+    },
     MoveAlongPath {
         target: SemanticNodeId,
         path: SemanticNodeId,
@@ -385,6 +391,7 @@ impl SemanticCompositionRequest {
         match self {
             Self::TransformTo { source, .. }
             | Self::MethodTarget { source, .. }
+            | Self::FamilyMethodTarget { source, .. }
             | Self::WorldTransform { target: source, .. }
             | Self::CameraProfile { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
@@ -2433,6 +2440,20 @@ impl ExecutionSession {
                     *interpolation,
                     *options,
                 )
+            }
+            SemanticCompositionRequest::FamilyMethodTarget {
+                source,
+                target,
+                options,
+            } => {
+                let copied = target.stage(store, *source, declaration).map_err(|error| {
+                    ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                })?;
+                family_colors.insert(*source, target.color);
+                family_styles.insert(*source, target.style.clone());
+                // Keep correspondence, member lag, padding appearance and completion
+                // in the canonical flat-family channel, including local endpoints.
+                Ok(declaration.create_family_transform_animation(*source, copied, *options))
             }
             SemanticCompositionRequest::MoveAlongPath {
                 target,
