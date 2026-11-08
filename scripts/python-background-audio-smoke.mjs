@@ -1131,9 +1131,10 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     assert.equal(finalState.starts.filter(start => start.node === voice.node).length, 1);
     // Buffering retires a device graph. Check terminal admission against the
     // voice active at that boundary, including a fresh voice after recovery.
-    const terminalAnchor = finalState.anchors.find(item => item.session === anchor.session &&
-      item.authorizedUntil === 34.65 && item.stops?.some(stop => stop.args.length > 0 &&
-        (item.sources.length === 0 || item.sources.includes(stop.node))));
+    const terminalAnchor = finalState.anchors.slice(run.before.anchors.length)
+      .find(item => item.session === anchor.session &&
+        item.authorizedUntil === 34.65 && item.stops?.some(stop => stop.args.length > 0 &&
+          (item.sources.length === 0 || item.sources.includes(stop.node))));
     assert.ok(terminalAnchor, "terminal history schedules the soundtrack through its authored endpoint");
     const terminalStops = terminalAnchor.stops.filter(stop => stop.args.length > 0 &&
       (terminalAnchor.sources.length === 0 || terminalAnchor.sources.includes(stop.node)));

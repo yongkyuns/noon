@@ -267,29 +267,30 @@ jobs:
           chmod 700 "$XDG_RUNTIME_DIR"
       - name: Test qualification admission
         run: python3 -m unittest discover -s tests/visual-effects -p test_gpu_qualification.py -v
+      # Run independent GPU tests serially; each test keeps its own concurrency.
       - name: Qualify shared polygon coverage against independent numerical oracles
         env:
           NOON_REQUIRE_GPU_TESTS: '1'
-        run: cargo test -p noon-render-wgpu --test polygon_fill_coverage --test polygon_perimeter_coverage --test path_shader_uniformity
+        run: cargo test -p noon-render-wgpu --test polygon_fill_coverage --test polygon_perimeter_coverage --test path_shader_uniformity -- --test-threads=1
       - name: Test glow resource and kernel contracts
         run: |
-          cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests
-          cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests
-          cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
+          cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests -- --test-threads=1
+          cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests -- --test-threads=1
+          cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests -- --test-threads=1
       - name: Qualify RGBA Gaussian pixels and retained raster resources
-        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture --test-threads=1
       - name: Qualify float Gaussian radiance and retained resource contracts
         env:
           NOON_HDR_GAUSSIAN_ARTIFACTS: ${{ github.workspace }}/hdr-gaussian-raster-artifacts
-        run: cargo test -p noon-render-wgpu --lib gpu::gaussian_blur::tests::hdr -- --include-ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::gaussian_blur::tests::hdr -- --include-ignored --nocapture --test-threads=1
       - name: Qualify linear HDR bloom against independent float and display references
         env:
           NOON_HDR_BLOOM_ARTIFACT_DIR: ${{ github.workspace }}/hdr-bloom-raster-artifacts
-        run: cargo test -p noon-render-wgpu --lib gpu::hdr_bloom::tests -- --include-ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::hdr_bloom::tests -- --include-ignored --nocapture --test-threads=1
       - name: Qualify encoded HDR output presentation
         env:
           NOON_HDR_PRESENTATION_ARTIFACTS: ${{ github.workspace }}/hdr-presentation-raster-artifacts
-        run: cargo test -p noon-render-wgpu --lib gpu::encoded_display::tests -- --include-ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::encoded_display::tests -- --include-ignored --nocapture --test-threads=1
       - name: Qualify raw and authored linear scene draws
         env:
           NOON_HDR_SCENE_ARTIFACT_DIR: ${{ github.workspace }}/hdr-scene-linear-raster-artifacts
@@ -303,79 +304,79 @@ jobs:
           NOON_HDR_COMPOSED_ARTIFACTS: ${{ github.workspace }}/hdr-composed-raster-artifacts
           NOON_GLYPH_WORKING_COLOR_ARTIFACT_DIR: ${{ github.workspace }}/glyph-working-color-raster-artifacts
         run: |
-          cargo test -p noon-render-wgpu --lib gpu::hdr_scene_raster_tests -- --ignored --nocapture
+          cargo test -p noon-render-wgpu --lib gpu::hdr_scene_raster_tests -- --ignored --nocapture --test-threads=1
           cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture --test-threads=1
-          cargo test -p noon-export --test view_bloom -- --ignored --nocapture
-          cargo test -p noon-render-wgpu --lib glyph_working_color_matches -- --ignored --nocapture
+          cargo test -p noon-export --test view_bloom -- --ignored --nocapture --test-threads=1
+          cargo test -p noon-render-wgpu --lib glyph_working_color_matches -- --ignored --nocapture --test-threads=1
       - name: Qualify ordered effect composition against independent RGBA references
-        run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture --test-threads=1
       - name: Qualify grouped glyph original coverage and paint alpha
         env:
           NOON_GLYPH_COVERAGE_ARTIFACT_DIR: ${{ github.workspace }}/glyph-coverage-raster-artifacts
-        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::source_capture::tests::glyph_opacity::pixels::glyph_capture_pixels_preserve_child_opacity_and_ignore_paint_alpha --nocapture
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::source_capture::tests::glyph_opacity::pixels::glyph_capture_pixels_preserve_child_opacity_and_ignore_paint_alpha --nocapture --test-threads=1
       - name: Qualify public composed group pixels and lifecycle
-        run: 'cargo test -p noon --features wgsl-effects --test glow_scene_raster composed:: -- --ignored --nocapture'
+        run: 'cargo test -p noon --features wgsl-effects --test glow_scene_raster composed:: -- --ignored --nocapture --test-threads=1'
       - name: Qualify native composed opacity and ancestor Visibility lifecycle
-        run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture
+        run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture --test-threads=1
       - name: Qualify authored glass lens and native export
         env:
           NOON_GLASS_ARTIFACTS: ${{ github.workspace }}/glass-lens-native-artifacts
-        run: cargo test -p noon-export --test glass_lens -- --ignored --nocapture
+        run: cargo test -p noon-export --test glass_lens -- --ignored --nocapture --test-threads=1
       - name: Qualify authored cell sampling and export
-        run: cargo test -p noon-export --test pixelate -- --ignored --nocapture
+        run: cargo test -p noon-export --test pixelate -- --ignored --nocapture --test-threads=1
       - name: Qualify sampled operators and typed custom shaders
         run: |
-          cargo test -p noon-render-wgpu --features wgsl-effects --lib gpu::sample_filter::tests -- --include-ignored --nocapture
-          cargo test -p noon-render-wgpu --features wgsl-effects --lib gpu::shader_effects::preparation::tests -- --include-ignored --nocapture
+          cargo test -p noon-render-wgpu --features wgsl-effects --lib gpu::sample_filter::tests -- --include-ignored --nocapture --test-threads=1
+          cargo test -p noon-render-wgpu --features wgsl-effects --lib gpu::shader_effects::preparation::tests -- --include-ignored --nocapture --test-threads=1
       - name: Qualify clipped backdrop replacement and real-shader negative controls
         env:
           NOON_BACKDROP_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-raster-artifacts
-        run: cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests -- --include-ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests -- --include-ignored --nocapture --test-threads=1
       - name: Qualify retained backdrop camera, resize, Visibility and lifecycle
         env:
           NOON_BACKDROP_COORDINATOR_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-coordinator-raster-artifacts
-        run: cargo test -p noon-render-wgpu --lib gpu::analytic_glow::backdrop::tests -- --include-ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::analytic_glow::backdrop::tests -- --include-ignored --nocapture --test-threads=1
       - name: Qualify painter-prefix capture against independent layer references
         env:
           NOON_PREFIX_ARTIFACT_DIR: ${{ github.workspace }}/prefix-raster-artifacts
-        run: cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests -- --include-ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests -- --include-ignored --nocapture --test-threads=1
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
         run: |
           cargo run -p noon --example glow_scene_playback
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact authored_glow_pulse_pixels_restore_and_replay --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact click_glow_pulse_pixels_restore_and_retire --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_blur_rgba_pixels_seek_neutral_and_removal --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_shadow_pixels_offset_animation_hard_shadow_and_retirement --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_shadow_support_and_foreground_painter_order_match_extended_field --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact shadow_scene_and_output_units_reprepare_under_view_changes --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact authored_glow_pulse_pixels_restore_and_replay --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact click_glow_pulse_pixels_restore_and_retire --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_blur_rgba_pixels_seek_neutral_and_removal --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_shadow_pixels_offset_animation_hard_shadow_and_retirement --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_shadow_support_and_foreground_painter_order_match_extended_field --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact shadow_scene_and_output_units_reprepare_under_view_changes --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture --test-threads=1
       - name: Qualify public Rust image paint on native GPU
         run: |
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_reuses_source_capture_for_blur_shadow_and_glow --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_reuses_source_capture_for_blur_shadow_and_glow --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes --nocapture --test-threads=1
       - name: Qualify public Rust animated linear paint on native GPU
         # The linear-paint oracle uses the same public Scene and retained GPU path.
         # Absence of the requested native adapter is a failure.
-        run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture
+        run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture --test-threads=1
       - name: Qualify public Rust radial paint on native GPU
-        run: cargo test -p noon --test radial_gradient_raster -- --ignored --exact radial_pixels_match_independent_field_alpha_pose_time_and_seek_reference --nocapture
+        run: cargo test -p noon --test radial_gradient_raster -- --ignored --exact radial_pixels_match_independent_field_alpha_pose_time_and_seek_reference --nocapture --test-threads=1
       - name: Qualify public Rust procedural noise paint on native GPU
         run: |
-          cargo test -p noon --test noise_paint_raster -- --ignored --nocapture
-          cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture
+          cargo test -p noon --test noise_paint_raster -- --ignored --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture --test-threads=1
       - name: Qualify public Rust hatch paint on native GPU
         # A missing GPU fails the required raster test, rather than skipping it.
         run: |
-          cargo test -p noon --test hatch_paint_raster -- --ignored --nocapture
-          cargo test -p noon --test glow_scene_raster public_hatch_fill -- --ignored --nocapture
+          cargo test -p noon --test hatch_paint_raster -- --ignored --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster public_hatch_fill -- --ignored --nocapture --test-threads=1
       - name: Preserve native HDR bloom evidence
         if: always()
         uses: actions/upload-artifact@v7

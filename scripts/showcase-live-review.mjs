@@ -904,6 +904,49 @@ async function main() {
         clearTimeout(failureTimer);
         await page.screenshot({ path: path.join(output, `${entry.id}-failure.png`) }).catch(() => {});
         console.error(`FAIL live ${entry.id}: ${result.error}`);
+        const fields = (value, keys) => value == null ? null : Object.fromEntries(keys.flatMap(key => {
+          const item = value[key];
+          return item === null || ["string", "number", "boolean"].includes(typeof item)
+            ? [[key, typeof item === "string" ? item.slice(0, 512) : item]] : [];
+        }));
+        const held = value => value == null ? null : {
+          ...fields(value, ["time", "evaluatedTime", "observedTime", "validUntil"]),
+          publication: fields(value.publication, ["session", "sequence"]),
+        };
+        const state = value => value == null ? null : {
+          ...fields(value, ["preparedPlayback", "time", "preparedFrontier", "durationSeconds",
+            "loopCount", "playing", "buffering", "preparing", "completed", "advancing"]),
+          receipt: fields(value.presentationReceipt, ["session", "sequence", "time", "objectCount"]),
+          held: held(value.heldPresentation),
+        };
+        const observation = value => value == null ? null : {
+          ...fields(value, ["observedAtEpochMs", "runRequestId", "interpreterGeneration",
+            "disposition", "rustTimeInHold", "naturalTerminalReceipt"]),
+          context: fields(value.context, ["exampleId", "selectionGeneration", "runGeneration"]),
+          controls: fields(value.controls, ["busy", "playing", "elapsedSeconds", "durationSeconds", "controllable"]),
+          state: state(value.executionState), held: held(value.heldPresentation),
+        };
+        const capture = result.failureState?.captureDiagnostics;
+        const candidateReceipt = capture?.lastCandidate?.executionState?.presentationReceipt;
+        const readback = result.failureExecution?.readback;
+        console.error(`FAIL live diagnostics ${entry.id}: ${JSON.stringify({
+          id: entry.id, stage: result.stage, backend, browserVersion: report.browserVersion,
+          sourceSha256: result.sourceSha256, authoredDuration: entry.duration,
+          runtime: fields(report.servedBuildIdentity, ["buildId", "sourceRevision"]),
+          failureState: fields(result.failureState, ["patch", "status"]),
+          polling: fields(capture, ["polls", "maxPollGapMs", "lastPollAtEpochMs"]),
+          disposition: fields(capture?.disposition, ["disposition", "observedAtEpochMs"]),
+          lastControls: observation(capture?.lastControls),
+          lastCandidate: observation(capture?.lastCandidate),
+          failureExecution: {
+            ...fields(result.failureExecution, ["timedOut", "error"]),
+            state: state(result.failureExecution?.state),
+            readback: fields(readback, ["status", "error", "session", "sequence", "time", "objectCount",
+              "presentedAtMs", "performanceTimeOriginMs", "copyCalledAtEpochMs", "copyReturnedAtEpochMs", "resolvedAtEpochMs"]),
+            readbackSameSessionAsCandidate: candidateReceipt == null || readback?.session == null
+              ? null : readback.session === candidateReceipt.session,
+          },
+        })}`);
       } finally {
         try { await page.close(); }
         finally { releasePreload?.(); }
