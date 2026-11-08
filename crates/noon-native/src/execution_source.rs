@@ -1,10 +1,11 @@
+use noon::integration::BlockingContinuation;
 use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, PlaybackProgram, RustHostCallbackTable,
-    SceneExecution,
+    SceneExecution, ScriptError,
 };
 use noon_core::{
     Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,
@@ -25,6 +26,19 @@ mod viewport_tests;
 /// visibility, and acknowledge a publication after the renderer has retained it.
 /// Physical presentation is a separate, potentially coalesced operation.
 pub(crate) trait NativeExecutionSource {
+    /// Access the original externally authored program for one short operation.
+    /// This borrow never spans a platform event pump.
+    fn with_authoring_program(
+        &mut self,
+        _operation: &mut dyn FnMut(
+            &mut LiveProgram<BlockingContinuation>,
+        ) -> Result<(), ScriptError>,
+    ) -> Result<(), ScriptError> {
+        Err(ScriptError::Host(
+            "this native source does not accept synchronous authoring".into(),
+        ))
+    }
+
     fn prepare_until(&mut self, _target: f64) -> Result<bool, NativeHostError> {
         self.resume_ready()
     }
@@ -354,9 +368,27 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 }
 
-pub(crate) struct PlaybackExecutionSource<C: LiveContinuation> {
+pub(crate) trait NativeAuthoringAccess<C: LiveContinuation> {
+    fn with_program(
+        _program: &mut PlaybackProgram<C>,
+        _operation: &mut dyn FnMut(
+            &mut LiveProgram<BlockingContinuation>,
+        ) -> Result<(), ScriptError>,
+    ) -> Result<(), ScriptError> {
+        Err(ScriptError::Host(
+            "this native source does not accept synchronous authoring".into(),
+        ))
+    }
+}
+
+pub(crate) struct NoExternalAuthoring;
+
+impl<C: LiveContinuation> NativeAuthoringAccess<C> for NoExternalAuthoring {}
+
+pub(crate) struct PlaybackExecutionSource<C: LiveContinuation, A = NoExternalAuthoring> {
     program: PlaybackProgram<C>,
     callbacks: RustHostCallbackTable,
+    authoring: std::marker::PhantomData<A>,
 }
 
 impl<C> PlaybackExecutionSource<C>
@@ -366,6 +398,20 @@ where
 {
     pub(crate) fn new(
         program: LiveProgram<C>,
+        callbacks: RustHostCallbackTable,
+    ) -> Result<Self, NativeHostError> {
+        Self::with_authoring_access(program, callbacks)
+    }
+}
+
+impl<C, A> PlaybackExecutionSource<C, A>
+where
+    C: LiveContinuation,
+    C::Error: std::fmt::Display,
+    A: NativeAuthoringAccess<C>,
+{
+    pub(crate) fn with_authoring_access(
+        program: LiveProgram<C>,
         mut callbacks: RustHostCallbackTable,
     ) -> Result<Self, NativeHostError> {
         let mut program = program
@@ -374,15 +420,29 @@ where
         program
             .prepare_ready(&mut callbacks)
             .map_err(|e| NativeHostError::Program(e.to_string()))?;
-        Ok(Self { program, callbacks })
+        Ok(Self {
+            program,
+            callbacks,
+            authoring: std::marker::PhantomData,
+        })
     }
 }
 
-impl<C> NativeExecutionSource for PlaybackExecutionSource<C>
+impl<C, A> NativeExecutionSource for PlaybackExecutionSource<C, A>
 where
     C: LiveContinuation + 'static,
     C::Error: std::fmt::Display,
+    A: NativeAuthoringAccess<C>,
 {
+    fn with_authoring_program(
+        &mut self,
+        operation: &mut dyn FnMut(
+            &mut LiveProgram<BlockingContinuation>,
+        ) -> Result<(), ScriptError>,
+    ) -> Result<(), ScriptError> {
+        A::with_program(&mut self.program, operation)
+    }
+
     fn retire_execution_source(&mut self) -> Result<(), NativeHostError> {
         self.program
             .retire_execution_source()

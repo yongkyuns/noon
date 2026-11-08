@@ -9,6 +9,11 @@ const helperStart = source.indexOf("async function startReplayForExplicitRerun(p
 const helperEnd = source.indexOf("\nasync function waitForInitialScene(page)", helperStart);
 assert.ok(helperStart >= 0 && helperEnd > helperStart, "exercise the actual hosted replay setup helper");
 const helper = source.slice(helperStart, helperEnd);
+const previewHelperStart = source.indexOf("async function pauseAndRecordPreview(page,");
+const previewHelperEnd = source.indexOf("\nasync function assertFrozenPreview(page,", previewHelperStart);
+assert.ok(previewHelperStart >= 0 && previewHelperEnd > previewHelperStart,
+  "exercise the actual preview reference setup helper");
+const previewHelper = source.slice(previewHelperStart, previewHelperEnd);
 
 const initial = dom();
 globalThis.HTMLElement = Element;
@@ -130,4 +135,109 @@ test("the old completed-source assumption is rejected by the real controls", asy
   })()`, f.context), error => error.code === "ERR_ASSERTION" && error.actual === "Play animation");
   await f.run();
   assert.equal(f.controls.element.dataset.playing, "true");
+});
+
+function previewFixture({ duration = 1, staleSession = false, blank = false } = {}) {
+  const { document, preview } = dom();
+  globalThis.document = document;
+  const calls = [];
+  const initialTime = duration === 0 ? 0 : 0.0405;
+  const state = (time, playing) => ({ time, playing, preparedPlayback: true, replaySupported: true,
+    preparedFrontier: duration, durationSeconds: duration, buffering: false, preparing: false,
+    seekRange: { start: 0, end: duration } });
+  let renderer = { time: initialTime, presentedFrames: 12, presentedSession: 1,
+    latestPresentationSample: { time: initialTime, session: 1, sequence: 11 } };
+  let pendingPresentation = null;
+  let waitingForPresentation = 0;
+  const player = {
+    async pause() { calls.push("pause"); return state(initialTime, false); },
+    async seek(time) {
+      calls.push(["seek", time]);
+      pendingPresentation = time;
+      // The accepted target alone is not evidence that the renderer displayed it.
+      return state(time, false);
+    },
+    async resume() { assert.fail("preview capture must remain paused"); },
+    async restartPlayback() { assert.fail("preview capture must not restart a looping source"); },
+  };
+  const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: duration });
+  controls.sync(state(initialTime, duration > 0));
+  const context = vm.createContext({ assert, Event,
+    document: { querySelector: selector => selector === ".playback-controls"
+      ? controls.element : preview.querySelector(selector) },
+    window: { __noonExampleGallery: { executionMetrics: async () => ({ metrics: renderer }) } },
+    requestAnimationFrame: callback => queueMicrotask(callback),
+    previewPixels: async () => {
+      calls.push("pixels");
+      return { different: blank ? 0 : duration === 0 || renderer.time === 0.5 ? 500 : 4 };
+    },
+  });
+  const evaluate = (fn, ...args) => {
+    context.args = args;
+    return vm.runInContext(`(${fn.toString()})(...args)`, context);
+  };
+  const page = {
+    locator(selector) {
+      if (selector === "#patch-status") return { getAttribute: async () => "1" };
+      const element = selector === ".playback-controls" ? controls.element : preview.querySelector(selector);
+      assert.ok(element, `unexpected selector: ${selector}`);
+      return {
+        isEnabled: async () => !element.disabled,
+        isDisabled: async () => element.disabled,
+        getAttribute: async name => name === "max" ? element.max : name === "data-elapsed-seconds"
+          ? element.dataset.elapsedSeconds : element.getAttribute(name),
+        click: async () => element.click(),
+        evaluate: async (fn, arg) => evaluate(fn, element, arg),
+      };
+    },
+    evaluate: fn => evaluate(fn),
+    async waitForFunction(predicate, arg) {
+      for (let i = 0; i < 12; i++) {
+        if (await evaluate(predicate, arg)) return;
+        await flush();
+        if (pendingPresentation !== null && ++waitingForPresentation === 2) {
+          assert.equal(controls.element.dataset.elapsedSeconds, "0.5",
+            "the control already advertises the accepted target while the renderer is still stale");
+          assert.equal(calls.includes("pixels"), false, "readback must wait for a matching presentation");
+          renderer = { ...renderer, time: pendingPresentation, presentedFrames: 13,
+            latestPresentationSample: { time: pendingPresentation, session: staleSession ? 0 : 1, sequence: 12 } };
+        }
+      }
+      throw new Error("preview presentation was not established");
+    },
+  };
+  context.page = page;
+  return { calls, run: (options = {}) => {
+    context.options = options;
+    return vm.runInContext(`${previewHelper}\npauseAndRecordPreview(page, options)`, context);
+  } };
+}
+
+test("preview capture selects visible authored geometry instead of a loop's initial Create frame", async () => {
+  const initial = previewFixture();
+  await assert.rejects(initial.run(), /visible nonuniform pixels/);
+  assert.deepEqual(initial.calls, ["pause", "pixels"]);
+
+  const sampled = previewFixture();
+  const reference = await sampled.run({ sampleTime: 0.5 });
+  assert.deepEqual(sampled.calls, ["pause", ["seek", 0.5], "pixels"]);
+  assert.equal(reference.pixels.different, 500);
+  assert.equal(reference.runGeneration, "1");
+});
+
+test("an accepted preview target cannot use a stale presentation session", async () => {
+  const f = previewFixture({ staleSession: true });
+  await assert.rejects(f.run({ sampleTime: 0.5 }), /preview presentation was not established/);
+  assert.equal(f.calls.includes("pixels"), false);
+});
+
+test("a presented but blank preview still fails the unchanged pixel guard", async () => {
+  const f = previewFixture({ blank: true });
+  await assert.rejects(f.run({ sampleTime: 0.5 }), /visible nonuniform pixels/);
+});
+
+test("an exact-zero preview retains disabled controls without requesting a seek", async () => {
+  const f = previewFixture({ duration: 0 });
+  await f.run();
+  assert.deepEqual(f.calls, ["pixels"]);
 });

@@ -176,6 +176,12 @@ impl<'a> From<&'a MobjectFamily> for MobjectTarget<'a> {
     }
 }
 
+impl<'a> From<&MobjectTarget<'a>> for MobjectTarget<'a> {
+    fn from(value: &MobjectTarget<'a>) -> Self {
+        *value
+    }
+}
+
 impl MobjectTarget<'_> {
     /// Observe this root and its descendants in Manim's last-occurrence order.
     /// Each identity appears once; this query neither publishes nor changes paint.

@@ -51,24 +51,175 @@ class Demo(Scene):
         self.wait(0.5)
 ```
 
-The public Rust `Scene` and `Mobject` API authors directly into the same semantic store used by the WASM handles:
+Rust scene authoring uses ordinary sequential code and the same semantic operations
+as Python. `Scene::script` turns `play` and `wait` awaits into the engine's existing
+completion boundaries:
 
 ```rust
-use noon::Scene;
+use noon::{Color, Create, Scene, Vec2};
 
-let mut scene = Scene::new();
-let mut circle = scene.circle(0.6)?;
-circle.shift(-2.0, 0.0)?;
-circle.set_fill(0.0, 0.0, 1.0, 0.5)?;
-let mut square = scene.square(1.2)?;
-square.next_to_handle(&circle, 1.0, 0.0, 0.25)?;
-scene.add(&circle)?;
-scene.add(&square)?;
-let session = scene.execution_session()?;
-assert_eq!(session.frame().objects.len(), 2);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let program = Scene::script(|scene| async move {
+        let circle = scene.circle(0.6)?;
+        scene.set_fill(&circle, Color::BLUE, 0.5)?;
+        scene.shift(&circle, Vec2::new(-2.0, 0.0))?;
+        let square = scene.square(1.2)?;
+        scene.set_color(&square, Color::PINK)?;
+
+        scene.play((Create::new(&circle), Create::new(&square))).await?;
+        scene.play((
+            circle.animate().shift(Vec2::new(2.0, 0.0)),
+            square.animate().rotate(std::f64::consts::FRAC_PI_4),
+        )).await?;
+        scene.wait(0.5).await?;
+        Ok(())
+    })?;
+    noon_native::run_live_program(program)?;
+    Ok(())
+}
 ```
 
-Constructors are scene-bound factories, `Scene::add` attaches the existing node, and handle queries return errors for stale identities. Copies allocate independent nodes in the same store. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for typed lowering and runtime execution.
+Tuples, arrays and vectors play their animations in parallel. Use `play_with(request,
+AnimationOptions::new().run_time(2.0))` for explicit timing. Animation builders own
+their handles and arguments; they capture the current effective state when play
+starts. Saving a Rust builder across an earlier play therefore uses that play's
+completed state. Python's `.animate` target is copied when the builder is created.
+The method-target rotation uses point correspondence, as in Python's `.animate.rotate`.
+
+Updaters are owned by the scene and return a registration that can be removed at
+the current authored time:
+
+```rust
+let turn = scene.add_updater(&line, |target, frame| {
+    target.rotate_about_origin(frame.dt())
+})?;
+scene.wait(2.0).await?;
+scene.remove_updater(&turn)?;
+```
+
+The updater target reads and writes the current ordered effective callback phase.
+Ordinary scene edits change persistent authored state. `scene.authored(&object)`
+and `scene.effective(&object)` make that observation choice explicit.
+
+The same persistent `set_color`, `set_fill`, `set_fill_opacity`, `set_stroke_width`, and `shift`
+operations are available on an ordinary `Scene` before and after its owned
+execution begins. For example, synchronous setup uses the same calls:
+
+```rust
+let mut scene = Scene::new();
+let circle = scene.circle(0.6)?;
+scene.set_fill(&circle, Color::BLUE, 0.5)?;
+scene.shift(&circle, Vec2::new(-2.0, 0.0))?;
+scene.add(&circle)?;
+```
+
+The script capability delegates these edits to its `Scene`. Validation and atomic
+publication stay in that shared operation path, including while execution is
+running. Borrowed `LiveSession` operations serve explicit external-session and
+callback integration.
+
+Families use the same scene capability for construction, membership, and layout.
+Objects can be grouped directly from an array of references. The group remains a
+semantic family, including when a member is shared with another group:
+
+```rust
+let first = scene.circle(0.4)?;
+let second = scene.square(0.8)?;
+let group = scene.family([&first, &second])?;
+scene.arrange_family_with_options(
+    &group,
+    &FamilyArrangeOptions::new(1.0, 0.0, 0.3, true),
+)?;
+scene.add(&group)?;
+scene.wait(0.5).await?;
+
+let third = scene.circle(0.3)?;
+scene.add_family_members(&group, [&third])?;
+scene.arrange_family_in_grid_with_options(
+    &group,
+    &FamilyGridOptions { columns: Some(2), ..Default::default() },
+)?;
+```
+
+Import `FamilyArrangeOptions` and `FamilyGridOptions` from `noon` for this example.
+Mixed object/family collections use `MobjectTarget::Object(&object)` and
+`MobjectTarget::Family(&family)`. Construction accepts arrays, vectors, and borrowed
+slices of these typed targets. `remove_family_members` detaches direct members;
+`remove(&group)` detaches the group from the scene. Both preserve semantic identity.
+Layout uses authored bounds during setup and current effective bounds after
+execution starts. `effective_layout(&object)` and `effective_family_layout(&group)`
+read the current publication; cold scenes return an explicit error for these
+effective queries.
+
+`Scene::script` runs initial setup through the first await, lowers that scene once,
+then lets the native or direct Rust/WASM host drive it. The same owner is available
+to rendering and input while the script waits. Async helper functions can compose
+these boundaries; pending external futures and simultaneous independent scene
+awaits are rejected. Compose concurrent animations in one `play` instead. Arbitrary
+source code remains opaque for replay/preparation admission.
+
+#### Synchronous Rust authoring prototype
+
+Desktop hosts also expose `noon_native::run_scene`, which accepts ordinary Rust
+functions. `play` and `wait` keep the author at that statement until its existing
+logical completion and publication boundary has been admitted. The host continues
+servicing rendering, input, and updaters through its normal event handlers.
+
+```rust
+use noon::{BlockingScene, Color, Mobject, ScriptError, Vec2};
+
+fn move_right(scene: &BlockingScene, square: &Mobject) -> Result<(), ScriptError> {
+    scene.play(square.animate().shift(Vec2::new(1.0, 0.0)))?;
+    scene.wait(0.25)?;
+    Ok(())
+}
+
+fn construct(scene: &BlockingScene) -> Result<(), ScriptError> {
+    let square = scene.square(1.0)?;
+    scene.set_fill(&square, Color::BLUE, 1.0)?;
+    scene.add(&square)?;
+    for _ in 0..2 {
+        move_right(scene, &square)?;
+    }
+    assert!((scene.effective_layout(&square)?.center.0 - 2.0).abs() < 1e-5);
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    noon_native::run_scene(construct)?;
+    Ok(())
+}
+```
+
+The desktop runner currently targets Windows, Linux, and macOS and owns the window
+event loop on its calling thread. It uses one scene/runtime and one realtime clock;
+it does not spawn an authoring thread or precompute the source's future decisions.
+Closing the host during a wait returns cancellation rather than a completed play.
+
+The direct WASM prototype uses the same ordinary Rust source with WebAssembly
+JS Promise Integration (JSPI). Enable `noon-web/blocking-scene` explicitly to build
+that host. Such a package requires a JSPI-capable browser at module initialization;
+the default browser package keeps its existing requirements. The browser host
+suspends the author's call stack and carries only completion notifications across
+the browser boundary. All scene/runtime operations remain typed Rust calls.
+
+This is an opt-in host prototype, not a replacement for the portable async path.
+The same source function is exercised by the
+[synchronous authoring example](crates/noon/src/example_scenes/blocking_authoring.rs)
+and its [Python counterpart](web/python/examples/ordinary_blocking_authoring.py).
+
+The initial fluent animation slice supports individual planar objects, `Create`,
+`FadeOut`, and animated shift/fill/scale/rotation. Shared engine admission still
+applies, including the restriction on first updater registration for targets added
+after execution bootstrap. Constructors create detached handles; `add` or an
+introducing animation attaches them, and stale/foreign handles return errors.
+Families can be constructed and laid out in scripts; fluent family animation
+requests remain a separate follow-up. See the paired
+[MovingAround](crates/noon/src/example_scenes/moving_around.rs),
+[RotationUpdater](crates/noon/src/example_scenes/live_updater_lifecycle.rs), and
+[family arrangement](crates/noon/src/example_scenes/family_arrangement.rs) sources,
+or [shared_authoring.rs](crates/noon/examples/shared_authoring.rs) for explicit typed
+lowering and execution integration.
 
 ### Paints, effects and shader materials
 

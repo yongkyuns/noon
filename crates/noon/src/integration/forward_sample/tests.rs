@@ -331,6 +331,62 @@ fn nonprogressing_zero_time_source_exhausts_the_transition_budget() {
 }
 
 #[test]
+fn idle_external_source_neither_resumes_nor_satisfies_a_future_export_sample() {
+    use crate::integration::{
+        BlockingSceneSetup, ExportFrameOptions, ExportFrames, ExportFramesError,
+        ExportFramesStatus, ExportStop,
+    };
+
+    let mut program = BlockingSceneSetup::new().into_program().unwrap();
+    let before = program.session().publication_context();
+    assert!(!program.can_resume());
+    assert!(matches!(
+        program.resume(),
+        Err(crate::LiveProgramError::InvalidState { .. })
+    ));
+    assert_eq!(program.status(), LiveProgramStatus::ReadyToResume);
+    let mut callbacks = RustHostCallbackTable::new();
+    {
+        let mut sample = ForwardSample::new(&mut program, &mut callbacks, 1.0, 1).unwrap();
+        for _ in 0..8 {
+            let ForwardSampleStatus::Ready(observation) = sample.advance().unwrap() else {
+                panic!("an empty external relay must remain idle");
+            };
+            assert_eq!(observation.requested_time, 1.0);
+            assert_eq!(observation.published_time, 0.0);
+            assert_eq!(observation.publication, before);
+        }
+    }
+    assert!(program.boundary_complete());
+
+    // The initial actual frame is valid. The next requested frame cannot be
+    // exported from the same idle observation or mislabeled as source completion.
+    let mut export = ExportFrames::new(
+        &mut program,
+        &mut callbacks,
+        ExportFrameOptions {
+            frame_rate: FrameRate::new(1, 1).unwrap(),
+            start_frame: 0,
+            stop: ExportStop::FrameCount(2),
+            max_frames: 2,
+            max_transitions_per_sample: 1,
+            final_hold_seconds: 0.0,
+        },
+    )
+    .unwrap();
+    let ExportFramesStatus::SampleReady(first) = export.advance().unwrap() else {
+        panic!("the actual initial frame is observable");
+    };
+    drop(export.take_renderer_publication().unwrap());
+    export.acknowledge_sample(first).unwrap();
+    assert!(matches!(
+        export.advance(),
+        Err(ExportFramesError::InvalidObservation)
+    ));
+    assert!(matches!(export.advance(), Err(ExportFramesError::Inactive)));
+}
+
+#[test]
 fn a_foreign_receipt_cannot_release_the_endpoint() {
     let other = fixture();
     let mut fixture = fixture();

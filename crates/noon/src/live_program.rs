@@ -6,7 +6,11 @@
 //! callback ordering, semantic publication, and renderer-facing invalidation
 //! remain in their existing owners.
 
-use std::{error::Error, rc::Rc};
+use std::{
+    error::Error,
+    ops::{Deref, DerefMut},
+    rc::Rc,
+};
 
 mod inspection;
 #[cfg(feature = "prepared-prefix")]
@@ -69,7 +73,86 @@ pub trait LiveContinuation {
     /// ahead of presentation; the engine cannot infer this from compiled code.
     const EFFECTS: ContinuationEffects = ContinuationEffects::Opaque;
 
+    /// Whether this source currently has work for one continuation invocation.
+    ///
+    /// Ordinary compiled continuations are ready at every admitted boundary.
+    /// An externally driven authoring stack may remain idle until it supplies
+    /// its next boundary. Observing readiness must not execute source code.
+    fn is_ready(&self) -> bool {
+        true
+    }
+
     fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error>;
+
+    /// Resume with the owning scene available to compiled async authoring.
+    /// Ordinary continuations continue to implement only [`Self::resume`].
+    #[doc(hidden)]
+    fn resume_scene(
+        &mut self,
+        scene: &mut ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        self.resume(&mut scene.owned_live())
+    }
+
+    /// An authoring source may own its callable table instead of requiring the host
+    /// to assemble it. The execution session still owns callback ordering.
+    #[doc(hidden)]
+    fn callbacks(&mut self) -> Option<&mut RustHostCallbackTable> {
+        None
+    }
+}
+
+/// The single scene owner at a compiled continuation boundary.
+///
+/// Only the crate's async adapter may temporarily move the scene into its scoped
+/// authoring capability. Host-facing borrows are available again before resumption
+/// returns, including when source code unwinds.
+#[doc(hidden)]
+pub struct ContinuationScene {
+    scene: Option<Scene>,
+}
+
+impl ContinuationScene {
+    pub(crate) fn new(scene: Scene) -> Self {
+        Self { scene: Some(scene) }
+    }
+
+    const fn get(&self) -> &Scene {
+        match &self.scene {
+            Some(scene) => scene,
+            None => panic!("scene is temporarily loaned to its authoring continuation"),
+        }
+    }
+
+    pub(crate) fn take(&mut self) -> Scene {
+        self.scene
+            .take()
+            .expect("scene is already loaned to its authoring continuation")
+    }
+
+    pub(crate) fn restore(&mut self, scene: Scene) {
+        assert!(
+            self.scene.is_none(),
+            "scene owner already contains its scene"
+        );
+        self.scene = Some(scene);
+    }
+}
+
+impl Deref for ContinuationScene {
+    type Target = Scene;
+
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
+impl DerefMut for ContinuationScene {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.scene
+            .as_mut()
+            .expect("scene is temporarily loaned to its authoring continuation")
+    }
 }
 
 /// Observable control-plane state for one live Rust program.
@@ -112,6 +195,8 @@ pub enum LiveProgramError<E> {
         expected: PublicationContext,
     },
     CompletedSegment(ExecutionSegment),
+    /// Source-owned and separately supplied host callables cannot compete.
+    CompetingCallbackTables,
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
     TranslationDrag(TranslationDragError),
@@ -143,6 +228,9 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
                 "continuation returned an already completed segment ending at {}",
                 segment.end_time()
             ),
+            Self::CompetingCallbackTables => formatter.write_str(
+                "this source owns its callbacks; drive it with an empty host callback table",
+            ),
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
             Self::TranslationDrag(error) => error.fmt(formatter),
@@ -166,6 +254,7 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
             Self::Continuation(error) => Some(error),
             Self::InvalidState { .. }
             | Self::CompletedSegment(_)
+            | Self::CompetingCallbackTables
             | Self::PublicationMismatch { .. }
             | Self::PublicationStillPending { .. } => None,
         }
@@ -178,7 +267,7 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
 /// accidentally pair a semantic store with a foreign runtime. It retains at most
 /// one existing segment and never creates another timeline or cursor.
 pub struct LiveProgram<C> {
-    scene: Scene,
+    scene: ContinuationScene,
     continuation: C,
     phase: LiveProgramPhase,
     pending_effects: Option<crate::StagedEffectPublication>,
@@ -210,7 +299,7 @@ impl Scene {
         }
         self.install_execution(execution);
         Ok(LiveProgram {
-            scene: self,
+            scene: ContinuationScene::new(self),
             continuation,
             phase: LiveProgramPhase::ReadyToResume,
             pending_effects: None,
@@ -221,7 +310,7 @@ impl Scene {
 impl<C: LiveContinuation> LiveProgram<C> {
     /// Borrow the authoritative runtime for frame, wake, camera, and query observations.
     pub const fn session(&self) -> &ExecutionSession {
-        self.scene.owned_execution()
+        self.scene.get().owned_execution()
     }
 
     /// Derive host cadence from the runtime and this program's one continuation barrier.
@@ -453,6 +542,35 @@ impl<C: LiveContinuation> LiveProgram<C> {
         }
     }
 
+    /// Whether both the completion barrier and the source permit one resume.
+    ///
+    /// A ready completion barrier does not manufacture work for an externally
+    /// driven source whose next boundary has not yet been submitted.
+    pub fn can_resume(&self) -> bool {
+        self.phase == LiveProgramPhase::ReadyToResume && self.continuation.is_ready()
+    }
+
+    /// Lend the existing owner only while an external author has no queued work.
+    /// The closure must return before its platform host waits or suspends.
+    pub(crate) fn with_external_authoring<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Scene, &mut C) -> R,
+    ) -> Result<R, LiveProgramError<C::Error>> {
+        if self.phase != LiveProgramPhase::ReadyToResume || self.continuation.is_ready() {
+            return Err(self.invalid_state("edit an externally driven source"));
+        }
+        Ok(operation(&mut self.scene, &mut self.continuation))
+    }
+
+    /// Retire this source even when cleanup reports an error. No later source
+    /// operation may repair or resume a cancelled invocation implicitly.
+    pub(crate) fn cancel_external_authoring(&mut self) -> Result<(), LiveProgramError<C::Error>> {
+        let result = self.retire_execution_source();
+        self.pending_effects = None;
+        self.phase = LiveProgramPhase::Terminal;
+        result
+    }
+
     /// Renderer integration enables mandatory preparation for later shader
     /// introductions. Detached/headless semantic construction stays device-free.
     pub fn require_effect_resource_preparation(&mut self) {
@@ -502,14 +620,13 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// A returned segment becomes the only segment this program can drive. A
     /// continuation error terminally closes the program and is never retried.
     pub fn resume(&mut self) -> Result<LiveProgramStatus, LiveProgramError<C::Error>> {
-        if self.phase != LiveProgramPhase::ReadyToResume {
+        if !self.can_resume() {
             return Err(self.invalid_state("resume authoring"));
         }
-        let result = {
-            let continuation = &mut self.continuation;
-            let mut live = self.scene.owned_live();
-            continuation.resume(&mut live)
-        };
+        // An unwinding source must not be retried. The async adapter restores the
+        // one Scene before unwinding out of this call.
+        self.phase = LiveProgramPhase::Terminal;
+        let result = self.continuation.resume_scene(&mut self.scene);
         match result {
             Ok(ContinuationStep::Await(segment)) => {
                 match self.session().validate_segment_for_advance(segment) {
@@ -562,9 +679,28 @@ impl<C: LiveContinuation> LiveProgram<C> {
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             return Err(self.invalid_state("drive a segment"));
         };
-        if let Err(error) =
-            callbacks.advance_segment_to(self.scene.owned_execution_mut(), segment, requested_time)
-        {
+        let advance = match self.continuation.callbacks() {
+            Some(source_callbacks) => {
+                if !callbacks.is_empty() {
+                    return Err(LiveProgramError::CompetingCallbackTables);
+                }
+                let result = source_callbacks.advance_segment_to(
+                    self.scene.owned_execution_mut(),
+                    segment,
+                    requested_time,
+                );
+                callbacks.record_completed_callback_phase(
+                    source_callbacks.last_advance_completed_callback_phase(),
+                );
+                result
+            }
+            None => callbacks.advance_segment_to(
+                self.scene.owned_execution_mut(),
+                segment,
+                requested_time,
+            ),
+        };
+        if let Err(error) = advance {
             self.phase = LiveProgramPhase::Terminal;
             return Err(LiveProgramError::Callback(error));
         }
@@ -991,7 +1127,7 @@ mod tests {
             ));
         scene.install_execution(session);
         let mut stale_program = LiveProgram {
-            scene,
+            scene: ContinuationScene::new(scene),
             continuation: ReturnSegment(stale),
             phase: LiveProgramPhase::ReadyToResume,
             pending_effects: None,

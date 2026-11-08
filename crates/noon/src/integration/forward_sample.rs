@@ -28,7 +28,9 @@ pub enum ForwardSampleStatus {
     /// Consume this exact endpoint publication, then acknowledge its admission.
     /// It is not an additional output frame.
     PublicationPending(PublicationContext),
-    /// Required callbacks and same-time source work have settled at the request.
+    /// Required callbacks and available source work have settled. An externally
+    /// driven source with no queued boundary reports its actual current time,
+    /// which may precede the request; it does not invent a future observation.
     Ready(SampleObservation),
     /// The finite source completed at or before the request. Do not relabel its
     /// endpoint as a later frame; the outer export range/hold policy decides.
@@ -198,6 +200,15 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
                 Err(ForwardSampleError::Inactive)
             }
             LiveProgramStatus::ReadyToResume => {
+                if !self.program.can_resume() {
+                    let observation = self.observation();
+                    self.phase = Phase::Observed {
+                        observation,
+                        finished: false,
+                        consumed: false,
+                    };
+                    return Ok(ForwardSampleStatus::Ready(observation));
+                }
                 self.spend_transition()?;
                 if let Err(error) = self.program.resume() {
                     self.phase = Phase::Failed;

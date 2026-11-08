@@ -196,6 +196,15 @@ pub(crate) enum SemanticCompositionRequest {
         complete_priority: bool,
         options: AnimationOptions,
     },
+    /// Candidate-local method target captured by direct Rust authoring. Its
+    /// target identity and effect copies are allocated only by the same atomic
+    /// declaration transaction that admits and activates the animation.
+    MethodTarget {
+        source: SemanticNodeId,
+        target_state: Box<noon_core::SemanticObjectState>,
+        interpolation: noon_core::SemanticTransformInterpolation,
+        options: AnimationOptions,
+    },
     MoveAlongPath {
         target: SemanticNodeId,
         path: SemanticNodeId,
@@ -375,6 +384,7 @@ impl SemanticCompositionRequest {
     const fn direct_leaf_target(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { source, .. }
+            | Self::MethodTarget { source, .. }
             | Self::WorldTransform { target: source, .. }
             | Self::CameraProfile { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
@@ -2406,6 +2416,24 @@ impl ExecutionSession {
                 );
                 Ok(animation)
             }
+            SemanticCompositionRequest::MethodTarget {
+                source,
+                target_state,
+                interpolation,
+                options,
+            } => {
+                if !(reuse_compatible_admission && admitted.seen.contains(&(*source).into())) {
+                    admit(*source, admitted)?;
+                }
+                self.stage_owned_method_target(
+                    store,
+                    declaration,
+                    *source,
+                    target_state,
+                    *interpolation,
+                    *options,
+                )
+            }
             SemanticCompositionRequest::MoveAlongPath {
                 target,
                 path,
@@ -3403,6 +3431,12 @@ impl ExecutionSession {
                 let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
                 Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
             }
+            SemanticCompositionRequest::MethodTarget { source, target_state, interpolation, options } => {
+                if !self.reachability.is_object_reachable(*source) {
+                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
+                }
+                self.stage_owned_method_target(store, declaration, *source, target_state, *interpolation, *options)
+            }
             SemanticCompositionRequest::MoveAlongPath { target, path, options } => {
                 if !self.reachability.is_object_reachable(*target)
                     || !self.reachability.is_object_reachable(*path)
@@ -4189,6 +4223,33 @@ impl ExecutionSession {
             declaration.create_effect(source, "glow", neutral);
         }
         Ok(())
+    }
+
+    fn stage_owned_method_target(
+        &self,
+        store: &SemanticStore,
+        declaration: &mut SemanticMutationTransaction,
+        source: SemanticNodeId,
+        target_state: &noon_core::SemanticObjectState,
+        interpolation: noon_core::SemanticTransformInterpolation,
+        options: AnimationOptions,
+    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+        let target = declaration.create_node(SemanticNodeCreation::object(target_state.clone()));
+        // These methods do not edit effects. Copy provenance marks parameters as
+        // omitted, so method-target completion preserves their effective values.
+        store
+            .copy_effects_into(source, target, declaration)
+            .map_err(|error| ExecutionSessionAnimationError::TargetState {
+                target: source,
+                error: error.into(),
+            })?;
+        Ok(declaration.create_transform_animation_with_interpolation(
+            source,
+            target,
+            interpolation,
+            true,
+            options,
+        ))
     }
 
     fn stage_animation_target_state(

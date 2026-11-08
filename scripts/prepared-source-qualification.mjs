@@ -1,7 +1,7 @@
 // Actual autonomous source tasks interleave with the existing canvas/input driver.
 // All source control flow, scene state and history delivery remain inside Rust.
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import playwright from "playwright";
@@ -15,11 +15,12 @@ const report = { status: "running", cases: [] };
 let server, browser;
 function equalPixels(a, b) { return a.width === b.width && a.height === b.height && a.data.equals(b.data); }
 try {
+  report.runtimeBuildIdentity = JSON.parse(await readFile(path.join(root, "web/runtime-build-identity.json"), "utf8"));
   server = await serveRepository(root, 0, { crossOriginIsolated: true });
   for (const backend of ["webgpu", "webgl"]) {
     browser = await playwright.chromium.launch({ headless: true, args: browserArgs(backend), channel: "chromium" });
     for (const scenario of ["complete", "failure", "cancel", "bounded", "starved"]) {
-      const result = { backend, scenario, status: "running", checks: [] }; report.cases.push(result);
+      const result = { backend, scenario, browserVersion: browser.version(), status: "running", checks: [] }; report.cases.push(result);
       const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
       page.setDefaultTimeout(60_000);
       const errors = []; page.on("pageerror", error => errors.push(String(error)));
@@ -64,10 +65,27 @@ try {
             bufferedWakes: () => bufferedWakes,
             start() {
               const ahead = scenario === "bounded" ? 1 : scenario === "starved" ? 0.125 : 60;
-              pump = this.pump = createCooperativePreparationDriver(() => source.prepareNext(renderer, ahead), {
+              let beforePreparation = null;
+              pump = this.pump = createCooperativePreparationDriver(() => {
+                if (scenario === "bounded") {
+                  beforePreparation = {
+                    atMs: performance.now(),
+                    playback: JSON.parse(renderer.debugPreparedPlaybackJson()),
+                    calls: source.calls(), dropped: source.producerDropped(),
+                  };
+                }
+                return source.prepareNext(renderer, ahead);
+              }, {
                 onProgress() {
                   const state = JSON.parse(renderer.debugPreparedPlaybackJson());
-                  samples.push({ time: state.time, frontier: state.frontier, calls: source.calls() });
+                  const sample = { time: state.time, frontier: state.frontier, calls: source.calls() };
+                  if (scenario === "bounded") {
+                    Object.assign(sample, {
+                      atMs: performance.now(), beforePreparation,
+                      playback: state, dropped: source.producerDropped(),
+                    });
+                  }
+                  samples.push(sample);
                   direct.wake();
                 },
                 onError: error => errors.push(String(error)),
@@ -137,7 +155,15 @@ try {
           assert.ok(samples.some(sample => sample.time > 1 && sample.calls < end.calls));
           if (scenario === "bounded") {
             result.maximumPreparedLead = Math.max(...samples.map(sample => sample.frontier - sample.time));
-            assert.ok(result.maximumPreparedLead <= 1.25 + 1e-9, "ahead limit plus one unknown segment");
+            result.boundedLeadDiagnostic = {
+              backend, browserVersion: result.browserVersion,
+              runtimeBuildIdentity: report.runtimeBuildIdentity,
+              maximumPreparedLead: result.maximumPreparedLead,
+              maximumPreparedLeadSample: samples.find(sample => sample.frontier - sample.time === result.maximumPreparedLead),
+              sampleCount: samples.length, current: end,
+            };
+            assert.ok(result.maximumPreparedLead <= 1.25 + 1e-9,
+              `ahead limit plus one unknown segment: ${JSON.stringify(result.boundedLeadDiagnostic)}`);
           } else {
             assert.ok(await page.evaluate(() => autoCanvas.bufferedWakes() > 0));
             result.checks.push("long-static-wait-frontier-refill-does-not-deadlock");

@@ -1,12 +1,78 @@
 //! Direct Rust authoring and coherent live execution for Noon.
 //!
-//! Start with [`Scene`] and [`Mobject`]. Scene-owned persistent operations such as
-//! geometry creation, family translation and linear/grid arrangement use the same
-//! route before and after execution bootstrap. Raw handle edits remain authored
+//! [`BlockingScene`] also supports ordinary synchronous helper functions through
+//! a platform runner. Its `play` and `wait` return only after logical completion
+//! and publication admission while the host continues rendering and input.
+//! The native desktop prototype is `noon_native::run_scene`; direct WASM support
+//! is opt-in through the browser host's experimental `blocking-scene` feature.
+//!
+//! Start with [`Scene::script`] for sequential animation authoring:
+//!
+//! ```no_run
+//! use noon::{Color, Create, LiveProgram, Scene, SceneScript, ScriptError, Vec2};
+//!
+//! fn lesson() -> Result<LiveProgram<SceneScript>, ScriptError> {
+//!     Scene::script(|scene| async move {
+//!         let circle = scene.circle(0.6)?;
+//!         scene.set_fill(&circle, Color::BLUE, 1.0)?;
+//!         scene.play(Create::new(&circle)).await?;
+//!         scene.play(circle.animate().shift(Vec2::new(2.0, 0.0))).await?;
+//!         scene.wait(0.5).await?;
+//!         Ok(())
+//!     })
+//! }
+//! ```
+//!
+//! Pass the returned program to a native or direct Rust/WASM host. Scene setup
+//! runs through the first await during construction; subsequent source code runs
+//! after each exact completion/publication boundary. [`ScriptScene`] exposes
+//! short authoring operations without holding a scene borrow across an await.
+//! Owned animation requests capture effective state when play starts. Tuples,
+//! arrays and vectors compose simultaneous animations in one play.
+//!
+//! Families use the same capability before and after a boundary:
+//!
+//! ```no_run
+//! use noon::{FamilyArrangeOptions, FamilyGridOptions, Scene};
+//! # fn example() -> Result<(), noon::ScriptError> {
+//! let program = Scene::script(|scene| async move {
+//!     let first = scene.circle(0.4)?;
+//!     let second = scene.square(0.8)?;
+//!     let group = scene.family([&first, &second])?;
+//!     scene.arrange_family_with_options(
+//!         &group,
+//!         &FamilyArrangeOptions::new(1.0, 0.0, 0.3, true),
+//!     )?;
+//!     scene.add(&group)?;
+//!     scene.wait(0.5).await?;
+//!     let third = scene.circle(0.3)?;
+//!     scene.add_family_members(&group, [&third])?;
+//!     scene.arrange_family_in_grid_with_options(
+//!         &group,
+//!         &FamilyGridOptions { columns: Some(2), ..Default::default() },
+//!     )?;
+//!     scene.wait(0.5).await?;
+//!     Ok(())
+//! })?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Mixed groups accept [`MobjectTarget::Object`] and [`MobjectTarget::Family`].
+//! Membership edits preserve handles and use one atomic publication. Layout
+//! observes authored bounds during setup and effective bounds during execution.
+//! [`ScriptScene::effective_layout`] and [`ScriptScene::effective_family_layout`]
+//! explicitly query the current publication. Fluent animation requests currently
+//! target individual planar objects; family method targets remain unsupported.
+//!
+//! [`Scene`] and [`Mobject`] also support explicit authoring. Scene-owned operations such as
+//! geometry/family creation, membership, paint edits, translation and linear/grid arrangement use
+//! the same route before and after execution bootstrap. [`ScriptScene`] delegates
+//! its persistent edits to these Scene-owned operations. Raw handle edits remain authored
 //! operations; they do not publish to an already running execution.
 //!
-//! [`Scene::live`] is for explicit borrowed-execution integration. Continuations
-//! also receive a [`LiveSession`] for their segment and callback capabilities.
+//! [`Scene::live`] and [`LiveContinuation`] are explicit execution integration
+//! facilities. Scene scripts hide their segment and callback plumbing.
 //!
 //! # Public surface
 //!
@@ -17,9 +83,10 @@
 //! - `diagnostics` (feature gated) provides explicit debug/export observations.
 //!
 //! Use [`Scene::authored`] for base state and [`Scene::effective`] for the current
-//! published value; a cold scene has no effective observation. Complete a segment with
-//! [`LiveSession::complete_segment`] before resuming dependent authoring. Ordinary
-//! completion is not a GPU-retirement fence. See the `shared_authoring` example.
+//! published value; a cold scene has no effective observation. Script awaits use
+//! the shared logical completion contract automatically. Explicit integrations
+//! complete their segments with [`LiveSession::complete_segment`]. Completion is
+//! not a GPU-retirement fence. See the `shared_authoring` example.
 //!
 //! A glob import cannot accidentally expose raw semantic storage or frame plumbing:
 //!
@@ -58,6 +125,7 @@ mod angle_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod animated_number_line_example;
 mod animation_authoring;
+mod animation_request;
 mod arc_authoring;
 pub use angle_authoring::ManimAngleOptions;
 pub mod angle_example;
@@ -181,6 +249,7 @@ mod scalar_authoring;
 mod scene;
 mod scene_membership;
 mod scene_ordering;
+mod scene_script;
 mod sector_authoring;
 mod semantic_mobject;
 mod source_reconciliation;
@@ -207,6 +276,9 @@ mod z_index;
 mod zoomed_scene;
 
 pub use animation_authoring::DeclaredAnimation;
+pub use animation_request::{
+    parallel, Animate, AnimationRequest, Create, FadeOut, IntoAnimationRequest,
+};
 pub use arc_authoring::ArcAuthoringError;
 pub use arrow_authoring::{
     ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH, DEFAULT_ARROW_STROKE_WIDTH_RATIO,
@@ -276,6 +348,8 @@ pub use latex_authoring::{
     DviFontResource, LatexBackend, LatexDocument, LatexFormat, LatexParts, MathTex, Tex,
     DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
 };
+#[doc(hidden)]
+pub use live_program::ContinuationScene;
 pub use live_program::{
     ContinuationEffects, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError,
     LiveProgramStatus,
@@ -336,6 +410,10 @@ pub use noon_core::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
 pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
+pub use scene_script::{
+    BlockingScene, SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame,
+    UpdaterRegistration, UpdaterTarget,
+};
 #[cfg(test)]
 mod gradient_authoring_tests;
 #[cfg(test)]
@@ -429,6 +507,11 @@ pub mod prelude {
         SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticVec3,
         SemanticWorldTransform3D, SurfaceFamily, SurfaceGrid, SurfaceOptions, SurfaceSample,
         UvSurfacePlan,
+    };
+    pub use crate::{
+        parallel, Animate, AnimationRequest, BlockingScene, Create, FadeOut, IntoAnimationRequest,
+        SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame, UpdaterRegistration,
+        UpdaterTarget,
     };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,

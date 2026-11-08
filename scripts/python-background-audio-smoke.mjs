@@ -530,6 +530,7 @@ try {
     const startUntil = WasmWorkerAudioOutput.prototype.startUntil;
     WasmWorkerAudioOutput.prototype.startUntil = function (session, time, authorizedUntil, sampledEpochMs, receivedEpochMs) {
       const before = audioQualification.starts.length;
+      const stopsBefore = audioQualification.stops.length;
       const entry = { operation: "startUntil", session, resourceSession: audioQualification.audioResourceSession,
         time, authorizedUntil, sampledEpochMs, receivedEpochMs };
       try {
@@ -537,11 +538,15 @@ try {
         entry.sources = audioQualification.starts.slice(before).map(source => source.node);
         return result;
       } catch (error) { entry.error = String(error?.stack ?? error); throw error; }
-      finally { audioQualification.anchors.push(entry); }
+      finally {
+        entry.stops = audioQualification.stops.slice(stopsBefore);
+        audioQualification.anchors.push(entry);
+      }
     };
     const extendUntil = WasmWorkerAudioOutput.prototype.extendUntil;
     WasmWorkerAudioOutput.prototype.extendUntil = function (session, time, authorizedUntil, sampledEpochMs, receivedEpochMs) {
       const before = audioQualification.starts.length;
+      const stopsBefore = audioQualification.stops.length;
       const entry = { operation: "extendUntil", session, resourceSession: audioQualification.audioResourceSession,
         time, authorizedUntil, sampledEpochMs, receivedEpochMs };
       try {
@@ -549,7 +554,10 @@ try {
         entry.sources = audioQualification.starts.slice(before).map(source => source.node);
         return result;
       } catch (error) { entry.error = String(error?.stack ?? error); throw error; }
-      finally { audioQualification.anchors.push(entry); }
+      finally {
+        entry.stops = audioQualification.stops.slice(stopsBefore);
+        audioQualification.anchors.push(entry);
+      }
     };
   });
   release();
@@ -1081,13 +1089,13 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     await page.getByRole("button", { name: "Play animation", exact: true }).click();
     await waitForBrowserObservation(page, async count => audioQualification.starts.length > count, startsBeforePlay);
     const firstPass = await audible();
-    const voice = firstPass.starts.at(-1);
+    const voice = firstPass.starts[startsBeforePlay];
     const anchor = firstPass.anchors.find(item => item.sources.includes(voice.node));
     assert.ok(anchor, "the audio voice uses the accepted shared Rust time anchor");
     const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
     near(voice.args[1], phase, "initial prepared soundtrack sample offset", 0.02);
     assert.equal(voice.args.length, 2, "the open prefix schedules a stoppable voice without a premature duration");
-    const initialStop = firstPass.stops.filter(stop => stop.node === voice.node && stop.args.length > 0).at(-1);
+    const initialStop = firstPass.stops.find(stop => stop.node === voice.node && stop.args.length > 0);
     assert.ok(initialStop && initialStop.args[0] > initialStop.observedAt,
       "the source is initially limited by the admitted visual prefix");
     assert.equal(firstPass.transport.hasAudio, true);
@@ -1116,10 +1124,33 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
       (bufferResumeAnchor.receivedEpochMs - bufferResumeAnchor.anchor.sampledEpochMs) / 1000;
     near(bufferResumeAnchor.starts[0].args[1], bufferResumeAnchorPhase,
       "audio buffer recovery uses the refreshed Rust sample offset", 0.02);
-    const extendedStops = finalState.stops.filter(stop => stop.node === voice.node && stop.args.length > 0);
-    assert.ok(extendedStops.at(-1).args[0] > initialStop.args[0],
-      "terminal history extends the same active device voice to its full authored interval");
+    assert.ok(finalState.ended.some(item => item.node === voice.node),
+      "buffering retires the original device voice");
+    assert.notEqual(bufferResumeAnchor.starts[0].node, voice.node,
+      "buffer recovery creates a new voice at the refreshed Rust sample offset");
     assert.equal(finalState.starts.filter(start => start.node === voice.node).length, 1);
+    // Buffering retires a device graph. Check terminal admission against the
+    // voice active at that boundary, including a fresh voice after recovery.
+    const terminalAnchor = finalState.anchors.slice(run.before.anchors.length)
+      .find(item => item.session === anchor.session &&
+        item.authorizedUntil === 34.65 && item.stops?.some(stop => stop.args.length > 0 &&
+          (item.sources.length === 0 || item.sources.includes(stop.node))));
+    assert.ok(terminalAnchor, "terminal history schedules the soundtrack through its authored endpoint");
+    const terminalStops = terminalAnchor.stops.filter(stop => stop.args.length > 0 &&
+      (terminalAnchor.sources.length === 0 || terminalAnchor.sources.includes(stop.node)));
+    assert.equal(terminalStops.length, 1, "terminal admission bounds exactly one soundtrack voice");
+    const terminalStop = terminalStops[0];
+    const terminalVoice = finalState.starts.find(start => start.node === terminalStop.node);
+    assert.ok(terminalVoice, "the terminal stop belongs to a real started device voice");
+    const terminalPhase = terminalAnchor.time +
+      (terminalAnchor.receivedEpochMs - terminalAnchor.sampledEpochMs) / 1000;
+    near(terminalStop.args[0] - terminalStop.observedAt, 34.65 - terminalPhase,
+      "terminal soundtrack remaining duration", 0.02);
+    assert.equal(finalState.starts.filter(start => start.node === terminalVoice.node).length, 1,
+      "terminal admission never starts the same device voice twice");
+    if (terminalAnchor.sources.includes(terminalVoice.node)) {
+      near(terminalVoice.args[1], terminalPhase, "terminal recovery uses the refreshed Rust sample offset", 0.02);
+    }
     assertEnvelope(finalState, voice, [
       [0, Math.min(0.5, 0.5 * phase / 1.5)],
       [1.5 - phase, 0.5], [32.15 - phase, 0.5], [34.65 - phase, 0],
@@ -1246,8 +1277,10 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
         drawCalls: combinedRender.metrics.drawCalls, instancesDrawn: combinedRender.metrics.instancesDrawn,
         rendererRebuilds: combinedRender.metrics.rendererRebuilds, pointerView: combinedRender.pointerView ?? null },
       viewport: combinedViewport,
-      initialVoice: { node: voice.node, anchor: anchor.time, phase, initialStop: initialStop.args[0],
-        finalStop: extendedStops.at(-1).args[0] },
+      initialVoice: { node: voice.node, anchor: anchor.time, phase, initialStop: initialStop.args[0] },
+      terminalVoice: { node: terminalVoice.node, operation: terminalAnchor.operation,
+        phase: terminalPhase, stop: terminalStop.args[0], observedAt: terminalStop.observedAt,
+        reused: !terminalAnchor.sources.includes(terminalVoice.node) },
       deviceBuffering: { held: heldAnchor.anchor, resumed: bufferResumeAnchor.anchor,
         resumedNode: bufferResumeAnchor.starts[0].node, resumedPhase: bufferResumeAnchorPhase },
       seek: seek.time, resumedVoice: { node: resumedVoice.node, phase: resumedPhase,

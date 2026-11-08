@@ -181,13 +181,25 @@ jobs:
             cargo test -p noon-native native_surface_smoke_incremental_first_picture_precedes_source_completion \
               -- --ignored --nocapture --test-threads=1
 
+      - name: Qualify synchronous Rust authoring and cancellation
+        run: |
+          timeout 90s xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native --lib \
+              ordinary_helpers_pump_native_frames_and_return_after_admitted_boundaries \
+              -- --ignored --nocapture --test-threads=1
+          timeout 90s xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native --lib \
+              rejected_first_boundary_is_recoverable_and_window_close_cancels_the_next_wait \
+              -- --ignored --nocapture --test-threads=1
+
       - name: Qualify native HDR pixels, capture equivalence and recovery
         env:
           NOON_NATIVE_HDR_ARTIFACTS: ${{ github.workspace }}/native-hdr-proof
           NOON_PLAYBACK_EVIDENCE_DIR: ${{ github.workspace }}/native-hdr-proof/playback
         run: |
-          cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture
-          cargo test -p noon-native --features wgsl-effects --lib native_incremental_handoff_pixels_match_original_observed_source -- --ignored --nocapture
+          # Keep independent GPU device lifecycles serial and failure logs attributable.
+          cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture --test-threads=1
+          cargo test -p noon-native --features wgsl-effects --lib native_incremental_handoff_pixels_match_original_observed_source -- --ignored --nocapture --test-threads=1
       - name: Present authored camera Bloom through native host
         run: |
           xvfb-run -a -s "-screen 0 1280x720x24" \

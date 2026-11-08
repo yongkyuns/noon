@@ -1,6 +1,7 @@
 const {
   createDirectStyleOperationsSmokeRenderer,
   createDirectAffineCallbackSmokeRenderer,
+  createDirectMovingAroundSmokeRenderer,
   createDirectLiveUpdaterLifecycleSmokeRenderer,
   createDirectCallbackPaintSmokeRenderer,
   createDirectLineMatchSmokeRenderer,
@@ -432,6 +433,56 @@ async function directLiveGeometryConstructionProof(expectedBackend) {
         dot.red <= dot.green + 30 || annulus.red <= annulus.blue + 30 ||
         annulus.green <= annulus.blue + 30 || Math.min(underline.red, underline.green, underline.blue) <= 150) {
       throw new Error(`typed live geometry did not publish coherent initial/final frames: ${JSON.stringify(metrics)}`);
+    }
+    return metrics;
+  } finally {
+    renderer.free();
+    if (expectedBackend === "WebGL2") {
+      canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  }
+}
+
+async function directMovingAroundProof(expectedBackend) {
+  const canvas = new OffscreenCanvas(960, 540);
+  const renderer = await createDirectMovingAroundSmokeRenderer(canvas);
+  const samples = [];
+  try {
+    renderer.resize(canvas.width, canvas.height);
+    await settleDirectPublication(renderer, 0);
+    let identity;
+    let final;
+    for (const milliseconds of [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]) {
+      if (milliseconds > 0) renderer.advanceDirectRealtime(milliseconds);
+      final = await settleDirectPublication(renderer, milliseconds);
+      const frame = JSON.parse(renderer.debugSelectionFrameJson());
+      const object = frame.objects[0];
+      identity ??= object?.id;
+      const centerX = milliseconds <= 1000 ? -milliseconds / 1000 : -1;
+      const center = await sampleRenderedColor(canvas, centerX, 0);
+      const edge = await sampleRenderedColor(canvas, centerX + 0.55, 0);
+      const corner = await sampleRenderedColor(canvas, -0.66, -0.12);
+      samples.push({ time: renderer.time(), center, edge, corner });
+      if (Math.abs(renderer.time() - milliseconds / 1000) > 1e-6 ||
+          frame.objects.length !== 1 || object.id !== identity ||
+          Math.abs(object.center[0] - centerX) > 1e-5 || Math.abs(object.center[1]) > 1e-5) {
+        throw new Error(`sequential method animation lost timing or identity: ${JSON.stringify(samples)}`);
+      }
+    }
+    const [initial, , shifted, recoloring, orange, scaling, scaled, , rotated] = samples;
+    const isOrange = color => color.red > color.green + 30 && color.green > color.blue + 30;
+    const metrics = { backend: renderer.rendererBackend(), time: renderer.time(),
+      objects: renderer.objectCount(), cadence: final.cadence, samples };
+    if (metrics.backend !== expectedBackend || metrics.objects !== 1 ||
+        metrics.time !== 4 || metrics.cadence !== "idle" ||
+        initial.center.blue <= initial.center.red + 30 ||
+        shifted.center.blue <= shifted.center.red + 30 ||
+        recoloring.center.red <= shifted.center.red + 30 ||
+        recoloring.center.red >= orange.center.red - 30 ||
+        !isOrange(orange.center) || !isOrange(scaling.edge) ||
+        Math.max(scaled.edge.red, scaled.edge.green, scaled.edge.blue) > 30 ||
+        isOrange(scaled.corner) || !isOrange(rotated.corner) || !isOrange(rotated.center)) {
+      throw new Error(`sequential shift/fill/scale/rotate pixels failed: ${JSON.stringify(metrics)}`);
     }
     return metrics;
   } finally {
@@ -1724,23 +1775,47 @@ async function directFamilyArrangementProof(expectedBackend) {
   try {
     renderer.resize(canvas.width, canvas.height);
     await settleDirectPublication(renderer, 0);
-    for (const [wallTime, first, second] of [
-      [0, [-1, 0], [1, 0]],
-      [500, [0.35, 0.7], [1, 0.7]],
+    let identities;
+    let initialPublication;
+    let final;
+    // Static waits retain the last publication until their timer is due.
+    for (const [wallTime, sceneTime, delayMs, first, second] of [
+      [0, 0, 500, [-1, 0], [1, 0]],
+      [250, 0, 250, [-1, 0], [1, 0]],
+      [500, 0.5, 500, [0.35, 0.7], [1, 0.7]],
+      [1000, 1, null, [0.35, 0.7], [1, 0.7]],
     ]) {
       renderer.advanceDirectRealtime(wallTime);
-      await settleDirectPublication(renderer, wallTime);
+      final = await settleDirectPublication(renderer, wallTime);
+      const frame = JSON.parse(renderer.debugSelectionFrameJson());
+      const objectIds = frame.objects.map(object => object.id);
+      identities ??= objectIds;
+      const publication = JSON.stringify(frame.publication);
+      initialPublication ??= publication;
+      const expectedCadence = delayMs === null ? "idle" : "timer";
+      const validDelay = delayMs === null ? final.delayMs === null
+        : Number.isFinite(final.delayMs) && Math.abs(final.delayMs - delayMs) <= 1e-6;
       const blue = await sampleRenderedColor(canvas, ...first);
       const yellow = await sampleRenderedColor(canvas, ...second);
-      if (blue.blue <= blue.red + 30 || yellow.red <= yellow.blue + 30) {
-        throw new Error(`direct family arrangement missed shared members: ${JSON.stringify({wallTime, blue, yellow})}`);
+      const cleared = wallTime >= 500
+        ? await Promise.all([-1, 1].map(x => sampleRenderedColor(canvas, x, 0))) : [];
+      if (renderer.time() !== sceneTime || frame.time !== sceneTime ||
+          final.cadence !== expectedCadence || !validDelay ||
+          (wallTime < 500 && publication !== initialPublication) ||
+          frame.objects.length !== 2 ||
+          objectIds.some((id, index) => id !== identities[index]) ||
+          frame.objects.some((object, index) => {
+            const expected = [first, second][index];
+            return Math.abs(object.center[0] - expected[0]) > 1e-5 ||
+              Math.abs(object.center[1] - expected[1]) > 1e-5;
+          }) || blue.blue <= blue.red + 30 || yellow.red <= yellow.blue + 30 ||
+          cleared.some(color => Math.max(color.red, color.green, color.blue) > 30)) {
+        throw new Error(`direct family arrangement missed timing, identity or shared member pixels: ${JSON.stringify({wallTime, sceneTime, wake: final, frame, blue, yellow, cleared})}`);
       }
-      samples.push({ wallTime, blue, yellow });
+      samples.push({ wallTime, sceneTime: renderer.time(), wake: final, objectIds, blue, yellow, cleared });
     }
-    renderer.advanceDirectRealtime(1000);
-    const wake = await settleDirectPublication(renderer, 1000);
     if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 1
-        || renderer.objectCount() !== 2 || wake.cadence !== "idle") {
+        || renderer.objectCount() !== 2 || final.cadence !== "idle") {
       throw new Error("direct family arrangement did not finish one coherent continuation");
     }
     return samples;
@@ -2896,6 +2971,7 @@ async function start() {
   metrics.livePrimitiveConstruction = await directLivePrimitiveConstructionProof(expectedBackend);
   metrics.squareToCircle = await directSquareToCircleProof(expectedBackend);
   metrics.differentRotations = await directDifferentRotationsProof(expectedBackend);
+  metrics.movingAround = await directMovingAroundProof(expectedBackend);
   metrics.affineLifecycle = await directAffineLifecycleProof(expectedBackend);
   metrics.timedComposition = await directTimedCompositionProof(expectedBackend);
   metrics.mixedScalarComposition = await directMixedScalarCompositionProof(expectedBackend);

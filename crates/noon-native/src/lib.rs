@@ -7,6 +7,11 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+mod blocking;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+pub use blocking::{run_scene, run_scene_with_config};
+
 mod execution_source;
 mod playback_controls;
 mod pointer_input;
@@ -299,24 +304,7 @@ fn run_source(
     source: Box<dyn NativeExecutionSource>,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
-    // Profile admission precedes window/device allocation. The host must not
-    // silently omit authored audio or consume a click without its control action.
-    if source.session().has_audio() {
-        #[cfg(not(feature = "audio"))]
-        return Err(NativeHostError::AudioOutputUnavailable);
-        #[cfg(feature = "audio")]
-        audio_output::admit_profile(source.as_ref())?;
-    }
-    if (config.playback_controls || source.session().has_playback_controls())
-        && !source.playback_controls_available()
-    {
-        return Err(NativeHostError::PlaybackControlsUnavailable);
-    }
-    if config.width == 0 || config.height == 0 {
-        return Err(NativeHostError::Platform(
-            "initial viewport dimensions must be positive".to_owned(),
-        ));
-    }
+    admit_source(source.as_ref(), &config)?;
 
     let event_loop =
         EventLoop::new().map_err(|error| NativeHostError::Platform(error.to_string()))?;
@@ -333,6 +321,32 @@ fn run_source(
     if let Some(error) = app.error.take() {
         return Err(error);
     }
+    Ok(())
+}
+
+fn admit_source(
+    source: &dyn NativeExecutionSource,
+    config: &NativeViewportConfig,
+) -> Result<(), NativeHostError> {
+    // Profile admission precedes window/device allocation. The host must not
+    // silently omit authored audio or consume a click without its control action.
+    if source.session().has_audio() {
+        #[cfg(not(feature = "audio"))]
+        return Err(NativeHostError::AudioOutputUnavailable);
+        #[cfg(feature = "audio")]
+        audio_output::admit_profile(source)?;
+    }
+    if (config.playback_controls || source.session().has_playback_controls())
+        && !source.playback_controls_available()
+    {
+        return Err(NativeHostError::PlaybackControlsUnavailable);
+    }
+    if config.width == 0 || config.height == 0 {
+        return Err(NativeHostError::Platform(
+            "initial viewport dimensions must be positive".to_owned(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -397,6 +411,10 @@ struct NativeApp {
     error: Option<NativeHostError>,
     #[cfg(test)]
     exit_after_present: Option<f64>,
+    #[cfg(test)]
+    close_on_user_event: bool,
+    #[cfg(test)]
+    close_event_timeline: Option<TimelineWakeState>,
     #[cfg(test)]
     presented_frame_time: Option<f64>,
     #[cfg(test)]
@@ -485,6 +503,10 @@ impl NativeApp {
             error: None,
             #[cfg(test)]
             exit_after_present: None,
+            #[cfg(test)]
+            close_on_user_event: false,
+            #[cfg(test)]
+            close_event_timeline: None,
             #[cfg(test)]
             presented_frame_time: None,
             #[cfg(test)]
@@ -1058,6 +1080,20 @@ impl NativeApp {
 }
 
 impl ApplicationHandler for NativeApp {
+    #[cfg(test)]
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
+        if self.close_on_user_event {
+            self.close_on_user_event = false;
+            self.close_event_timeline = Some(self.execution.timeline());
+            let window = self
+                .window
+                .as_ref()
+                .expect("close fixture owns a window")
+                .id();
+            self.window_event(event_loop, window, WindowEvent::CloseRequested);
+        }
+    }
+
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(feature = "audio")]
         if let Err(error) = self.suspend_audio(Instant::now()) {

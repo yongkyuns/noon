@@ -98,11 +98,15 @@ Cancellation is checked between blocks and before publication. This uses a file
 input for audio rather than another live encoder pipe, and successful or failed
 runs clean their own staging through the existing destination owner.
 
-AAC decoders may return complete 1,024-sample packets beyond the presentation
-endpoint. Raw decoded byte count is therefore not the movie-duration oracle:
-container/edit-list and packet presentation times establish the end, while
-decoded signal checks establish alignment. Audio presentation may end less than
-one 48 kHz sample before video; it cannot extend the reported movie duration.
+AAC decoders may return complete 1,024-sample frames beyond the presentation
+endpoint. Demuxers may also report the boundary packet's original media duration
+instead of shortening it to the edit. Container/edit-list timing and the demuxed
+audio stream's exact duration establish the presentation end. Packet checks prove
+continuous AAC coverage through that end with preserved priming and media timing;
+decoded signal checks establish alignment. Raw decoded byte count and the final
+coded packet's end are therefore not movie-duration oracles. Audio presentation
+may end less than one 48 kHz sample before video; it cannot extend the reported
+movie duration.
 An interval shorter than one audio sample can contain no presented audio frames.
 
 PNG sequences are explicitly visual-only and omit authored audio. The existing

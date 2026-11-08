@@ -1,160 +1,82 @@
 //! Shared nested-family arrangement before and after a logical wait boundary.
-use std::rc::Rc;
-
 use crate::{
-    Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
-    Scene,
+    Color, FamilyArrangeOptions, LayoutAnchor, LiveLayoutTarget, LiveProgram, ManimNextToArgs,
+    MobjectTarget, Scene, SceneScript, ScriptError, Vec2,
 };
 
-pub struct FamilyArrangement {
-    family: MobjectFamily,
-    first: Mobject,
-    second: Mobject,
-    nested: MobjectFamily,
-    stage: u8,
-}
-
-impl LiveContinuation for FamilyArrangement {
-    type Error = String;
-
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
-        match self.stage {
-            0 => {
-                self.stage = 1;
-                live.wait_segment(0.5)
-                    .map(ContinuationStep::Await)
-                    .map_err(|e| e.to_string())
-            }
-            1 => {
-                self.family = live
-                    .create_family(&[(&self.first).into(), (&self.nested).into()])
-                    .map_err(|e| e.to_string())?;
-                live.remove_family_members(&self.family, &[(&self.nested).into()])
-                    .map_err(|e| e.to_string())?;
-                live.add_family_members(&self.family, &[(&self.nested).into()])
-                    .map_err(|e| e.to_string())?;
-                let mut options = crate::FamilyArrangeOptions::new(0.0, 1.0, 0.3, false);
-                options.placement.aligned_edge = (-1.0, 0.0);
-                live.arrange_family_with_options(&self.family, &options)
-                    .map_err(|e| e.to_string())?;
-                let layout = live
-                    .effective_family_layout(&self.nested)
-                    .map_err(|e| e.to_string())?;
-                if (layout.width - 2.4).abs() > 1e-5 {
-                    return Err("live family layout did not observe the arranged members".into());
-                }
-                if layout.center.0.abs() > 1e-5 {
-                    return Err("aligned arrangement moved the common left edge".into());
-                }
-                live.move_family_to(
-                    &self.nested,
-                    crate::LiveLayoutTarget::Point(0.0, 0.0),
-                    (0.0, 0.0),
-                    (1.0, 0.0),
-                )
-                .map_err(|e| e.to_string())?;
-                let source = crate::LayoutAnchor::from(&self.nested);
-                live.next_layout_to_aligned(
-                    &source,
-                    crate::LiveLayoutTarget::Point(0.0, 0.0),
-                    &source.clone().member(-1),
-                    crate::semantic_mobject::ManimNextToArgs {
-                        direction: (0.0, 2.0),
-                        buff: 0.25,
-                        aligned_edge: (0.0, 0.0),
-                        mask: (0.0, 1.0),
-                    },
-                )
-                .map_err(|e| e.to_string())?;
-                live.align_family_to(
-                    &self.nested,
-                    crate::LiveLayoutTarget::Mobject(&self.first),
-                    (0.0, 1.0),
-                )
-                .map_err(|e| e.to_string())?;
-                let first = crate::LayoutAnchor::from(&self.first);
-                live.next_layout_to_aligned(
-                    &first,
-                    crate::LiveLayoutTarget::Mobject(&self.second),
-                    &first,
-                    crate::semantic_mobject::ManimNextToArgs {
-                        direction: (-1.0, 0.0),
-                        buff: 0.25,
-                        aligned_edge: (0.0, 0.0),
-                        mask: (1.0, 1.0),
-                    },
-                )
-                .map_err(|e| e.to_string())?;
-                let placed = live
-                    .effective_layout(&self.first)
-                    .map_err(|e| e.to_string())?;
-                if (placed.center.0 - 0.35).abs() > 1e-6 {
-                    return Err(
-                        "plain live object placement missed its shared target bounds".into(),
-                    );
-                }
-                self.stage = 2;
-                live.wait_segment(0.5)
-                    .map(ContinuationStep::Await)
-                    .map_err(|e| e.to_string())
-            }
-            2 => {
-                self.stage = 3;
-                Ok(ContinuationStep::Finished)
-            }
-            _ => Err("family arrangement resumed after completion".into()),
+pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
+    Scene::script(|scene| async move {
+        let first = scene.circle(0.2)?;
+        let second = scene.circle(0.2)?;
+        for (object, color) in [(&first, Color::BLUE), (&second, Color::YELLOW)] {
+            scene.set_fill(object, color, 1.0)?;
+            scene.set_stroke_width(object, 0.0)?;
         }
-    }
-}
+        scene.shift(&second, Vec2::new(2.0, 0.0))?;
 
-pub fn program() -> Result<LiveProgram<FamilyArrangement>, String> {
-    let mut scene = Scene::new();
-    let mut first = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)
-        .map_err(|error| error.to_string())?;
-    let mut second = Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.2)
-        .map_err(|error| error.to_string())?;
-    for (object, color) in [(&mut first, Color::BLUE), (&mut second, Color::YELLOW)] {
-        object
-            .set_fill(
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                1.0,
-            )
-            .map_err(|error| error.to_string())?;
-        object
-            .set_stroke_width(0.0)
-            .map_err(|error| error.to_string())?;
-    }
-    second.shift(2.0, 0.0).map_err(|error| error.to_string())?;
-    let nested = scene
-        .family(&[(&first).into(), (&second).into()])
-        .map_err(|error| error.to_string())?;
-    let family = scene
-        .family(&[(&first).into(), (&nested).into()])
-        .map_err(|error| error.to_string())?;
-    let bounds = family
-        .layout_bounds()
-        .map_err(|error| error.to_string())?
-        .ok_or("family bounds are empty")?;
-    if (bounds.width() - 2.4).abs() > 1e-6 || (bounds.height() - 0.4).abs() > 1e-6 {
-        return Err("shared family bounds differ from its authored members".into());
-    }
-    scene
-        .arrange_family_with_options(
+        // One semantic leaf participates in both a direct and a nested member.
+        let nested = scene.family([&first, &second])?;
+        let family = scene.family([
+            MobjectTarget::Object(&first),
+            MobjectTarget::Family(&nested),
+        ])?;
+        let bounds = family.layout_bounds()?.expect("family bounds are empty");
+        assert!((bounds.width() - 2.4).abs() < 1e-6);
+        assert!((bounds.height() - 0.4).abs() < 1e-6);
+        scene.arrange_family_with_options(
             &family,
-            &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
-        )
-        .map_err(|error| error.to_string())?;
-    scene.add(&first).map_err(|error| error.to_string())?;
-    scene.add(&second).map_err(|error| error.to_string())?;
-    scene
-        .into_live_program(FamilyArrangement {
-            family,
-            first,
-            second,
-            nested,
-            stage: 0,
-        })
-        .map_err(|e| e.to_string())
+            &FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+        )?;
+        scene.add(&first)?;
+        scene.add(&second)?;
+        scene.wait(0.5).await?;
+
+        let family = scene.family([
+            MobjectTarget::Object(&first),
+            MobjectTarget::Family(&nested),
+        ])?;
+        scene.remove_family_members(&family, [&nested])?;
+        scene.add_family_members(&family, [&nested])?;
+        let mut options = FamilyArrangeOptions::new(0.0, 1.0, 0.3, false);
+        options.placement.aligned_edge = (-1.0, 0.0);
+        scene.arrange_family_with_options(&family, &options)?;
+        let layout = scene.effective_family_layout(&nested)?;
+        assert!((layout.width - 2.4).abs() < 1e-5);
+        assert!(layout.center.0.abs() < 1e-5);
+        scene.move_family_to(
+            &nested,
+            LiveLayoutTarget::Point(0.0, 0.0),
+            (0.0, 0.0),
+            (1.0, 0.0),
+        )?;
+        let source = LayoutAnchor::from(&nested);
+        scene.next_layout_to_aligned(
+            &source,
+            LiveLayoutTarget::Point(0.0, 0.0),
+            &source.clone().member(-1),
+            ManimNextToArgs {
+                direction: (0.0, 2.0),
+                buff: 0.25,
+                aligned_edge: (0.0, 0.0),
+                mask: (0.0, 1.0),
+            },
+        )?;
+        scene.align_family_to(&nested, LiveLayoutTarget::Mobject(&first), (0.0, 1.0))?;
+        let first_anchor = LayoutAnchor::from(&first);
+        scene.next_layout_to_aligned(
+            &first_anchor,
+            LiveLayoutTarget::Mobject(&second),
+            &first_anchor,
+            ManimNextToArgs {
+                direction: (-1.0, 0.0),
+                buff: 0.25,
+                aligned_edge: (0.0, 0.0),
+                mask: (1.0, 1.0),
+            },
+        )?;
+        let placed = scene.effective_layout(&first)?;
+        assert!((placed.center.0 - 0.35).abs() < 1e-6);
+        scene.wait(0.5).await?;
+        Ok(())
+    })
 }

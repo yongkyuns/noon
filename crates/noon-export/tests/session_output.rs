@@ -421,17 +421,35 @@ fn verify_movie_timing(path: &Path, frames: u64, duration: f64, audio: bool) {
             0.0
         );
         let audio_end = field(&audio_stream, "duration_ts").parse::<u64>().unwrap();
-        assert!((audio_end as f64 / f64::from(AUDIO_RATE) - duration).abs() <= 1.0 / 48_000.0);
+        assert_eq!(
+            audio_end,
+            end_ticks * u64::from(AUDIO_RATE) / 30_000,
+            "{path:?}: audio presentation must end at the exact complete-sample boundary",
+        );
         let audio_packets = probe(path, Some("a:0"), "packet=pts,duration", true);
         let packets = packet_times(&audio_packets);
         assert_eq!(packets.first().copied(), Some((-1_024, 1_024)));
-        assert!(packets.windows(2).all(|pair| pair[1].0 > pair[0].0));
-        let packet_end = packets
-            .iter()
-            .map(|(pts, duration)| *pts + *duration as i64)
-            .max()
-            .unwrap();
-        assert!((packet_end as f64 / 48_000.0 - duration).abs() <= 1.0 / 48_000.0);
+        for (index, &(pts, duration)) in packets.iter().enumerate() {
+            assert_eq!(pts, (index as i64 - 1) * 1_024);
+            assert!((1..=1_024).contains(&duration));
+            if index + 1 < packets.len() {
+                assert_eq!(duration, 1_024);
+            }
+        }
+        let &(last_pts, last_duration) = packets.last().unwrap();
+        let last_pts = u64::try_from(last_pts).unwrap();
+        let pcm_frames = (frames * 1_001 * u64::from(AUDIO_RATE)).div_ceil(30_000);
+        // The edit defines presentation; a demuxer may retain the boundary
+        // packet's original media duration. That packet must cover the exact
+        // endpoint without introducing a later packet or extending the PCM span.
+        assert!(
+            last_pts < audio_end,
+            "{path:?}: final AAC packet starts at {last_pts}, audio ends at {audio_end}",
+        );
+        assert!(
+            (audio_end..=pcm_frames).contains(&(last_pts + last_duration)),
+            "{path:?}: final AAC packet ({last_pts}, {last_duration}), audio end {audio_end}, PCM span {pcm_frames}",
+        );
         evidence.push_str(&format!(
             "\nAUDIO\n{audio_stream}\nAUDIO PACKETS\n{audio_packets}"
         ));
@@ -543,8 +561,8 @@ fn verify_audio(path: &Path, duration: f64, crop_start: f64, cutoff: f64, tone: 
         .collect();
     assert!(samples.iter().all(|value| value.is_finite()));
     let frames = (duration * f64::from(AUDIO_RATE)).floor() as usize;
-    // AAC decoding may expose the final padded codec block. Presentation ends
-    // are checked from packets and stream/edit timing above, never byte length.
+    // AAC decoding may expose the final padded codec block. Exact stream/edit
+    // timing bounds presentation; the packet checks above prove coded coverage.
     assert!(samples.len() >= frames * 2);
     for channel in 0..2 {
         let mut error = 0.0;
@@ -724,10 +742,10 @@ fn finite_movies_keep_audio_phase_gaps_crop_holds_and_exact_presentation_endpoin
         } else {
             case.frames as f64 * 1_001.0 / 30_000.0
         };
+        eprintln!("{}: {}", case.name, path.display());
         verify_movie_timing(&path, case.frames, duration, true);
         verify_pixels(&path, case.frames, crop_start, case.visual_duration);
         verify_audio(&path, duration, crop_start, case.cutoff, case.tone);
-        eprintln!("{}: {}", case.name, path.display());
     }
 }
 

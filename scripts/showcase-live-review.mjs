@@ -41,9 +41,11 @@ export function assertFirstPass(entry, observed, expectedBackend, naturalCapture
       assertNaturalFirstPassPublication(entry, naturalCapture.authoredDuration, naturalCapture.rendererReceipt?.time);
     }
     const elapsed = Number(naturalCapture.controls?.elapsedSeconds);
-    assert.ok(Number.isFinite(elapsed) && elapsed >= naturalCapture.holdStart &&
-      elapsed <= naturalCapture.authoredDuration + 8 * Number.EPSILON * Math.max(1, entry.duration),
-    "first-pass picture was not captured in the declared terminal hold");
+    assert.ok(Number.isFinite(elapsed), "first-pass controls have no finite elapsed time");
+    const observedTime = naturalCapture.executionState?.time;
+    assert.ok(Number.isFinite(observedTime) && observedTime >= naturalCapture.holdStart &&
+      observedTime <= naturalCapture.authoredDuration + 8 * Number.EPSILON * Math.max(1, entry.duration),
+    "first-pass Rust observation is outside the declared terminal hold");
   } else {
     const elapsed = Number(observed.controls?.elapsedSeconds);
     const roundoff = 8 * Number.EPSILON * Math.max(1, entry.duration);
@@ -156,14 +158,15 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
     context: diagnostics.context, runRequestId: diagnostics.runRequestId,
     interpreterGeneration: diagnostics.interpreterGeneration };
   const alreadyCaptured = window.__showcaseLiveReviewFirstPass;
+  // Controls cache an earlier observation; admit hold timing only from the fresh
+  // Rust state and matching presentation proof below.
   if (!alreadyCaptured && diagnostics?.context?.exampleId === exampleId &&
       Number.isSafeInteger(diagnostics.runRequestId) &&
       Number.isSafeInteger(diagnostics.interpreterGeneration) &&
       events.some((event) => event.stage === "attached" && event.publication) &&
       diagnostics.context.runGeneration === runGeneration &&
       controls?.busy === "false" &&
-      controls.playing === "true" && Number.isFinite(elapsed) &&
-      elapsed >= holdStart && elapsed <= duration + 8 * Number.EPSILON * Math.max(1, duration)) {
+      controls.playing === "true" && Number.isFinite(elapsed)) {
     const runIdentity = {
       interpreterGeneration: diagnostics.interpreterGeneration,
       runRequestId: diagnostics.runRequestId,
@@ -202,7 +205,6 @@ export async function observeNaturalFirstPassWrap({ duration, holdStart, example
       runRequestId: current.runRequestId, interpreterGeneration: current.interpreterGeneration };
     if (captureControls.busy !== "false" ||
         captureControls.playing !== "true" || !Number.isFinite(captureElapsed) ||
-        captureElapsed < holdStart || captureElapsed > duration + 8 * Number.EPSILON * Math.max(1, duration) ||
         current?.interpreterGeneration !== runIdentity.interpreterGeneration ||
         current?.runRequestId !== runIdentity.runRequestId ||
         JSON.stringify(current.context) !== JSON.stringify(runIdentity.context) ||
@@ -904,6 +906,49 @@ async function main() {
         clearTimeout(failureTimer);
         await page.screenshot({ path: path.join(output, `${entry.id}-failure.png`) }).catch(() => {});
         console.error(`FAIL live ${entry.id}: ${result.error}`);
+        const fields = (value, keys) => value == null ? null : Object.fromEntries(keys.flatMap(key => {
+          const item = value[key];
+          return item === null || ["string", "number", "boolean"].includes(typeof item)
+            ? [[key, typeof item === "string" ? item.slice(0, 512) : item]] : [];
+        }));
+        const held = value => value == null ? null : {
+          ...fields(value, ["time", "evaluatedTime", "observedTime", "validUntil"]),
+          publication: fields(value.publication, ["session", "sequence"]),
+        };
+        const state = value => value == null ? null : {
+          ...fields(value, ["preparedPlayback", "time", "preparedFrontier", "durationSeconds",
+            "loopCount", "playing", "buffering", "preparing", "completed", "advancing"]),
+          receipt: fields(value.presentationReceipt, ["session", "sequence", "time", "objectCount"]),
+          held: held(value.heldPresentation),
+        };
+        const observation = value => value == null ? null : {
+          ...fields(value, ["observedAtEpochMs", "runRequestId", "interpreterGeneration",
+            "disposition", "rustTimeInHold", "naturalTerminalReceipt"]),
+          context: fields(value.context, ["exampleId", "selectionGeneration", "runGeneration"]),
+          controls: fields(value.controls, ["busy", "playing", "elapsedSeconds", "durationSeconds", "controllable"]),
+          state: state(value.executionState), held: held(value.heldPresentation),
+        };
+        const capture = result.failureState?.captureDiagnostics;
+        const candidateReceipt = capture?.lastCandidate?.executionState?.presentationReceipt;
+        const readback = result.failureExecution?.readback;
+        console.error(`FAIL live diagnostics ${entry.id}: ${JSON.stringify({
+          id: entry.id, stage: result.stage, backend, browserVersion: report.browserVersion,
+          sourceSha256: result.sourceSha256, authoredDuration: entry.duration,
+          runtime: fields(report.servedBuildIdentity, ["buildId", "sourceRevision"]),
+          failureState: fields(result.failureState, ["patch", "status"]),
+          polling: fields(capture, ["polls", "maxPollGapMs", "lastPollAtEpochMs"]),
+          disposition: fields(capture?.disposition, ["disposition", "observedAtEpochMs"]),
+          lastControls: observation(capture?.lastControls),
+          lastCandidate: observation(capture?.lastCandidate),
+          failureExecution: {
+            ...fields(result.failureExecution, ["timedOut", "error"]),
+            state: state(result.failureExecution?.state),
+            readback: fields(readback, ["status", "error", "session", "sequence", "time", "objectCount",
+              "presentedAtMs", "performanceTimeOriginMs", "copyCalledAtEpochMs", "copyReturnedAtEpochMs", "resolvedAtEpochMs"]),
+            readbackSameSessionAsCandidate: candidateReceipt == null || readback?.session == null
+              ? null : readback.session === candidateReceipt.session,
+          },
+        })}`);
       } finally {
         try { await page.close(); }
         finally { releasePreload?.(); }

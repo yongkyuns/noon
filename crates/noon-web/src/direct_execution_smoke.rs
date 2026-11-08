@@ -1292,15 +1292,22 @@ pub async fn create_direct_scale_in_place_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Sequential method animations authored through the ordinary Rust scene API.
+#[wasm_bindgen(js_name = createDirectMovingAroundSmokeRenderer)]
+pub async fn create_direct_moving_around_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::moving_around::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Sequential updater removal/replacement through the shared native/WASM session.
 #[wasm_bindgen(js_name = createDirectLiveUpdaterLifecycleSmokeRenderer)]
 pub async fn create_direct_live_updater_lifecycle_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let (program, callbacks) =
-        noon::example_scenes::live_updater_lifecycle::program().map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
-        .await
+    let program = noon::example_scenes::live_updater_lifecycle::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 /// Shared dimension fitting uses the same typed native and Rust/WASM session.

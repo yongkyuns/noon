@@ -333,6 +333,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
     let mut maximum = 0;
     let mut maximum_float = 0.0f64;
     for phase in 0..13 {
+        eprintln!("native HDR phase {phase}: begin");
         match phase {
             3 => {
                 sigma = 2.0;
@@ -437,6 +438,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
         )
         .unwrap();
         let capture_pixels = capture.capture(&mut capture_session).unwrap().rgba.to_vec();
+        eprintln!("native HDR phase {phase}: capture readback complete");
         assert_eq!(
             session.frame().time,
             0.0,
@@ -477,6 +479,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
             &overlay,
             false,
         );
+        eprintln!("native HDR phase {phase}: presentation readback complete");
         if [1, 2, 3, 4, 5].contains(&phase) {
             assert_eq!(
                 uploads, 0,
@@ -597,6 +600,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
             "intensity":intensity,"overlay":highlighted,"profile":if phase==6{"compatibility"}else{"linear_hdr"},
             "expected":expected,"linear_expected":linear,"uploads":uploads,"pipeline_compiles":stats.pipeline_compiles,
             "scratch_bytes":stats.scratch_bytes}));
+        eprintln!("native HDR phase {phase}: assertions complete");
     }
     if let Some(root) = root {
         std::fs::write(root.join("report.json"),serde_json::to_vec_pretty(

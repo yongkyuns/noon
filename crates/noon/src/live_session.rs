@@ -1318,26 +1318,6 @@ impl<'a> LiveSession<'a> {
         MobjectFamily::from_node(Rc::clone(self.store), family).map_err(LiveSessionError::from)
     }
 
-    /// Construct a family while a continuation holds the only borrowed live
-    /// execution capability.
-    ///
-    /// This in-crate bridge exists because continuations receive a
-    /// [`LiveSession`] without a durable [`crate::Scene`] owner. Public
-    /// ordinary authoring uses [`crate::Scene::family`].
-    pub(crate) fn create_family(
-        &mut self,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<MobjectFamily, LiveSessionError> {
-        let (transaction, family) =
-            crate::family_authoring::family_creation_transaction(self.store, members, 0.0)
-                .map_err(LiveSessionError::from)?;
-        let result = self.apply(transaction)?;
-        let node = result
-            .resolve(family)
-            .expect("family creation transaction resolves its created token");
-        MobjectFamily::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
-    }
-
     /// Shape and publish one detached plain Text object through this live session.
     ///
     /// The object receives semantic identity and immutable text resources, but no
@@ -1592,41 +1572,14 @@ impl<'a> LiveSession<'a> {
         &self,
         mobject: &Mobject,
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        if mobject.has_members()? {
-            let anchor = crate::LayoutAnchor::from(mobject);
-            let (_, bounds) = crate::family_layout::effective_anchor_layout_measure(
-                self.store,
-                self.session,
-                &anchor,
-                false,
-            )?;
-            let (_, boundary) = crate::family_layout::effective_anchor_layout_measure(
-                self.store,
-                self.session,
-                &anchor,
-                true,
-            )?;
-            return Ok(EffectiveMobjectLayout {
-                center: crate::family_layout::bounds_critical_point(boundary, 0.0, 0.0),
-                width: bounds.map_or(0.0, Bounds2D64::width),
-                height: bounds.map_or(0.0, Bounds2D64::height),
-                publication: self.session.publication_context(),
-            });
-        }
-        let store = self.store.borrow();
-        let observed = self
-            .session
-            .effective_semantic_object(&store, mobject.node_id())?;
-        if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::EffectiveLayoutRenderOverride,
-            )));
-        }
-        let transform = observed.object.transform;
-        let publication = observed.publication;
-        drop(store);
-        self.layout_at_transform(mobject, transform, publication)
+        crate::family_layout::effective_mobject_layout(self.store, self.session, mobject).map_err(
+            |error| match error {
+                crate::AuthoringError::ExecutionPublication(error) => {
+                    LiveSessionError::Publication(error)
+                }
+                other => other.into(),
+            },
+        )
     }
 
     fn validate_manim_rotation_pivot(
@@ -1758,23 +1711,6 @@ impl<'a> LiveSession<'a> {
         Ok(crate::semantic_mobject::manim_color_from_effective(
             &effective.style,
         ))
-    }
-
-    fn layout_at_transform(
-        &self,
-        mobject: &Mobject,
-        transform: Transform2D,
-        publication: PublicationContext,
-    ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
-        let bounds = mobject.layout_bounds_at(transform)?;
-        let boundary = mobject.boundary_bounds_at(transform)?;
-        let center = crate::semantic_mobject::boundary_center(boundary, (0.0, 0.0));
-        Ok(EffectiveMobjectLayout {
-            center,
-            width: bounds.map_or(0.0, Bounds2D64::width),
-            height: bounds.map_or(0.0, Bounds2D64::height),
-            publication,
-        })
     }
 
     /// Activate one predeclared animation in this session.
@@ -2280,9 +2216,19 @@ impl<'a> LiveSession<'a> {
         play_options: AnimationOptions,
     ) -> Result<ExecutionSegment, LiveSessionError> {
         let request = self.execution_composition_request(request)?;
+        self.declare_and_activate_semantic_composition(&request, play_options)
+    }
+
+    /// Consume a prepared direct-Rust request through the same declaration and
+    /// publication transaction as the borrowed composition facade.
+    pub(crate) fn declare_and_activate_semantic_composition(
+        &mut self,
+        request: &crate::execution_session::SemanticCompositionRequest,
+        play_options: AnimationOptions,
+    ) -> Result<ExecutionSegment, LiveSessionError> {
         let mut store = self.store.borrow_mut();
         self.session
-            .declare_and_activate_composition(&mut store, self.root, &request, play_options)
+            .declare_and_activate_composition(&mut store, self.root, request, play_options)
             .map_err(Into::into)
     }
 
@@ -6020,23 +5966,23 @@ mod tests {
         let mut scene = Scene::new();
         let anchor = scene.circle(0.3).unwrap();
         scene.add(&anchor).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let wait = live.wait_segment(1.0).unwrap();
-        live.advance_segment_to(wait, 1.0).unwrap();
-        live.complete_segment(wait).unwrap();
-        let first = live
-            .create_manim_geometry(crate::ManimGeometryOptions::square(0.7).unwrap())
-            .unwrap();
-        let second = live
-            .create_manim_geometry(crate::ManimGeometryOptions::square(0.7).unwrap())
-            .unwrap();
-        let _family = live
-            .create_family(&[
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        {
+            let mut live = scene.owned_live();
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, 1.0).unwrap();
+            live.complete_segment(wait).unwrap();
+        }
+        let first = scene.square(0.7).unwrap();
+        let second = scene.square(0.7).unwrap();
+        let _family = scene
+            .family(&[
                 MobjectTarget::Object(&first),
                 MobjectTarget::Object(&second),
             ])
             .unwrap();
+        let mut live = scene.owned_live();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
             options: AnimationOptions::new()
@@ -7816,25 +7762,25 @@ mod recursive_composition_tests {
         let mut scene = Scene::new();
         let anchor = scene.circle(0.25).unwrap();
         scene.add(&anchor).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let mut live = scene.live(&mut session);
-
-        let wait = live.wait_segment(1.0).unwrap();
-        live.advance_segment_to(wait, wait.end_time()).unwrap();
-        let first = live
-            .create_manim_geometry(crate::ManimGeometryOptions::square(0.5).unwrap())
-            .unwrap();
-        let second = live
-            .create_manim_geometry(crate::ManimGeometryOptions::circle(0.25).unwrap())
-            .unwrap();
-        let family = live
-            .create_family(&[
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        scene.owned_execution_mut().take_frame_changes();
+        let wait = {
+            let mut live = scene.owned_live();
+            let wait = live.wait_segment(1.0).unwrap();
+            live.advance_segment_to(wait, wait.end_time()).unwrap();
+            wait
+        };
+        let first = scene.square(0.5).unwrap();
+        let second = scene.circle(0.25).unwrap();
+        let family = scene
+            .family(&[
                 MobjectTarget::Object(&first),
                 MobjectTarget::Object(&second),
             ])
             .unwrap();
 
+        let mut live = scene.owned_live();
         live.prepare_family_subset_display(&family).unwrap();
         assert_eq!(live.authored(&first).unwrap().style.fill_opacity, 0.0);
         assert_eq!(live.authored(&second).unwrap().style.fill_opacity, 0.0);

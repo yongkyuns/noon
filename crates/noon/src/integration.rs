@@ -43,6 +43,10 @@ pub use pixel_readback::{
     PixelChannelOrder, PixelReadbackError, PixelRowOrder, Rgba8ReadbackLayout,
 };
 
+pub use crate::scene_script::{
+    BlockingBoundary, BlockingContinuation, BlockingSceneHost, BlockingSceneSetup,
+};
+
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.
 pub const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 
