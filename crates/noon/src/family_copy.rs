@@ -210,6 +210,55 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
     references: &[MobjectTarget<'_>],
     root_membership: CopyRootMembership,
     mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
+    capture_family_style: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &mut noon_core::SemanticStyle,
+    ) -> Result<(), E>,
+    copy_effects: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        SemanticLocalNodeToken,
+        &mut SemanticMutationTransaction,
+    ) -> Result<(), E>,
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), E> {
+    source.validate()?;
+    let store = source.integration_store();
+    let mut transaction = SemanticMutationTransaction::new();
+    let references = references
+        .iter()
+        .map(|target| target.require_store(store))
+        .collect::<Result<Vec<_>, _>>()?;
+    let copied = stage_semantic_copy(
+        &store.borrow(),
+        source.node_id(),
+        &references,
+        root_membership,
+        &mut transaction,
+        |id, graph_row| capture(&Mobject::from_node(Rc::clone(store), id)?, graph_row),
+        capture_family_style,
+        copy_effects,
+    )?;
+    Ok((
+        transaction,
+        PendingSemanticCopy {
+            store: Rc::clone(store),
+            source_root: source.node_id(),
+            copied,
+        },
+    ))
+}
+
+/// Stage a root-local copy in the caller's transaction. Tokens never escape a
+/// failed admission; existing copy and owned animation targets share this walk.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stage_semantic_copy<E: From<AuthoringError>>(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    references: &[SemanticNodeId],
+    root_membership: CopyRootMembership,
+    transaction: &mut SemanticMutationTransaction,
+    mut capture: impl FnMut(SemanticNodeId, bool) -> Result<SemanticObjectState, E>,
     mut capture_family_style: impl FnMut(
         &SemanticStore,
         SemanticNodeId,
@@ -221,22 +270,17 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
         SemanticLocalNodeToken,
         &mut SemanticMutationTransaction,
     ) -> Result<(), E>,
-) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), E> {
-    source.validate()?;
-    let store = source.integration_store();
-    let mut transaction = SemanticMutationTransaction::new();
+) -> Result<BTreeMap<SemanticNodeId, SemanticLocalNodeToken>, E> {
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
     let mut graph_declarations = Vec::new();
     let mut table_layouts = Vec::new();
     let mut inset_views = Vec::new();
     let mut queue = Vec::with_capacity(references.len() + 1);
-    for target in references {
-        queue.push(target.require_store(store)?);
-    }
-    queue.push(source.node_id());
-    let omitted_root = (root_membership == CopyRootMembership::Omit).then_some(source.node_id());
-    let graph_dependency_rows = graph_dependency_copy_rows(&store.borrow(), &queue, omitted_root)?;
+    queue.extend_from_slice(references);
+    queue.push(source);
+    let omitted_root = (root_membership == CopyRootMembership::Omit).then_some(source);
+    let graph_dependency_rows = graph_dependency_copy_rows(store, &queue, omitted_root)?;
     while let Some(id) = queue.pop() {
         if copied.contains_key(&id) {
             continue;
@@ -255,7 +299,6 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             graph_declaration,
             updating_suspended,
         ) = {
-            let store = store.borrow();
             let node = store.node(id).ok_or_else(|| {
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
@@ -310,7 +353,6 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
         }
         if is_family {
             if let Some(layout) = store
-                .borrow()
                 .semantic_table_layout(id)
                 .map_err(AuthoringError::from)?
             {
@@ -322,19 +364,13 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
         edges.push((id, members));
         let has_content = !is_family
             || store
-                .borrow()
                 .node(id)
                 .is_some_and(|node| node.semantic_object_state().is_some());
         if !has_content {
-            capture_family_style(
-                &store.borrow(),
-                id,
-                family_style.as_mut().expect("family style"),
-            )?;
+            capture_family_style(store, id, family_style.as_mut().expect("family style"))?;
         }
         let state = if has_content {
-            let mobject = Mobject::from_node(Rc::clone(store), id)?;
-            let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
+            let mut state = capture(id, graph_dependency_rows.contains(&id))?;
             if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
                 inset_views.push((id, view));
                 state.set_role(noon_core::SemanticObjectRole::Ordinary);
@@ -357,7 +393,7 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
         if updating_suspended {
             transaction.set_updating_suspended(pending, true);
         }
-        copy_effects(&store.borrow(), id, pending, &mut transaction)?;
+        copy_effects(store, id, pending, transaction)?;
         if let Some(z) = family_z {
             transaction.set_z_index(pending, z);
         }
@@ -438,14 +474,7 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             }),
         );
     }
-    Ok((
-        transaction,
-        PendingSemanticCopy {
-            store: Rc::clone(store),
-            source_root: source.node_id(),
-            copied,
-        },
-    ))
+    Ok(copied)
 }
 
 fn graph_dependency_copy_rows<E: From<AuthoringError>>(

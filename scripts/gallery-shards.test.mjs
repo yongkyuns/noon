@@ -52,7 +52,7 @@ test("every current gallery entry and no-JSPI control is covered exactly once pe
   }
 });
 
-test("strict showcase coverage adds all 33 catalog entries to the existing shard pool exactly once", () => {
+test("strict showcase coverage adds all 34 catalog entries to the existing shard pool exactly once", () => {
   const strictEntries = galleryPoolForProfileGate(entries, manifests[3].entries, "strict");
   const showcaseIds = new Set(SHOWCASE_PROFILE_EXPECTATIONS.map(row => row.id));
   for (const browser of ["chromium", "firefox", "webkit"]) {
@@ -62,7 +62,7 @@ test("strict showcase coverage adds all 33 catalog entries to the existing shard
       .map(entry => entry.id).sort();
     assert.deepEqual(actual, [...showcaseIds].sort(), browser + ": strict showcase coverage omitted or duplicated an entry");
   }
-  assert.equal(strictEntries.filter(entry => showcaseIds.has(entry.id)).length, 33);
+  assert.equal(strictEntries.filter(entry => showcaseIds.has(entry.id)).length, 34);
 });
 
 test("profile-gate pool preserves disabled runs and allows an explicitly focused baseline", () => {

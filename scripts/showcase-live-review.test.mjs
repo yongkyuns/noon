@@ -238,7 +238,11 @@ function preparedAudioPage({ run, runDelayMs = 0, priorRunInFlight = false,
     get generationDiagnostics() { return { runGeneration: generation }; },
     get runPhaseMetrics() { return runPhaseMetrics; },
     get runInFlight() { return current.runInFlight ?? priorRunInFlight; },
-    async executionMetrics() { return observationReport("metrics"); },
+    async executionMetrics() {
+      const report = observationReport("metrics");
+      report.metrics.showcaseRendererReadback = current.readbacks?.shift();
+      return report;
+    },
     async executionState() {
       const report = observationReport("state");
       const playback = report.engineMetrics?.preparedPlayback;
@@ -259,7 +263,8 @@ function preparedAudioPage({ run, runDelayMs = 0, priorRunInFlight = false,
           session: current.session ?? 7, sequence: 4 } }],
       };
       return current.looped ? { ...base, events: [...base.events,
-        { stage: "disposition", disposition: "looped", loopCount: 1 }] } : base;
+        { stage: "disposition", disposition: "looped", loopCount: 1,
+          time: current.publishedTime, publication: current.wrapPublication }] } : base;
     },
   };
   function observationReport(owner) {
@@ -435,6 +440,26 @@ test("looping first pass captures one unseeked terminal hold before wrap with it
     session: 7, sequence: 5, time: 7.5, presentedAtMs: 100, objectCount: 55,
   });
   assert.match(result.firstPassCapture.pngDataUrl, /^data:image\/png;base64,/);
+});
+
+test("a late observer waits for the renderer's first-traversal copy to finish encoding", async () => {
+  const lesson = { id: "showcase-example", duration: 8, still_intervals: [[7, 8]] };
+  const readback = { status: "ready", session: 7, sequence: 5, time: 7.5, objectCount: 55,
+    presentedAtMs: 100, performanceTimeOriginMs: 1, copyCalledAtEpochMs: 101,
+    copyReturnedAtEpochMs: 102, resolvedAtEpochMs: 120, pngDataUrl: "data:image/png;base64,aGVsbG8=" };
+  const { page } = preparedAudioPage({
+    run: { stale: false, result: { hasAudio: false, preparedPlayback: true,
+      time: 0, playing: true, durationSeconds: 8 } },
+    observations: [{ elapsed: 0.1, publishedTime: 0.1, looped: true,
+      wrapPublication: { session: 7, sequence: 6, time: 0.1 },
+      readbacks: [{ ...readback, status: "pending", pngDataUrl: null }, readback] }],
+  });
+  const result = await runOrdinaryGallery(page, 200, lesson, { rendererReadback: {} });
+  assert.equal(result.firstPassCapture.firstWrap.loopCount, 1);
+  assert.equal(result.firstPassCapture.rendererReceipt.sequence, 5);
+  assert.equal(result.firstPassCapture.pngDataUrl, readback.pngDataUrl);
+  assert.equal(result.firstPassCapture.executionState, undefined, "no in-hold Rust observation was invented");
+  assertFirstPass(lesson, observed(), "WebGPU", result.firstPassCapture);
 });
 
 test("terminal observation starts at Run acceptance and captures before delayed duration metadata", async () => {

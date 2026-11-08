@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
-import { decorateAuthoringRenderController, assertRendererReadback,
+import { decorateAuthoringRenderController, assertRendererReadback, assertReadbackBeforeFirstWrap,
   installAuthoringRendererReadback } from "./showcase-renderer-readback.mjs";
 
 const source = await readFile(new URL("../web/authoring-render-controller.js", import.meta.url), "utf8");
@@ -62,6 +62,10 @@ test("ack posts before readback, pending encoding allows later frames, and first
   context.tryPresent({ displayedPublication: { session: 4, sequence: 11 }, displayedTime: 7, canvas });
   assert.equal(JSON.stringify(context.events()), JSON.stringify([["ack", 11], ["copy", 11]]));
   assert.equal(conversions, 1);
+  const pending = context.metrics({ requestId: 0 }).showcaseRendererReadback;
+  assert.equal(pending.status, "pending");
+  assert.equal(pending.sequence, 11);
+  assert.equal(pending.pngDataUrl, null);
   // A subsequent render proceeds while the first PNG encoding remains unresolved.
   context.tryPresent({ displayedPublication: { session: 4, sequence: 12 }, displayedTime: 7.1, canvas });
   assert.equal(JSON.stringify(context.events()), JSON.stringify([["ack", 11], ["copy", 11], ["ack", 12]]));
@@ -125,6 +129,17 @@ test("renderer readback is joined to the attached session, first-loop proof and 
     { ...valid, time: 6.7 }, { ...valid, time: 7.5 }, { ...valid, objectCount: 599 },
     { ...valid, pngDataUrl: null }, { ...valid, status: "pending" }, { ...valid, resolvedAtEpochMs: 100 },
   ]) assert.throws(() => assertRendererReadback(candidate, args));
+});
+
+test("late readback proof requires an earlier publication in the first traversal", () => {
+  const wrap = { disposition: "looped", loopCount: 1, time: 0.2, publication: { ...proof, time: 0.2 } };
+  assertReadbackBeforeFirstWrap(valid, wrap, args);
+  for (const invalid of [
+    { ...wrap, loopCount: 2 }, { ...wrap, time: 7 },
+    { ...wrap, publication: { ...wrap.publication, time: 7 } },
+    { ...wrap, publication: { ...wrap.publication, sequence: valid.sequence } },
+    { ...wrap, publication: { ...wrap.publication, session: 5 } },
+  ]) assert.throws(() => assertReadbackBeforeFirstWrap(valid, invalid, args));
 });
 
 test("held compositor screenshot is bounded by the same before/after Rust publication", async () => {

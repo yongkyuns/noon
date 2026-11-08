@@ -14,7 +14,7 @@ use super::family_transform::{
 
 /// One activation-time family Transform occurrence before execution publication.
 ///
-/// The source/target fields are real authored leaf identities. `source_padding` and
+/// The source is an authored leaf identity; the target may be transaction-local. `source_padding` and
 /// `target_padding` describe a renderer-derived occurrence only; they do not allocate
 /// semantic or execution identity. `source_execution_object_id` is the existing source
 /// leaf's stable execution row and serves only as the effective-state capture/ordering
@@ -23,7 +23,7 @@ use super::family_transform::{
 pub struct PreparedFamilyTransformOccurrence {
     pub animation: SemanticTransactionNodeRef,
     pub source: SemanticNodeId,
-    pub target_state: SemanticNodeId,
+    pub target_state: SemanticTransactionNodeRef,
     pub source_execution_object_id: ObjectId,
     pub source_padding: bool,
     pub target_padding: bool,
@@ -63,6 +63,10 @@ pub enum PreparedFamilyTransformActivationError {
         animation: SemanticTransactionNodeRef,
         endpoint: SemanticTransactionNodeRef,
     },
+    LocalTarget {
+        animation: SemanticTransactionNodeRef,
+        reason: String,
+    },
     UnsupportedNestedTopology {
         animation: SemanticTransactionNodeRef,
         endpoint: SemanticNodeId,
@@ -101,6 +105,7 @@ impl std::fmt::Display for PreparedFamilyTransformActivationError {
                 formatter,
                 "prepared family Transform {animation:?} retains pending family endpoint {endpoint:?}"
             ),
+            Self::LocalTarget { animation, reason } => write!(formatter, "prepared family Transform {animation:?} has invalid local target: {reason}"),
             Self::UnsupportedNestedTopology {
                 animation,
                 endpoint,
@@ -161,7 +166,8 @@ impl std::error::Error for PreparedFamilyTransformActivationError {
 /// each distinct source leaf's coherent effective value exactly once.
 ///
 /// Family endpoints used by the current live-session API are existing semantic
-/// families. Pending endpoints fail closed here rather than receiving guessed identity.
+/// source families. Transaction-local targets retain their tokens through lowering;
+/// their first supported profile has exactly the source's flat topology.
 /// The persistent unequal-family completion contract is currently flat-only, so nested
 /// endpoints are rejected at this pre-publication activation boundary instead of being
 /// accepted for interpolation and panicking later during semantic completion.
@@ -188,8 +194,59 @@ where
             });
         }
         let source_family = existing_endpoint(family.animation, family.source)?;
-        let target_family = existing_endpoint(family.animation, family.target_state)?;
         require_flat_family_endpoint(prepared.store(), family.animation, source_family)?;
+        // Owned targets have the source's fixed topology. Reuse canonical source
+        // correspondence and substitute only the candidate-local target endpoints.
+        // No identity is guessed or committed before the complete graph validates.
+        let local_targets = if family.target_state.existing().is_none() {
+            let error = |reason: String| PreparedFamilyTransformActivationError::LocalTarget {
+                animation: family.animation,
+                reason,
+            };
+            prepared
+                .family_style(family.target_state)
+                .map_err(|e| error(e.to_string()))?;
+            if prepared.object_state(family.target_state).is_ok() {
+                return Err(error("content-owning roots are unsupported".into()));
+            }
+            let sources = prepared
+                .store()
+                .semantic_family_members_checked(source_family)
+                .expect("validated flat source");
+            let targets = prepared
+                .family_members(family.target_state)
+                .map_err(|e| error(e.to_string()))?;
+            if sources.len() != targets.len() {
+                return Err(error("local targets require fixed family topology".into()));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for &target in &targets {
+                prepared
+                    .object_state(target)
+                    .map_err(|e| error(e.to_string()))?;
+                if prepared.family_style(target).is_ok()
+                    || !prepared
+                        .family_members(target)
+                        .map_err(|e| error(e.to_string()))?
+                        .is_empty()
+                    || !seen.insert(target)
+                {
+                    return Err(error(
+                        "local targets require unique flat object members".into(),
+                    ));
+                }
+            }
+            Some(
+                sources
+                    .iter()
+                    .copied()
+                    .zip(targets)
+                    .collect::<HashMap<_, _>>(),
+            )
+        } else {
+            None
+        };
+        let target_family = family.target_state.existing().unwrap_or(source_family);
         require_flat_family_endpoint(prepared.store(), family.animation, target_family)?;
         let correspondence =
             derive_family_transform_correspondence(prepared.store(), source_family, target_family)
@@ -252,7 +309,10 @@ where
             occurrences.push(PreparedFamilyTransformOccurrence {
                 animation: family.animation,
                 source,
-                target_state: correspondence_member.target(),
+                target_state: local_targets.as_ref().map_or_else(
+                    || correspondence_member.target().into(),
+                    |targets| targets[&source],
+                ),
                 source_execution_object_id: execution_object_id,
                 source_padding: correspondence_member.source_is_padding(),
                 target_padding: correspondence_member.target_is_padding(),
