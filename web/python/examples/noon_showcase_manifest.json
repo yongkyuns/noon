@@ -18,7 +18,7 @@
       "id": "showcase-group-animation", "title": "Move the whole diagram",
       "lesson": "Keep step labels and connectors together while moving, scaling, rotating and recoloring a diagram.",
       "primary_feature": "group-animation", "category": "Visual design",
-      "path": "python/examples/ordinary_group_animation.py", "features": ["VGroup", "animate", "shared pivot", "set_color"],
+      "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "animate", "shared pivot", "set_color"],
       "duration": 6.5, "thumbnail_time": 6.5,
       "thumbnail": "thumbnails/showcase/showcase-group-animation.png",
       "thumbnail_alt": "Two orange outlined steps labeled 1 and 2, joined by an arrow, after their shared animation",

@@ -185,7 +185,7 @@ fn main() -> Result<(), String> {
         &[0.0, 0.25, 0.5, 0.75, 1.0],
     )?;
     emit(
-        "ordinary_group_animation",
+        "showcase_group_animation",
         example_scenes::group_animation::program().map_err(|error| error.to_string())?,
         &[
             0.0, 0.75, 1.375, 2.0, 2.5, 3.125, 3.75, 4.25, 4.875, 5.5, 6.5,

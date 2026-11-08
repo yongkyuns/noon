@@ -1,5 +1,5 @@
 //! Two annotated steps move as one diagram through ordinary group authoring.
-//! Paired with `ordinary_group_animation.py`, also available in the demo gallery.
+//! Paired with `showcase_group_animation.py`, also available in the demo gallery.
 use crate::{AnimationOptions, Color, LiveProgram, Scene, SceneScript, ScriptError, Vec2};
 
 pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {

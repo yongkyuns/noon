@@ -149,7 +149,7 @@ with fixed topology and shared scale/rotation pivots. It uses the existing famil
 transform interpolation, member lag, and completion rules. Nested/content-owning
 groups, effects, table/graph metadata, and mixing a group target with other animation
 leaves fail explicitly. The paired [Rust](crates/noon/src/example_scenes/group_animation.rs)
-and [Python](web/python/examples/ordinary_group_animation.py) diagram tutorial is
+and [Python](web/python/examples/showcase_group_animation.py) diagram tutorial is
 available as **Move the whole diagram** in the demo gallery; run its native version
 with `cargo run -p noon-native --example ordinary_group_animation`.
 
