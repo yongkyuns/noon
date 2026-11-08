@@ -619,7 +619,8 @@ jobs:
       - name: Test Python gallery background audio
         env:
           NOON_PYTHON_AUDIO_ARTIFACTS: ${{ runner.temp }}/python-background-audio
-        run: timeout --signal=TERM 240s node scripts/python-background-audio-smoke.mjs
+        # The two full Fourier sources each have a 360s completion deadline.
+        run: timeout --signal=TERM 900s node scripts/python-background-audio-smoke.mjs
       - name: Retain Python background audio evidence
         if: always()
         uses: actions/upload-artifact@v7
