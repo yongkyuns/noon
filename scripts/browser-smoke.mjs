@@ -273,7 +273,7 @@ function pixelDistance(left, right) {
 
 function sampleTimes(latestEnd) {
   assert.ok(Number.isFinite(latestEnd) && latestEnd > 0, "scene timeline must have positive duration");
-  assert.ok(latestEnd < 4.0, "scene timeline must fit the four-second playground loop");
+  // Direct fixtures use their authored duration, independently of the playground loop.
   return [0.35, 0.60, 0.85, 1.0].map((fraction) => latestEnd * fraction);
 }
 
