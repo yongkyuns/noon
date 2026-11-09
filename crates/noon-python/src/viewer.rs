@@ -143,6 +143,101 @@ impl PreparedScene {
         Ok(())
     }
 
+    /// Consume this prepared view into a native H.264 MP4. Source runs only once.
+    /// Rational frame rates use fps/fps_denominator; stop bounds are exclusive.
+    /// Failures and cancellation preserve any previous destination. Reprepare
+    /// the source for another export after this ownership transfer.
+    #[cfg(feature = "capture")]
+    #[pyo3(signature = (path, *, fps=30, fps_denominator=1, width=960, height=540,
+        start_frame=0, frames=None, end_time=None, hold=0.0, max_frames=108_000,
+        overwrite=false, ffmpeg="ffmpeg", crf=18, cancellation=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn export_mp4(
+        &mut self,
+        py: Python<'_>,
+        path: std::path::PathBuf,
+        fps: u32,
+        fps_denominator: u32,
+        width: u32,
+        height: u32,
+        start_frame: u64,
+        frames: Option<u64>,
+        end_time: Option<f64>,
+        hold: f64,
+        max_frames: u64,
+        overwrite: bool,
+        ffmpeg: &str,
+        crf: u8,
+        cancellation: Option<&crate::export::ExportCancellation>,
+    ) -> PyResult<crate::export::ExportSummary> {
+        use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
+        use pyo3::exceptions::PyValueError;
+
+        if frames.is_some() && end_time.is_some() {
+            return Err(PyValueError::new_err(
+                "frames and end_time are mutually exclusive",
+            ));
+        }
+        let frame_rate = FrameRate::new(fps, fps_denominator)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let frame_options = ExportFrameOptions {
+            frame_rate,
+            start_frame,
+            stop: match (frames, end_time) {
+                (Some(count), _) => ExportStop::FrameCount(count),
+                (_, Some(end)) => ExportStop::EndTime(end),
+                _ => ExportStop::SourceEnd,
+            },
+            max_frames,
+            max_transitions_per_sample: 4_096,
+            final_hold_seconds: hold,
+        };
+        let mut capture = noon_export::CaptureOptions::new(width, height);
+        if let Some(cancellation) = cancellation {
+            capture.cancellation = cancellation.token.clone();
+        }
+        let token = capture.cancellation.clone();
+        let mut output = noon_export::output::OutputOptions::mp4(path);
+        output.overwrite = overwrite;
+        output.ffmpeg = ffmpeg.into();
+        output.crf = crf;
+
+        let mut execution = self
+            .execution
+            .take()
+            .ok_or_else(|| engine_error("native view is closed"))?;
+        self.capture = None;
+        self.dimensions = None;
+        let mut signal_error = None;
+        let result = noon_export::output::export_scene_file_with_interrupt(
+            &mut execution,
+            frame_options,
+            capture,
+            output,
+            || {
+                // Only the GIL is released; the non-Send scene remains on this
+                // owner's stack. Other Python threads may set the atomic token.
+                py.detach(std::thread::yield_now);
+                if let Err(error) = py.check_signals() {
+                    token.cancel();
+                    signal_error = Some(error);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "Python export interrupted",
+                    ));
+                }
+                Ok(())
+            },
+        );
+        let retired = execution.retire_execution_source();
+        if let Some(error) = signal_error {
+            return Err(error);
+        }
+        let summary = result.map_err(|error| engine_error(error.to_string()))?;
+        retired.map_err(|error| engine_error(error.to_string()))?;
+        Ok(summary.into())
+    }
+
     fn close(&mut self) -> PyResult<()> {
         if let Some(execution) = self.execution.as_mut() {
             execution

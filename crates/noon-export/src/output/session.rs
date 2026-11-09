@@ -1,4 +1,4 @@
-//! Native file output for one complete immutable execution plan.
+//! Native file output for one finite immutable plan or sealed source history.
 
 use std::{error::Error, fmt, io};
 
@@ -6,7 +6,7 @@ use noon::integration::{
     ExportEndReason, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,
     ExportFramePolicyStatus, SampleObservation,
 };
-use noon::{EvaluationError, ExecutionSession};
+use noon::{EvaluationError, ExecutionSession, ExecutionSessionInputError, SceneExecution};
 
 use super::{audio::Soundtrack, check_publication_cancellation, FileExportSummary, FileSink};
 use super::{OutputFormat, OutputOptions};
@@ -46,6 +46,128 @@ pub fn export_session_file(
     let source_end = session
         .finite_timeline_end_time()
         .ok_or(SessionFileExportError::UnsupportedSession)?;
+    export_source(
+        FiniteSource::Timeline(session),
+        source_end,
+        frame_options,
+        capture_options,
+        output,
+        &mut || Ok(()),
+    )
+}
+
+/// Export the existing native viewer owner without executing its source again.
+///
+/// Complete immutable plans use the same path as [`export_session_file`]. A
+/// retained source must already be sealed and satisfy the engine's viewer
+/// admission (no unrecorded input or callbacks). Its canonical history supplies
+/// the endpoint and every sample through the existing typed seek operation.
+/// Audio in retained history remains unsupported and is never silently omitted.
+/// The shared frame policy consumes the zero-origin prefix before a crop.
+///
+/// A fresh renderer is used for each export. On failure, discard the owner;
+/// neither consumed renderer publications nor partial files are retried.
+pub fn export_scene_file(
+    scene: &mut SceneExecution,
+    frame_options: ExportFrameOptions,
+    capture_options: CaptureOptions,
+    output: OutputOptions,
+) -> Result<FileExportSummary, SessionFileExportError> {
+    export_scene_file_with_interrupt(scene, frame_options, capture_options, output, || Ok(()))
+}
+
+/// The scene exporter with a cooperative host interrupt check.
+///
+/// The check runs on the owner thread between samples and immediately before
+/// destination publication, including after encoder finalization. Returning an
+/// error abandons the run and preserves an existing destination. This hook must
+/// not mutate the scene or supply time; it is for language-host signals. GPU
+/// calls and encoder waits retain their configured finite deadlines.
+pub fn export_scene_file_with_interrupt(
+    scene: &mut SceneExecution,
+    frame_options: ExportFrameOptions,
+    capture_options: CaptureOptions,
+    output: OutputOptions,
+    mut interrupt: impl FnMut() -> io::Result<()>,
+) -> Result<FileExportSummary, SessionFileExportError> {
+    interrupt().map_err(SessionFileExportError::Output)?;
+    check_publication_cancellation(&capture_options.cancellation)
+        .map_err(SessionFileExportError::Output)?;
+    let source_end = if scene.session().replay_scope_active() {
+        if !scene.session().replay_is_sealed() {
+            return Err(SessionFileExportError::UnsupportedHistory);
+        }
+        scene
+            .session_mut()
+            .seal_replay_for_viewer()
+            .map_err(|_| SessionFileExportError::UnsupportedHistory)?;
+        if scene.session().has_audio() {
+            return Err(SessionFileExportError::HistoryAudio);
+        }
+        scene
+            .session()
+            .replay_end_time()
+            .ok_or(SessionFileExportError::UnsupportedHistory)?
+    } else {
+        scene
+            .session()
+            .finite_playback_end_time()
+            .ok_or(SessionFileExportError::UnsupportedSession)?
+    };
+    export_source(
+        FiniteSource::Scene(scene),
+        source_end,
+        frame_options,
+        capture_options,
+        output,
+        &mut interrupt,
+    )
+}
+
+/// Only host ownership differs. Sampling, rendering, encoding and publication
+/// remain a single implementation for native Rust and optional language hosts.
+enum FiniteSource<'a> {
+    Timeline(&'a mut ExecutionSession),
+    Scene(&'a mut SceneExecution),
+}
+
+impl FiniteSource<'_> {
+    fn session(&self) -> &ExecutionSession {
+        match self {
+            Self::Timeline(session) => session,
+            Self::Scene(scene) => scene.session(),
+        }
+    }
+
+    fn session_mut(&mut self) -> &mut ExecutionSession {
+        match self {
+            Self::Timeline(session) => session,
+            Self::Scene(scene) => scene.session_mut(),
+        }
+    }
+
+    fn sample(&mut self, time: f64) -> Result<(), SessionFileExportError> {
+        match self {
+            Self::Timeline(session) => session
+                .advance_to(time)
+                .map(|_| ())
+                .map_err(SessionFileExportError::Evaluation),
+            Self::Scene(scene) => scene
+                .seek(time)
+                .map(|_| ())
+                .map_err(SessionFileExportError::Playback),
+        }
+    }
+}
+
+fn export_source(
+    mut source: FiniteSource<'_>,
+    source_end: f64,
+    frame_options: ExportFrameOptions,
+    capture_options: CaptureOptions,
+    output: OutputOptions,
+    interrupt: &mut impl FnMut() -> io::Result<()>,
+) -> Result<FileExportSummary, SessionFileExportError> {
     capture_options
         .layout()
         .map_err(|error| SessionFileExportError::Output(io::Error::other(error)))?;
@@ -67,8 +189,8 @@ pub fn export_session_file(
     let planned = policy
         .finite_summary(source_end)
         .map_err(SessionFileExportError::Sampling)?;
-    let soundtrack = if output.format == OutputFormat::Mp4 && session.has_audio() {
-        Some(Soundtrack::new(session, planned).map_err(SessionFileExportError::Output)?)
+    let soundtrack = if output.format == OutputFormat::Mp4 && source.session().has_audio() {
+        Some(Soundtrack::new(source.session(), planned).map_err(SessionFileExportError::Output)?)
     } else {
         None
     };
@@ -82,26 +204,29 @@ pub fn export_session_file(
         soundtrack,
     )
     .map_err(SessionFileExportError::Output)?;
-    let mut capture =
-        SessionCapture::new(session, capture_options).map_err(SessionFileExportError::Capture)?;
+    interrupt().map_err(SessionFileExportError::Output)?;
+    if source.session().frame().time != 0.0 {
+        source.sample(0.0)?;
+    }
+    let mut capture = SessionCapture::new(source.session(), capture_options)
+        .map_err(SessionFileExportError::Capture)?;
     let sampling = loop {
+        interrupt().map_err(SessionFileExportError::Output)?;
         check_publication_cancellation(&cancellation).map_err(SessionFileExportError::Output)?;
         match policy.status().map_err(SessionFileExportError::Sampling)? {
             ExportFramePolicyStatus::NeedsSample(requested_time) => {
                 let time = requested_time.min(source_end);
                 // A terminal hold reuses the already settled publication. It
                 // cannot create another runtime epoch or extend authored audio.
-                if session.frame().time != time {
-                    session
-                        .advance_to(time)
-                        .map_err(SessionFileExportError::Evaluation)?;
+                if source.session().frame().time != time {
+                    source.sample(time)?;
                 }
                 policy
                     .observe(
                         SampleObservation {
                             requested_time,
-                            published_time: session.frame().time,
-                            publication: session.publication_context(),
+                            published_time: source.session().frame().time,
+                            publication: source.session().publication_context(),
                         },
                         requested_time >= source_end,
                     )
@@ -110,7 +235,7 @@ pub fn export_session_file(
             ExportFramePolicyStatus::SampleReady(sample) => {
                 if let Some(frame) = sample.frame {
                     let captured = capture
-                        .capture(session)
+                        .capture(source.session_mut())
                         .map_err(SessionFileExportError::Capture)?;
                     check_receipt(captured.receipt, sample.observation)?;
                     sink.write(CapturedFrame {
@@ -125,7 +250,7 @@ pub fn export_session_file(
                     .map_err(SessionFileExportError::Output)?;
                 } else {
                     let receipt = capture
-                        .render(session)
+                        .render(source.session_mut())
                         .map_err(SessionFileExportError::Capture)?;
                     check_receipt(receipt, sample.observation)?;
                 }
@@ -150,7 +275,7 @@ pub fn export_session_file(
         None
     };
     let (path, format, encoder_diagnostics) = sink
-        .finish_with_source_end(sampling.frames, source_duration)
+        .finish_with_source_end_and_interrupt(sampling.frames, source_duration, interrupt)
         .map_err(SessionFileExportError::Output)?;
     Ok(FileExportSummary {
         capture: capture.summary(sampling),
@@ -179,8 +304,11 @@ fn check_receipt(
 pub enum SessionFileExportError {
     SessionNotAtStart,
     UnsupportedSession,
+    UnsupportedHistory,
+    HistoryAudio,
     Sampling(ExportFramePolicyError),
     Evaluation(EvaluationError),
+    Playback(ExecutionSessionInputError),
     Capture(SessionCaptureError),
     Output(io::Error),
 }
@@ -192,8 +320,15 @@ impl fmt::Display for SessionFileExportError {
             Self::UnsupportedSession => formatter.write_str(
                 "finite export requires a complete immutable timeline without callbacks, pending segments or source history (#2263)",
             ),
+            Self::UnsupportedHistory => formatter.write_str(
+                "source export requires completed sealed deterministic history without unrecorded callbacks or input",
+            ),
+            Self::HistoryAudio => formatter.write_str(
+                "audio export from retained source history is not supported; use a finite immutable session (#2263)",
+            ),
             Self::Sampling(error) => error.fmt(formatter),
             Self::Evaluation(error) => error.fmt(formatter),
+            Self::Playback(error) => error.fmt(formatter),
             Self::Capture(error) => error.fmt(formatter),
             Self::Output(error) => write!(formatter, "file export: {error}"),
         }
@@ -205,9 +340,13 @@ impl Error for SessionFileExportError {
         match self {
             Self::Sampling(error) => Some(error),
             Self::Evaluation(error) => Some(error),
+            Self::Playback(error) => Some(error),
             Self::Capture(error) => Some(error),
             Self::Output(error) => Some(error),
-            Self::SessionNotAtStart | Self::UnsupportedSession => None,
+            Self::SessionNotAtStart
+            | Self::UnsupportedSession
+            | Self::UnsupportedHistory
+            | Self::HistoryAudio => None,
         }
     }
 }

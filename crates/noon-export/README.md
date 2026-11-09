@@ -2,8 +2,8 @@
 
 `noon-export` is native GPU/output integration over the shared Rust engine and
 retained WGPU renderer. It has no dependency on the window/event-loop host,
-Python, JavaScript, or a browser. Native Python integration remains a separate
-language binding task, not another exporter.
+Python, JavaScript, or a browser. The optional native Python binding calls this
+same exporter for finite prepared scenes.
 
 ## Video and PNG output
 
@@ -30,6 +30,23 @@ MP4 uses H.264, YUV420p, `veryfast`, CRF 18 by default and no B-frames. CRF is
 configurable from 0 through 51. Even dimensions are required; odd dimensions are
 rejected instead of being resized. PNG preserves every captured RGBA byte and
 supports odd dimensions. The file adapters currently accept opaque input only.
+
+## Sealed source history
+
+`output::export_scene_file` accepts an existing `SceneExecution` with a finite
+immutable plan or completed, sealed deterministic history. It seeks and samples
+that owner through the same frame policy, capture and output sink. Source code
+is not executed again, and inspecting a later frame before export does not change
+the zero-origin sampling/crop contract. Unsealed history, unrecorded callbacks
+or input, and retained-history audio are rejected explicitly.
+
+`output::export_scene_file_with_interrupt` additionally checks a cooperative host
+interrupt between samples and immediately before output publication, including
+after encoder finalization. Native Python uses this entry point for
+`PreparedScene.export_mp4`; it transfers and retires the prepared owner on either
+success or runtime failure. Rendering and encoder waits keep their configured
+finite deadlines. An abandoned export cleans its private staging files and
+preserves an existing destination.
 
 ## Finite scenes with a soundtrack
 
@@ -404,3 +421,9 @@ This typed API remains a prerequisite for in-process native language-binding
 integration. The finite Pyodide path described above captures through the normal
 browser renderer and imports finished media into the native sink; it does not
 use `SessionCapture` or replace a native CPython binding.
+
+## Release candidates
+
+Registry names are still being selected in [#2433](https://github.com/yongkyuns/noon/issues/2433).
+The current 0.1.0 artifacts are local candidates; the existing crates.io/PyPI
+`noon` projects are unrelated. Rust builds require version 1.98.1 or newer.

@@ -15,7 +15,10 @@ pub use prepared::{
     PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate, PreparedPublication,
     PreparedSample, PreparedStop,
 };
-pub use session::{export_session_file, SessionFileExportError};
+pub use session::{
+    export_scene_file, export_scene_file_with_interrupt, export_session_file,
+    SessionFileExportError,
+};
 
 use std::error::Error;
 use std::fmt;
@@ -427,9 +430,18 @@ impl FileSink {
     }
 
     fn finish_with_source_end(
+        self,
+        expected_frames: u64,
+        source_end: Option<f64>,
+    ) -> io::Result<(PathBuf, OutputFormat, String)> {
+        self.finish_with_source_end_and_interrupt(expected_frames, source_end, &mut || Ok(()))
+    }
+
+    fn finish_with_source_end_and_interrupt(
         mut self,
         expected_frames: u64,
         source_end: Option<f64>,
+        interrupt: &mut impl FnMut() -> io::Result<()>,
     ) -> io::Result<(PathBuf, OutputFormat, String)> {
         if self.failed || self.frames == 0 || self.frames != expected_frames {
             return Err(io::Error::other(
@@ -441,6 +453,7 @@ impl FileSink {
             .take()
             .ok_or_else(|| io::Error::other("encoder is inactive"))?
             .finish()?;
+        interrupt()?;
         check_publication_cancellation(&self.cancellation)?;
         if self.options.format == OutputFormat::Mp4
             && (self.audio_frames.is_some() || source_end.is_some())
@@ -474,6 +487,7 @@ impl FileSink {
             .take()
             .ok_or_else(|| io::Error::other("output already published"))?
             .publish(self.frames, || {
+                interrupt()?;
                 check_publication_cancellation(&self.cancellation)
             })?;
         Ok((path, self.options.format, diagnostics))
