@@ -29,6 +29,27 @@ NOTICE_NAME = re.compile(r"^(?:licen[cs]e|copying|copyright|notice)(?:[._-].*)?$
 NOTICE_DIRS = {"license", "licenses", "licence", "licences", "legal", "notices"}
 SOURCE_SUFFIXES = {".rs", ".c", ".h", ".cpp", ".py", ".js", ".ts", ".wasm"}
 NATIVE_NAME = re.compile(r"\.(?:so(?:\..*)?|dylib|dll|pyd|a|lib)$", re.I)
+# These exact AUTHORS files contain copyright and permission text, not merely
+# contributor names. Keep this exception tied to the reviewed registry bytes
+# and upstream revision; AUTHORS is deliberately not a generic notice name.
+REVIEWED_NOTICE_SUPPLEMENTS = (
+    {
+        "name": "r-efi", "version": "5.3.0",
+        "registryChecksum": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f",
+        "repository": "r-efi/r-efi", "revision": "97b55bed1c2c91dcbf787674849f05337ff80b33",
+        "cratePathInVcs": ".", "upstreamPath": "AUTHORS",
+        "gitBlobSha1": "7397b2bd6a8580d51fe7b23783f8f1a05fa70291",
+        "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7",
+    },
+    {
+        "name": "r-efi", "version": "6.0.0",
+        "registryChecksum": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf",
+        "repository": "r-efi/r-efi", "revision": "7e1b0322d31d625f81a5656096330934f9cd835d",
+        "cratePathInVcs": ".", "upstreamPath": "AUTHORS",
+        "gitBlobSha1": "79c8b7c4a1dabcfbc718b7fe6d43b1892f9850cd",
+        "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111",
+    },
+)
 README = """Noon release dependency evidence
 
 inventory.json records a conservative Cargo graph, declared license expressions,
@@ -37,6 +58,10 @@ SHA256SUMS covers every collected file. Registry evidence is copied unchanged fr
 the cached .crate archive only after its SHA256 matches Cargo.lock. Optional
 upstream files come from the exact GitHub revision in that archive's VCS metadata;
 their Git blob hashes are verified and their provenance is recorded individually.
+Observed HTTP GitHub roots and matching /tree/main/<crate> repository URLs are
+normalized only for repository identification; every request still uses HTTPS
+and the archive-recorded commit. Reviewed nonstandard notice filenames require
+an exact package/archive/revision/path match and two pinned content hashes.
 
 The graph includes all conditional targets and build dependencies in Cargo's
 workspace-resolved default-feature graph, so it can include code absent from a
@@ -77,6 +102,25 @@ def is_notice(value):
         bool(NOTICE_NAME.fullmatch(path.name)) or
         bool(re.fullmatch(r"third[-_]party[-_](?:licenses|notices)(?:\..*)?", path.name, re.I)) or
         any(part.lower() in NOTICE_DIRS for part in path.parts[:-1]))
+
+
+def github_repository(value, crate_path):
+    """Normalize observed Cargo repository URLs without following a branch."""
+    repository = urlparse(value or "")
+    match = re.fullmatch(
+        r"/([\w-]+)/([\w.-]+?)(?:\.git)?(?:/tree/main/([\w.-]+(?:/[\w.-]+)*))?/?",
+        repository.path)
+    if (repository.scheme not in {"http", "https"} or repository.netloc != "github.com" or
+            repository.query or repository.fragment or not match):
+        raise ValueError("no supported GitHub repository URL")
+    owner, name, declared_path = match.groups()
+    if owner in {".", ".."} or name in {".", ".."}:
+        raise ValueError("no supported GitHub repository URL")
+    if declared_path is not None and (
+            repository.scheme != "https" or str(safe_path(declared_path)) != declared_path or
+            declared_path != str(crate_path)):
+        raise ValueError("repository URL crate path differs from archive VCS path")
+    return f"{owner}/{name}"
 
 
 def put(output, relative, data):
@@ -196,17 +240,23 @@ class PinnedGitHub:
             raise ValueError("upstream response exceeds evidence size limit")
         return data
 
-    def collect(self, package, vcs, output, prefix):
-        repository = urlparse(package.get("repository") or "")
-        match = re.fullmatch(r"/([\w.-]+)/([\w.-]+?)(?:\.git)?/?", repository.path)
+    def collect(self, package, vcs, output, prefix, *, registry_checksum=None):
         sha = (vcs or {}).get("git", {}).get("sha1", "")
-        if (repository.scheme != "https" or repository.hostname != "github.com" or
-                repository.query or repository.fragment or not match or not re.fullmatch(r"[0-9a-fA-F]{40}", sha) or
+        if (not re.fullmatch(r"[0-9a-fA-F]{40}", sha) or
                 (vcs or {}).get("git", {}).get("dirty")):
-            raise ValueError("no HTTPS GitHub repository plus pinned 40-hex VCS revision")
-        repo, sha = "/".join(match.groups()), sha.lower()
+            raise ValueError("no clean pinned 40-hex VCS revision")
+        sha = sha.lower()
         relative = (vcs or {}).get("path_in_vcs", "")
         crate_path = safe_path(relative) if relative else PurePosixPath(".")
+        repo = github_repository(package.get("repository"), crate_path)
+        supplements = {}
+        for pin in REVIEWED_NOTICE_SUPPLEMENTS:
+            if (package.get("name"), package.get("version")) != (pin["name"], pin["version"]):
+                continue
+            if ((repo, sha, str(crate_path), registry_checksum) !=
+                    (pin["repository"], pin["revision"], pin["cratePathInVcs"], pin["registryChecksum"])):
+                raise ValueError("reviewed notice package/archive/revision/path identity mismatch")
+            supplements[str(safe_path(pin["upstreamPath"]))] = pin
         ancestors = {str(crate_path), *(str(p) for p in crate_path.parents), "."}
         key = (repo, sha)
         if key not in self.trees:
@@ -222,6 +272,14 @@ class PinnedGitHub:
         tree = self.trees[key]
         if isinstance(tree, str):
             raise ValueError(tree)
+        entries = {entry["path"]: entry for entry in tree["tree"]}
+        for relative, pin in supplements.items():
+            entry = entries.get(relative)
+            if (entry is None or entry.get("type") != "blob" or
+                    entry.get("mode") not in {"100644", "100755"}):
+                raise ValueError(f"reviewed notice is absent or not a regular file: {relative}")
+            if entry["sha"] != pin["gitBlobSha1"]:
+                raise ValueError(f"reviewed notice Git blob hash mismatch: {relative}")
         result = []
         for entry in sorted(tree["tree"], key=lambda value: value["path"]):
             relative = str(safe_path(entry["path"]))
@@ -229,7 +287,7 @@ class PinnedGitHub:
             primary = str(candidate.parent) in ancestors or any(
                 str(parent.parent) in ancestors and parent.name.lower() in NOTICE_DIRS
                 for parent in candidate.parents)
-            if entry["type"] != "blob" or not primary or not is_notice(relative):
+            if entry["type"] != "blob" or not primary or not (is_notice(relative) or relative in supplements):
                 continue
             if entry.get("mode") not in {"100644", "100755"}:
                 raise ValueError(f"upstream notice is not a regular file: {relative}")
@@ -242,10 +300,17 @@ class PinnedGitHub:
                 raise ValueError(f"upstream Git blob hash mismatch: {relative}")
             if not data.strip():
                 raise ValueError(f"empty upstream license or notice text: {relative}")
+            supplement = supplements.get(relative)
+            if supplement and digest(data) != supplement["sha256"]:
+                raise ValueError(f"reviewed notice SHA256 mismatch: {relative}")
             item = put(output, f"{prefix}/upstream/{relative}", data)
-            item.update({"origin": "pinned-upstream-ancestor", "url": url, "repository": f"https://github.com/{repo}",
+            item.update({"origin": "pinned-upstream-supplement" if supplement else "pinned-upstream-ancestor",
+                         "url": url, "repository": f"https://github.com/{repo}",
+                         "declaredRepository": package.get("repository"),
                          "revision": sha, "gitBlobSha1": blob, "upstreamPath": relative,
                          "cratePathInVcs": str(crate_path), "applicability": "requires review"})
+            if supplement:
+                item["registryChecksum"] = registry_checksum
             result.append(item)
         return result
 
@@ -322,7 +387,7 @@ def collect(root, output, metadata, roots, wheels=(), fetcher=None, metadata_sel
                     item["issues"].append(str(error))
                 if not item["noticeFiles"] and fetcher and vcs:
                     try:
-                        evidence = fetcher.collect(package, vcs, stage, f"crates/{keys[pid]}")
+                        evidence = fetcher.collect(package, vcs, stage, f"crates/{keys[pid]}", registry_checksum=lock["checksum"])
                         item["evidenceFiles"].extend(evidence)
                         item["noticeFiles"].extend(entry["path"] for entry in evidence)
                     except Exception as error:
@@ -337,7 +402,8 @@ def collect(root, output, metadata, roots, wheels=(), fetcher=None, metadata_sel
         report["summary"] = {"packages": len(report["packages"]), "thirdPartyPackages": sum(not p["workspaceMember"] for p in report["packages"]),
             "packagesWithEvidenceGaps": len(missing), "nativePayloads": sum(len(w["nativePayloads"]) for w in report["wheels"]),
             "additionalNativeLibrariesRequiringReview": sum(not p["isNoonExtension"] for w in report["wheels"] for p in w["nativePayloads"]),
-            "pinnedAncestorFilesRequiringReview": sum(e["origin"] == "pinned-upstream-ancestor" for p in report["packages"] for e in p["evidenceFiles"])}
+            "pinnedAncestorFilesRequiringReview": sum(e["origin"] == "pinned-upstream-ancestor" for p in report["packages"] for e in p["evidenceFiles"]),
+            "pinnedSupplementalNoticeFiles": sum(e["origin"] == "pinned-upstream-supplement" for p in report["packages"] for e in p["evidenceFiles"])}
         put(stage, "inventory.json", (json.dumps(report, sort_keys=True, indent=2) + "\n").encode())
         put(stage, "README.txt", README.encode())
         put(stage, "Cargo.lock", lock_bytes)

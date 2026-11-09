@@ -190,6 +190,137 @@ class LicenseEvidenceTests(unittest.TestCase):
                 fetcher.collect(package, vcs, self.root / "out", "crate")
         self.assertFalse((self.root / "cache").exists())
 
+    def test_observed_repository_urls_use_only_the_archive_revision_over_https(self):
+        repositories = ["http://github.com/example/project", "https://github.com/example/project.git",
+                        "https://github.com/example/project/tree/main/crates/member"]
+        for index, repository in enumerate(repositories):
+            dependency = self.fixture.package(f"member-{index}", repository=repository,
+                                              vcs={"git": {"sha1": REVISION}, "path_in_vcs": "crates/member"})
+            self.fixture.edge(self.python, dependency)
+        body = b"exact upstream terms\r\n"
+        tree = {"truncated": False, "tree": [{"type": "blob", "mode": "100644", "path": "LICENSE",
+                "sha": hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()}]}
+        calls = []
+
+        def request(request, timeout):
+            url = request.full_url
+            calls.append(url)
+            self.assertTrue(url.startswith("https://"))
+            self.assertIn(REVISION, url)
+            self.assertNotIn("/tree/main/", url)
+            return Response(json.dumps(tree).encode() if "api.github.com" in url else body, url)
+
+        with patch.object(collector, "urlopen", side_effect=request):
+            report = self.collect(fetcher=collector.PinnedGitHub(self.root / "cache"))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(report["summary"]["packagesWithEvidenceGaps"], 0)
+        for item in report["packages"]:
+            if item["workspaceMember"]:
+                continue
+            notice = next(e for e in item["evidenceFiles"] if e["origin"] == "pinned-upstream-ancestor")
+            self.assertEqual(notice["declaredRepository"], item["repository"])
+            self.assertEqual(notice["repository"], "https://github.com/example/project")
+            self.assertEqual(notice["revision"], REVISION)
+
+    def test_unobserved_or_mismatched_repository_urls_cannot_trigger_requests(self):
+        fetcher = collector.PinnedGitHub(self.root / "cache")
+        vcs = {"git": {"sha1": REVISION}, "path_in_vcs": "crates/member"}
+        urls = ["https://github.com.attacker.test/example/project", "https://user@github.com/example/project",
+                "https://github.com:443/example/project", "git://github.com/example/project",
+                "https://github.com/example/project?ref=main", "https://github.com/example/project#main",
+                "https://github.com/example/project/tree/develop/crates/member",
+                "https://github.com/example/project/blob/main/crates/member",
+                "http://github.com/example/project/tree/main/crates/member",
+                "https://github.com/example/project/tree/main/crates/other",
+                "https://github.com/example/project/tree/main/crates/../member",
+                "https://github.com/example/project/tree/main/crates/./member",
+                "https://github.com/example/project/tree/main/crates/%6dember"]
+        with patch.object(fetcher, "request") as request:
+            for url in urls:
+                with self.subTest(url=url), self.assertRaises(ValueError):
+                    fetcher.collect({"repository": url}, vcs, self.root / "out", "crate")
+            request.assert_not_called()
+
+    def notice_pin(self, name, data, checksum):
+        return {"name": name, "version": "1.0.0", "registryChecksum": checksum,
+                "repository": "example/project", "revision": REVISION, "cratePathInVcs": ".",
+                "upstreamPath": "AUTHORS", "sha256": collector.digest(data),
+                "gitBlobSha1": hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()}
+
+    def test_reviewed_author_notice_is_exact_and_authors_remains_non_generic(self):
+        body = b"Copyright and full permission text\r\n"
+        dependency = self.fixture.package("reviewed", vcs={"git": {"sha1": REVISION}})
+        other = self.fixture.package("unreviewed", vcs={"git": {"sha1": REVISION}})
+        self.fixture.edge(self.python, dependency)
+        self.fixture.edge(self.python, other)
+        archive = self.root / "cargo/registry/cache/test-registry/reviewed-1.0.0.crate"
+        pin = self.notice_pin("reviewed", body, collector.file_digest(archive))
+        tree = {"truncated": False, "tree": [{"type": "blob", "mode": "100644", "path": "AUTHORS",
+                                              "sha": pin["gitBlobSha1"]}]}
+        fetcher = collector.PinnedGitHub(self.root / "cache")
+        with patch.object(collector, "REVIEWED_NOTICE_SUPPLEMENTS", [pin]), \
+                patch.object(fetcher, "request", side_effect=[json.dumps(tree).encode(), body]):
+            report = self.collect(fetcher=fetcher)
+        self.assertFalse(collector.is_notice("AUTHORS"))
+        self.assertEqual(report["summary"]["pinnedSupplementalNoticeFiles"], 1)
+        self.assertEqual(report["summary"]["packagesWithEvidenceGaps"], 1)
+        item = next(p for p in report["packages"] if p["name"] == "reviewed")
+        self.assertEqual(item["issues"], [])
+        notice = next(e for e in item["evidenceFiles"] if e["origin"] == "pinned-upstream-supplement")
+        self.assertEqual(notice["sha256"], pin["sha256"])
+        self.assertEqual(notice["gitBlobSha1"], pin["gitBlobSha1"])
+        self.assertEqual(notice["registryChecksum"], pin["registryChecksum"])
+        self.assertEqual(notice["applicability"], "requires review")
+        self.assertEqual((self.root / "evidence" / notice["path"]).read_bytes(), body)
+        self.assertEqual(next(p for p in report["packages"] if p["name"] == "unreviewed")["noticeFiles"], [])
+
+    def test_reviewed_notice_identity_pins_are_required_before_requests(self):
+        checksum = "1" * 64
+        pin = self.notice_pin("reviewed", b"terms", checksum)
+        package = {"name": "reviewed", "version": "1.0.0", "repository": "https://github.com/example/project"}
+        fetcher = collector.PinnedGitHub(self.root / "cache")
+        for field, wrong in {"registryChecksum": "2" * 64, "revision": "b" * 40,
+                             "repository": "example/other", "cratePathInVcs": "crates/other"}.items():
+            with self.subTest(field=field), \
+                    patch.object(collector, "REVIEWED_NOTICE_SUPPLEMENTS", [{**pin, field: wrong}]), \
+                    patch.object(fetcher, "request") as request, \
+                    self.assertRaisesRegex(ValueError, "identity mismatch"):
+                fetcher.collect(package, {"git": {"sha1": REVISION}}, self.root / "out", "crate",
+                                registry_checksum=checksum)
+            request.assert_not_called()
+        for field, wrong in {"name": "different", "version": "1.0.1"}.items():
+            tree = {"truncated": False, "tree": [{"type": "blob", "mode": "100644", "path": "AUTHORS",
+                                                  "sha": pin["gitBlobSha1"]}]}
+            fetcher = collector.PinnedGitHub(self.root / "cache")
+            with self.subTest(field=field), patch.object(collector, "REVIEWED_NOTICE_SUPPLEMENTS", [pin]), \
+                    patch.object(fetcher, "request", return_value=json.dumps(tree).encode()) as request:
+                notices = fetcher.collect({**package, field: wrong}, {"git": {"sha1": REVISION}},
+                                          self.root / "out", "crate", registry_checksum=checksum)
+            self.assertEqual(notices, [])
+            self.assertEqual(request.call_count, 1)  # Tree only; no unreviewed AUTHORS download.
+
+    def test_reviewed_notice_requires_regular_file_and_both_pinned_hashes(self):
+        package = {"name": "reviewed", "version": "1.0.0", "repository": "https://github.com/example/project"}
+        checksum = "1" * 64
+        for case in ("missing", "symlink", "git-hash", "sha256", "empty"):
+            body = b"" if case == "empty" else b"exact notice"
+            pin = self.notice_pin("reviewed", body, checksum)
+            entry = {"type": "blob", "mode": "100644", "path": "AUTHORS", "sha": pin["gitBlobSha1"]}
+            if case == "symlink":
+                entry["mode"] = "120000"
+            if case == "git-hash":
+                pin["gitBlobSha1"] = "0" * 40
+            if case == "sha256":
+                pin["sha256"] = "0" * 64
+            tree = {"truncated": False, "tree": [] if case == "missing" else [entry]}
+            fetcher = collector.PinnedGitHub(self.root / "cache")
+            with self.subTest(case=case), patch.object(collector, "REVIEWED_NOTICE_SUPPLEMENTS", [pin]), \
+                    patch.object(fetcher, "request", side_effect=[json.dumps(tree).encode(), body]), \
+                    self.assertRaises(ValueError):
+                fetcher.collect(package, {"git": {"sha1": REVISION}}, self.root / "out", case,
+                                registry_checksum=checksum)
+            self.assertFalse((self.root / "out" / case).exists())
+
     def test_wrong_upstream_blob_is_reported_without_copying_it(self):
         dependency = self.fixture.package("missing", vcs={"git": {"sha1": REVISION}})
         self.fixture.edge(self.python, dependency)

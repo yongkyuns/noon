@@ -3,6 +3,7 @@
 import copy
 import importlib.util
 import io
+import json
 from pathlib import Path
 import tarfile
 import tempfile
@@ -202,6 +203,46 @@ class ConsumerDependencyCache(unittest.TestCase):
         self.cached = True
         self.assertEqual(self.resolve(offline=True), {"packages": []})
         self.assertEqual((self.downloads, self.metadata_reads), (0, 1))
+
+
+class ReadmeApplicationContract(unittest.TestCase):
+    def test_extracts_the_complete_advertised_bytes_without_a_rewrite(self):
+        source = b'fn main() {\r\n    println!("ordinary source");\r\n}\r\n'
+        readme = b'# Native application\r\n\r\n```toml\r\n[dependencies]\r\n```\r\n```rust\r\n' + source + b'```\r\n'
+        self.assertEqual(CHECK.readme_application_source(readme), source)
+
+    def test_multiple_rust_examples_cannot_silently_select_the_wrong_application(self):
+        readme = b'```rust\nfn main() {}\n```\n\n```rust\nfn unrelated() {}\n```\n'
+        with self.assertRaisesRegex(CHECK.PackageError, 'exactly one'):
+            CHECK.readme_application_source(readme)
+
+    def test_missing_unterminated_or_empty_application_is_rejected(self):
+        for readme in (b'# No application', b'```rust\nfn main() {}', b'```rust\n \n```\n'):
+            with self.subTest(readme=readme), self.assertRaises(CHECK.PackageError):
+                CHECK.readme_application_source(readme)
+
+    def test_cargo_executable_is_resolved_from_its_actual_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory).resolve() / 'custom-target' / 'application'
+            binary.parent.mkdir()
+            binary.touch()
+            messages = '\n'.join(json.dumps(message) for message in [
+                {'reason': 'compiler-artifact', 'target': {'name': 'other', 'kind': ['bin']}, 'executable': '/not/our/app'},
+                {'reason': 'compiler-artifact', 'target': {'name': CHECK.README_APPLICATION, 'kind': ['bin']}, 'executable': str(binary)},
+                {'reason': 'build-finished', 'success': True},
+            ])
+            self.assertEqual(CHECK.built_application(messages, CHECK.README_APPLICATION), binary)
+
+    def test_missing_duplicate_or_wrong_kind_executable_cannot_qualify(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory).resolve() / 'application'
+            binary.touch()
+            valid = {'reason': 'compiler-artifact', 'target': {'name': CHECK.README_APPLICATION, 'kind': ['bin']}, 'executable': str(binary)}
+            wrong = copy.deepcopy(valid)
+            wrong['target']['kind'] = ['example']
+            for messages in ('', json.dumps(valid) + '\n' + json.dumps(valid), json.dumps(wrong)):
+                with self.subTest(messages=messages), self.assertRaises(CHECK.PackageError):
+                    CHECK.built_application(messages, CHECK.README_APPLICATION)
 
 
 class FirstLessonOutputContract(unittest.TestCase):

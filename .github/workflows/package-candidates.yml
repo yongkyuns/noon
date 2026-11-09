@@ -2,6 +2,7 @@ name: Package candidates
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -15,6 +16,8 @@ on:
       - 'README.md'
       - 'scripts/check-rust-packages.py'
       - 'scripts/test_rust_packages.py'
+      - 'scripts/native_window_proof.py'
+      - 'scripts/test_native_window_proof.py'
       - 'scripts/collect-release-licenses.py'
       - 'scripts/test_collect_release_licenses.py'
       - 'scripts/check-python-package.py'
@@ -24,6 +27,8 @@ on:
       - 'scripts/test-inventory.py'
       - 'scripts/test_test_inventory.py'
       - '.github/ci/cibuildwheel.toml'
+      - '.github/ci/package-candidate-profile*'
+      - '.github/ci/check-wheel-matrix*'
       - '.github/workflows/package-candidates.yml'
   workflow_dispatch:
 
@@ -33,12 +38,31 @@ permissions:
   contents: read
 
 concurrency:
-  group: package-candidates-${{ github.ref }}
+  # Even an ignored label event must not cancel an active candidate run before
+  # the profile job evaluates it. Ordinary branch runs keep their prior group.
+  group: package-candidates-${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  profile:
+    name: Select candidate qualification profile
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.profile.outputs.run }}
+      profile: ${{ steps.profile.outputs.profile }}
+      wheel-build: ${{ steps.profile.outputs.wheel-build }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify candidate event selection
+        run: node --test .github/ci/package-candidate-profile.test.mjs .github/ci/check-wheel-matrix.test.mjs
+      - name: Select this event's candidate profile
+        id: profile
+        run: node .github/ci/package-candidate-profile.mjs
+
   source:
     name: Python source archive and packaging contracts
+    needs: profile
+    if: needs.profile.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,6 +91,8 @@ jobs:
 
   rust:
     name: Rust archive consumers
+    needs: profile
+    if: needs.profile.outputs.run == 'true'
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: '0'
@@ -91,13 +117,17 @@ jobs:
           key: rust-package-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: rust-package-cargo-
       - name: Install native graphics and media runtime for Rust archive proof
-        run: bash scripts/ci-install-reference-deps.sh mesa-vulkan-drivers libvulkan1 ffmpeg
+        run: |
+          bash scripts/ci-install-reference-deps.sh mesa-vulkan-drivers libvulkan1 ffmpeg xvfb xauth libxkbcommon-x11-0
+          python -m pip install python-xlib==0.33
       - name: Validate normalized archives and outside-checkout consumers
         env:
           WGPU_BACKEND: vulkan
         run: |
           python scripts/test_rust_packages.py -v
-          python scripts/check-rust-packages.py --wasm --render --output dist/rust
+          python scripts/test_native_window_proof.py -v
+          env -u WAYLAND_DISPLAY xvfb-run -a -s "-screen 0 1280x720x24 -dpi 96" \
+            python scripts/check-rust-packages.py --wasm --render --window --output dist/rust
       - name: Retain exact dependency notices and explicit evidence gaps
         run: |
           cargo fetch --locked
@@ -113,7 +143,7 @@ jobs:
 
   wheels:
     name: Installed wheel on ${{ matrix.os }}
-    needs: source
+    needs: [profile, source]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -122,9 +152,9 @@ jobs:
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
-      # PRs qualify the declared minimum on all three hosts. Explicit candidate
-      # dispatch builds the full normal-GIL CPython matrix before a release.
-      CIBW_BUILD: ${{ github.event_name == 'workflow_dispatch' && 'cp3{11,12,13,14,15}-*' || 'cp311-*' }}
+      # Full coverage is explicit for this event; keeping a PR label does not
+      # expand ordinary synchronize builds into repeated release matrices.
+      CIBW_BUILD: ${{ needs.profile.outputs.wheel-build }}
     steps:
       - name: Preserve source archive line endings on Windows
         if: runner.os == 'Windows'
@@ -172,7 +202,10 @@ jobs:
             python scripts/check-python-package.py --check-only "$noon_wheel" --report "$noon_wheel.report.json"
           done
           python -c "import hashlib, pathlib; p=pathlib.Path('wheelhouse'); (p/'SHA256SUMS').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in sorted(p.glob('*.whl'))), encoding='utf8')"
+      - name: Require every selected interpreter in the repaired wheel set
+        run: node .github/ci/check-wheel-matrix.mjs --profile ${{ needs.profile.outputs.profile }} --directory wheelhouse
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: python-wheel-candidates-${{ matrix.os }}
           path: wheelhouse/

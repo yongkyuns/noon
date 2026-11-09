@@ -22,11 +22,28 @@ The source job builds an sdist and checks its complete Rust/resource closure,
 canonical Python modules, metadata, dependency declarations and notices. Each
 wheel job builds **from that sdist** with cibuildwheel 4.3.1, applies its normal
 auditwheel/delocate/delvewheel repair, audits the resulting archive and exercises
-the installed command from outside the checkout. PRs test CPython 3.11 on Linux
-x86_64, the native macOS runner architecture and Windows x64. Explicit dispatch
-builds CPython 3.11–3.15 with the normal GIL on those same hosts. The Linux job
-also renders a PNG, probes/decodes a rational-FPS MP4 and runs the real export
-regressions against the repaired installed wheel. A successful run qualifies only
+the installed command from outside the checkout. Ordinary PR events test CPython
+3.11 on Linux x86_64, the native macOS runner architecture and Windows x64.
+Explicit dispatch or applying the `release-full-matrix` PR label builds CPython
+3.11–3.15 with the normal GIL on those same hosts. The label selects only its
+`labeled` event: later pushes remain minimum-version runs even while the label
+is present. Remove and reapply it for another deliberate full qualification.
+Unrelated label events skip candidate builds, and label-triggered runs are
+isolated from ordinary branch concurrency so they cannot cancel an active
+candidate. This permits full qualification before the new workflow reaches the
+default branch; it requires no publication or merge. The lightweight profile job
+tests and reads the actual event payload,
+then passes constant build selectors to the existing source/Rust/wheel jobs.
+Each host then requires exactly one repaired native wheel for every selected
+interpreter. The matrix verifier binds each archive report to the actual wheel's
+SHA256, rejects missing/duplicate/stale or unsupported ABI cells, and retains a
+JSON result even on failure. A successful build with an omitted interpreter is
+therefore an incomplete candidate. Exercise the event/output-protocol and
+matrix-completeness controls locally with
+`node --test .github/ci/package-candidate-profile.test.mjs .github/ci/check-wheel-matrix.test.mjs`.
+
+The Linux job also renders a PNG, probes/decodes a rational-FPS MP4 and runs the
+real export regressions against the repaired installed wheel. A successful run qualifies only
 its recorded interpreter, platform tags and host; it is not physical-device
 performance evidence or a free-threaded Python qualification.
 
@@ -37,8 +54,16 @@ It also runs the packaged ordinary Rust first-lesson export example verbatim
 against those archives. FFmpeg decodes all 60 frames; independent checks verify
 two-second timing, title and equation pixels, simultaneous group motion, and the
 caption's late appearance. The movie, probe data and per-frame observations are
-retained with the package report. This is offscreen software-renderer evidence,
-not native window or physical-device presentation qualification.
+retained with the package report. This is offscreen software-renderer evidence.
+The separate `--window` check copies the sole Rust application block from the
+packaged facade README verbatim into the outside-checkout consumer, builds it,
+and observes its actual X11 window under Xvfb. The observer checks title/equation
+pixels, initial and final shape positions, simultaneous motion and the late
+caption, then requests `WM_DELETE_WINDOW` and requires a clean process exit.
+It retains presented pixels, source/binary hashes, observations and failure logs.
+The ordinary default application does not enable playback controls, so this
+check makes no keyboard-control claim. Virtual-window/software-renderer checks
+do not qualify physical-device presentation or pacing.
 The reviewed dependency lock seeds the consumer, and the report rejects unreviewed
 registry versions/checksums or a dependency that escapes back to checkout source.
 `noon-python` is a wheel implementation package and is excluded from crates.io.
@@ -71,12 +96,17 @@ Local equivalents are:
 
 ```sh
 python scripts/check-rust-packages.py --wasm --render --output dist/rust
+env -u WAYLAND_DISPLAY xvfb-run -a -s "-screen 0 1280x720x24 -dpi 96" \
+  python scripts/check-rust-packages.py --wasm --render --window --output dist/rust
 python -m build
 python scripts/check-python-package.py dist/<wheel>.whl --sdist dist/<sdist>.tar.gz --render --mp4
 ```
 
 The Rust `--render` check needs a native graphics adapter plus FFmpeg/ffprobe;
 omit it only for a compile/API-only check, which does not qualify lesson output.
+The optional `--window` check additionally needs Xvfb/Xauth, the native X11
+runtime and the CI observer dependency `python-xlib==0.33`. Without that flag,
+the archive check does not claim native-window presentation.
 Use `--allow-dirty` explicitly for a local Rust packaging experiment; final
 candidates must identify a clean source commit. The existing optimized-production
 browser job additionally runs:
@@ -91,6 +121,16 @@ hashes or a dirty/mismatched source. The archive retains the entire deployable
 `web/` tree, notices, original runtime build identity, source SHA and checksums.
 The browser's existing external CDN dependencies still require network access.
 No npm publication is needed to serve its `web/` directory.
+
+A separate platform job downloads that complete release archive, verifies its
+checksum/manifest and every payload, and extracts it outside the checkout.
+The existing product harness serves those exact bytes and exercises the packaged
+first-scene lesson through cold, warm and edited execution, rendered endpoints
+and nonblank pixel checks. Runtime/source identity and the complete extracted
+inventory are checked again afterward. No WASM rebuild or diagnostic replay
+package substitutes for the production archive. The job retains its report,
+pixels and failure evidence for the existing three days; this software-WebGL
+check is separate from physical-device performance and release deployment.
 
 Candidate artifacts still expire after **three days** under the policy above.
 At the approved release step, attach the exact qualified archives, checksum

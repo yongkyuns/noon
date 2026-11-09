@@ -8,6 +8,8 @@ Use --allow-dirty explicitly for a working-tree candidate and --offline explicit
 when all package dependencies are cached. --wasm also checks the browser host.
 --render runs and independently decodes the packaged ordinary Rust first lesson;
 it requires a native graphics adapter, FFmpeg and ffprobe.
+--window also runs the exact packaged README application in an existing X11
+display, observes its presented lesson, and requests a clean window close.
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_TESTS = ("public_facade.rs", "authoring_errors.rs", "object_authoring_errors.rs")
 LESSON_EXAMPLE = "examples/first_lesson.rs"
 LESSON_WIDTH, LESSON_HEIGHT, LESSON_FPS, LESSON_FRAMES = 320, 180, 30, 60
+README_APPLICATION = "readme-first-application"
 
 
 class PackageError(ValueError):
@@ -210,7 +214,15 @@ def source_identity(root, environment):
     return {"commit": commit, "dirty": bool(status), "working_tree_changes": status}
 
 
-def write_consumer(consumer, extracted, loaded, workspace, root=ROOT, *, render=False):
+def readme_application_source(readme):
+    """Select the sole complete application without rewriting advertised Rust."""
+    blocks = re.findall(rb"(?m)^```rust[ \t]*\r?\n([\s\S]*?)^```[ \t]*\r?$", readme)
+    require(len(blocks) == 1, "packaged facade README must have exactly one Rust application block")
+    require(blocks[0].strip(), "packaged facade README application is empty")
+    return blocks[0]
+
+
+def write_consumer(consumer, extracted, loaded, workspace, root=ROOT, *, render=False, window=False):
     consumer.mkdir()
     extracted.mkdir()
     for value in loaded.values():
@@ -243,16 +255,23 @@ def write_consumer(consumer, extracted, loaded, workspace, root=ROOT, *, render=
     if render:
         text += ['[[bin]]', 'name = "first-lesson-export"', 'path = "src/bin/first_lesson.rs"',
                  'required-features = ["product", "native-host"]', '']
+    if window:
+        text += ['[[bin]]', f'name = "{README_APPLICATION}"', 'path = "src/bin/readme_application.rs"',
+                 'required-features = ["product", "native-host"]', '']
     (consumer / "Cargo.toml").write_text("\n".join(text), encoding="utf8")
     (consumer / "src").mkdir()
     (consumer / "tests").mkdir()
+    if render or window:
+        (consumer / "src/bin").mkdir()
     if render:
         require(LESSON_EXAMPLE in loaded["noon-export"]["files"],
                 "noon-export archive is missing the ordinary first-lesson export example")
-        (consumer / "src/bin").mkdir()
         # Execute the advertised source verbatim, with the engine supplied only
         # by the extracted packages. Do not substitute a workspace-only fixture.
         (consumer / "src/bin/first_lesson.rs").write_bytes(loaded["noon-export"]["files"][LESSON_EXAMPLE])
+    if window:
+        readme = loaded["noon"]["files"][loaded["noon"]["manifest"]["package"]["readme"]]
+        (consumer / "src/bin/readme_application.rs").write_bytes(readme_application_source(readme))
     fixture = root / "fixtures/provider-consumer"
     shutil.copyfile(fixture / "src/main.rs", consumer / "src/main.rs")
     for name in FIXTURE_TESTS:
@@ -395,7 +414,25 @@ def resolve_consumer_metadata(consumer, *, root, environment, offline):
                               cwd=consumer, environment=environment, capture=True))
 
 
-def qualify_consumer(loaded, workspace, output, *, wasm, offline, environment, render=False, root=ROOT):
+def built_application(build_messages, name):
+    """Resolve the executable emitted by Cargo, including custom target dirs."""
+    applications = []
+    for line in build_messages.splitlines():
+        if not line.strip():
+            continue
+        message = json.loads(line)
+        if (message.get("reason") == "compiler-artifact"
+                and message.get("target", {}).get("name") == name
+                and message.get("executable")):
+            require("bin" in message["target"].get("kind", []), "README executable is not a binary target")
+            applications.append(Path(message["executable"]))
+    require(len(applications) == 1, "Cargo did not identify exactly one README application executable")
+    require(applications[0].is_absolute() and applications[0].is_file(),
+            "Cargo README application executable is missing or not absolute")
+    return applications[0]
+
+
+def qualify_consumer(loaded, workspace, output, *, wasm, offline, environment, render=False, window=False, root=ROOT):
     expected = {name: value for name, value in workspace.items() if value["publish"]}
     reviewed = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf8"))
     checks = []
@@ -403,7 +440,7 @@ def qualify_consumer(loaded, workspace, output, *, wasm, offline, environment, r
         outside = Path(directory).resolve()
         require(not outside.is_relative_to(root.resolve()), "consumer temporary directory is inside checkout")
         consumer, extracted = outside / "consumer", outside / "archives"
-        write_consumer(consumer, extracted, loaded, workspace, root, render=render)
+        write_consumer(consumer, extracted, loaded, workspace, root, render=render, window=window)
         # Cargo updates only the local root/path identities. Offline resolution
         # and a full checksum comparison prevent a new registry resolution from
         # silently becoming the package proof.
@@ -445,11 +482,45 @@ def qualify_consumer(loaded, workspace, output, *, wasm, offline, environment, r
             lesson["producer_output"] = producer
             checks.append({"name": "packaged ordinary Rust first-lesson export", "status": "passed",
                            "command": invocation, "features": ["product", "native-host"]})
+        window_result = None
+        if window:
+            from native_window_proof import qualify_window
+
+            evidence = output / "native-window"
+            evidence.mkdir(exist_ok=True)
+            readme = loaded["noon"]["files"][loaded["noon"]["manifest"]["package"]["readme"]]
+            source = readme_application_source(readme)
+            require((consumer / "src/bin/readme_application.rs").read_bytes() == source,
+                    "consumer application differs from the packaged README")
+            (evidence / "README.md").write_bytes(readme)
+            (evidence / "main.rs").write_bytes(source)
+            invocation = ["cargo", "build", "--features", "product,native-host", "--bin", README_APPLICATION,
+                          "--message-format=json-render-diagnostics", "--locked"]
+            if offline:
+                invocation.append("--offline")
+            messages = command(invocation, cwd=consumer, environment=environment, capture=True)
+            (evidence / "build-artifacts.jsonl").write_text(messages, encoding="utf8")
+            require(digest(consumer / "Cargo.lock") == frozen_lock, "consumer lock changed during README application build")
+            binary = built_application(messages, README_APPLICATION)
+            try:
+                window_result = qualify_window(binary, evidence, environment, cwd=consumer)
+            except Exception as error:
+                raise PackageError(f"packaged README native-window qualification failed: {error}") from error
+            require(window_result.get("status") == "passed", "packaged README native-window proof did not pass")
+            window_result.update({"readme_sha256": hashlib.sha256(readme).hexdigest(),
+                                  "source_sha256": hashlib.sha256(source).hexdigest(),
+                                  "build_command": invocation,
+                                  "source_modified": False, "outside_checkout": True})
+            (evidence / "packaged-application.json").write_text(json.dumps(window_result, indent=2) + "\n", encoding="utf8")
+            require(digest(consumer / "Cargo.lock") == frozen_lock, "consumer lock changed during README window proof")
+            checks.append({"name": "packaged README native-window application", "status": "passed",
+                           "command": [str(binary)], "features": ["product", "native-host"]})
         shutil.copyfile(consumer / "Cargo.lock", output / "consumer-Cargo.lock")
         return {"outside_checkout": True, "archive_paths_only": True,
                 "reviewed_registry_dependencies": registry_count, "consumer_lock_sha256": frozen_lock,
                 "fixture_tests": list(FIXTURE_TESTS), "checks": checks, "wasm_requested": wasm,
-                "render_requested": render, "first_lesson": lesson}
+                "render_requested": render, "first_lesson": lesson,
+                "window_requested": window, "native_window": window_result}
 
 
 def main():
@@ -459,6 +530,7 @@ def main():
     parser.add_argument("--offline", action="store_true", help="require all Cargo dependencies to be cached")
     parser.add_argument("--wasm", action="store_true", help="also compile product APIs and noon-web for wasm32-unknown-unknown")
     parser.add_argument("--render", action="store_true", help="run the packaged ordinary Rust lesson and independently decode its complete MP4")
+    parser.add_argument("--window", action="store_true", help="run and observe the exact packaged README application in an existing X11 display")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -504,7 +576,7 @@ def main():
         report["packages"] = records
         report["package_command"] = package_command
         report["consumer"] = qualify_consumer(loaded, workspace, output, wasm=args.wasm, offline=args.offline,
-                                              environment=environment, render=args.render)
+                                              environment=environment, render=args.render, window=args.window)
         report["status"] = "passed"
     except (PackageError, OSError, ValueError, KeyError, subprocess.SubprocessError, tarfile.TarError) as error:
         report["status"] = "failed"

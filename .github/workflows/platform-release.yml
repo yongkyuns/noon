@@ -15,6 +15,7 @@ on:
       - 'scripts/check-web-package.mjs'
       - 'scripts/package-browser-release.mjs'
       - 'scripts/package-browser-release.test.mjs'
+      - 'scripts/check-browser-release.mjs'
       - 'licenses/**'
       - 'scripts/deterministic-replay-smoke.mjs'
       - 'web/**'
@@ -36,6 +37,7 @@ on:
       - 'scripts/check-web-package.mjs'
       - 'scripts/package-browser-release.mjs'
       - 'scripts/package-browser-release.test.mjs'
+      - 'scripts/check-browser-release.mjs'
       - 'licenses/**'
       - 'scripts/deterministic-replay-smoke.mjs'
       - '.github/ci/wasm-build.mjs'
@@ -226,6 +228,43 @@ jobs:
             web/ci-artifact.json
             web/ci-Cargo.lock
           if-no-files-found: error
+          retention-days: 3
+
+  browser-release:
+    name: Extracted production browser release in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: optimized-wasm
+    steps:
+      - name: Checkout exact workflow source
+        uses: actions/checkout@v7
+      - name: Download the complete production release candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: browser-release-candidate
+          path: dist/browser
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install the existing product harness dependencies
+        run: |
+          npm install --no-save --ignore-scripts --package-lock=false playwright@1.62.1 pngjs@7.0.0
+          bash scripts/ci-install-playwright-browser.sh chromium
+      - name: Qualify the extracted production archive without rebuilding
+        shell: bash
+        run: |
+          noon_browser_archives=(dist/browser/*.tar.gz)
+          test "${#noon_browser_archives[@]}" -eq 1
+          node scripts/check-browser-release.mjs --archive "${noon_browser_archives[0]}" --output dist/browser-proof
+      - name: Retain exact production-browser proof and failures
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: browser-release-qualification
+          path: dist/browser-proof/
+          if-no-files-found: warn
           retention-days: 3
 
   optimized-replay:
