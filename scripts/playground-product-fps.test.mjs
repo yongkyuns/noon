@@ -250,7 +250,7 @@ test("the camera measurement window follows the curated source's authored beats"
   const source = await readFile(new URL("../web/python/examples/showcase_camera_follows_path.py", import.meta.url), "utf8");
   const [setup, following] = source.split("camera_frame.add_updater(follow_point)");
   assert.ok(following, "the measured camera lesson must use its required Python updater");
-  const duration = section => [...section.matchAll(/run_time=([0-9.]+)|await self\.wait\(([0-9.]+)\)/g)]
+  const duration = section => [...section.matchAll(/run_time=([0-9.]+)|self\.wait\(([0-9.]+)\)/g)]
     .reduce((total, match) => total + Number(match[1] ?? match[2]), 0);
   const protocol = productMeasurement("showcase-camera-follows-path");
   assert.ok(Math.abs(duration(setup) - protocol.windowStartSeconds) < 0.001);

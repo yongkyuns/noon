@@ -309,10 +309,11 @@ def tokens(value):
             for shadowed in names:
                 with self.subTest(filename=filename, shadowed=shadowed):
                     poisoned = spatial.replace(
-                        "    async def construct(self):\n",
-                        f"    async def construct(self):\n        {shadowed} = None\n",
+                        "    def construct(self):\n",
+                        f"    def construct(self):\n        {shadowed} = None\n",
                         1,
                     )
+                    self.assertNotEqual(poisoned, spatial)
                     self.assertFalse(source_execution_proof(poisoned)["admitted"])
     def test_builtin_audio_source_is_confined_to_initial_scene_audio(self):
         source = dedent('''

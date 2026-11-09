@@ -1,3 +1,4 @@
+import ast
 import json
 import math
 import unittest
@@ -5,6 +6,28 @@ from pathlib import Path
 
 
 class PublicGalleryManifestTests(unittest.TestCase):
+    def test_public_sources_default_to_synchronous_authoring(self) -> None:
+        web_root = Path(__file__).parents[1]
+        # LaTeX must load its compiler assets before the first text constructor.
+        # CUDA's nested helpers suspend between steps. The portable compiler
+        # can only suspend at supported calls made directly by construct().
+        exceptions = {
+            "noon-ordinary-matrix", "noon-ordinary-table", "noon-ordinary-variable",
+            "showcase-latex-create", "showcase-linear-algebra", "showcase-cuda-transpose",
+        }
+        asynchronous = set()
+        for name in ("noon_showcase", "manim_tutorial", "manim_compatibility", "manim_stress"):
+            manifest = web_root / "python" / "examples" / f"{name}_manifest.json"
+            for entry in json.loads(manifest.read_text(encoding="utf-8"))["entries"]:
+                if entry.get("status", "ready") != "ready":
+                    continue
+                source = web_root / entry["path"]
+                if any(isinstance(node, (ast.AsyncFunctionDef, ast.Await, ast.AsyncFor, ast.AsyncWith))
+                       or (isinstance(node, ast.comprehension) and node.is_async)
+                       for node in ast.walk(ast.parse(source.read_bytes(), filename=str(source)))):
+                    asynchronous.add(entry["id"])
+        self.assertEqual(asynchronous, exceptions)
+
     def test_public_gallery_is_manifest_driven_and_manim_only(self) -> None:
         web_root = Path(__file__).parents[1]
         repo_root = web_root.parent

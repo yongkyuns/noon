@@ -28,6 +28,7 @@ import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import (
+    PORTABLE_SPATIAL_METHODS,
     cooperative_source_yield_active,
     current_source_invocation,
 )
@@ -897,7 +898,7 @@ def _semantic_continuation_active(scene: _base.Scene) -> bool:
     return _async_continuation_active(scene) or _synchronous_continuation_active(scene)
 
 
-def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
+def _portable_scene_methods(scene: _base.Scene, used_names=()) -> dict[str, object] | None:
     """Return the canonical methods portable source may call on ``scene``.
 
     Zoom activation stays a ZoomedScene feature.  A scene that defines the
@@ -916,6 +917,17 @@ def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
         "set_drag_targets": _base.Scene.set_drag_targets,
         "next_section": _base.Scene.next_section,
     }
+    spatial_names = PORTABLE_SPATIAL_METHODS.intersection(used_names)
+    if spatial_names:
+        from _noon_spatial import SpatialScene, ThreeDScene
+
+        if isinstance(scene, SpatialScene):
+            canonical = ThreeDScene if isinstance(scene, ThreeDScene) else SpatialScene
+            methods.update({name: getattr(canonical, name, None) for name in spatial_names})
+            if spatial_names & {"move_camera", "set_camera_orientation"}:
+                methods["_camera_endpoint"] = getattr(canonical, "_camera_endpoint", None)
+        elif any(inspect.getattr_static(scene, name, None) is not None for name in spatial_names):
+            return None
     # Keep this conservative and descriptor-safe, like the base-method
     # admission below.  The source compiler admits direct scene calls from its
     # fixed allow-list, including calls nested in expressions.
@@ -959,7 +971,7 @@ async def execute_construct(
                 # Overrides and dynamic lookup retain the original call path.
                 candidate = bind_portable_construct(scene.construct, portable_constructs)
                 if candidate is not None:
-                    methods = _portable_scene_methods(scene)
+                    methods = _portable_scene_methods(scene, candidate.__code__.co_names)
                     if methods is not None and has_portable_scene_methods(scene, **methods):
                         portable_construct = candidate
             if portable_construct is not None:
@@ -1007,9 +1019,14 @@ async def await_source_barrier(method, /, *args, **kwargs):
     """Yield at one compiled host call, using the existing canonical awaitable."""
     scene = getattr(method, "__self__", None)
     if (not isinstance(scene, _base.Scene)
-            or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
-            or getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait)):
-        raise RuntimeError("portable barrier must be the current Scene's canonical play/wait")
+            or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)):
+        raise RuntimeError("portable barrier must be a canonical operation on the current Scene")
+    function = getattr(method, "__func__", None)
+    if function not in (_base.Scene.play, _base.Scene.wait):
+        from _noon_spatial import ThreeDScene
+
+        if not isinstance(scene, ThreeDScene) or function is not ThreeDScene.move_camera:
+            raise RuntimeError("portable barrier must be a canonical operation on the current Scene")
     setattr(scene, _PORTABLE_BARRIER_CALL, True)
     try:
         pending = method(*args, **kwargs)
