@@ -4621,7 +4621,12 @@ impl ExecutionSession {
         {
             match family.mode {
                 SemanticFamilyTransformMode::Structural => {
-                    if !schedule.leaves().is_empty() || !schedule.scalar_leaves().is_empty() {
+                    // Candidate-local targets have fixed flat topology, validated
+                    // by the family compiler below. They can share an activation
+                    // with independent object leaves without structural completion.
+                    if (family.target_state.existing().is_some() && !schedule.leaves().is_empty())
+                        || !schedule.scalar_leaves().is_empty()
+                    {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
                                 "structural unequal-family Transform supports one family Transform plus timing-only composition nodes per activation".into(),
                             ));
@@ -4653,6 +4658,21 @@ impl ExecutionSession {
                     .map_err(|error| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })?;
+                    let members = activation
+                        .occurrences()
+                        .iter()
+                        .map(|occurrence| occurrence.source_execution_object_id)
+                        .collect::<HashSet<_>>();
+                    if schedule
+                        .leaves()
+                        .iter()
+                        .any(|leaf| members.contains(&leaf.execution_object_id))
+                    {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "family Transform cannot compose with an animation of its members"
+                                .into(),
+                        ));
+                    }
                     let channels = lower_prepared_family_transform_channels(&prepared, &activation)
                         .map_err(|error| {
                             ExecutionSessionAnimationError::InvalidComposition(error.to_string())

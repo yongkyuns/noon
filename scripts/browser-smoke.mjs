@@ -53,7 +53,7 @@ const examples = [
   { name: "Family membership order", factory: "createDirectFamilyMembershipOrderSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family replacement", factory: "createDirectFamilyReplacementSmokeRenderer", objectCount: 3, duration: 0.2 },
   { name: "Group animation tutorial", factory: "createDirectGroupAnimationSmokeRenderer",
-    objectCount: 10, duration: 6.5, playback: "live", boundaries: [0.75, 2, 2.5, 3.75, 4.25, 5.5] },
+    objectCount: 11, duration: 6.5, playback: "live", boundaries: [0.75, 2, 2.5, 3.75, 4.25, 5.5] },
   { name: "Family affine", factory: "createDirectFamilyAffineSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Family paint", factory: "createDirectFamilyPaintSmokeRenderer", objectCount: 2, duration: 0.2 },
   { name: "Planar affine", factory: "createDirectPlanarAffineSmokeRenderer", objectCount: 4, duration: 0.2 },
