@@ -73,22 +73,22 @@ fn browser_pointer_trace_matches_native_scene_mapping_and_edge_semantics() {
         f.player.submit_test_frame_json(&json).unwrap();
     }
     assert_eq!(
-        f.player.session.effective_signal_value(f.position),
+        f.player.source.session().effective_signal_value(f.position),
         Some(&ReactiveValue::Vec2(Vec2::new(
             shared_trace::EXPECTED_POSITION.0,
             shared_trace::EXPECTED_POSITION.1,
         )))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.button),
+        f.player.source.session().effective_signal_value(f.button),
         Some(&ReactiveValue::Bool(false))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.down),
+        f.player.source.session().effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(shared_trace::EXPECTED_DOWN_COUNT))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.up),
+        f.player.source.session().effective_signal_value(f.up),
         Some(&ReactiveValue::Scalar(shared_trace::EXPECTED_UP_COUNT))
     );
     assert_eq!(
@@ -96,11 +96,11 @@ fn browser_pointer_trace_matches_native_scene_mapping_and_edge_semantics() {
         shared_trace::EXPECTED_SEQUENCE
     );
     assert_eq!(
-        f.player.session.frame().time,
+        f.player.source.session().frame().time,
         shared_trace::EXPECTED_FRAME_TIME
     );
     assert_eq!(
-        f.player.session.selected_pointer_target(),
+        f.player.source.session().selected_pointer_target(),
         shared_trace::EXPECTED_SELECTED.then_some(f.target)
     );
 }
@@ -133,11 +133,14 @@ fn shared_rebind_trace_matches_after_mid_session_viewport_change() {
     send(&mut f, "move", old_pos, None, 1, 0, old_size).unwrap();
     send(&mut f, "press", old_pos, Some(0), 1, 0, old_size).unwrap();
 
-    let before_stale = f.player.session.publication_context();
+    let before_stale = f.player.source.session().publication_context();
     let old_binding = f.player.browser_pointer_binding;
     assert!(send(&mut f, "move", new_pos, None, 1, 0, new_size).is_err());
     assert_eq!(f.player.browser_pointer_binding, old_binding);
-    assert_eq!(f.player.session.publication_context(), before_stale);
+    assert_eq!(
+        f.player.source.session().publication_context(),
+        before_stale
+    );
     assert_eq!(f.player.next_native_event_sequence, 2);
 
     send(&mut f, "focus_lost", None, None, 1, 0, old_size).unwrap();
@@ -147,30 +150,35 @@ fn shared_rebind_trace_matches_after_mid_session_viewport_change() {
     }
 
     assert_eq!(
-        f.player.session.effective_signal_value(f.position),
+        f.player.source.session().effective_signal_value(f.position),
         Some(&ReactiveValue::Vec2(Vec2::new(
             shared_trace::REBIND_EXPECTED_POSITION.0,
             shared_trace::REBIND_EXPECTED_POSITION.1,
         )))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.down),
+        f.player.source.session().effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(
             shared_trace::REBIND_EXPECTED_DOWN_COUNT
         ))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.up),
+        f.player.source.session().effective_signal_value(f.up),
         Some(&ReactiveValue::Scalar(
             shared_trace::REBIND_EXPECTED_UP_COUNT
         ))
     );
     assert_eq!(f.player.next_native_event_sequence, 6);
     assert_eq!(
-        f.player.session.frame().time,
+        f.player.source.session().frame().time,
         shared_trace::REBIND_EXPECTED_FRAME_TIME
     );
-    let token = f.player.session.native_pointer_input_token().unwrap();
+    let token = f
+        .player
+        .source
+        .session()
+        .native_pointer_input_token()
+        .unwrap();
     assert_eq!(token.context().view_revision, 1);
     assert_eq!(
         f.player
@@ -201,11 +209,11 @@ fn browser_cancel_and_view_rebind_clear_buttons_without_release() {
         .submit_test_frame_json(&browser_pointer_json("focus_lost", None, None, None, 3))
         .unwrap();
     assert_eq!(
-        f.player.session.effective_signal_value(f.button),
+        f.player.source.session().effective_signal_value(f.button),
         Some(&ReactiveValue::Bool(false))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.up),
+        f.player.source.session().effective_signal_value(f.up),
         Some(&ReactiveValue::Scalar(0.0))
     );
     f.player
@@ -218,12 +226,13 @@ fn browser_cancel_and_view_rebind_clear_buttons_without_release() {
         ))
         .unwrap();
     assert_eq!(
-        f.player.session.effective_signal_value(f.down),
+        f.player.source.session().effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(2.0))
     );
     assert_eq!(
         f.player
-            .session
+            .source
+            .session()
             .native_pointer_input_token()
             .unwrap()
             .context()
@@ -235,7 +244,7 @@ fn browser_cancel_and_view_rebind_clear_buttons_without_release() {
 #[test]
 fn rejected_browser_pointer_input_does_not_acknowledge_sequence() {
     let mut f = pointer_fixture();
-    let before = f.player.session.publication_context();
+    let before = f.player.source.session().publication_context();
     let invalid = serde_json::json!({
         "kind": "move",
         "source_id": 1,
@@ -252,7 +261,7 @@ fn rejected_browser_pointer_input_does_not_acknowledge_sequence() {
     assert_eq!(f.player.next_native_event_sequence, 0);
     assert!(f.player.browser_pointer_binding.is_none());
     // Malformed wire data cannot configure a new source or reset buttons.
-    assert_eq!(f.player.session.publication_context(), before);
+    assert_eq!(f.player.source.session().publication_context(), before);
     f.player
         .submit_test_frame_json(&browser_pointer_json(
             "move",
@@ -281,7 +290,12 @@ fn browser_source_and_signed_pointer_identity_reach_the_shared_session() {
     f.player
         .submit_test_frame_input(wire("press", 19, -2))
         .unwrap();
-    let token = f.player.session.native_pointer_input_token().unwrap();
+    let token = f
+        .player
+        .source
+        .session()
+        .native_pointer_input_token()
+        .unwrap();
     assert_eq!(
         token.pointer(),
         NativePointerId {
@@ -305,8 +319,13 @@ fn foreign_or_retired_source_cannot_release_or_cancel_the_current_pointer() {
     f.player
         .submit_test_frame_input(wire("press", 5, 8))
         .unwrap();
-    let before = f.player.session.publication_context();
-    let token = f.player.session.native_pointer_input_token().unwrap();
+    let before = f.player.source.session().publication_context();
+    let token = f
+        .player
+        .source
+        .session()
+        .native_pointer_input_token()
+        .unwrap();
     for kind in ["release", "cancel", "capture_lost", "focus_lost"] {
         for (source, pointer) in [(4, 7), (5, 7), (6, 99)] {
             assert!(f
@@ -315,18 +334,22 @@ fn foreign_or_retired_source_cannot_release_or_cancel_the_current_pointer() {
                 .is_err());
         }
     }
-    assert_eq!(f.player.session.publication_context(), before);
+    assert_eq!(f.player.source.session().publication_context(), before);
     assert_eq!(
-        f.player.session.native_pointer_input_token().unwrap(),
+        f.player
+            .source
+            .session()
+            .native_pointer_input_token()
+            .unwrap(),
         token
     );
     assert_eq!(f.player.next_native_event_sequence, 3);
     assert_eq!(
-        f.player.session.effective_signal_value(f.button),
+        f.player.source.session().effective_signal_value(f.button),
         Some(&ReactiveValue::Bool(true))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.up),
+        f.player.source.session().effective_signal_value(f.up),
         Some(&ReactiveValue::Scalar(0.0))
     );
 }
@@ -348,18 +371,18 @@ fn cancelled_sources_cannot_be_resurrected_by_late_positional_records() {
     }
     assert_eq!(f.player.next_native_event_sequence, 2);
     assert_eq!(
-        f.player.session.effective_signal_value(f.button),
+        f.player.source.session().effective_signal_value(f.button),
         Some(&ReactiveValue::Bool(false))
     );
     assert_eq!(
-        f.player.session.effective_signal_value(f.up),
+        f.player.source.session().effective_signal_value(f.up),
         Some(&ReactiveValue::Scalar(0.0))
     );
     f.player
         .submit_test_frame_input(wire("press", 2, 7))
         .unwrap();
     assert_eq!(
-        f.player.session.effective_signal_value(f.down),
+        f.player.source.session().effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(2.0))
     );
 }
@@ -370,7 +393,7 @@ fn stale_view_or_changed_viewport_requires_a_new_source_without_mutation() {
     f.player
         .submit_test_frame_input(wire("press", 1, 7))
         .unwrap();
-    let before = f.player.session.publication_context();
+    let before = f.player.source.session().publication_context();
     let binding = f.player.browser_pointer_binding;
     for revision in [1, 3] {
         let mut input = wire("move", 1, 7);
@@ -381,10 +404,10 @@ fn stale_view_or_changed_viewport_requires_a_new_source_without_mutation() {
     input.viewport_width = Some(1600.0);
     assert!(f.player.submit_test_frame_input(input).is_err());
     assert_eq!(f.player.browser_pointer_binding, binding);
-    assert_eq!(f.player.session.publication_context(), before);
+    assert_eq!(f.player.source.session().publication_context(), before);
     assert_eq!(f.player.next_native_event_sequence, 1);
     assert_eq!(
-        f.player.session.effective_signal_value(f.button),
+        f.player.source.session().effective_signal_value(f.button),
         Some(&ReactiveValue::Bool(true))
     );
 }
@@ -425,23 +448,32 @@ fn invalid_rebinding_record_does_not_clear_pressed_state_or_acknowledge_sequence
     cases.push(invalid);
     cases.push(wire("move", 0, 8));
     cases.push(wire("move", 2, -1));
-    let before = f.player.session.publication_context();
-    let token = f.player.session.native_pointer_input_token().unwrap();
+    let before = f.player.source.session().publication_context();
+    let token = f
+        .player
+        .source
+        .session()
+        .native_pointer_input_token()
+        .unwrap();
     let binding = f.player.browser_pointer_binding;
     for input in cases {
         assert!(
             f.player.submit_test_frame_input(input).is_err(),
             "{input:?}"
         );
-        assert_eq!(f.player.session.publication_context(), before);
+        assert_eq!(f.player.source.session().publication_context(), before);
         assert_eq!(
-            f.player.session.native_pointer_input_token().unwrap(),
+            f.player
+                .source
+                .session()
+                .native_pointer_input_token()
+                .unwrap(),
             token
         );
         assert_eq!(f.player.browser_pointer_binding, binding);
         assert_eq!(f.player.next_native_event_sequence, 1);
         assert_eq!(
-            f.player.session.effective_signal_value(f.button),
+            f.player.source.session().effective_signal_value(f.button),
             Some(&ReactiveValue::Bool(true))
         );
     }
@@ -451,13 +483,14 @@ fn invalid_rebinding_record_does_not_clear_pressed_state_or_acknowledge_sequence
 fn missing_wire_identity_cannot_bind_or_reset_an_existing_raw_pointer_button() {
     let mut f = pointer_fixture();
     f.player
-        .session
+        .source
+        .session_mut()
         .set_native_state_input(
             NativeStateSource::PointerButton { button: 0 },
             NativeInputValue::Bool(true),
         )
         .unwrap();
-    let before = f.player.session.publication_context();
+    let before = f.player.source.session().publication_context();
     for field in ["source_id", "pointer_id", "view_revision"] {
         let mut value: serde_json::Value = serde_json::from_str(&browser_pointer_json(
             "press",
@@ -470,9 +503,9 @@ fn missing_wire_identity_cannot_bind_or_reset_an_existing_raw_pointer_button() {
         value.as_object_mut().unwrap().remove(field);
         assert!(f.player.submit_test_frame_json(&value.to_string()).is_err());
         assert!(f.player.browser_pointer_binding.is_none());
-        assert_eq!(f.player.session.publication_context(), before);
+        assert_eq!(f.player.source.session().publication_context(), before);
         assert_eq!(
-            f.player.session.effective_signal_value(f.button),
+            f.player.source.session().effective_signal_value(f.button),
             Some(&ReactiveValue::Bool(true))
         );
     }
@@ -485,19 +518,28 @@ fn sequence_exhaustion_precedes_source_configuration() {
         .submit_test_frame_input(wire("press", 1, 7))
         .unwrap();
     f.player.next_native_event_sequence = u64::MAX;
-    let token = f.player.session.native_pointer_input_token().unwrap();
-    let before = f.player.session.publication_context();
+    let token = f
+        .player
+        .source
+        .session()
+        .native_pointer_input_token()
+        .unwrap();
+    let before = f.player.source.session().publication_context();
     assert!(f
         .player
         .submit_test_frame_input(wire("move", 2, 8))
         .is_err());
     assert_eq!(
-        f.player.session.native_pointer_input_token().unwrap(),
+        f.player
+            .source
+            .session()
+            .native_pointer_input_token()
+            .unwrap(),
         token
     );
-    assert_eq!(f.player.session.publication_context(), before);
+    assert_eq!(f.player.source.session().publication_context(), before);
     assert_eq!(
-        f.player.session.effective_signal_value(f.button),
+        f.player.source.session().effective_signal_value(f.button),
         Some(&ReactiveValue::Bool(true))
     );
 }
@@ -506,7 +548,8 @@ fn sequence_exhaustion_precedes_source_configuration() {
 fn browser_input_classifies_unrecorded_replay_without_blocking_first_execution() {
     let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
     f.player
-        .session
+        .source
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
     f.player
@@ -522,10 +565,10 @@ fn browser_input_classifies_unrecorded_replay_without_blocking_first_execution()
         f.player.seal_replay(),
         Err("replay unavailable: UnrecordedInput".to_owned())
     );
-    f.player.session.advance_to(1.0).unwrap();
-    assert_eq!(f.player.session.frame().time, 1.0);
+    f.player.source.session_mut().advance_to(1.0).unwrap();
+    assert_eq!(f.player.source.session().frame().time, 1.0);
     assert_eq!(
-        f.player.session.effective_signal_value(f.down),
+        f.player.source.session().effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(1.0))
     );
 }
@@ -538,15 +581,15 @@ fn automatic_viewer_completion_preserves_live_native_input() {
     f.player.live_advance_segment_to(0.25).unwrap();
     f.player.live_complete_segment().unwrap();
     f.player.finish_source_playback().unwrap();
-    let completed_frame = f.player.session.frame().clone();
+    let completed_frame = f.player.source.session().frame().clone();
 
     assert_eq!(
         f.player.seal_replay_for_viewer(),
         Err("replay unavailable: UnrecordedInput".to_owned())
     );
-    assert!(f.player.session.replay_scope_active());
-    assert!(!f.player.session.replay_is_sealed());
-    assert_eq!(f.player.session.frame(), &completed_frame);
+    assert!(f.player.source.session().replay_scope_active());
+    assert!(!f.player.source.session().replay_is_sealed());
+    assert_eq!(f.player.source.session().frame(), &completed_frame);
 
     f.player
         .submit_test_frame_json(&browser_pointer_json(
@@ -558,7 +601,7 @@ fn automatic_viewer_completion_preserves_live_native_input() {
         ))
         .unwrap();
     assert_eq!(
-        f.player.session.effective_signal_value(f.down),
+        f.player.source.session().effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(1.0))
     );
 }
@@ -567,7 +610,8 @@ fn automatic_viewer_completion_preserves_live_native_input() {
 fn browser_no_op_source_setup_does_not_poison_replay() {
     let mut f = pointer_fixture_from(shared_trace::Fixture::signals_only());
     f.player
-        .session
+        .source
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
     // Center maps to the existing zero position; all reset buttons are already false.
@@ -597,26 +641,27 @@ fn sealed_browser_input_does_not_acknowledge_and_can_retry_after_explicit_discar
         ))
         .unwrap();
     f.player
-        .session
+        .source
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
     f.player.seal_replay().unwrap();
     let input = browser_pointer_json("press", Some(200.0), Some(100.0), Some(0), 0);
-    let before = f.player.session.publication_context();
+    let before = f.player.source.session().publication_context();
     let binding = f.player.browser_pointer_binding;
     assert!(f.player.submit_test_frame_json(&input).is_err());
     assert_eq!(f.player.next_native_event_sequence, 1);
     assert_eq!(f.player.browser_pointer_binding, binding);
-    assert_eq!(f.player.session.publication_context(), before);
+    assert_eq!(f.player.source.session().publication_context(), before);
     assert_eq!(
-        f.player.session.effective_signal_value(f.button),
+        f.player.source.session().effective_signal_value(f.button),
         Some(&ReactiveValue::Bool(false))
     );
-    f.player.session.discard_replay_retention();
+    f.player.source.session_mut().discard_replay_retention();
     f.player.submit_test_frame_json(&input).unwrap();
     assert_eq!(f.player.next_native_event_sequence, 2);
     assert_eq!(
-        f.player.session.effective_signal_value(f.down),
+        f.player.source.session().effective_signal_value(f.down),
         Some(&ReactiveValue::Scalar(1.0))
     );
 }
@@ -626,14 +671,7 @@ fn typed_browser_normalizers_reach_identical_session_input_effects() {
     use super::submit_test_frame;
     let mut worker = pointer_fixture();
     let direct_fixture = pointer_fixture();
-    let scene = noon::Scene::with_integration_root(
-        direct_fixture.player.semantics.unwrap(),
-        direct_fixture.player.semantic_root.unwrap(),
-    )
-    .unwrap();
-    let mut direct = scene
-        .into_execution_with_session(direct_fixture.player.session)
-        .unwrap();
+    let mut direct = direct_fixture.player.source;
     let mut binding = None;
     let mut sequence = 0;
     for (kind, source) in [
@@ -656,7 +694,7 @@ fn typed_browser_normalizers_reach_identical_session_input_effects() {
         ] {
             assert_eq!(
                 direct.session().effective_signal_value(a),
-                worker.player.session.effective_signal_value(b)
+                worker.player.source.session().effective_signal_value(b)
             );
         }
         assert_eq!(sequence, worker.player.next_native_event_sequence);

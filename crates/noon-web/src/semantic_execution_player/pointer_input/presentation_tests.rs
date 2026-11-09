@@ -92,13 +92,13 @@ fn capture_and_delta_consumption_do_not_authorize_a_pointer() {
     assert!(!input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     assert_eq!(p.next_native_event_sequence, 0);
     assert!(p.browser_pointer_binding.is_none());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
     assert!(acknowledge(&mut p, r));
     // Even after presentation, the old rejected source is never replayed.
     assert!(!input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
     assert!(input(&mut p, "press", 2, Some(r), 1, 400.0).unwrap());
     assert!(input(&mut p, "release", 2, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 #[test]
 fn collected_without_a_receipt_stays_rejected_after_presentation() {
@@ -109,8 +109,8 @@ fn collected_without_a_receipt_stays_rejected_after_presentation() {
 #[test]
 fn valid_receipt_projects_selection_without_authored_or_resource_changes() {
     let (mut p, r) = ready();
-    let frame = p.session.frame().clone();
-    let publication = p.session.publication_context();
+    let frame = p.source.session().frame().clone();
+    let publication = p.source.session().publication_context();
     let resources = p.resource_bundle_bytes();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
@@ -118,8 +118,8 @@ fn valid_receipt_projects_selection_without_authored_or_resource_changes() {
     assert!(d.selection_overlay.is_some());
     assert!(d.retained.objects.is_empty());
     assert!(d.resource_additions.is_none());
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), publication);
+    assert_eq!(p.source.session().frame(), &frame);
+    assert_eq!(p.source.session().publication_context(), publication);
     assert_eq!(p.resource_bundle_bytes(), resources);
     assert!(p.drain_delta_json().unwrap().is_none());
 }
@@ -128,12 +128,12 @@ fn old_collected_receipt_is_not_retagged_after_newer_presentation() {
     let (mut p, a) = ready();
     assert!(input(&mut p, "press", 1, Some(a), 1, 400.0).unwrap());
     // An unpresented execution round trip changes identity without changing pixels.
-    p.session.advance_to(0.25).unwrap();
+    p.source.session_mut().advance_to(0.25).unwrap();
     p.seek_session(0.0).unwrap();
     let b = receipt(&delta(&mut p), 2);
     assert!(acknowledge(&mut p, b));
     assert!(!input(&mut p, "release", 1, Some(a), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
     let ack = p.next_native_event_sequence;
     assert!(!input(&mut p, "press", 1, Some(b), 1, 400.0).unwrap());
     assert_eq!(
@@ -142,15 +142,15 @@ fn old_collected_receipt_is_not_retagged_after_newer_presentation() {
     );
     assert!(input(&mut p, "press", 2, Some(b), 1, 400.0).unwrap());
     assert!(input(&mut p, "release", 2, Some(b), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 #[test]
 fn unchanged_geometry_does_not_make_an_unpresented_revision_current() {
     let (mut p, r) = ready();
-    p.session.advance_to(0.25).unwrap();
+    p.source.session_mut().advance_to(0.25).unwrap();
     p.seek_session(0.0).unwrap();
     assert!(!input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
     assert!(p.drain_delta_json().unwrap().is_some());
 }
 #[test]
@@ -168,12 +168,12 @@ fn foreign_future_or_wrong_view_receipts_cannot_authorize_or_replace_current() {
     }
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 #[test]
 fn issued_newer_delta_retires_previous_receipt_even_before_presentation() {
     let (mut p, a) = ready();
-    p.session.advance_to(0.25).unwrap();
+    p.source.session_mut().advance_to(0.25).unwrap();
     let b = receipt(&delta(&mut p), 2);
     assert!(!acknowledge(&mut p, a));
     assert!(!input(&mut p, "press", 1, Some(a), 1, 400.0).unwrap());
@@ -187,8 +187,7 @@ fn surface_invalidation_still_cancels_when_newer_delta_is_in_flight() {
     // Issue a presentation-only delta without mutating the session gesture.
     let snapshot = {
         let target = PlayerPointerTarget {
-            session: &mut p.session,
-            semantics: p.semantics.as_ref().unwrap(),
+            source: &mut p.source,
             translation_drag_undo: &mut p.translation_drag_undo,
         };
         p.worker_pointer_presentation.capture(&target).unwrap()
@@ -203,7 +202,7 @@ fn surface_invalidation_still_cancels_when_newer_delta_is_in_flight() {
     };
     assert!(acknowledge(&mut p, b));
     assert!(input(&mut p, "release", 1, Some(b), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
 }
 #[test]
 fn same_delta_repaint_does_not_reuse_an_old_presentation_receipt() {
@@ -217,7 +216,7 @@ fn same_delta_repaint_does_not_reuse_an_old_presentation_receipt() {
     assert!(acknowledge(&mut p, b));
     assert!(!acknowledge(&mut p, a));
     assert!(!input(&mut p, "release", 1, Some(a), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
 }
 #[test]
 fn old_invalidation_cannot_cancel_a_newer_presented_gesture() {
@@ -230,7 +229,7 @@ fn old_invalidation_cannot_cancel_a_newer_presented_gesture() {
     assert!(input(&mut p, "press", 1, Some(b), 1, 400.0).unwrap());
     assert!(!invalidate(&mut p, a));
     assert!(input(&mut p, "release", 1, Some(b), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 #[test]
 fn view_registration_is_not_a_receipt_and_old_view_cannot_return() {
@@ -245,7 +244,7 @@ fn view_registration_is_not_a_receipt_and_old_view_cannot_return() {
     assert!(acknowledge(&mut p, b));
     assert!(input(&mut p, "press", 3, Some(b), 2, 400.0).unwrap());
     assert!(input(&mut p, "release", 3, Some(b), 2, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 #[test]
 fn invalid_view_does_not_reset_valid_receipt_or_pressed_state() {
@@ -260,7 +259,7 @@ fn invalid_view_does_not_reset_valid_receipt_or_pressed_state() {
         assert!(p.set_browser_pointer_view_json(&value.to_string()).is_err());
     }
     assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 #[test]
 fn hidden_view_emits_clear_mapping_without_minting_a_receipt() {
@@ -272,16 +271,16 @@ fn hidden_view_emits_clear_mapping_without_minting_a_receipt() {
     assert!(d.pointer_view.is_none());
     assert!(!acknowledge(&mut p, r));
     assert!(p.drain_delta_json().unwrap().is_none());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
 }
 #[test]
 fn cancellation_does_not_require_a_positional_receipt() {
     let (mut p, r) = ready();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
-    p.session.advance_to(0.25).unwrap();
+    p.source.session_mut().advance_to(0.25).unwrap();
     assert!(input(&mut p, "cancel", 1, None, 1, 400.0).unwrap());
     assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).is_err());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
 }
 #[test]
 fn malformed_or_foreign_rejected_tail_is_not_silently_dropped() {
@@ -323,10 +322,10 @@ fn sequence_exhaustion_cannot_mutate_rejection_cleanup() {
     let (mut p, r) = ready();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     p.next_native_event_sequence = u64::MAX;
-    let before = p.session.publication_context();
+    let before = p.source.session().publication_context();
     let binding = p.browser_pointer_binding;
     assert!(input(&mut p, "release", 1, None, 1, 400.0).is_err());
-    assert_eq!(p.session.publication_context(), before);
+    assert_eq!(p.source.session().publication_context(), before);
     assert_eq!(p.browser_pointer_binding, binding);
 }
 #[test]
@@ -349,13 +348,19 @@ fn signal_only_change_requires_a_new_issued_and_presented_receipt() {
     let a = receipt(&delta(p), 1);
     assert!(acknowledge(p, a));
     // Pointer position has no visual dependents in this fixture.
-    p.session
+    p.source
+        .session_mut()
         .set_native_state_input(
             NativeStateSource::PointerPosition,
             NativeInputValue::Vec2(Vec2::new(2.0, 3.0)),
         )
         .unwrap();
-    assert!(p.session.take_renderer_publication().changes().is_empty());
+    assert!(p
+        .source
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
     let b = receipt(&delta(p), 2);
     assert!(!input(p, "press", 1, Some(a), 1, 400.0).unwrap());
     assert!(acknowledge(p, b));
@@ -364,7 +369,7 @@ fn signal_only_change_requires_a_new_issued_and_presented_receipt() {
 #[test]
 fn retained_pointer_view_validation_rejects_invalid_mapping_before_mirror_admission() {
     let (mut p, _) = ready();
-    p.session.advance_to(0.25).unwrap();
+    p.source.session_mut().advance_to(0.25).unwrap();
     let mut d = delta(&mut p);
     d.pointer_view = Some(PointerPresentationView {
         revision: 1,
@@ -392,29 +397,29 @@ fn invalidated_receipt_cannot_be_resurrected_before_repaint() {
     );
     assert_eq!(p.next_native_event_sequence, acknowledged_sequence);
     assert!(!input(&mut p, "release", 1, Some(a), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
     let b = receipt(&delta(&mut p), 2);
     assert!(acknowledge(&mut p, b));
     assert!(input(&mut p, "press", 2, Some(b), 1, 400.0).unwrap());
     assert!(input(&mut p, "release", 2, Some(b), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 
 #[test]
 fn registered_view_without_pointer_subscribers_preserves_quiet_presentation() {
     let mut p = player();
     p.set_pointer_fill_selection(None).unwrap();
-    assert!(!p.session.has_native_pointer_subscribers());
+    assert!(!p.source.session().has_native_pointer_subscribers());
     register(&mut p, 1);
     let displayed = delta(&mut p);
     let r = receipt(&displayed, 1);
     assert!(acknowledge(&mut p, r));
-    let publication = p.session.publication_context();
+    let publication = p.source.session().publication_context();
 
     for time in [0.25, 0.5, 1.0] {
-        p.session.advance_to(time).unwrap();
+        p.source.session_mut().advance_to(time).unwrap();
         assert_eq!(p.time(), time);
-        assert_ne!(p.session.publication_context(), publication);
+        assert_ne!(p.source.session().publication_context(), publication);
         assert!(
             p.drain_delta_json().unwrap().is_none(),
             "a dormant pointer view must not republish a visually quiet sample"
@@ -440,12 +445,12 @@ fn dormant_callback_scene_rejects_pointer_sources_without_entering_callback_admi
     let mut p =
         SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 7)
             .unwrap();
-    assert!(!p.session.has_native_pointer_subscribers());
+    assert!(!p.source.session().has_native_pointer_subscribers());
     register(&mut p, 1);
     let r = receipt(&delta(&mut p), 1);
     assert!(acknowledge(&mut p, r));
-    let frame = p.session.frame().clone();
-    let publication = p.session.publication_context();
+    let frame = p.source.session().frame().clone();
+    let publication = p.source.session().publication_context();
     // Orphan cancellation remains an error. Only a validated positional source
     // can enter the ordinary rejected-source tail handling.
     assert!(input(&mut p, "cancel", 1, None, 1, 400.0).is_err());
@@ -456,10 +461,10 @@ fn dormant_callback_scene_rejects_pointer_sources_without_entering_callback_admi
     assert!(input(&mut p, "move", 1, Some(r), 2, 400.0).is_err());
     assert!(p.browser_pointer_binding.is_none());
     assert_eq!(p.next_native_event_sequence, 0);
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), publication);
+    assert_eq!(p.source.session().frame(), &frame);
+    assert_eq!(p.source.session().publication_context(), publication);
     assert!(matches!(
-        p.session.configure_native_pointer_input(
+        p.source.session_mut().configure_native_pointer_input(
             noon_core::NativePointerId {
                 source: 1,
                 pointer: 7
@@ -482,20 +487,20 @@ fn enabling_selection_after_quiet_samples_requires_fresh_presentation() {
     register(&mut p, 1);
     let old = receipt(&delta(&mut p), 1);
     assert!(acknowledge(&mut p, old));
-    p.session.advance_to(0.5).unwrap();
+    p.source.session_mut().advance_to(0.5).unwrap();
     assert!(p.drain_delta_json().unwrap().is_none());
 
     p.set_pointer_fill_selection(Some(4.0)).unwrap();
-    assert!(p.session.has_native_pointer_subscribers());
+    assert!(p.source.session().has_native_pointer_subscribers());
     let fresh = receipt(&delta(&mut p), 2);
     assert_ne!(fresh.sequence, old.sequence);
     assert!(!input(&mut p, "press", 1, Some(old), 1, 400.0).unwrap());
     assert!(acknowledge(&mut p, fresh));
     assert!(!input(&mut p, "release", 1, Some(fresh), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
     assert!(input(&mut p, "press", 2, Some(fresh), 1, 400.0).unwrap());
     assert!(input(&mut p, "release", 2, Some(fresh), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 
 #[test]
@@ -508,11 +513,11 @@ fn disabling_last_pointer_subscriber_clears_once_then_settles() {
     assert!(acknowledge(&mut p, receipt(&selected, 2)));
 
     p.set_pointer_fill_selection(None).unwrap();
-    assert!(!p.session.has_native_pointer_subscribers());
+    assert!(!p.source.session().has_native_pointer_subscribers());
     let cleared = delta(&mut p);
     assert!(cleared.selection_overlay.is_none());
     assert!(acknowledge(&mut p, receipt(&cleared, 3)));
-    p.session.advance_to(0.5).unwrap();
+    p.source.session_mut().advance_to(0.5).unwrap();
     assert!(p.drain_delta_json().unwrap().is_none());
 }
 
@@ -543,10 +548,10 @@ fn drag_player() -> (SemanticExecutionPlayer, noon::Mobject, WorkerPointerReceip
 #[test]
 fn translation_drag_worker_receipts_publish_local_motion_and_one_authored_release() {
     let (mut p, circle, r) = drag_player();
-    let before = p.session.publication_context();
+    let before = p.source.session().publication_context();
     let resources = p.resource_bundle_bytes();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.translation_drag_active());
+    assert!(p.source.session().translation_drag_active());
     assert!(
         p.drain_delta_json().unwrap().is_none(),
         "stationary capture does not repaint"
@@ -556,7 +561,7 @@ fn translation_drag_worker_receipts_publish_local_motion_and_one_authored_releas
     assert_eq!(moved.retained.objects.len(), 1);
     assert!(moved.resource_additions.is_none());
     assert_eq!(
-        p.session.publication_context().scene_revision(),
+        p.source.session().publication_context().scene_revision(),
         before.scene_revision()
     );
     assert_eq!(
@@ -566,10 +571,10 @@ fn translation_drag_worker_receipts_publish_local_motion_and_one_authored_releas
     let r = receipt(&moved, 3);
     assert!(acknowledge(&mut p, r));
     assert!(input(&mut p, "release", 1, Some(r), 1, 500.0).unwrap());
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert!(circle.state().unwrap().transform.translation.x > 0.0);
     assert_eq!(
-        p.session.publication_context().scene_revision(),
+        p.source.session().publication_context().scene_revision(),
         before.scene_revision().checked_next().unwrap()
     );
     assert_eq!(p.resource_bundle_bytes(), resources);
@@ -582,7 +587,7 @@ fn translation_drag_worker_receipts_publish_local_motion_and_one_authored_releas
 #[test]
 fn captured_drag_continues_with_its_presented_receipt_until_release() {
     let (mut p, circle, presented) = drag_player();
-    let before = p.session.publication_context();
+    let before = p.source.session().publication_context();
     assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
     assert!(input(&mut p, "move", 1, Some(presented), 1, 450.0).unwrap());
 
@@ -593,14 +598,14 @@ fn captured_drag_continues_with_its_presented_receipt_until_release() {
     assert!(input(&mut p, "move", 1, Some(presented), 1, 500.0).unwrap());
     assert!(input(&mut p, "release", 1, Some(presented), 1, 550.0).unwrap());
 
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert_eq!(
         circle.state().unwrap().transform.translation.x,
         3.0,
         "release uses its own final collection-time coordinates"
     );
     assert_eq!(
-        p.session.publication_context().scene_revision(),
+        p.source.session().publication_context().scene_revision(),
         before.scene_revision().checked_next().unwrap(),
         "motion stays effective-only and release authors one change"
     );
@@ -611,7 +616,7 @@ fn captured_drag_continues_with_its_presented_receipt_until_release() {
 #[test]
 fn captured_drag_survives_newer_acknowledgement_before_delayed_motion() {
     let (mut p, circle, collected) = drag_player();
-    let before = p.session.publication_context();
+    let before = p.source.session().publication_context();
     assert!(input(&mut p, "press", 1, Some(collected), 1, 400.0).unwrap());
     assert!(input(&mut p, "move", 1, Some(collected), 1, 450.0).unwrap());
 
@@ -621,11 +626,11 @@ fn captured_drag_survives_newer_acknowledgement_before_delayed_motion() {
     let newer = receipt(&delta(&mut p), collected.presentation + 1);
     assert!(acknowledge(&mut p, newer));
     assert!(input(&mut p, "move", 1, Some(collected), 1, 500.0).unwrap());
-    assert!(p.session.translation_drag_active());
+    assert!(p.source.session().translation_drag_active());
     assert!(input(&mut p, "release", 1, Some(collected), 1, 550.0).unwrap());
     assert_eq!(circle.state().unwrap().transform.translation.x, 3.0);
     assert_eq!(
-        p.session.publication_context().scene_revision(),
+        p.source.session().publication_context().scene_revision(),
         before.scene_revision().checked_next().unwrap()
     );
     let completed = receipt(&delta(&mut p), newer.presentation + 1);
@@ -685,13 +690,13 @@ fn captured_drag_rejects_receipts_outside_its_acquired_interval() {
             },
         };
         assert!(!input(&mut p, "move", 1, Some(bad), 1, 500.0).unwrap());
-        assert!(!p.session.translation_drag_active());
+        assert!(!p.source.session().translation_drag_active());
         assert_eq!(
             circle.state().unwrap().transform.translation,
             noon_core::SemanticVec3::ZERO
         );
         assert_eq!(
-            p.session.frame().objects[0].transform.translation,
+            p.source.session().frame().objects[0].transform.translation,
             Vec2::ZERO
         );
     }
@@ -706,13 +711,13 @@ fn captured_drag_mapping_is_retired_by_surface_invalidation() {
     assert!(acknowledge(&mut p, newest));
     assert!(invalidate(&mut p, newest));
     assert!(!input(&mut p, "move", 1, Some(collected), 1, 500.0).unwrap());
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert_eq!(
         circle.state().unwrap().transform.translation,
         noon_core::SemanticVec3::ZERO
     );
     assert_eq!(
-        p.session.frame().objects[0].transform.translation,
+        p.source.session().frame().objects[0].transform.translation,
         Vec2::ZERO
     );
 }
@@ -758,22 +763,25 @@ fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
     let acquired = receipt(&delta(&mut p), 1);
     assert!(acknowledge(&mut p, acquired));
     assert!(input(&mut p, "press", 1, Some(acquired), 1, 400.0).unwrap());
-    assert!(p.session.translation_drag_active());
+    assert!(p.source.session().translation_drag_active());
 
-    p.session.advance_to(0.5).unwrap();
-    assert_eq!(p.session.camera().unwrap().center, Vec2::new(1.0, 0.0));
-    assert!(p.session.translation_drag_active());
+    p.source.session_mut().advance_to(0.5).unwrap();
+    assert_eq!(
+        p.source.session().camera().unwrap().center,
+        Vec2::new(1.0, 0.0)
+    );
+    assert!(p.source.session().translation_drag_active());
     let moved_camera = receipt(&delta(&mut p), 2);
     assert!(acknowledge(&mut p, moved_camera));
     assert!(!input(&mut p, "move", 1, Some(moved_camera), 1, 450.0).unwrap());
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert_eq!(
         circle.state().unwrap().transform.translation,
         noon_core::SemanticVec3::ZERO
     );
     assert_eq!(
         scene
-            .live(&mut p.session)
+            .live(p.source.session_mut())
             .effective(&circle)
             .unwrap()
             .transform
@@ -786,15 +794,15 @@ fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
 fn a_new_pointer_source_cancels_a_captured_drag_before_rebinding() {
     let (mut p, circle, presented) = drag_player();
     assert!(input(&mut p, "press", 1, Some(presented), 1, 400.0).unwrap());
-    assert!(p.session.translation_drag_active());
+    assert!(p.source.session().translation_drag_active());
 
     assert!(
         !input(&mut p, "move", 2, Some(presented), 1, 450.0).unwrap(),
         "a new source cannot inherit the old source's captured hit"
     );
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert_eq!(
-        p.session.frame().objects[0].transform.translation,
+        p.source.session().frame().objects[0].transform.translation,
         Vec2::ZERO
     );
     assert_eq!(
@@ -817,10 +825,10 @@ fn unrelated_button_release_does_not_release_the_captured_translation_drag() {
             &serde_json::json!({"input": unrelated, "presentation": presented}).to_string(),
         )
         .unwrap());
-    assert!(p.session.translation_drag_active());
+    assert!(p.source.session().translation_drag_active());
 
     assert!(input(&mut p, "release", 1, Some(presented), 1, 400.0).unwrap());
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert_eq!(
         circle.state().unwrap().transform.translation,
         noon_core::SemanticVec3::ZERO
@@ -830,7 +838,7 @@ fn unrelated_button_release_does_not_release_the_captured_translation_drag() {
 #[test]
 fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
     let (mut p, circle, r) = drag_player();
-    let before = p.session.publication_context().scene_revision();
+    let before = p.source.session().publication_context().scene_revision();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     assert!(
         p.drain_delta_json().unwrap().is_none(),
@@ -840,28 +848,39 @@ fn translation_drag_view_change_cancels_before_retiring_the_old_receipt() {
     let old = receipt(&delta(&mut p), 3);
     assert!(acknowledge(&mut p, old));
     register(&mut p, 2);
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert_eq!(
-        p.session.frame().objects[0].transform.translation,
+        p.source.session().frame().objects[0].transform.translation,
         Vec2::ZERO
     );
     assert_eq!(
         circle.state().unwrap().transform.translation,
         noon_core::SemanticVec3::ZERO
     );
-    assert_eq!(p.session.publication_context().scene_revision(), before);
+    assert_eq!(
+        p.source.session().publication_context().scene_revision(),
+        before
+    );
     assert!(input(&mut p, "release", 1, Some(old), 1, 500.0).is_err());
-    assert_eq!(p.session.publication_context().scene_revision(), before);
+    assert_eq!(
+        p.source.session().publication_context().scene_revision(),
+        before
+    );
 }
 
 #[test]
 fn renderer_receipt_refreshes_stationary_hover_without_synthesizing_input() {
     let (mut p, first) = ready();
     assert!(input(&mut p, "move", 1, Some(first), 1, 400.0).unwrap());
-    let target = p.session.hovered_pointer_target().expect("center hover");
+    let target = p
+        .source
+        .session()
+        .hovered_pointer_target()
+        .expect("center hover");
     let sequence = p.next_native_event_sequence;
     let mut phase = p
-        .session
+        .source
+        .session_mut()
         .begin_required_callback_phase(0.0, [target])
         .unwrap();
     phase
@@ -873,10 +892,11 @@ fn renderer_receipt_refreshes_stationary_hover_without_synthesizing_input() {
             },
         )
         .unwrap();
-    p.session
+    p.source
+        .session_mut()
         .commit_required_callback_phase(phase.finish())
         .unwrap();
-    assert_eq!(p.session.hovered_pointer_target(), Some(target));
+    assert_eq!(p.source.session().hovered_pointer_target(), Some(target));
     // A delayed old receipt never retargets the current publication.
     assert!(acknowledge(
         &mut p,
@@ -885,53 +905,14 @@ fn renderer_receipt_refreshes_stationary_hover_without_synthesizing_input() {
             ..first
         }
     ));
-    assert_eq!(p.session.hovered_pointer_target(), Some(target));
+    assert_eq!(p.source.session().hovered_pointer_target(), Some(target));
     let next = receipt(&delta(&mut p), 3);
     assert!(acknowledge(&mut p, next));
-    assert_eq!(p.session.hovered_pointer_target(), None);
+    assert_eq!(p.source.session().hovered_pointer_target(), None);
     assert_eq!(p.next_native_event_sequence, sequence);
-    assert_eq!(p.session.frame().time, 0.0);
+    assert_eq!(p.source.session().frame().time, 0.0);
     assert!(input(&mut p, "move", 1, Some(next), 1, 600.0).unwrap());
-    assert_eq!(p.session.hovered_pointer_target(), Some(target));
+    assert_eq!(p.source.session().hovered_pointer_target(), Some(target));
     assert!(input(&mut p, "cancel", 1, None, 1, 0.0).unwrap());
-    assert_eq!(p.session.hovered_pointer_target(), None);
-}
-
-#[test]
-fn pointer_receipt_lifecycle_requires_the_existing_semantic_owner() {
-    let mut p = player();
-    register(&mut p, 1);
-    let frame = p.session.frame().clone();
-    let publication = p.session.publication_context();
-    let sequence = p.next_native_event_sequence;
-    let owner = p.semantics.take().unwrap();
-    assert_eq!(
-        p.initial_delta_json().unwrap_err(),
-        "execution player lost its semantic store"
-    );
-    assert!(!p.snapshot_sent);
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), publication);
-    assert_eq!(p.next_native_event_sequence, sequence);
-
-    // Restoring the same owner permits normal issuance, not forged feedback.
-    p.semantics = Some(owner);
-    let r = receipt(&delta(&mut p), 1);
-    let owner = p.semantics.take().unwrap();
-    assert_eq!(
-        p.note_pointer_presentation_json(&serde_json::to_string(&r).unwrap())
-            .unwrap_err(),
-        "execution player lost its semantic store"
-    );
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), publication);
-    assert_eq!(p.next_native_event_sequence, sequence);
-    assert!(p.browser_pointer_binding.is_none());
-
-    // Rejected feedback did not consume the receipt or acknowledge an input.
-    p.semantics = Some(owner);
-    assert!(acknowledge(&mut p, r));
-    assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
-    assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert_eq!(p.source.session().hovered_pointer_target(), None);
 }

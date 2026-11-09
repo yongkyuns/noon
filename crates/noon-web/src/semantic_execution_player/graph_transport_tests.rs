@@ -288,11 +288,13 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
     };
     let arrow = digraph.edge(&1, &2).unwrap().arrow().unwrap();
     let shaft = player
-        .session
+        .source
+        .session()
         .execution_object_id(arrow.shaft().node_id())
         .unwrap();
     let tip = player
-        .session
+        .source
+        .session()
         .execution_object_id(arrow.end_tip().node_id())
         .unwrap();
     let admitted = player.delta(false).unwrap().unwrap();

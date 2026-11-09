@@ -30,4 +30,4 @@ class BloomEmission(MovingCameraScene):
         self.wait(0.75)
         self.play(source.animate.set_emission(0), camera.animate.set_effect("bloom", intensity=0),
                   run_time=1.5, rate_func=linear)
-        self.wait(0.75)
+        self.wait(3.25)

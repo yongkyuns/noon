@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "d971e1d7abd960ff37a4e9f8450cffac42b57a8a",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "d971e1d7abd960ff37a4e9f8450cffac42b57a8a",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "6faf38f05de5a5afe03ec6cb629340de9c7b93ca0409269f0b4d7190632e689f"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "db9471d31e4d6a55d81d1f38aebc06d3b07a34dfa76c7a97c8e639ba5d63dcfd"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "41336601b71d1300814d5e3058aef79eae006411be7c961c8f413d752bbe04c2"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "b94b3a88a00e48e606252c62115d98d1b92b37e749d6c19eec1f1843e725d097"
+  },
+  "posters": [
+    {
+      "id": "showcase-camera-follows-path",
+      "captureBuildId": "b94b3a88a00e48e606252c62115d98d1b92b37e749d6c19eec1f1843e725d097",
+      "sourceSha256": "aafc4a18eb8cf4dfacc9abb39ba5c643ac77d94b4d7b44d9e4d41339e779f87a",
+      "thumbnailTime": 7.1,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 6197,
+        "pngSha256": "18acd980cd7c0d5dd3886a6d473c67b453ee8d75e8dca5d5f2d1d301df85178d",
+        "pixelSha256": "d2b64122c3fbd4a5dabd50bb72d69cf77c749b20a215c036e5530f5cdaee28d0"
+      },
+      "sample": {
+        "requestedTime": 7.1,
+        "publishedTime": 7.1,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

@@ -13,7 +13,7 @@ impl SemanticExecutionPlayer {
 impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = hasAudio))]
     pub fn has_audio_wasm(&self) -> bool {
-        self.session.has_audio()
+        self.source.session().has_audio()
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finiteAudioDuration))]
@@ -24,7 +24,7 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioResourceBundleBytes))]
     pub fn audio_resource_bundle_bytes(&self) -> Result<Vec<u8>, String> {
-        crate::worker_audio::encode(&self.session, self.encoder.session())
+        crate::worker_audio::encode(self.source.session(), self.encoder.session())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJson))]
@@ -33,7 +33,7 @@ impl SemanticExecutionPlayer {
             return Err("audio anchor requires a finite host timestamp".into());
         }
         Ok(serde_json::json!({
-            "session": self.encoder.session(), "time": self.session.frame().time,
+            "session": self.encoder.session(), "time": self.source.session().frame().time,
             "playing": self.clock.is_playing(), "buffering": false,
             "sampledEpochMs": sampled_epoch_ms,
         })

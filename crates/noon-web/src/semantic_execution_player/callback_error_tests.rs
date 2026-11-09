@@ -304,7 +304,8 @@ fn callback_and_advancement_share_settled_nested_error_projection() {
     let before = state(&player);
     for time in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let error = player
-            .session
+            .source
+            .session_mut()
             .advance_to_callback_barrier(time)
             .expect_err("the shared callback operation rejects non-finite time");
         // Exercise the existing shared wrapper conversion as well as the
@@ -323,13 +324,14 @@ fn callback_and_advancement_share_settled_nested_error_projection() {
         assert_eq!(state(&player), before);
     }
 
-    let segment = player.session.wait_segment(0.25).unwrap();
+    let segment = player.source.session().wait_segment(0.25).unwrap();
     let phase = phase(&mut player);
     player.initial_delta_json().unwrap();
     let before = state(&player);
-    let publication = player.session.publication_context();
+    let publication = player.source.session().publication_context();
     let error = player
-        .session
+        .source
+        .session_mut()
         .advance_segment_to_callback_barrier(segment, 0.125)
         .expect_err("the shared segment operation rejects a pending callback");
     let failure = AuthoringFailure::from(error);
@@ -343,7 +345,7 @@ fn callback_and_advancement_share_settled_nested_error_projection() {
     assert!(cause.cause.is_none());
     assert!(failure.source().is_some());
     assert_eq!(state(&player), before);
-    assert_eq!(player.session.publication_context(), publication);
+    assert_eq!(player.source.session().publication_context(), publication);
     assert_eq!(player.drain_delta_json().unwrap(), None);
     finish(&mut player, Some(&phase));
 }
@@ -354,7 +356,7 @@ fn checked_callback_emission_keeps_f64_and_rejects_invalid_batches_atomically() 
     let phase = phase(&mut player);
     player.initial_delta_json().unwrap();
     let before = state(&player);
-    let before_frame = player.session.frame().clone();
+    let before_frame = player.source.session().frame().clone();
     let strength = 7.000000000000001_f64;
     let valid = json!({"kind":"emission","object":phase["objects"][0]["node"],"emission":strength});
     for invalid in [json!(-0.1), json!(64.0), json!("NaN")] {
@@ -366,14 +368,17 @@ fn checked_callback_emission_keeps_f64_and_rejects_invalid_batches_atomically() 
             )
             .is_err());
         assert_eq!(state(&player), before);
-        assert_eq!(player.session.frame(), &before_frame);
+        assert_eq!(player.source.session().frame(), &before_frame);
         assert_eq!(player.drain_delta_json().unwrap(), None);
     }
     player
         .commit_callback_phase_json(&json!({"token":phase["token"],"writes":[valid]}).to_string())
         .unwrap();
     assert_eq!(
-        player.session.frame().objects[0].style.emission.strength(),
+        player.source.session().frame().objects[0]
+            .style
+            .emission
+            .strength(),
         strength
     );
     finish(&mut player, None);

@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "d971e1d7abd960ff37a4e9f8450cffac42b57a8a",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "d971e1d7abd960ff37a4e9f8450cffac42b57a8a",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "6faf38f05de5a5afe03ec6cb629340de9c7b93ca0409269f0b4d7190632e689f"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "db9471d31e4d6a55d81d1f38aebc06d3b07a34dfa76c7a97c8e639ba5d63dcfd"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "41336601b71d1300814d5e3058aef79eae006411be7c961c8f413d752bbe04c2"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "b94b3a88a00e48e606252c62115d98d1b92b37e749d6c19eec1f1843e725d097"
+  },
+  "posters": [
+    {
+      "id": "showcase-spatial-scene",
+      "captureBuildId": "b94b3a88a00e48e606252c62115d98d1b92b37e749d6c19eec1f1843e725d097",
+      "sourceSha256": "fdb34592531156b14af2393d4c2073acc86f3a9003d5785d4524758b45adec13",
+      "thumbnailTime": 7.1,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 38278,
+        "pngSha256": "a15fd0a8830cd0d88920bc8bee001b214ff9a8c394a6729f7276ac52f2134d4f",
+        "pixelSha256": "8099341d26ebe4beb8fa64f3fa9bfe8776a77477a64795e8ace059728f5832e8"
+      },
+      "sample": {
+        "requestedTime": 7.1,
+        "publishedTime": 7.1,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

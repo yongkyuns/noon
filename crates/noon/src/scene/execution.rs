@@ -109,17 +109,14 @@ impl Scene {
 }
 
 impl SceneExecution {
-    /// Transfer this checked pair into an existing language/context adapter.
-    /// No arena or runtime is copied, replaced, or lowered during the handoff.
-    pub fn into_integration_parts(
-        mut self,
-    ) -> (Rc<RefCell<SemanticStore>>, SemanticNodeId, ExecutionSession) {
-        let session = self
-            .scene
-            .execution
-            .take()
-            .expect("consumed Scene owns execution");
-        (self.scene.store, self.scene.root, session)
+    /// Borrow the canonical Scene for authored observations and identity checks.
+    pub const fn scene(&self) -> &Scene {
+        &self.scene
+    }
+
+    /// Publish ordinary authoring operations through the Scene that owns execution.
+    pub fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
     }
 
     pub const fn session(&self) -> &ExecutionSession {

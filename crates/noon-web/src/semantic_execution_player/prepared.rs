@@ -19,7 +19,8 @@ impl SemanticExecutionPlayer {
     pub(crate) fn observed_source_execution_requirement(
         &self,
     ) -> Option<noon::SourceExecutionRequirement> {
-        self.session
+        self.source
+            .session()
             .continuation_execution_requirement(noon::ContinuationEffects::Opaque)
     }
 
@@ -31,7 +32,8 @@ impl SemanticExecutionPlayer {
         if finished {
             self.completed_prepared_boundary()?;
         }
-        self.session
+        self.source
+            .session()
             .preflight_prepared_source(Some(publisher))
             .map_err(prefix_error)
     }
@@ -49,7 +51,8 @@ impl SemanticExecutionPlayer {
             self.live_segment()?;
         }
         if self
-            .session
+            .source
+            .session_mut()
             .begin_observed_prefix_source(publisher, reader)
             .map_err(prefix_error)?
             .is_none()
@@ -71,7 +74,8 @@ impl SemanticExecutionPlayer {
         // An interpreter invocation may perform arbitrary host work after this
         // await. Scene replay metadata is not a source-purity proof. Keep its
         // original stack behind the ordinary observed completion protocol.
-        self.session
+        self.source
+            .session_mut()
             .begin_observed_prepared_source(effects)
             .map_err(prefix_error)
     }
@@ -80,7 +84,8 @@ impl SemanticExecutionPlayer {
         &self,
         publisher: &PrefixPublisher,
     ) -> Result<(), AuthoringFailure> {
-        self.session
+        self.source
+            .session()
             .validate_prepared_publisher(publisher)
             .map_err(prefix_error)
     }
@@ -118,7 +123,8 @@ impl SemanticExecutionPlayer {
         publisher: Option<&PrefixPublisher>,
     ) -> Result<PreparedPrefixAdvance, AuthoringFailure> {
         if let Some(requirement) = self
-            .session
+            .source
+            .session()
             .preflight_prepared_source(publisher)
             .map_err(prefix_error)?
         {
@@ -128,7 +134,7 @@ impl SemanticExecutionPlayer {
         self.live_advance_segment_to(segment.end_time())?;
         Ok(PreparedPrefixAdvance::Advanced {
             segment,
-            publication: self.session.publication_context(),
+            publication: self.source.session().publication_context(),
         })
     }
 
@@ -138,8 +144,8 @@ impl SemanticExecutionPlayer {
         publication: noon_core::PublicationContext,
     ) -> Result<f64, AuthoringFailure> {
         if self.live_segment()? != expected
-            || self.session.frame().time != expected.end_time()
-            || self.session.publication_context() != publication
+            || self.source.session().frame().time != expected.end_time()
+            || self.source.session().publication_context() != publication
         {
             return Err(prefix_error(noon::PrefixError::NotReady));
         }
@@ -155,8 +161,8 @@ impl SemanticExecutionPlayer {
                 "complete the source segment before publishing prepared history",
             ));
         };
-        if self.session.frame().time != segment.end_time()
-            || !self.session.segment_state(segment).is_complete()
+        if self.source.session().frame().time != segment.end_time()
+            || !self.source.session().segment_state(segment).is_complete()
         {
             return Err(prefix_error(noon::PrefixError::NotReady));
         }
@@ -165,16 +171,17 @@ impl SemanticExecutionPlayer {
 
     pub(crate) fn prepare_initial_source_segment(&mut self) -> Result<bool, AuthoringFailure> {
         self.live_prepare_segment()?;
-        self.session
+        self.source
+            .session()
             .has_prepared_prefix_interval(self.completed_prepared_boundary()?)
             .map_err(prefix_error)
     }
 
     pub(crate) fn has_finished_static_source_profile(&self) -> bool {
-        self.session.frame().time == 0.0
-            && self.session.finite_timeline_end_time() == Some(0.0)
-            && !self.session.has_audio()
-            && !self.session.has_playback_controls()
+        self.source.session().frame().time == 0.0
+            && self.source.session().finite_timeline_end_time() == Some(0.0)
+            && !self.source.session().has_audio()
+            && !self.source.session().has_playback_controls()
     }
 
     pub(crate) fn create_finished_static_reader(
@@ -187,24 +194,33 @@ impl SemanticExecutionPlayer {
         if !self.has_finished_static_source_profile() {
             return Err(prefix_error(noon::PrefixError::NotReady));
         }
-        if self.session.source_execution_requirement().is_some() {
-            self.session
+        if self
+            .source
+            .session()
+            .source_execution_requirement()
+            .is_some()
+        {
+            self.source
+                .session_mut()
                 .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
                 .map_err(prefix_error)?;
             self.pause();
             return Ok(None);
         }
-        if !self.session.replay_scope_active() {
-            self.session
+        if !self.source.session().replay_scope_active() {
+            self.source
+                .session_mut()
                 .begin_replay_retention(noon_runtime::ReplayLimits::default())
                 .map_err(|error| {
                     AuthoringFailure::unclassified("prepared.static_source", &error)
                 })?;
         }
-        self.session
+        self.source
+            .session_mut()
             .seal_replay()
             .map_err(|error| AuthoringFailure::unclassified("prepared.static_source", &error))?;
-        self.session
+        self.source
+            .session()
             .create_finished_prepared_reader()
             .map(Some)
             .map_err(prefix_error)
@@ -213,7 +229,8 @@ impl SemanticExecutionPlayer {
     pub(crate) fn create_prepared_prefix(
         &self,
     ) -> Result<(PrefixPublisher, PrefixReader), AuthoringFailure> {
-        self.session
+        self.source
+            .session()
             .create_prepared_prefix(self.completed_prepared_boundary()?)
             .map_err(prefix_error)
     }
@@ -222,7 +239,8 @@ impl SemanticExecutionPlayer {
         &self,
         publisher: &mut PrefixPublisher,
     ) -> Result<PrefixBatch, AuthoringFailure> {
-        self.session
+        self.source
+            .session()
             .publish_prepared_prefix(self.completed_prepared_boundary()?, publisher)
             .map_err(prefix_error)
     }
@@ -232,10 +250,12 @@ impl SemanticExecutionPlayer {
     /// an otherwise live source as an incidental side effect of a rejected call.
     pub(crate) fn seal_prepared_source(&mut self) -> Result<(), AuthoringFailure> {
         self.completed_prepared_boundary()?;
-        self.session
+        self.source
+            .session()
             .validate_prepared_source_domain()
             .map_err(prefix_error)?;
-        self.session
+        self.source
+            .session_mut()
             .seal_replay()
             .map_err(|error| AuthoringFailure::unclassified("prepared.seal", &error))
     }
@@ -244,7 +264,8 @@ impl SemanticExecutionPlayer {
         &self,
         publisher: &mut PrefixPublisher,
     ) -> Result<PrefixBatch, AuthoringFailure> {
-        self.session
+        self.source
+            .session()
             .finish_prepared_prefix(self.completed_prepared_boundary()?, publisher)
             .map_err(prefix_error)
     }

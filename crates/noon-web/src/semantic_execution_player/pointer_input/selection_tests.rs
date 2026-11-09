@@ -45,8 +45,8 @@ fn drain(player: &mut SemanticExecutionPlayer) -> RetainedFamilyExecutionDeltaEn
 #[test]
 fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
     let mut p = player();
-    let frame = p.session.frame().clone();
-    let context = p.session.publication_context();
+    let frame = p.source.session().frame().clone();
+    let context = p.source.session().publication_context();
     let bundle = p.resource_bundle_bytes();
     input(&mut p, "press", 400.0);
     assert!(p.drain_delta_json().unwrap().is_none());
@@ -59,10 +59,15 @@ fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
     assert!(selected.resource_additions.is_none());
     assert!(selected.transient_presentations.is_empty());
     assert!(selected.selection_overlay.is_some());
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), context);
+    assert_eq!(p.source.session().frame(), &frame);
+    assert_eq!(p.source.session().publication_context(), context);
     assert_eq!(p.resource_bundle_bytes(), bundle);
-    assert!(p.session.take_renderer_publication().changes().is_empty());
+    assert!(p
+        .source
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
     assert!(p.drain_delta_json().unwrap().is_none());
     click(&mut p, 5.0);
     let clear = drain(&mut p);
@@ -74,8 +79,8 @@ fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
         .as_object()
         .unwrap()
         .contains_key("selection_overlay"));
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), context);
+    assert_eq!(p.source.session().frame(), &frame);
+    assert_eq!(p.source.session().publication_context(), context);
     assert_eq!(p.execution_wake(50_000.0).unwrap().cadence(), "idle");
 }
 
@@ -123,7 +128,7 @@ fn rebind_snapshot_projects_current_session_but_seek_clears_selection() {
     let clear: RetainedFamilyExecutionDeltaEnvelope =
         serde_json::from_str(&p.seek_delta_json(0.0).unwrap().unwrap()).unwrap();
     assert!(clear.selection_overlay.is_none());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
 }
 
 #[test]

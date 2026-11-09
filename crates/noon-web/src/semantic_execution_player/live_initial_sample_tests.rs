@@ -109,19 +109,23 @@ fn late_first_sample_of_a_new_finite_play_is_evaluated_before_endpoint() {
     player.live_segment_wake(1_000.0).unwrap();
     // A logical wait can observe the same continuous background work. It must
     // still catch up immediately, without acquiring an extra presentation.
-    let wait = player.session.wait_segment(0.5).unwrap();
+    let wait = player.source.session().wait_segment(0.5).unwrap();
     assert!(matches!(
-        player.session.segment_state(wait).timeline(),
+        player.source.session().segment_state(wait).timeline(),
         TimelineWakeState::Continuous
     ));
     assert_eq!(
-        player.session.initial_continuous_segment_sample(wait, 9.0),
+        player
+            .source
+            .session()
+            .initial_continuous_segment_sample(wait, 9.0),
         9.0
     );
     let segment = player.live_segment().unwrap();
     assert_eq!(
         player
-            .session
+            .source
+            .session()
             .initial_continuous_segment_sample(segment, f64::INFINITY),
         f64::INFINITY
     );
