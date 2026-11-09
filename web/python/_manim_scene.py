@@ -28,6 +28,7 @@ import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import (
+    PORTABLE_SPATIAL_METHODS,
     cooperative_source_yield_active,
     current_source_invocation,
 )
@@ -916,6 +917,15 @@ def _portable_scene_methods(scene: _base.Scene) -> dict[str, object] | None:
         "set_drag_targets": _base.Scene.set_drag_targets,
         "next_section": _base.Scene.next_section,
     }
+    if any(inspect.getattr_static(scene, name, None) is not None
+           for name in PORTABLE_SPATIAL_METHODS):
+        from _noon_spatial import SpatialScene, ThreeDScene
+
+        if not isinstance(scene, SpatialScene):
+            return None
+        canonical = ThreeDScene if isinstance(scene, ThreeDScene) else SpatialScene
+        methods.update({name: getattr(canonical, name, None) for name in PORTABLE_SPATIAL_METHODS})
+        methods["_camera_endpoint"] = getattr(canonical, "_camera_endpoint", None)
     # Keep this conservative and descriptor-safe, like the base-method
     # admission below.  The source compiler admits direct scene calls from its
     # fixed allow-list, including calls nested in expressions.
@@ -1007,9 +1017,14 @@ async def await_source_barrier(method, /, *args, **kwargs):
     """Yield at one compiled host call, using the existing canonical awaitable."""
     scene = getattr(method, "__self__", None)
     if (not isinstance(scene, _base.Scene)
-            or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
-            or getattr(method, "__func__", None) not in (_base.Scene.play, _base.Scene.wait)):
-        raise RuntimeError("portable barrier must be the current Scene's canonical play/wait")
+            or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)):
+        raise RuntimeError("portable barrier must be a canonical operation on the current Scene")
+    function = getattr(method, "__func__", None)
+    if function not in (_base.Scene.play, _base.Scene.wait):
+        from _noon_spatial import ThreeDScene
+
+        if not isinstance(scene, ThreeDScene) or function is not ThreeDScene.move_camera:
+            raise RuntimeError("portable barrier must be a canonical operation on the current Scene")
     setattr(scene, _PORTABLE_BARRIER_CALL, True)
     try:
         pending = method(*args, **kwargs)

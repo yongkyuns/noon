@@ -569,6 +569,24 @@ value: MissingName = 2
         self.assertEqual(original.co_qualname, "FollowingGraphCamera.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_spatial_gallery_uses_portable_camera_barriers(self):
+        examples = Path(__file__).with_name("examples")
+        for filename in ("showcase_spatial_scene.py", "showcase_three_d_axes.py"):
+            with self.subTest(filename=filename):
+                _, pairs = compile_authoring_source(examples.joinpath(filename).read_text())
+                self.assertEqual(len(pairs), 1)
+                self.assertIn(BARRIER_GLOBAL, next(iter(pairs.values())).co_names)
+
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            from _manim_scene import _portable_scene_methods
+            from _noon_spatial import ThreeDScene
+
+            scene = object.__new__(ThreeDScene)
+            methods = _portable_scene_methods(scene)
+            self.assertTrue(has_portable_scene_methods(scene, **methods))
+            scene.move_camera = lambda **kwargs: scene.wait(1)
+            self.assertFalse(has_portable_scene_methods(scene, **methods))
+
     def test_timed_supplementary_camera_fixtures_are_portable(self):
         examples = Path(__file__).with_name("examples")
         filenames = (

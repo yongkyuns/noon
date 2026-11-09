@@ -330,8 +330,8 @@ class SpatialScene(_base.Scene):
 
     def _edit_membership(self, kind, values=(), *, key=None):
         from _manim_scene import _canonical_edit_membership
-        _canonical_edit_membership(self, kind, values, key=key,
-                                   spatial_domain="world_default" if kind == "add" else None)
+        return _canonical_edit_membership(self, kind, values, key=key,
+                                          spatial_domain="world_default" if kind == "add" else None)
 
     def point_light(self, position=(4, -3, 6), color=_base.WHITE, intensity=1):
         from _manim_compat import _as_color
@@ -348,18 +348,18 @@ class SpatialScene(_base.Scene):
 
     def add_world_mobjects(self, *mobjects):
         from _manim_scene import _canonical_edit_membership
-        _canonical_edit_membership(self, "add", mobjects, spatial_domain="world")
-        return self
+        pending = _canonical_edit_membership(self, "add", mobjects, spatial_domain="world")
+        return _base._membership_result(pending, self)
 
     def add_fixed_in_frame_mobjects(self, *mobjects):
         from _manim_scene import _canonical_edit_membership
-        _canonical_edit_membership(self, "add", mobjects, spatial_domain="fixed_frame")
-        return self
+        pending = _canonical_edit_membership(self, "add", mobjects, spatial_domain="fixed_frame")
+        return _base._membership_result(pending, self)
 
     def add_fixed_orientation_mobjects(self, *mobjects):
         from _manim_scene import _canonical_edit_membership
-        _canonical_edit_membership(self, "add", mobjects, spatial_domain="fixed_orientation")
-        return self
+        pending = _canonical_edit_membership(self, "add", mobjects, spatial_domain="fixed_orientation")
+        return _base._membership_result(pending, self)
 
     def set_world_transform(self, mobject, *, translation=(0, 0, 0),
                             rotation=(1, 0, 0, 0), scale=(1, 1, 1)):

@@ -7,7 +7,7 @@ class SpatialSceneShowcase(ThreeDScene):
     def __init__(self):
         super().__init__(near=0.1, far=60)
 
-    async def construct(self):
+    def construct(self):
         self.set_camera_orientation(
             phi=0.95, theta=-1.15, gamma=0.05, focal_distance=6,
             zoom=1, frame_center=(0, 0, 0),
@@ -38,27 +38,27 @@ class SpatialSceneShowcase(ThreeDScene):
         self.add_fixed_in_frame_mobjects(title)
 
         # Beat 1: reveal the surface's changing highlights by moving its light and view.
-        await self.move_camera(
+        self.move_camera(
             phi=1.12, theta=-0.65, gamma=0.08, focal_distance=6, zoom=1.05,
             frame_center=(0, 0, 0),
             added_anims=(WorldTransformTo(light, translation=(-3.2, 2.8, 4.2)),),
             run_time=1.8, rate_func=linear,
         )
-        await self.wait(0.45)
+        self.wait(0.45)
 
         # Beat 2: lift the solid marker above the saddle while the light holds.
-        await self.play(
+        self.play(
             WorldTransformTo(marker, translation=(0.55, 0.15, 1.0),
                              rotation=(1, 0, 0, 0), scale=(1, 1, 1)),
             run_time=1.5, rate_func=smooth,
         )
-        await self.wait(0.4)
+        self.wait(0.4)
 
         # Beat 3: move both the light and camera to show the surface from the far side.
-        await self.move_camera(
+        self.move_camera(
             phi=0.78, theta=0.55, gamma=-0.12, focal_distance=6, zoom=1.08,
             frame_center=(0.1, 0, 0),
             added_anims=(WorldTransformTo(light, translation=(3.0, 2.6, 4.8)),),
             run_time=1.8, rate_func=linear,
         )
-        await self.wait(2.05)
+        self.wait(2.05)

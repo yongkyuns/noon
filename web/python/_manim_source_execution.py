@@ -6,8 +6,8 @@ wrapper that would turn globals into locals. The deferred callbacks themselves
 stay synchronous and are never rewritten.
 
 The original construct definitions are retained. A second, never-executed module compilation
-supplies coroutine code for ordinary ``construct`` methods with direct statement
-``self.play``/``self.wait`` barriers and resource-dependent effect/membership calls,
+supplies coroutine code for ordinary ``construct`` methods with direct scene
+barriers and resource-dependent effect/membership calls,
 including assigned and chained results. Binding that code reuses the original
 function's globals, defaults and closure; class/decorator/module effects are not
 replayed. All barriers still use the canonical Scene implementation and runtime.
@@ -4659,7 +4659,14 @@ def source_is_scene_only(source: str) -> bool:
 RESOURCE_BARRIER_METHODS = frozenset({
     "add_effect", "add", "add_foreground_mobject", "add_foreground_mobjects",
     "bring_to_front", "bring_to_back", "replace",
+    "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
 })
+
+CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"})
+PORTABLE_SPATIAL_METHODS = (
+    "move_camera", "set_camera_orientation", "point_light",
+    "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
+)
 
 
 @dataclass
@@ -4748,7 +4755,7 @@ _SCENE_CALLS = frozenset({
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "next_section",
-})
+}) | frozenset(PORTABLE_SPATIAL_METHODS)
 
 
 class _CooperativeSourceCheckpoints(ast.NodeTransformer):
@@ -4853,7 +4860,7 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
             and isinstance(call.func, ast.Attribute)
             and (isinstance(call.func.value, ast.Name)
                 and call.func.value.id == self.receiver
-                and call.func.attr in {"play", "wait"}
+                and call.func.attr in CONSTRUCT_SCENE_BARRIERS
             )
         ):
             # Inspect arguments as usual, but admit this particular receiver and
@@ -4877,7 +4884,7 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
             if (node.attr.startswith("__") or
                     (node.attr in _SCENE_CALLS and isinstance(node.ctx, (ast.Store, ast.Del)))):
                 self.unsupported = True
-            if node.attr in {"play", "wait"}:
+            if node.attr in CONSTRUCT_SCENE_BARRIERS:
                 # Aliasing, storing, passing, or using a barrier's return value
                 # requires the original synchronous/explicit async execution.
                 self.unsupported = True
@@ -4917,7 +4924,7 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
         # than pretending an arbitrary synchronous helper can suspend.
         for child in ast.walk(node):
             if (isinstance(child, ast.Name) and child.id == self.receiver
-                    or isinstance(child, ast.Attribute) and child.attr in {"play", "wait"}
+                    or isinstance(child, ast.Attribute) and child.attr in CONSTRUCT_SCENE_BARRIERS
                     or isinstance(child, (ast.Await, ast.Yield, ast.YieldFrom, ast.AsyncFunctionDef, ast.ClassDef))
                     or isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
                     and child.func.id in {"super", "locals", "globals", "vars", "eval", "exec"}
@@ -5041,7 +5048,7 @@ def compile_authoring_source(
     has_construct = any(
         code.co_name == "construct"
         and not code.co_flags & (inspect.CO_COROUTINE | inspect.CO_GENERATOR)
-        and {"play", "wait", "add_effect"}.intersection(code.co_names)
+        and (CONSTRUCT_SCENE_BARRIERS | {"add_effect"}).intersection(code.co_names)
         for code in originals
     )
     has_module_barrier = bool({"play", "wait", "add_effect"}.intersection(original.co_names))
@@ -5110,7 +5117,7 @@ def bind_portable_construct(
     return MethodType(portable, method.__self__)
 
 
-def has_portable_scene_methods(scene: object, **methods: FunctionType) -> bool:
+def has_portable_scene_methods(scene: object, **methods: FunctionType | None) -> bool:
     """Admit only ordinary method lookup, without invoking authored descriptors.
 
     Class-only checks miss instance overrides installed by setup(). Dynamic
