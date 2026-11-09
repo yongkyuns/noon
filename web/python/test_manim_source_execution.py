@@ -582,10 +582,21 @@ value: MissingName = 2
             from _noon_spatial import ThreeDScene
 
             scene = object.__new__(ThreeDScene)
-            methods = _portable_scene_methods(scene)
+            methods = _portable_scene_methods(scene, ("move_camera",))
             self.assertTrue(has_portable_scene_methods(scene, **methods))
             scene.move_camera = lambda **kwargs: scene.wait(1)
             self.assertFalse(has_portable_scene_methods(scene, **methods))
+            self.assertTrue(has_portable_scene_methods(scene, **_portable_scene_methods(scene, ("wait",))))
+
+    def test_unrelated_camera_method_in_callback_keeps_portable_construct(self):
+        _, pairs = compile_authoring_source(textwrap.dedent('''
+            class Example(Scene):
+                def construct(self):
+                    def updater(camera):
+                        camera.move_camera()
+                    self.wait(0.1)
+        '''))
+        self.assertEqual(len(pairs), 1)
 
     def test_timed_supplementary_camera_fixtures_are_portable(self):
         examples = Path(__file__).with_name("examples")

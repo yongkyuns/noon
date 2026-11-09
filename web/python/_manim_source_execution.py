@@ -4663,10 +4663,10 @@ RESOURCE_BARRIER_METHODS = frozenset({
 })
 
 CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"})
-PORTABLE_SPATIAL_METHODS = (
+PORTABLE_SPATIAL_METHODS = frozenset({
     "move_camera", "set_camera_orientation", "point_light",
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
-)
+})
 
 
 @dataclass
@@ -4755,7 +4755,7 @@ _SCENE_CALLS = frozenset({
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "next_section",
-}) | frozenset(PORTABLE_SPATIAL_METHODS)
+}) | PORTABLE_SPATIAL_METHODS
 
 
 class _CooperativeSourceCheckpoints(ast.NodeTransformer):
@@ -4924,7 +4924,7 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
         # than pretending an arbitrary synchronous helper can suspend.
         for child in ast.walk(node):
             if (isinstance(child, ast.Name) and child.id == self.receiver
-                    or isinstance(child, ast.Attribute) and child.attr in CONSTRUCT_SCENE_BARRIERS
+                    or isinstance(child, ast.Attribute) and child.attr in {"play", "wait"}
                     or isinstance(child, (ast.Await, ast.Yield, ast.YieldFrom, ast.AsyncFunctionDef, ast.ClassDef))
                     or isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
                     and child.func.id in {"super", "locals", "globals", "vars", "eval", "exec"}
