@@ -1,15 +1,15 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "79e7d31b2377e7babf029d8c9f5b68f52aef76ce",
+  "captureRevision": "1400ea86e2d69e6b9aa04c39383163f0ab9a7520",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "79e7d31b2377e7babf029d8c9f5b68f52aef76ce",
+    "sourceRevision": "1400ea86e2d69e6b9aa04c39383163f0ab9a7520",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "cc8287fa4b84c4cd1022f8713fd4f8d0f7048b349f8ccb78b9f0c117cf6c58c6"
+        "sha256": "79d6387757b36d8fbbbc38e11d9022f02c68474347655e1f9f8045d123bf941d"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
@@ -24,13 +24,13 @@
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "2f680a2f76f81a88c04212fcaa751520604c0f866c3f1e93a0a0ce646d0570ed"
+    "buildId": "e7786578dc25cc31026602963913fedd29ab530fa02b4a24c34f29f2227ff30a"
   },
   "posters": [
     {
       "id": "showcase-linear-algebra",
-      "captureBuildId": "2f680a2f76f81a88c04212fcaa751520604c0f866c3f1e93a0a0ce646d0570ed",
-      "sourceSha256": "3c62fc355b581ec5598d39ff28fb5a1493b2bbda609ebab8f9cbb9ea98cbf831",
+      "captureBuildId": "e7786578dc25cc31026602963913fedd29ab530fa02b4a24c34f29f2227ff30a",
+      "sourceSha256": "259aa762117cbd89f4cd9933a47c1c198d4447ac368ff05669e309f7a7c16b83",
       "thumbnailTime": 8.25,
       "image": {
         "width": 960,
