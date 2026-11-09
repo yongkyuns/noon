@@ -55,6 +55,69 @@ fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNode
     family
 }
 
+#[test]
+fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects() {
+    for (target_count, overlap) in [(1, false), (2, false), (3, false), (2, true)] {
+        let mut store = SemanticStore::new();
+        let left = object(&mut store, -2.0);
+        let right = object(&mut store, 2.0);
+        let source = family(&mut store, &[left, right]);
+        let targets = (0..target_count)
+            .map(|i| object(&mut store, 4.0 + f64::from(i)))
+            .collect::<Vec<_>>();
+        let target = family(&mut store, &targets);
+        let marker = object(&mut store, 0.0);
+        let root = family(&mut store, &[source, marker]);
+        let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+        session.take_frame_changes();
+        let context = session.publication_context();
+        let frame = session.frame().clone();
+        let nodes = store.len();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let request = SemanticCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options,
+            children: vec![
+                SemanticCompositionRequest::FamilyMethodTargetTo {
+                    source,
+                    target_state: target,
+                    options,
+                },
+                SemanticCompositionRequest::Rotate {
+                    target: if overlap { left } else { marker },
+                    angle: 1.0,
+                    hold_origin: false,
+                    options,
+                },
+            ],
+        };
+        let result = session.declare_and_activate_composition(
+            &mut store,
+            root,
+            &request,
+            AnimationOptions::new(),
+        );
+        if target_count != 2 || overlap {
+            assert!(result.is_err());
+            assert_eq!(store.len(), nodes);
+            assert_eq!(session.publication_context(), context);
+            assert_eq!(session.frame(), &frame);
+            assert!(session.take_frame_changes().is_empty());
+            continue;
+        }
+        let segment = result.unwrap();
+        session.advance_segment_to(segment, 0.5).unwrap();
+        assert_eq!(session.frame().objects[0].transform.translation.x, 1.0);
+        assert_eq!(session.frame().objects[2].transform.rotation, 0.5);
+        session.advance_segment_to(segment, 1.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        assert_eq!(store.node(source).unwrap().members(), [left, right]);
+        assert_eq!(session.frame().objects.len(), 3);
+    }
+}
+
 fn expansion_session() -> (ExecutionSession, ExecutionSegment) {
     let mut store = SemanticStore::new();
     let s0 = object(&mut store, 0.0);

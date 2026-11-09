@@ -4621,16 +4621,6 @@ impl ExecutionSession {
         {
             match family.mode {
                 SemanticFamilyTransformMode::Structural => {
-                    // Candidate-local targets have fixed flat topology, validated
-                    // by the family compiler below. They can share an activation
-                    // with independent object leaves without structural completion.
-                    if (family.target_state.existing().is_some() && !schedule.leaves().is_empty())
-                        || !schedule.scalar_leaves().is_empty()
-                    {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                                "structural unequal-family Transform supports one family Transform plus timing-only composition nodes per activation".into(),
-                            ));
-                    }
                     let activation = prepare_family_transform_activations(
                         &prepared,
                         &self.execution_index,
@@ -4658,6 +4648,19 @@ impl ExecutionSession {
                     .map_err(|error| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })?;
+                    // Both existing and candidate-local fixed-topology targets
+                    // can share ordinary tracks. Padding still needs exclusive
+                    // structural completion; use the compiler's correspondence.
+                    if !schedule.scalar_leaves().is_empty()
+                        || (!schedule.leaves().is_empty()
+                            && activation.occurrences().iter().any(|occurrence| {
+                                occurrence.source_padding || occurrence.target_padding
+                            }))
+                    {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "unequal-family Transform and scalar leaves cannot share a mixed family activation".into(),
+                        ));
+                    }
                     let members = activation
                         .occurrences()
                         .iter()
