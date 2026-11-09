@@ -128,21 +128,22 @@ fn empty_foreign_stale_and_direct_families_obey_query_and_mutation_validation() 
         .remove_node(stale.node_id())
         .unwrap();
     let store = std::rc::Rc::clone(scene.integration_store());
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
-    let before = live.effective_family_layout(&empty).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let scene = execution.scene_mut();
+    let before = scene.effective_family_layout(&empty).unwrap();
     for invalid in [&foreign, &stale] {
-        assert!(live.effective_family_layout(invalid).is_err());
-        assert!(live
+        assert!(scene.effective_family_layout(invalid).is_err());
+        assert!(scene
             .align_family_to(&empty, Target::Family(invalid), (1.0, 0.0))
             .is_err());
     }
-    live.move_family_to(&empty, Target::Point(2.0, 3.0), (0.0, 0.0), (1.0, 1.0))
+    scene
+        .move_family_to(&empty, Target::Point(2.0, 3.0), (0.0, 0.0), (1.0, 1.0))
         .unwrap();
-    assert_eq!(live.effective_family_layout(&empty).unwrap(), before);
+    assert_eq!(scene.effective_family_layout(&empty).unwrap(), before);
     let direct_id = store.borrow_mut().insert_family();
     let direct = MobjectFamily::from_node(std::rc::Rc::clone(&store), direct_id).unwrap();
-    assert_eq!(live.effective_family_layout(&direct).unwrap(), before);
+    assert_eq!(scene.effective_family_layout(&direct).unwrap(), before);
 }
 
 #[test]

@@ -960,10 +960,9 @@ pub(crate) fn live(
     candidate: &CoordinateOptions,
 ) -> PyResult<FamilyHandle> {
     context.available()?;
-    let Some(session) = context.execution.as_mut() else {
+    let Some(mut live) = context.live_session() else {
         return create(context.scene.integration_store(), candidate);
     };
-    let mut live = context.scene.live(session);
     let family = match &candidate.request {
         CoordinateRequest::NumberLine(options) => {
             live.number_line(options).map(|v| v.family().clone())

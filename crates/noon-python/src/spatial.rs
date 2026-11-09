@@ -328,7 +328,7 @@ pub(crate) fn create_mesh(
 ) -> PyResult<crate::mobject::MobjectHandle> {
     context.available()?;
     let options = candidate.take()?.into_options();
-    if context.execution.is_some() {
+    if context.has_execution() {
         context.with_live(|live| live.create_mesh(options))
     } else {
         context.scene.mesh(options).map_err(engine_error)
@@ -343,7 +343,7 @@ pub(crate) fn create_family(
     let candidate = candidate.take()?;
     let surface = candidate.has_surface_roles();
     let (meshes, paths) = candidate.into_parts().map_err(engine_error)?;
-    let family = if context.execution.is_some() {
+    let family = if context.has_execution() {
         context.with_live(|live| live.create_mesh_family_with_paths(meshes, paths))
     } else {
         context
@@ -362,7 +362,7 @@ pub(crate) fn world_affine(
     edit: noon::WorldAffineEdit,
 ) -> PyResult<()> {
     context.available()?;
-    if context.execution.is_some() {
+    if context.has_execution() {
         context.with_live(|live| live.world_affine(target, edit))
     } else {
         context

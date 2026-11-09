@@ -36,6 +36,7 @@ class NativePythonTests(unittest.TestCase):
                      "ordinary_text_family_reveal", "ordinary_text_family_write", "ordinary_arc_geometry",
                      "manim_example_typst_text", "manim_example_math_typst", "ordinary_automatic_wait_text",
                      "showcase_editorial_cover", "live_affine_animation", "live_affine_completion",
+                     "live_masked_placement",
                      "live_semantic_scene", "live_content_switch", "ordinary_become_semantics",
                      "shader_time", "showcase_wave_interference", "showcase_shader_material",
                      "noon_spatial_surface_lighting", "showcase_spatial_scene", "noon_spatial_three_d_axes",
