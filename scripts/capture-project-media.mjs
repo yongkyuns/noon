@@ -20,12 +20,12 @@ const gallery = await readJson("web/python/examples/noon_showcase_manifest.json"
 const output = path.join(root, "web/site/media");
 const scratch = await mkdtemp(path.join(os.tmpdir(), "noon-project-media-"));
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
-const fps = 10;
+const fps = 30;
 const report = {
   purpose: "sampled real Noon output; not a real-time performance benchmark",
   checkoutRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   runtime: await readJson("web/runtime-build-identity.json"),
-  rendererBackend: "WebGL2", samplingHz: 30, encodedFps: fps,
+  rendererBackend: "WebGL2", samplingHz: 30, encodedFps: { gif: 10, mp4: fps },
   viewport: { width: 960, height: 540 }, results: [],
 };
 assert.equal(report.runtime.sourceRevision, report.checkoutRevision, "capture runtime must match this checkout");
@@ -79,7 +79,7 @@ try {
       assert.ok(new Set(samples.map(sample => sample.pngSha256)).size >= 4, `${id}: static capture`);
       assert.deepEqual(errors, [], `${id}: browser errors`);
       const input = ["-v", "error", "-y", "-framerate", String(fps), "-i", path.join(frames, "%04d.png")];
-      execFileSync("ffmpeg", [...input, "-vf", "scale=480:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3", "-loop", "0", path.join(scratch, `${id}.gif`)], { timeout: 120_000 });
+      execFileSync("ffmpeg", [...input, "-vf", "fps=10,scale=480:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer:bayer_scale=3", "-loop", "0", path.join(scratch, `${id}.gif`)], { timeout: 120_000 });
       execFileSync("ffmpeg", [...input, "-c:v", "libx264", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", path.join(scratch, `${id}.mp4`)], { timeout: 120_000 });
       const files = {};
       for (const extension of ["gif", "mp4"]) {
@@ -89,6 +89,15 @@ try {
       }
       report.results.push({ id, source: entry.path, sourceSha256: hash(source), start, end, samples, files });
       console.log(`Captured ${id}: ${samples.length} actual frames`);
+    } catch (error) {
+      const evidence = path.join(root, "browser-smoke-artifacts/project-site");
+      await mkdir(evidence, { recursive: true });
+      await writeFile(path.join(evidence, `${id}-failure.json`), JSON.stringify({
+        id, error: String(error.stack ?? error), runtime: report.runtime,
+        sourceSha256: hash(source), samples, pageErrors: errors,
+      }, null, 2));
+      await page.screenshot({ path: path.join(evidence, `${id}-failure.png`) }).catch(() => {});
+      throw error;
     } finally {
       await page.close();
     }

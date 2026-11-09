@@ -33,8 +33,8 @@ canonical source paths and durations remain in
 
 `scripts/capture-project-media.mjs` executes those unchanged Python sources through
 the existing Noon raster host and WebGL2 renderer. It advances scene time at 30 Hz
-and captures 10 frames per authored second. FFmpeg makes 480 × 270 GIFs for the
-README and 960 × 540 MP4 clips for the site. Each clip is limited to 6 MB. These
+and captures 30 frames per authored second. FFmpeg makes 480 × 270, 10 fps GIFs
+for the README and 960 × 540, 30 fps MP4 clips for the site. Each clip is limited to 6 MB. These
 sampled previews are **not real-time performance measurements**.
 
 The script checks actual presentation, backend, dimensions, changing frames, and

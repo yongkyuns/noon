@@ -86,8 +86,8 @@ PYTHONPATH=build/python python3 -m noon_native web/python/examples/ordinary_affi
 
 This is the native CPython path, not the browser exporter. See
 [Native CPython](REFERENCE.md#native-cpython) for headless execution, snapshots,
-scene selection, and current limitations. There is no package-install shortcut
-assumed here: these instructions build the current repository source.
+scene selection, and current limitations. The native Python extension is
+currently built from source.
 
 ### Rust
 
@@ -100,8 +100,8 @@ cargo run -p noon-native --example ordinary_affine_play
 Rust uses the same engine directly, without Python. See the
 [native examples](crates/noon-native/examples) and
 [Rust authoring reference](REFERENCE.md#authoring) for scene construction,
-sequential animation, and the synchronous authoring prototype. Rust also runs as
-WebAssembly; host setup differs from the native runner.
+and sequential animation. Rust also runs as WebAssembly; host setup differs
+from the native runner.
 
 For a local browser build, follow the [web guide](web/README.md).
 
