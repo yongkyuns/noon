@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check site source contracts
         run: |
-          node --test scripts/project-site.test.mjs
+          node --test scripts/project-site.test.mjs web/project-site-editorial.test.mjs
           node --check scripts/capture-project-media.mjs
           node --check scripts/project-site-smoke.mjs
       - name: Build the exact-source browser runtime
