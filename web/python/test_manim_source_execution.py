@@ -814,6 +814,37 @@ value: MissingName = 2
         await _manim_scene.execute_construct(scene, portable_constructs={object(): object()})
         self.assertEqual(events, ["ordinary"])
 
+    async def test_latex_declaration_prepares_before_setup_and_stops_on_failure(self):
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            import _manim_latex
+            from _manim_scene import execute_construct
+
+            events = []
+
+            class Example(noon.Scene):
+                requires_latex = True
+
+                def setup(self):
+                    events.append("setup")
+
+                def construct(self):
+                    events.append("construct")
+
+            async def prepare():
+                events.append("prepare")
+
+            with patch.object(_manim_latex, "prepare_latex", prepare):
+                await execute_construct(Example())
+                await execute_construct(noon.Scene())
+            self.assertEqual(events, ["prepare", "setup", "construct"])
+
+            events.clear()
+            with patch.object(_manim_latex, "prepare_latex", side_effect=RuntimeError("compiler unavailable")):
+                with self.assertRaisesRegex(RuntimeError, "compiler unavailable"):
+                    await execute_construct(Example())
+            self.assertEqual(events, [])
+
     async def test_source_invocation_stops_module_candidate_before_scene_lifecycle(self):
         import noon
         with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):

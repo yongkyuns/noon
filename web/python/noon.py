@@ -1481,6 +1481,8 @@ def _membership_result(pending, result):
 class Scene:
     """Python authoring facade; semantic operations require the shared Rust host."""
 
+    requires_latex = False
+
     def __init__(self) -> None:
         # Derived wrapper/export identities only. These rows never carry scene
         # content, painter order, animation tracks, or runtime state.

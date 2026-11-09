@@ -93,7 +93,7 @@ add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
 _SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
 _CANONICAL_SCENE_FIELDS = frozenset("""
 _owner _binding_handles _object_keys _object_key_ids _next_object_id
-_canonical_authoring_context
+_canonical_authoring_context requires_latex
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
@@ -1083,6 +1083,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         }
         self.admitted_resource_preparation_loads = set()
         self.admitted_controlled_text_loads = set()
+        self.latex_prepared_constructs = set()
         self.resource_preparation_scopes = []
         self.admitted_regex_attributes = []
         self.admitted_local_group_attributes = []
@@ -3578,7 +3579,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             bool_checks.add(name)
         return set()
 
-    def _scope(self, body, parameters=(), array_parameters=(), scalar_parameters=(), integer_parameters=()):
+    def _scope(self, body, parameters=(), array_parameters=(), scalar_parameters=(), integer_parameters=(),
+               *, latex_ready=False):
         parameters = set(parameters)
         bindings = _SourceBindings()
         for node in body:
@@ -3619,7 +3621,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             and isinstance(node.value.value.func, ast.Name)
             and node.value.value.func.id in _SOURCE_RESOURCE_PREPARATIONS
         }
-        preparation_scope = {"awaits": preparation_awaits, "ready": False}
+        preparation_scope = {"awaits": preparation_awaits, "ready": latex_ready}
         self.resource_preparation_scopes.append(preparation_scope)
         self.numpy_safe_containers.append(_safe_numpy_containers(body))
         self.local_scope_names.append(bindings.names | parameters)
@@ -4210,7 +4212,8 @@ class _SceneOnlySource(ast.NodeVisitor):
                                    *((kwarg.arg,) if kwarg else ())],
                         self.numpy_array_parameters.get(node.name, ()),
                         self.numpy_scalar_parameters.get(node.name, ()),
-                        self.numpy_integer_parameters.get(node.name, ()))
+                        self.numpy_integer_parameters.get(node.name, ()),
+                        latex_ready=id(node) in self.latex_prepared_constructs)
         finally:
             self.function_context.pop()
 
@@ -4340,9 +4343,16 @@ class _SceneOnlySource(ast.NodeVisitor):
         elif node.bases[0].id != "Scene":
             raise _OpaqueSource(node, "unsupported_class_contract")
         self.visit(node.bases[0])
-        if any(not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Expr, ast.Pass))
-               or isinstance(member, ast.Expr) and not isinstance(member.value, ast.Constant)
-               for member in node.body):
+        latex_declarations = []
+        for member in node.body:
+            match member:
+                case ast.Assign(targets=[ast.Name(id="requires_latex")], value=ast.Constant(value=True)):
+                    latex_declarations.append(member)
+                case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.Expr(value=ast.Constant()) | ast.Pass():
+                    pass
+                case _:
+                    raise _OpaqueSource(node, "unsupported_class_contract")
+        if len(latex_declarations) > 1 or (latex_declarations and not self._trusted_noon_binding(node.bases[0].id)):
             raise _OpaqueSource(node, "unsupported_class_contract")
         constructs = [member for member in node.body
                       if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -4351,12 +4361,16 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(constructs[1], "unproven_audio_declaration")
         if constructs:
             self._prepare_scene_audio_calls(constructs[0])
+            if latex_declarations:
+                self.latex_prepared_constructs.add(id(constructs[0]))
         # Methods resolve module globals, not names in their class dictionary.
         previous_members = self.members
         previous_module_scope = self.scopes[0]
         previous_helpers = self.scene_helper_names
         declared_helpers = {member.name for member in node.body
                             if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        if latex_declarations and "requires_latex" in declared_helpers:
+            raise _OpaqueSource(node, "unsupported_class_contract")
         self.scene_helper_names = declared_helpers
         if len(declared_helpers) != sum(isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
                                         for member in node.body):
@@ -4396,6 +4410,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.scopes[0] = self.scopes[0] | {"Typst"}
         try:
             for member in node.body:
+                if member in latex_declarations:
+                    continue
                 if (spatial or linear) and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                         and member.name == "__init__":
                     continue
@@ -4662,7 +4678,8 @@ RESOURCE_BARRIER_METHODS = frozenset({
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
 })
 
-CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"})
+PORTABLE_VECTOR_METHODS = frozenset({"add_vector", "apply_matrix"})
+CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"}) | PORTABLE_VECTOR_METHODS
 PORTABLE_SPATIAL_METHODS = frozenset({
     "move_camera", "set_camera_orientation", "point_light",
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
@@ -4755,7 +4772,7 @@ _SCENE_CALLS = frozenset({
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "next_section",
-}) | PORTABLE_SPATIAL_METHODS
+}) | PORTABLE_SPATIAL_METHODS | PORTABLE_VECTOR_METHODS
 
 
 class _CooperativeSourceCheckpoints(ast.NodeTransformer):

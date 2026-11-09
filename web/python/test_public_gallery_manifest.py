@@ -8,13 +8,8 @@ from pathlib import Path
 class PublicGalleryManifestTests(unittest.TestCase):
     def test_public_sources_default_to_synchronous_authoring(self) -> None:
         web_root = Path(__file__).parents[1]
-        # LaTeX must load its compiler assets before the first text constructor.
         # CUDA's nested helpers suspend between steps. The portable compiler
         # can only suspend at supported calls made directly by construct().
-        exceptions = {
-            "noon-ordinary-matrix", "noon-ordinary-table", "noon-ordinary-variable",
-            "showcase-latex-create", "showcase-linear-algebra", "showcase-cuda-transpose",
-        }
         asynchronous = set()
         for name in ("noon_showcase", "manim_tutorial", "manim_compatibility", "manim_stress"):
             manifest = web_root / "python" / "examples" / f"{name}_manifest.json"
@@ -26,7 +21,7 @@ class PublicGalleryManifestTests(unittest.TestCase):
                        or (isinstance(node, ast.comprehension) and node.is_async)
                        for node in ast.walk(ast.parse(source.read_bytes(), filename=str(source)))):
                     asynchronous.add(entry["id"])
-        self.assertEqual(asynchronous, exceptions)
+        self.assertEqual(asynchronous, {"showcase-cuda-transpose"})
 
     def test_public_gallery_is_manifest_driven_and_manim_only(self) -> None:
         web_root = Path(__file__).parents[1]

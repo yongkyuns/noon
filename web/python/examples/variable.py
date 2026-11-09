@@ -2,8 +2,9 @@ from noon import *
 
 
 class VariableExample(Scene):
-    async def construct(self):
-        await prepare_latex()
+    requires_latex = True
+
+    def construct(self):
         variable = Variable(
             12_345.6,
             "x",

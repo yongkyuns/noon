@@ -29,6 +29,7 @@ import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import (
     PORTABLE_SPATIAL_METHODS,
+    PORTABLE_VECTOR_METHODS,
     cooperative_source_yield_active,
     current_source_invocation,
 )
@@ -928,6 +929,15 @@ def _portable_scene_methods(scene: _base.Scene, used_names=()) -> dict[str, obje
                 methods["_camera_endpoint"] = getattr(canonical, "_camera_endpoint", None)
         elif any(inspect.getattr_static(scene, name, None) is not None for name in spatial_names):
             return None
+    vector_names = PORTABLE_VECTOR_METHODS.intersection(used_names)
+    if vector_names:
+        from _manim_vector_space import LinearTransformationScene, VectorScene
+
+        if isinstance(scene, VectorScene):
+            canonical = LinearTransformationScene if isinstance(scene, LinearTransformationScene) else VectorScene
+            methods.update({name: getattr(canonical, name, None) for name in vector_names})
+        elif any(inspect.getattr_static(scene, name, None) is not None for name in vector_names):
+            return None
     # Keep this conservative and descriptor-safe, like the base-method
     # admission below.  The source compiler admits direct scene calls from its
     # fixed allow-list, including calls nested in expressions.
@@ -959,6 +969,10 @@ async def execute_construct(
     )
     token = _reactive._enter_authoring_scene(scene if canonical else None)
     try:
+        if inspect.getattr_static(type(scene), "requires_latex", False) is True:
+            from _manim_latex import prepare_latex
+
+            await prepare_latex()
         scene.setup()
         try:
             portable_construct = None
@@ -1017,15 +1031,21 @@ def _require_portable_barrier_admission(scene: _base.Scene) -> None:
 
 async def await_source_barrier(method, /, *args, **kwargs):
     """Yield at one compiled host call, using the existing canonical awaitable."""
-    scene = getattr(method, "__self__", None)
+    scene = method.__self__ if inspect.ismethod(method) else None
     if (not isinstance(scene, _base.Scene)
             or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)):
         raise RuntimeError("portable barrier must be a canonical operation on the current Scene")
     function = getattr(method, "__func__", None)
     if function not in (_base.Scene.play, _base.Scene.wait):
+        from _manim_vector_space import LinearTransformationScene, VectorScene
         from _noon_spatial import ThreeDScene
 
-        if not isinstance(scene, ThreeDScene) or function is not ThreeDScene.move_camera:
+        camera = isinstance(scene, ThreeDScene) and function is ThreeDScene.move_camera
+        vector = isinstance(scene, VectorScene) and function in (
+            VectorScene.add_vector, LinearTransformationScene.add_vector,
+            LinearTransformationScene.apply_matrix,
+        )
+        if not (camera or vector):
             raise RuntimeError("portable barrier must be a canonical operation on the current Scene")
     setattr(scene, _PORTABLE_BARRIER_CALL, True)
     try:
@@ -1033,7 +1053,7 @@ async def await_source_barrier(method, /, *args, **kwargs):
     finally:
         # Callbacks and helpers must not inherit admission to a different call.
         setattr(scene, _PORTABLE_BARRIER_CALL, False)
-    if isinstance(pending, _SemanticContinuationAwaitable):
+    if inspect.isawaitable(pending):
         return await pending
     return pending
 

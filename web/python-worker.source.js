@@ -293,6 +293,7 @@ async function initializePyodide() {
   self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
   self.noonAuthoringSampleSpaceOptions = WasmSampleSpaceOptions;
   self.noonCreateAuthoringSampleSpaceHandle = (options) => authoringStore.createSampleSpace(options);
+  const latexPreparationHint = "Set requires_latex = True on your Scene or call await prepare_latex()";
   self.noonAuthoringBarChartOptions = (values, range, width, height) =>
     new WasmBarChartOptions(values, range, width, height);
   self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
@@ -301,13 +302,13 @@ async function initializePyodide() {
   self.noonCreateAuthoringBarChart = (options, labels, context) => {
     if (!latexCompiler) {
       options.free(); labels.free();
-      throw new Error("Call await prepare_latex() before constructing BarChart");
+      throw new Error(`${latexPreparationHint} before constructing BarChart`);
     }
     return context == null ? authoringStore.createLabeledBarChart(options, labels, latexCompiler)
       : context.liveCreateLabeledBarChart(options, labels, latexCompiler);
   };
   self.noonBarChartLabels = (chart, size, buff, math, rgba, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing chart labels");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing chart labels`);
     return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
       : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
   };
@@ -316,7 +317,7 @@ async function initializePyodide() {
   ) => {
     if (!latexCompiler) {
       xOptions.free(); yOptions.free();
-      throw new Error("Call await prepare_latex() before constructing NumberPlane coordinates");
+      throw new Error(`${latexPreparationHint} before constructing NumberPlane coordinates`);
     }
     return plane.numberPlaneDecimalCoordinateLabelFamilies(
       xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
@@ -327,7 +328,7 @@ async function initializePyodide() {
   ) => {
     if (!latexCompiler) {
       options.free();
-      throw new Error("Call await prepare_latex() before constructing NumberLine numbers");
+      throw new Error(`${latexPreparationHint} before constructing NumberLine numbers`);
     }
     return line.numberLineDecimalNumberLabelFamily(
       values, automatic, options, attach, latexCompiler,
@@ -338,7 +339,7 @@ async function initializePyodide() {
   ) => {
     if (!latexCompiler) {
       xOptions.free(); yOptions.free();
-      throw new Error("Call await prepare_latex() before constructing Axes coordinates");
+      throw new Error(`${latexPreparationHint} before constructing Axes coordinates`);
     }
     return axes.axesDecimalCoordinateLabelFamilies(
       xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
@@ -373,21 +374,21 @@ async function initializePyodide() {
     await latexPreparation;
   };
   self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Tex or MathTex`);
     const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
     options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
       : context.liveCreateLatex(options, latexCompiler);
   };
   self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Tex or MathTex`);
     const options = WasmLatexOptions.fromStrings(strings, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
     options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
       : context.liveCreateLatex(options, latexCompiler);
   };
   const numericHandle = (handle) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalNumber`);
     return {
       // A detached number exposes its retained authored value. An attached
       // number is queried through the current canonical execution session.
@@ -405,7 +406,7 @@ async function initializePyodide() {
   self.noonDecimalNumberLabelMembers = (family) =>
     Array.from(family.decimalNumberLabelMembers(), numericHandle);
   self.noonCreateAuthoringDecimalNumberHandle = (value, places, sign, commas, ellipsis, unit, fontSize, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalNumber`);
     const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];
     return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
       : context.liveCreateDecimalNumber(...args));
@@ -466,16 +467,16 @@ async function initializePyodide() {
       : context.liveCreateTableWithLabels(...args);
   };
   self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing MathTable`);
     return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
   self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing IntegerTable`);
     return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
   self.noonCreateAuthoringDecimalTableHandle = (rows, decimalPlaces, includeSign, groupWithCommas, showEllipsis, unit,
     v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalTable`);
     return context.liveCreateDecimalTable(
       Array.from(rows, row => Array.from(row)), decimalPlaces, includeSign, groupWithCommas,
       showEllipsis, unit, tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
@@ -492,7 +493,7 @@ async function initializePyodide() {
       : context.liveCreateMobjectTableWithLabels(...args);
   };
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Variable`);
     if (context == null) throw new Error("Variable requires a canonical Scene authoring context");
     const handle = context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
     return {
@@ -507,19 +508,19 @@ async function initializePyodide() {
   self.noonLinearTransformationPathArc = noonLinearTransformationPathArc;
   self.noonMatrixFromFamily = (family) => family.asMatrix();
   self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Matrix`);
     return context.liveCreateMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerMatrix");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing IntegerMatrix`);
     return context.liveCreateIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalMatrix`);
     return context.liveCreateDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing MobjectMatrix`);
     const entries = compositeRows(rows);
     return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };

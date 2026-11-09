@@ -89,37 +89,15 @@ for (const entry of readyEntries) {
 
   const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
   assert.match(source, /from noon import\b/, `${entry.id}: public source must import Noon`);
-  let normalizedSource = source;
-  if (entry.requires_latex === true) {
-    assert.equal(
-      (source.match(/async\s+def\s+construct\s*\(/g) ?? []).length,
-      1,
-      `${entry.id}: compiler bootstrap must be the only async construct`,
-    );
-    assert.equal(
-      (source.match(/await\s+prepare_latex\s*\(\s*\)/g) ?? []).length,
-      1,
-      `${entry.id}: compiler bootstrap must await prepare_latex exactly once`,
-    );
-    assert.match(
-      source,
-      /^    async def construct\(self\):\n        await prepare_latex\(\)\n/m,
-      `${entry.id}: await prepare_latex() must be the first construct statement`,
-    );
-    normalizedSource = source.replace(
-      "    async def construct(self):\n        await prepare_latex()\n",
-      "    def construct(self):\n",
-    );
-    assert.notEqual(normalizedSource, source, `${entry.id}: compiler bootstrap must be normalized`);
-  }
-  assert.doesNotMatch(
-    normalizedSource,
-    /\b(?:async|await)\b/,
-    `${entry.id}: no async/await is allowed beyond the declared compiler bootstrap`,
+  assert.equal(
+    (source.match(/^    requires_latex = True$/gm) ?? []).length,
+    entry.requires_latex === true ? 1 : 0,
+    `${entry.id}: source must declare its compiler dependency exactly when the catalog requires it`,
   );
+  assert.doesNotMatch(source, /\b(?:async|await)\b/, `${entry.id}: source must use ordinary Python`);
   for (const pattern of noonOnlyPatterns) {
     assert.doesNotMatch(
-      normalizedSource,
+      source,
       pattern,
       `${entry.id}: Manim-compatible source must not depend on Noon-only helper ${pattern}`,
     );

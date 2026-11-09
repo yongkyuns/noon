@@ -342,6 +342,10 @@ This frame is captured from the native retained renderer by
 `crates/noon/tests/code_block_raster.rs`; the paired browser checks render the
 same scene through direct Rust/WASM and the production Python worker.
 
+### LaTeX in a scene
+
+Set `requires_latex = True` on a `Scene` class to load the browser compiler before `setup()`. Then use `MathTex`, TeX-backed labels, or tables in an ordinary `construct()`. The compiler loads on demand. See the [LaTeX lesson](web/python/examples/showcase_latex_create.py).
+
 ### Source-declared click indication
 
 An authored primary click can run a restoring `Indicate` without a Python callback or per-frame Python work. The current action supports filled analytic `Circle` and `Rectangle` targets, and the `Indicate` must name the same target:

@@ -636,6 +636,10 @@ def tokens(value):
             "showcase_latex_create.py"
         ).read_text()
         self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        for replacement in ("", "    requires_latex = 1\n", "    requires_latex = True\n    requires_latex = False\n",
+                            "    requires_latex = True\n    def requires_latex(self): pass\n"):
+            with self.subTest(declaration=replacement):
+                self.assertFalse(source_is_scene_only(source.replace("    requires_latex = True\n", replacement)))
 
         safe = '''from noon import *
 class Example(Scene):
