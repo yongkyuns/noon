@@ -49,6 +49,7 @@ const exactFamilies = new Map([
   ["compiler-cache-seed.yml", "cache-seed"],
   ["test-coverage.yml", "coverage"],
   ["platform-release.yml", "platform-release"],
+  ["package-candidates.yml", "platform-release"],
   ["native-host-smoke.yml", "native-host"],
   ["native-export-output.yml", "native-host"],
   ["pages.yml", "deployment"],

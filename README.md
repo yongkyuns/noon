@@ -9,6 +9,95 @@ triangle**, which precomputes mirror reflections and uses ordinary shared Rust
 animations to draw and move the light. Edit its triangle, launch angle and bounce
 counts in Python to explore the geometry. Posters show actual Noon-rendered frames.
 
+## Initial release candidates
+
+Registry names are still being chosen. The existing `noon` entries on crates.io
+and PyPI are unrelated projects; use this checkout or the exact candidate files
+from [release readiness #2433](https://github.com/yongkyuns/noon/issues/2433).
+The current local package version is `0.1.0`. The commands below do not upload
+packages or deploy the browser.
+
+### First Rust scene
+
+Install the Rust toolchain pinned in `rust-toolchain.toml` (1.98.1), then run:
+
+```sh
+cargo run -p noon-native --example first_lesson
+```
+
+The [complete ordinary Rust lesson](crates/noon/src/example_scenes/first_lesson.rs)
+uses `BlockingScene`, a helper function and a loop to construct text, a formula,
+and two grouped shapes. It animates the group and admits another text resource
+after playback starts. `noon_native::run_scene` drives the same shared scene and
+runtime as async authoring. The [facade README](crates/noon/README.md) shows a
+complete application and the current checkout dependency setup. Default features
+include native text, Typst, bundled fonts, images and code display; geometry-only
+consumers can set `default-features = false`.
+
+### First installed Python scene
+
+Build with CPython 3.11+ and the pinned Rust toolchain:
+
+```sh
+python -m pip install build
+python -m build
+```
+
+The default build creates both a source archive and a native wheel, building the
+wheel from the extracted source archive. Install the wheel for your interpreter
+and platform into a fresh virtual environment:
+
+```sh
+python -m venv .venv
+# Activate .venv using the command for your shell, then:
+python -m pip install /absolute/path/to/noon-0.1.0-<python>-<abi>-<platform>.whl
+```
+
+Save [first_lesson.py](web/python/examples/first_lesson.py) in your working
+directory and run:
+
+```sh
+noon first_lesson.py                       # Native viewer
+noon first_lesson.py --headless            # Execute without a window or GPU
+noon first_lesson.py --snapshot lesson.png --time 1.75
+noon first_lesson.py --mp4 lesson.mp4 --fps 30000/1001 --width 1280 --height 720
+```
+
+`python -m noon_native` is equivalent to the `noon` command. The wheel includes
+the native engine and canonical Python facade, and declares NumPy and SciPy as
+dependencies; an installed wheel needs no `PYTHONPATH` or Rust compiler.
+Rendering requires a compatible graphics driver. MP4 output additionally needs
+an installed FFmpeg with H.264 encoding; it does not use a browser or Node.
+Source builds require a native C toolchain and the platform's graphics build
+dependencies. Optional native Rust audio also needs ALSA development headers on
+Linux. The [native Python README](crates/noon-python/README.md) describes the
+supported finite-scene profile, export controls and explicit limitations.
+
+### Browser access and candidate verification
+
+The [hosted playground](https://yongkyuns.github.io/noon/) is available directly;
+using it does not require installing an npm package. Browser candidates are
+complete versioned site archives containing the generated WASM, workers, Python
+facade, editor and assets, with source/build identity and checksums. External
+Pyodide/CDN dependencies still require network access. At release, retain that
+archive with the matching source tag so the moving playground URL is not the
+only record of the released browser.
+
+Candidate validation uses the packaged files:
+
+```sh
+python scripts/check-rust-packages.py --wasm --output dist/rust
+python scripts/check-python-package.py dist/<wheel>.whl --sdist dist/<source>.tar.gz --render --mp4
+```
+
+The Rust check installs the archive graph into an outside-checkout consumer;
+the Python check creates a fresh outside-checkout environment and runs the
+installed console command, PNG capture and decoded MP4 checks. Platform tags
+and support claims must match the successful candidate matrix recorded in
+#2433. Free-threaded Python and platforms absent from that matrix are not
+qualified by a Linux source build. See [CI evidence tooling](.github/ci/README.md)
+for candidate workflow commands and artifact retention.
+
 ## Architecture
 
 The main data path is intentionally small. Focused diagrams carry the detailed publication, locality, callback, deployment, and ownership contracts instead of crowding them into one picture.
@@ -451,6 +540,15 @@ a display server, use `--snapshot frame.png --time 1 --width 640 --height 360`.
 Snapshots create a new PNG and refuse to overwrite an existing file. Python can
 also call `run_source(..., retain_history=True)` and `prepare_view(scene)`, then
 `view.capture(...)`, `view.snapshot(...)`, `view.show()` or `view.close()`.
+
+For a finite prepared scene, `--mp4 movie.mp4` or `view.export_mp4(...)` writes
+H.264 through the shared native Rust exporter and an installed FFmpeg. Rational
+`--fps 30000/1001`, `--start-frame`, exclusive `--frames` or `--end-time`, and
+`--hold` use the shared export frame policy. `--overwrite` atomically replaces
+an existing output only after a successful export. The source is evaluated once;
+export replays its sealed history. Export consumes the prepared view, including
+on cancellation or runtime failure, and leaves a previous destination intact
+when it fails. Native Python audio export is not part of this profile.
 
 Arbitrary Python callbacks support the sampled `--headless` profile; prepared
 window playback rejects unrecorded callbacks or external input. Advanced plotting,

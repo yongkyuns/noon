@@ -1,8 +1,11 @@
 [package]
 name = "noon-web"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Browser-facing persistent runtime and live patch control for Noon"
 
 [lib]
@@ -26,17 +29,17 @@ renderer = [
 
 [dependencies]
 ciborium = "0.2"
-noon = { path = "../noon", features = ["diagnostics", "latex"] }
-noon-compile = { path = "../noon-compile" }
-noon-core = { path = "../noon-core" }
-noon-geometry = { path = "../noon-geometry" }
-noon-runtime = { path = "../noon-runtime" }
+noon = { version = "0.1.0", path = "../noon", features = ["diagnostics", "latex"] }
+noon-compile = { version = "0.1.0", path = "../noon-compile" }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-geometry = { version = "0.1.0", path = "../noon-geometry" }
+noon-runtime = { version = "0.1.0", path = "../noon-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
-noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"], optional = true }
+noon-render-wgpu = { version = "0.1.0", path = "../noon-render-wgpu", default-features = false, features = ["web"], optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["console", "AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam", "AudioScheduledSourceNode", "BaseAudioContext", "GainNode", "Document", "Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "WebGl2RenderingContext", "WebGlContextAttributes", "Window"] }

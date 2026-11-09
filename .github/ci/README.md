@@ -11,6 +11,82 @@ day. Every upload declares `retention-days` explicitly, including shared actions
 and failure diagnostics. The CI contract suite checks this policy with
 `node --test .github/ci/artifact-retention.test.mjs`.
 
+## Initial package candidates
+
+`Package candidates` qualifies the files that users install. It performs no
+registry upload, GitHub Release publication or deployment. Registry names remain
+pending in [#2433](https://github.com/yongkyuns/noon/issues/2433); local artifacts
+currently use version `0.1.0` and the existing checkout names.
+
+The source job builds an sdist and checks its complete Rust/resource closure,
+canonical Python modules, metadata, dependency declarations and notices. Each
+wheel job builds **from that sdist** with cibuildwheel 4.3.1, applies its normal
+auditwheel/delocate/delvewheel repair, audits the resulting archive and exercises
+the installed command from outside the checkout. PRs test CPython 3.11 on Linux
+x86_64, the native macOS runner architecture and Windows x64. Explicit dispatch
+builds CPython 3.11–3.15 with the normal GIL on those same hosts. The Linux job
+also renders a PNG, probes/decodes a rational-FPS MP4 and runs the real export
+regressions against the repaired installed wheel. A successful run qualifies only
+its recorded interpreter, platform tags and host; it is not physical-device
+performance evidence or a free-threaded Python qualification.
+
+The Rust job builds the publishable workspace archives and tests an independent
+consumer patched exclusively to **extracted archives**. It covers minimal and
+default authoring, native host/export compilation and the WASM/browser graph.
+The reviewed dependency lock seeds the consumer, and the report rejects unreviewed
+registry versions/checksums or a dependency that escapes back to checkout source.
+`noon-python` is a wheel implementation package and is excluded from crates.io.
+
+The Rust candidate also retains a dependency-notice inventory. The collector
+verifies cached crate bytes against `Cargo.lock`, copies upstream notices exactly,
+and can fill missing files only from the GitHub revision recorded in the verified
+crate. Its all-target normal/build dependency graph is explicitly a conservative
+superset, and it reports missing files and ancestor-file applicability separately.
+Every repaired wheel report lists its native payloads and bundled notices so any
+additional shared libraries can be matched to their redistribution terms. These
+are review inputs; candidate CI's report-only collection is not a license approval.
+
+```sh
+cargo fetch --locked
+python scripts/collect-release-licenses.py --output dist/release-licenses --fetch-missing --wheel dist/<wheel>.whl
+```
+
+Without `--report-only`, missing Cargo notice evidence returns a failing exit
+status after preserving the report. Review the complete evidence set and actual
+wheel repair output before publication; finding a license file alone does not
+resolve every asset, dependency or native library obligation.
+
+Local equivalents are:
+
+```sh
+python scripts/check-rust-packages.py --wasm --output dist/rust
+python -m build
+python scripts/check-python-package.py dist/<wheel>.whl --sdist dist/<sdist>.tar.gz --render --mp4
+```
+
+Use `--allow-dirty` explicitly for a local Rust packaging experiment; final
+candidates must identify a clean source commit. The existing optimized-production
+browser job additionally runs:
+
+```sh
+node scripts/package-browser-release.mjs --version 0.1.0 --output dist/browser
+```
+
+Run that command after the production `prepare`, build and `stamp` steps in
+`optimized-replay-artifact.mjs`. It rejects a development/replay build, stale
+hashes or a dirty/mismatched source. The archive retains the entire deployable
+`web/` tree, notices, original runtime build identity, source SHA and checksums.
+The browser's existing external CDN dependencies still require network access.
+No npm publication is needed to serve its `web/` directory.
+
+Candidate artifacts still expire after **three days** under the policy above.
+At the approved release step, attach the exact qualified archives, checksum
+files and reports to the matching source tag's GitHub Release and record the
+hosted browser build identity there. Those retained release assets, rather than
+expiring CI artifacts or the moving Pages URL, are the durable browser version.
+Missing matrix cells, dependency redistribution evidence and physical-device
+qualification remain explicit release gates in #2433.
+
 ## Qualification cadence
 
 The exhaustive pinned Manim raster oracle runs nightly at 06:17 UTC and on

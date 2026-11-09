@@ -1,15 +1,17 @@
 [package]
 name = "noon-runtime"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-description = "Deterministic renderer-free runtime for compiled Noon scenes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 readme = "README.md"
+description = "Deterministic renderer-free runtime for compiled Noon scenes"
 
 [dependencies]
-noon-core = { path = "../noon-core" }
-noon-geometry = { path = "../noon-geometry" }
-noon-compile = { path = "../noon-compile" }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-geometry = { version = "0.1.0", path = "../noon-geometry" }
+noon-compile = { version = "0.1.0", path = "../noon-compile" }
 
 [features]
 # Experimental #2211; not enabled by default.

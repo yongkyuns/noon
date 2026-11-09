@@ -1,0 +1,130 @@
+[build-system]
+requires = ["setuptools>=77,<85", "setuptools-rust>=1.13,<2", "wheel>=0.45,<1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Local release candidate identity. Registry naming is still tracked in #2433;
+# this configuration does not authorize an upload to the existing PyPI name.
+name = "noon"
+dynamic = ["version"]
+description = "Educational animation with Python authoring and a shared Rust engine"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = [
+  "LICENSE",
+  "crates/noon/src/code_display/THIRD_PARTY_NOTICES.md",
+  "licenses/typst-assets-0.15.1/LICENSE",
+  "licenses/typst-assets-0.15.1/NOTICE",
+  "licenses/typst-assets-0.15.1/README.md",
+]
+dependencies = ["numpy>=2.0,<3", "scipy>=1.13,<2"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Graphics",
+]
+
+[project.urls]
+Homepage = "https://github.com/yongkyuns/noon"
+Documentation = "https://github.com/yongkyuns/noon#readme"
+Issues = "https://github.com/yongkyuns/noon/issues"
+
+[project.scripts]
+noon = "noon_native:main"
+
+[tool.setuptools]
+package-dir = {"" = "web/python"}
+packages = []
+include-package-data = false
+# Explicitly package the unchanged canonical facade. Browser source loading
+# remains independent; development tests and helper fixtures are not installed.
+py-modules = [
+    "_manim_angle",
+    "_manim_animate",
+    "_manim_animation_options",
+    "_manim_arc",
+    "_manim_arrow",
+    "_manim_brace",
+    "_manim_camera",
+    "_manim_code",
+    "_manim_color_palettes",
+    "_manim_compat",
+    "_manim_complex_plane",
+    "_manim_composition",
+    "_manim_config_utils",
+    "_manim_dashed_line",
+    "_manim_draw_border_then_fill",
+    "_manim_enums",
+    "_manim_family_creation",
+    "_manim_file_paths",
+    "_manim_frame_sampling",
+    "_manim_geometry",
+    "_manim_graph",
+    "_manim_growing",
+    "_manim_image",
+    "_manim_implicit",
+    "_manim_indication",
+    "_manim_interpolation",
+    "_manim_iterables",
+    "_manim_latex",
+    "_manim_lifecycle",
+    "_manim_matrix",
+    "_manim_namespace",
+    "_manim_number_labels",
+    "_manim_number_plane",
+    "_manim_numbers",
+    "_manim_path_editing",
+    "_manim_path_queries",
+    "_manim_plotting",
+    "_manim_point_promotion",
+    "_manim_polar_plane",
+    "_manim_polygon",
+    "_manim_rate_functions",
+    "_manim_reactive",
+    "_manim_rotate",
+    "_manim_sample_space",
+    "_manim_scene",
+    "_manim_semantic_handles",
+    "_manim_shared_geometry",
+    "_manim_simple_functions",
+    "_manim_source_execution",
+    "_manim_spatial_geometry",
+    "_manim_svg",
+    "_manim_table",
+    "_manim_typing",
+    "_manim_typing_values",
+    "_manim_typst",
+    "_manim_unit",
+    "_manim_updaters",
+    "_manim_user_vector_bases",
+    "_manim_user_vectors",
+    "_manim_vector_space",
+    "_manim_zoomed_scene",
+    "_noon_audio",
+    "_noon_diagnostics",
+    "_noon_effects",
+    "_noon_errors",
+    "_noon_host",
+    "_noon_ir",
+    "_noon_native_host",
+    "_noon_paints",
+    "_noon_shaders",
+    "_noon_source",
+    "_noon_spatial",
+    "noon",
+    "noon_native",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "noon.__version__"}
+
+[[tool.setuptools-rust.ext-modules]]
+target = "_noon_native"
+path = "crates/noon-python/Cargo.toml"
+binding = "PyO3"
+cargo-manifest-args = ["--locked"]
+# A missing native engine must fail the build instead of producing a pure wheel.
+optional = false

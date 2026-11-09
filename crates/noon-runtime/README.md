@@ -17,3 +17,9 @@ This crate does not own Semantic Scene authoring or language APIs, semantic anal
 The engine path remains `Semantic Scene -> Execution Plan -> Runtime -> Renderer`. Migration-era compiled-scene and patch types at some seams do not create another authored-scene authority.
 
 This boundary follows `docs/architecture.md` and the Phase A5 normalization rules in #960.
+
+## Release candidates
+
+Registry names are still being selected in [#2433](https://github.com/yongkyuns/noon/issues/2433).
+The current 0.1.0 artifacts are local candidates; the existing crates.io/PyPI
+`noon` projects are unrelated. Rust builds require version 1.98.1 or newer.

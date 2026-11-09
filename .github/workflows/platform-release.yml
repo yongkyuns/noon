@@ -13,6 +13,9 @@ on:
       - 'scripts/build-python-worker.mjs'
       - 'scripts/build-runtime-identity.mjs'
       - 'scripts/check-web-package.mjs'
+      - 'scripts/package-browser-release.mjs'
+      - 'scripts/package-browser-release.test.mjs'
+      - 'licenses/**'
       - 'scripts/deterministic-replay-smoke.mjs'
       - 'web/**'
       - '.github/ci/wasm-build.mjs'
@@ -31,6 +34,9 @@ on:
       - 'scripts/build-python-worker.mjs'
       - 'scripts/build-runtime-identity.mjs'
       - 'scripts/check-web-package.mjs'
+      - 'scripts/package-browser-release.mjs'
+      - 'scripts/package-browser-release.test.mjs'
+      - 'licenses/**'
       - 'scripts/deterministic-replay-smoke.mjs'
       - '.github/ci/wasm-build.mjs'
       - '.github/ci/optimized-replay-artifact.mjs'
@@ -153,7 +159,7 @@ jobs:
       - name: Install pinned wasm-opt
         uses: ./.github/actions/install-wasm-opt
       - name: Test optimized replay build contract
-        run: node --test web/optimized-replay-contract.test.mjs .github/ci/wasm-build.test.mjs
+        run: node --test web/optimized-replay-contract.test.mjs .github/ci/wasm-build.test.mjs scripts/package-browser-release.test.mjs
       - name: Validate the reviewed dependency lock for both packages
         run: cargo metadata --locked --format-version 1 > /dev/null
       - name: Build and validate optimized browser package
@@ -161,6 +167,18 @@ jobs:
           node .github/ci/optimized-replay-artifact.mjs prepare production .
           bash scripts/build-web-demo.sh
           node .github/ci/optimized-replay-artifact.mjs stamp production .
+      - name: Archive the complete versioned browser candidate
+        shell: bash
+        run: |
+          noon_browser_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          node scripts/package-browser-release.mjs --version "$noon_browser_version" --output dist/browser
+      - name: Retain the browser candidate for release assembly
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-release-candidate
+          path: dist/browser/
+          if-no-files-found: error
+          retention-days: 3
       - name: Record optimized WASM size
         shell: bash
         run: |

@@ -19,3 +19,7 @@ __pycache__/
 /tools/python-editor/node_modules
 
 /build/python/
+/build/lib*/
+/build/bdist*/
+/dist/
+/web/python/*.egg-info/

@@ -1,8 +1,11 @@
 [package]
 name = "noon-export"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Windowless native capture and output integration for the shared Noon engine"
 
 [features]
@@ -15,9 +18,9 @@ latex = ["noon/latex"]
 wgsl-effects = ["noon/wgsl-effects"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-noon = { path = "../noon", default-features = false }
-noon-core = { path = "../noon-core" }
-noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["native"] }
+noon = { version = "0.1.0", path = "../noon", default-features = false }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-render-wgpu = { version = "0.1.0", path = "../noon-render-wgpu", default-features = false, features = ["native"] }
 pollster = "=1.0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

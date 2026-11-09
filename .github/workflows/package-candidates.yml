@@ -1,0 +1,172 @@
+name: Package candidates
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'crates/**'
+      - 'web/python/**'
+      - 'pyproject.toml'
+      - 'MANIFEST.in'
+      - 'LICENSE'
+      - 'licenses/**'
+      - 'README.md'
+      - 'scripts/check-rust-packages.py'
+      - 'scripts/test_rust_packages.py'
+      - 'scripts/collect-release-licenses.py'
+      - 'scripts/test_collect_release_licenses.py'
+      - 'scripts/check-python-package.py'
+      - 'scripts/test_python_package.py'
+      - 'scripts/test_native_python_export.py'
+      - 'scripts/ci-python-wheel-linux.sh'
+      - 'scripts/test-inventory.py'
+      - 'scripts/test_test_inventory.py'
+      - '.github/ci/cibuildwheel.toml'
+      - '.github/workflows/package-candidates.yml'
+  workflow_dispatch:
+
+# Candidate generation and qualification only. Publication is a separate step
+# after registry naming and release approval in #2433.
+permissions:
+  contents: read
+
+concurrency:
+  group: package-candidates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: Python source archive and packaging contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Check package and inventory contracts
+        run: |
+          python scripts/test_python_package.py -v
+          python scripts/test_test_inventory.py -v
+          python scripts/test_collect_release_licenses.py -v
+          python scripts/test-inventory.py --check
+      - name: Build and inspect the complete source archive
+        run: |
+          python -m pip install build==1.3.0 twine==6.2.0
+          python -m build --sdist
+          python scripts/check-python-package.py --check-only --sdist dist/*.tar.gz --report dist/source-report.json
+          python -m twine check dist/*.tar.gz
+          git rev-parse HEAD > dist/source-sha.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-source-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  rust:
+    name: Rust archive consumers
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustc --version --verbose
+          rustup target add wasm32-unknown-unknown
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rust-package-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: rust-package-cargo-
+      - name: Validate normalized archives and outside-checkout consumers
+        run: |
+          python scripts/test_rust_packages.py -v
+          python scripts/check-rust-packages.py --wasm --output dist/rust
+      - name: Retain exact dependency notices and explicit evidence gaps
+        run: |
+          cargo fetch --locked
+          python scripts/collect-release-licenses.py --output dist/rust/licenses --fetch-missing --report-only
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-package-candidates
+          path: dist/rust/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  wheels:
+    name: Installed wheel on ${{ matrix.os }}
+    needs: source
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      # PRs qualify the declared minimum on all three hosts. Explicit candidate
+      # dispatch builds the full normal-GIL CPython matrix before a release.
+      CIBW_BUILD: ${{ github.event_name == 'workflow_dispatch' && 'cp3{11,12,13,14,15}-*' || 'cp311-*' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-source-candidate
+          path: dist
+      - name: Use repository-pinned Rust on native build hosts
+        if: runner.os != 'Linux'
+        run: rustup install
+      - uses: actions/cache@v6
+        if: runner.os != 'Linux'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-python-wheel-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-python-wheel-cargo-
+      - name: Build repaired wheels from the source archive and test installed commands
+        run: |
+          python -m pip install cibuildwheel==4.3.1
+          python -c "import pathlib, subprocess, sys; archive, = pathlib.Path('dist').glob('*.tar.gz'); subprocess.run([sys.executable, '-m', 'cibuildwheel', str(archive), '--config-file', '.github/ci/cibuildwheel.toml', '--output-dir', 'wheelhouse'], check=True)"
+      - name: Install Linux graphics and media runtime for installed-wheel proof
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-install-reference-deps.sh mesa-vulkan-drivers libvulkan1 ffmpeg
+      - name: Capture and decode output from the repaired minimum-version Linux wheel
+        if: runner.os == 'Linux'
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          python scripts/check-python-package.py wheelhouse/*cp311-*.whl --sdist dist/*.tar.gz --render --mp4 --report wheelhouse/installed-linux-report.json
+          python -m venv "$RUNNER_TEMP/noon-installed-export"
+          "$RUNNER_TEMP/noon-installed-export/bin/python" -m pip install wheelhouse/*cp311-*.whl
+          env -u PYTHONPATH -u DISPLAY -u WAYLAND_DISPLAY "$RUNNER_TEMP/noon-installed-export/bin/python" -I scripts/test_native_python_export.py -v
+      - name: Record exact candidate hashes and source
+        shell: bash
+        run: |
+          git rev-parse HEAD > wheelhouse/source-sha.txt
+          for noon_wheel in wheelhouse/*.whl; do
+            python scripts/check-python-package.py --check-only "$noon_wheel" --report "$noon_wheel.report.json"
+          done
+          python -c "import hashlib, pathlib; p=pathlib.Path('wheelhouse'); (p/'SHA256SUMS').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in sorted(p.glob('*.whl'))), encoding='utf8')"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-wheel-candidates-${{ matrix.os }}
+          path: wheelhouse/
+          if-no-files-found: error
+          retention-days: 3
