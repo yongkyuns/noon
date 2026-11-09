@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "79e7d31b2377e7babf029d8c9f5b68f52aef76ce",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "79e7d31b2377e7babf029d8c9f5b68f52aef76ce",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "cc8287fa4b84c4cd1022f8713fd4f8d0f7048b349f8ccb78b9f0c117cf6c58c6"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "d61f72af1889a81fc8deb94e4a32db0ebf4667d05770961ed8502927e1340d7b"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "61b5818f6e664b13ce4243b0a31ff5568c655a6d1a05d3208f214a3341e4e8eb"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "2f680a2f76f81a88c04212fcaa751520604c0f866c3f1e93a0a0ce646d0570ed"
+  },
+  "posters": [
+    {
+      "id": "showcase-linear-algebra",
+      "captureBuildId": "2f680a2f76f81a88c04212fcaa751520604c0f866c3f1e93a0a0ce646d0570ed",
+      "sourceSha256": "3c62fc355b581ec5598d39ff28fb5a1493b2bbda609ebab8f9cbb9ea98cbf831",
+      "thumbnailTime": 8.25,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 506630,
+        "pngSha256": "08a97ef9f9ae4fed4eef9c505f27316789a84831950d3201b226e2cd824a444e",
+        "pixelSha256": "a1c9cff4e4336e6890409a2278172911fadbe268bb2ff1f06dfac9c5874b5223"
+      },
+      "sample": {
+        "requestedTime": 8.25,
+        "publishedTime": 8.25,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
