@@ -68,6 +68,19 @@ fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
     assert_eq!(player.source.session().frame(), &frame);
     assert_eq!(player.source.session().publication_context(), publication);
     let identity = player.ownership_identity();
+    let foreign = noon::Scene::new().circle(0.5).unwrap();
+    let foreign_anchor = noon::LayoutAnchor::from(&foreign);
+    let failure = player
+        .live_move_to(
+            &circle,
+            noon::LiveLayoutTarget::Anchor(&foreign_anchor),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
+        .unwrap_err();
+    assert_eq!(failure.category, "foreign_handle");
+    assert_eq!(failure.code, "live.foreign_store");
+    assert_eq!(player.source.session().publication_context(), publication);
     player
         .live_move_to(
             &circle,

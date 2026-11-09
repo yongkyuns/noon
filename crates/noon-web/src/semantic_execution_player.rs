@@ -809,7 +809,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .move_to(mobject, target, edge, mask)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -823,7 +823,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .align_mobject_on_frame(mobject, direction, buff)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2147,6 +2147,12 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn live_placement_error(error: noon::AuthoringError) -> AuthoringFailure {
+        // The browser binding keeps its live diagnostic shape after placement moves to Scene.
+        noon::LiveSessionError::from(error).into()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_replace_content(
         &mut self,
         target: &noon::Mobject,
@@ -2186,7 +2192,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .shift_family_3d(family, noon_core::SemanticVec3::new(x, y, z))
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2199,7 +2205,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .arrange_family_in_grid_with_options(family, options)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2304,7 +2310,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .arrange_family_with_options(family, options)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2373,7 +2379,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .move_family_to(family, target, edge, mask)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2388,7 +2394,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .next_layout_to_aligned(source, target, aligner, args)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2417,7 +2423,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .align_family_on_frame(family, direction, buff)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2431,7 +2437,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .align_family_to(family, target, axis)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
