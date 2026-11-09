@@ -12,9 +12,9 @@ const server = await serveRepository(root, 0);
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  // Serving _site as a subdirectory exercises the same relative-path property
-  // as GitHub's /noon/ project site, rather than testing only an origin root.
-  const base = `${server.baseUrl}/_site/`;
+  // The shared server serves files, not directory indexes. This still exercises
+  // the same relative paths as GitHub's /noon/ project prefix.
+  const base = `${server.baseUrl}/_site/index.html`;
   for (const width of [1440, 768, 390, 320]) {
     const page = await browser.newPage({ viewport: { width, height: 1000 } });
     const errors = [], requests = [];
