@@ -89,33 +89,107 @@ fn group_animation_preserves_alias_identity_and_unrelated_state() {
 }
 
 #[test]
+fn group_and_independent_object_share_timing_admission_and_completion() {
+    let (mut scene, family, left, right) = group_scene();
+    let marker = scene.circle(0.25).unwrap(); // Admitted with the complete play.
+    let alias = scene.family(&[(&left).into()]).unwrap();
+    let mut session = scene.execution_session().unwrap();
+    let left_id = session.execution_object_id(left.node_id());
+    let mut live = scene.live(&mut session);
+    let segment = activate(
+        &mut live,
+        (
+            marker
+                .animate()
+                .shift(RIGHT * 2.0)
+                .with_options(linear().run_time(4.0)),
+            family
+                .animate()
+                .shift(UP)
+                .set_color(Color::ORANGE)
+                .with_options(linear().run_time(4.0).lag_ratio(1.0)),
+        )
+            .into_animation_request(),
+        linear().run_time(2.0),
+    )
+    .unwrap();
+    assert!(live.contains(&marker).unwrap());
+    assert_eq!(segment.end_time() - segment.start_time(), 2.0);
+    live.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        live.effective(&marker).unwrap().transform.translation.x,
+        0.5
+    );
+    assert_eq!(live.effective(&left).unwrap().transform.translation.y, 0.5);
+    assert_eq!(live.effective(&right).unwrap().transform.translation.y, 0.0);
+    finish(&mut live, segment);
+    assert_eq!(marker.state().unwrap().transform.translation.x, 2.0);
+    assert_eq!(right.state().unwrap().transform.translation.y, 1.0);
+    assert_eq!(
+        family.own_style().unwrap().family_color(),
+        Some(Color::ORANGE)
+    );
+
+    let segment = activate(
+        &mut live,
+        (family.animate().shift(UP), FadeOut::new(&marker)).into_animation_request(),
+        linear(),
+    )
+    .unwrap();
+    finish(&mut live, segment);
+    assert!(!live.contains(&marker).unwrap());
+    assert_eq!(right.state().unwrap().transform.translation.y, 2.0);
+    assert_eq!(
+        alias.member_at(0).unwrap().unwrap().node_id(),
+        left.node_id()
+    );
+    assert_eq!(session.execution_object_id(left.node_id()), left_id);
+}
+
+#[test]
 fn group_late_child_and_member_driver_failures_publish_nothing() {
-    let (scene, family, left, right) = group_scene();
+    let (mut scene, family, left, right) = group_scene();
+    let marker = scene.circle(0.25).unwrap();
     let mut session = scene.execution_session().unwrap();
     session.take_frame_changes();
     let context = session.publication_context();
     let frame = session.frame().clone();
     let nodes = scene.integration_store().borrow().len();
     let states = (left.state().unwrap(), right.state().unwrap());
-    for invalid in [
-        right
+    let invalids: [AnimationRequest; 6] = [
+        marker
             .animate()
-            .with_options(AnimationOptions::new().run_time(-1.0)),
-        left.animate().shift(UP),
-        family.animate().shift(RIGHT),
-        family.animate().scale(f64::NAN),
-    ] {
-        let error = activate(
-            &mut scene.live(&mut session),
-            (family.animate().shift(UP), invalid).into_animation_request(),
-            AnimationOptions::new(),
-        );
-        assert!(error.is_err(), "unexpected admission: {error:?}");
-        assert_eq!(scene.integration_store().borrow().len(), nodes);
-        assert_eq!(session.publication_context(), context);
-        assert_eq!(session.frame(), &frame);
-        assert!(session.take_frame_changes().is_empty());
-        assert_eq!((left.state().unwrap(), right.state().unwrap()), states);
+            .with_options(AnimationOptions::new().run_time(-1.0))
+            .into(),
+        left.animate().shift(UP).into(),
+        FadeOut::new(&right).into(),
+        Create::new(&left).into(),
+        family.animate().shift(RIGHT).into(),
+        family.animate().scale(f64::NAN).into(),
+    ];
+    for invalid in invalids {
+        for reverse in [false, true] {
+            let mut children = vec![
+                family.animate().shift(UP).into(),
+                marker.animate().shift(RIGHT).into(),
+                invalid.clone(),
+            ];
+            if reverse {
+                children.reverse();
+            }
+            let error = activate(
+                &mut scene.live(&mut session),
+                children.into_animation_request(),
+                AnimationOptions::new(),
+            );
+            assert!(error.is_err(), "unexpected admission: {error:?}");
+            assert_eq!(scene.integration_store().borrow().len(), nodes);
+            assert_eq!(session.publication_context(), context);
+            assert_eq!(session.frame(), &frame);
+            assert!(session.take_frame_changes().is_empty());
+            assert_eq!((left.state().unwrap(), right.state().unwrap()), states);
+            assert!(!scene.live(&mut session).contains(&marker).unwrap());
+        }
     }
 }
 

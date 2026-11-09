@@ -4621,11 +4621,6 @@ impl ExecutionSession {
         {
             match family.mode {
                 SemanticFamilyTransformMode::Structural => {
-                    if !schedule.leaves().is_empty() || !schedule.scalar_leaves().is_empty() {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                                "structural unequal-family Transform supports one family Transform plus timing-only composition nodes per activation".into(),
-                            ));
-                    }
                     let activation = prepare_family_transform_activations(
                         &prepared,
                         &self.execution_index,
@@ -4653,6 +4648,34 @@ impl ExecutionSession {
                     .map_err(|error| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })?;
+                    // Both existing and candidate-local fixed-topology targets
+                    // can share ordinary tracks. Padding still needs exclusive
+                    // structural completion; use the compiler's correspondence.
+                    if !schedule.scalar_leaves().is_empty()
+                        || (!schedule.leaves().is_empty()
+                            && activation.occurrences().iter().any(|occurrence| {
+                                occurrence.source_padding || occurrence.target_padding
+                            }))
+                    {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "unequal-family Transform and scalar leaves cannot share a mixed family activation".into(),
+                        ));
+                    }
+                    let members = activation
+                        .occurrences()
+                        .iter()
+                        .map(|occurrence| occurrence.source_execution_object_id)
+                        .collect::<HashSet<_>>();
+                    if schedule
+                        .leaves()
+                        .iter()
+                        .any(|leaf| members.contains(&leaf.execution_object_id))
+                    {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "family Transform cannot compose with an animation of its members"
+                                .into(),
+                        ));
+                    }
                     let channels = lower_prepared_family_transform_channels(&prepared, &activation)
                         .map_err(|error| {
                             ExecutionSessionAnimationError::InvalidComposition(error.to_string())
