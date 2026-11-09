@@ -121,6 +121,9 @@ jobs:
       # dispatch builds the full normal-GIL CPython matrix before a release.
       CIBW_BUILD: ${{ github.event_name == 'workflow_dispatch' && 'cp3{11,12,13,14,15}-*' || 'cp311-*' }}
     steps:
+      - name: Preserve source archive line endings on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
