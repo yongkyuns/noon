@@ -2,8 +2,6 @@
 from noon import *
 
 class LinearAlgebra(LinearTransformationScene):
-    requires_latex = True
-
     def __init__(self):
         super().__init__(leave_ghost_vectors=True)
 

@@ -969,10 +969,6 @@ async def execute_construct(
     )
     token = _reactive._enter_authoring_scene(scene if canonical else None)
     try:
-        if inspect.getattr_static(type(scene), "requires_latex", False) is True:
-            from _manim_latex import prepare_latex
-
-            await prepare_latex()
         scene.setup()
         try:
             portable_construct = None

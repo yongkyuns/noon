@@ -68,6 +68,8 @@ let nextSemanticContext = 0;
 let nextContinuationGeneration = 1;
 let activeAuthoringRun = null;
 let authoringStore = null;
+let latexCompiler = null;
+let latexPreparation = null;
 // Opaque source may modify imported modules/builtins. Never infer purity against
 // that environment on a later Run or retry/reconstruct the source to recover it.
 let authoringLibrariesPristine = true;
@@ -293,7 +295,7 @@ async function initializePyodide() {
   self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
   self.noonAuthoringSampleSpaceOptions = WasmSampleSpaceOptions;
   self.noonCreateAuthoringSampleSpaceHandle = (options) => authoringStore.createSampleSpace(options);
-  const latexPreparationHint = "Set requires_latex = True on your Scene or call await prepare_latex()";
+  const latexPreparationHint = "For dynamically selected TeX APIs, call await prepare_latex()";
   self.noonAuthoringBarChartOptions = (values, range, width, height) =>
     new WasmBarChartOptions(values, range, width, height);
   self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
@@ -362,17 +364,7 @@ async function initializePyodide() {
   self.noonCreateAuthoringMarkupTextHandle = (...args) => authoringStore.createManimMarkupText(...args);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
-  let latexCompiler = null;
-  let latexPreparation = null;
-  self.noonPrepareLatex = async () => {
-    if (!latexPreparation) {
-      latexPreparation = import("./latex/backend.js")
-        .then(({ prepareLatexBackend }) => prepareLatexBackend())
-        .then(backend => { latexCompiler = new WasmLatexCompiler(backend); })
-        .catch(error => { latexPreparation = null; throw error; });
-    }
-    await latexPreparation;
-  };
+  self.noonPrepareLatex = prepareLatex;
   self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Tex or MathTex`);
     const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
@@ -1923,6 +1915,16 @@ function retireSemanticContext(token, entry) {
   }
 }
 
+async function prepareLatex() {
+  if (!latexPreparation) {
+    latexPreparation = import("./latex/backend.js")
+      .then(({ prepareLatexBackend }) => prepareLatexBackend())
+      .then(backend => { latexCompiler = new WasmLatexCompiler(backend); })
+      .catch(error => { latexPreparation = null; throw error; });
+  }
+  await latexPreparation;
+}
+
 async function prepareAuthoringDependencies(pyodide, source) {
   // Explicit imports use Pyodide's ordinary package resolver. Implicit Manim
   // namespace aliases are detected by Python's AST parser and loaded separately
@@ -1937,11 +1939,12 @@ async function prepareAuthoringDependencies(pyodide, source) {
     const requiredJson = pyodide.runPython(
       `
 import _manim_namespace
-_manim_namespace.required_packages_json(__noon_dependency_source)
+_manim_namespace.source_dependencies_json(__noon_dependency_source)
 `,
       { globals },
     );
-    const requiredPackages = JSON.parse(requiredJson);
+    const { packages: requiredPackages, latex } = JSON.parse(requiredJson);
+    if (latex) await prepareLatex();
     if (requiredPackages.length === 0) return;
 
     const requiredPackagesJson = JSON.stringify(requiredPackages);
@@ -1973,7 +1976,7 @@ async function runAuthoringSource(pyodide, source, context, requestId) {
     const proof = measurePreparationOperation(run, "source-proof", () => authoringLibrariesPristine ? JSON.parse(pyodide.runPython(`
 import json
 from _manim_source_execution import source_execution_proof
-json.dumps(source_execution_proof(__noon_source))
+json.dumps(source_execution_proof(__noon_source, auto_prepare_latex=True))
 `, { globals })) : { admitted: false, reason: { code: "interpreter_tainted", span: null } });
     if (!isRecord(proof) || typeof proof.admitted !== "boolean" ||
         (proof.admitted ? proof.reason !== null : !isRecord(proof.reason) || typeof proof.reason.code !== "string")) {

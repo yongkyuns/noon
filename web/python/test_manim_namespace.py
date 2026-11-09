@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 import noon as _base
@@ -29,6 +30,27 @@ class ManimNamespaceTests(unittest.TestCase):
             namespace.required_packages("message = 'np.log is only text here'\n"),
             (),
         )
+
+    def test_latex_dependency_discovery(self) -> None:
+        cases = {
+            "from noon import MathTex as Formula\nFormula('x')": True,
+            "import noon as n\nn.MathTable([['x']])": True,
+            "getattr(noon, 'MathTex')('x')": True,
+            "make_labels = plane.add_coordinates\nmake_labels()": True,
+            "axes.get_axis_labels()": True,
+            "axes.get_x_axis_label('x')": True,
+            "Axes(axis_config={'include_numbers': True})": True,
+            "LinearTransformationScene(show_coordinates=True)": True,
+            "NumberLine(numbers_to_include=[1, 2])": True,
+            "from noon import *\nText('MathTex')  # DecimalNumber()": False,
+            "axes.get_x_axis_label(Text('x'))": False,
+            "line.add_numbers(font='DejaVu Sans Mono')": False,
+            "NumberLine(include_numbers=False)": False,
+            "await prepare_latex()\nMathTex('x')": False,
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(json.loads(namespace.source_dependencies_json(source))["latex"], expected)
 
     def test_standard_library_exports_preserve_identity_and_metadata_errors(self) -> None:
         import __future__

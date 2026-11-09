@@ -4,8 +4,6 @@ from noon import *
 
 
 class RetainedTable(Scene):
-    requires_latex = True
-
     def construct(self):
         plain = Table([["plain", "native"], ["text", "table"]], include_outer_lines=True)
         plain.shift(LEFT * 3 + UP * 1.4)

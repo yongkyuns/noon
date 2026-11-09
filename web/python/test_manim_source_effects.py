@@ -635,11 +635,11 @@ def tokens(value):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_latex_create.py"
         ).read_text()
-        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
-        for replacement in ("", "    requires_latex = 1\n", "    requires_latex = True\n    requires_latex = False\n",
-                            "    requires_latex = True\n    def requires_latex(self): pass\n"):
-            with self.subTest(declaration=replacement):
-                self.assertFalse(source_is_scene_only(source.replace("    requires_latex = True\n", replacement)))
+        self.assertEqual(source_execution_proof(source, auto_prepare_latex=True),
+                         {"admitted": True, "reason": None})
+        self.assertFalse(source_execution_proof(source)["admitted"])
+        dynamic_options = source.replace("font_size=88", 'font_size=context["size"]', 1)
+        self.assertFalse(source_execution_proof(dynamic_options, auto_prepare_latex=True)["admitted"])
 
         safe = '''from noon import *
 class Example(Scene):

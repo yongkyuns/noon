@@ -52,13 +52,6 @@ assert.deepEqual(
   ],
 );
 
-const compilerEntries = readyEntries.filter((entry) => entry.requires_latex === true);
-assert.deepEqual(
-  compilerEntries.map((entry) => entry.id).sort(),
-  ["noon-ordinary-matrix", "noon-ordinary-table", "noon-ordinary-variable"],
-  "only the three qualified compiler demos may declare the LaTeX bootstrap",
-);
-
 const noonOnlyPatterns = [
   /self\.value_tracker\(/,
   /self\.bind_position\(/,
@@ -89,11 +82,6 @@ for (const entry of readyEntries) {
 
   const source = await readFile(new URL(`./${entry.path}`, import.meta.url), "utf8");
   assert.match(source, /from noon import\b/, `${entry.id}: public source must import Noon`);
-  assert.equal(
-    (source.match(/^    requires_latex = True$/gm) ?? []).length,
-    entry.requires_latex === true ? 1 : 0,
-    `${entry.id}: source must declare its compiler dependency exactly when the catalog requires it`,
-  );
   assert.doesNotMatch(source, /\b(?:async|await)\b/, `${entry.id}: source must use ordinary Python`);
   for (const pattern of noonOnlyPatterns) {
     assert.doesNotMatch(

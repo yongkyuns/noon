@@ -93,7 +93,7 @@ add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
 _SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
 _CANONICAL_SCENE_FIELDS = frozenset("""
 _owner _binding_handles _object_keys _object_key_ids _next_object_id
-_canonical_authoring_context requires_latex
+_canonical_authoring_context
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
@@ -990,7 +990,8 @@ class _SourceBindings(ast.NodeVisitor):
 
 
 class _SceneOnlySource(ast.NodeVisitor):
-    def __init__(self, tree, star_exports):
+    def __init__(self, tree, star_exports, *, latex_prepared=False):
+        self.latex_prepared = latex_prepared
         self.tree = tree
         self.admitted_lagged_map_loads = set()
         self.admitted_plot_loads = set()
@@ -1083,7 +1084,6 @@ class _SceneOnlySource(ast.NodeVisitor):
         }
         self.admitted_resource_preparation_loads = set()
         self.admitted_controlled_text_loads = set()
-        self.latex_prepared_constructs = set()
         self.resource_preparation_scopes = []
         self.admitted_regex_attributes = []
         self.admitted_local_group_attributes = []
@@ -3579,8 +3579,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             bool_checks.add(name)
         return set()
 
-    def _scope(self, body, parameters=(), array_parameters=(), scalar_parameters=(), integer_parameters=(),
-               *, latex_ready=False):
+    def _scope(self, body, parameters=(), array_parameters=(), scalar_parameters=(), integer_parameters=()):
         parameters = set(parameters)
         bindings = _SourceBindings()
         for node in body:
@@ -3621,7 +3620,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             and isinstance(node.value.value.func, ast.Name)
             and node.value.value.func.id in _SOURCE_RESOURCE_PREPARATIONS
         }
-        preparation_scope = {"awaits": preparation_awaits, "ready": latex_ready}
+        preparation_scope = {"awaits": preparation_awaits, "ready": self.latex_prepared}
         self.resource_preparation_scopes.append(preparation_scope)
         self.numpy_safe_containers.append(_safe_numpy_containers(body))
         self.local_scope_names.append(bindings.names | parameters)
@@ -4212,8 +4211,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                                    *((kwarg.arg,) if kwarg else ())],
                         self.numpy_array_parameters.get(node.name, ()),
                         self.numpy_scalar_parameters.get(node.name, ()),
-                        self.numpy_integer_parameters.get(node.name, ()),
-                        latex_ready=id(node) in self.latex_prepared_constructs)
+                        self.numpy_integer_parameters.get(node.name, ()))
         finally:
             self.function_context.pop()
 
@@ -4343,16 +4341,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         elif node.bases[0].id != "Scene":
             raise _OpaqueSource(node, "unsupported_class_contract")
         self.visit(node.bases[0])
-        latex_declarations = []
-        for member in node.body:
-            match member:
-                case ast.Assign(targets=[ast.Name(id="requires_latex")], value=ast.Constant(value=True)):
-                    latex_declarations.append(member)
-                case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.Expr(value=ast.Constant()) | ast.Pass():
-                    pass
-                case _:
-                    raise _OpaqueSource(node, "unsupported_class_contract")
-        if len(latex_declarations) > 1 or (latex_declarations and not self._trusted_noon_binding(node.bases[0].id)):
+        if any(not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Expr, ast.Pass))
+               or isinstance(member, ast.Expr) and not isinstance(member.value, ast.Constant)
+               for member in node.body):
             raise _OpaqueSource(node, "unsupported_class_contract")
         constructs = [member for member in node.body
                       if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -4361,16 +4352,12 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(constructs[1], "unproven_audio_declaration")
         if constructs:
             self._prepare_scene_audio_calls(constructs[0])
-            if latex_declarations:
-                self.latex_prepared_constructs.add(id(constructs[0]))
         # Methods resolve module globals, not names in their class dictionary.
         previous_members = self.members
         previous_module_scope = self.scopes[0]
         previous_helpers = self.scene_helper_names
         declared_helpers = {member.name for member in node.body
                             if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        if latex_declarations and "requires_latex" in declared_helpers:
-            raise _OpaqueSource(node, "unsupported_class_contract")
         self.scene_helper_names = declared_helpers
         if len(declared_helpers) != sum(isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
                                         for member in node.body):
@@ -4410,8 +4397,6 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.scopes[0] = self.scopes[0] | {"Typst"}
         try:
             for member in node.body:
-                if member in latex_declarations:
-                    continue
                 if (spatial or linear) and isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                         and member.name == "__init__":
                     continue
@@ -4619,7 +4604,7 @@ class _SceneOnlySource(ast.NodeVisitor):
     visit_Delete = visit_NamedExpr = _opaque
 
 
-def source_execution_proof(source: str) -> dict:
+def source_execution_proof(source: str, *, auto_prepare_latex=False) -> dict:
     """Prove a closed trusted-API subset; unknown Python remains opaque.
 
     This assumes a pristine interpreter (or only preceding proven sources).
@@ -4639,7 +4624,12 @@ def source_execution_proof(source: str) -> dict:
                 if module is None or not isinstance(getattr(module, "__all__", None), (list, tuple)):
                     raise _OpaqueSource(node, "unproven_wildcard_exports")
                 exports[node.module] = frozenset(module.__all__)
-        _SceneOnlySource(tree, exports).visit(tree)
+        latex_prepared = False
+        if auto_prepare_latex and "MathTex" in source:
+            from _manim_namespace import needs_latex
+
+            latex_prepared = needs_latex(tree)
+        _SceneOnlySource(tree, exports, latex_prepared=latex_prepared).visit(tree)
         return {"admitted": True, "reason": None}
     except _OpaqueSource as error:
         node = error.node

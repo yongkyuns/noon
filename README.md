@@ -344,7 +344,7 @@ same scene through direct Rust/WASM and the production Python worker.
 
 ### LaTeX in a scene
 
-Set `requires_latex = True` on a `Scene` class to load the browser compiler before `setup()`. Then use `MathTex`, TeX-backed labels, or tables in an ordinary `construct()`. The compiler loads on demand. See the [LaTeX lesson](web/python/examples/showcase_latex_create.py).
+The browser loads the optional compiler when scene source references TeX APIs such as `MathTex`, or requests TeX-backed numeric labels. Use these APIs directly from ordinary Python. See the [LaTeX lesson](web/python/examples/showcase_latex_create.py).
 
 ### Source-declared click indication
 

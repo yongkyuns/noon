@@ -2,8 +2,6 @@ from noon import *
 
 
 class VariableExample(Scene):
-    requires_latex = True
-
     def construct(self):
         variable = Variable(
             12_345.6,

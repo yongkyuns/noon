@@ -4,8 +4,6 @@ from noon import *
 
 
 class LatexCreate(Scene):
-    requires_latex = True
-
     def construct(self):
         drawn = MathTex(r"x^2+\frac{1}{2}", font_size=88, color=BLUE).shift(1.5 * UP)
         written = MathTex(r"x^2+\frac{1}{2}", font_size=88, color=YELLOW).shift(1.5 * DOWN)
