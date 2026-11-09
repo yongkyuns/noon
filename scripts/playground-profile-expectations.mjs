@@ -18,7 +18,7 @@ const rows = [
   ['showcase-gpu-glow','showcase_gpu_glow.py','526c40036c50a960cdb2b6e01e13178f5d989e1f7680ca7e14af856063be49da','incremental','ordinary',[], 'looped'],
   ['showcase-painted-surfaces','showcase_painted_surfaces.py','ba191918aefbdc28ea4e9991b938d5ed46548bf45cdcfc79c7488865f0e26f80','incremental','ordinary',[], 'looped'],
   ['showcase-layered-effects','showcase_layered_effects.py','7ba83b94112f75f950623094da4fe62443c210bbbfababec30db34485f4638cc','incremental','ordinary',[], 'looped'],
-  ['showcase-bloom-emission','showcase_bloom_emission.py','4ba79033cb5c857cff45f0e737b646ba83343cb9deea8a2b61c38c2d7acdf473','incremental','ordinary',[], 'looped'],
+  ['showcase-bloom-emission','showcase_bloom_emission.py','e463bd2116aad0dfb4f3f059bb359101319f518620801a6ba6a6924000f1c8c9','incremental','ordinary',[], 'looped'],
   ['showcase-group-slicing','showcase_group_slicing.py','1efe31b9783f9bc531b93915cb8d851e09e9ab258b3a6262c2a96084e7e94e69','incremental','ordinary',[], 'looped'],
   ['showcase-bezier-paths','showcase_bezier_paths.py','60e5708b4a235f68c8b0788fd57fb219fdc4a2949aa61573d1aa0cef267ff84b','incremental','ordinary',[], 'looped'],
   ['showcase-transform-ownership','showcase_transform_ownership.py','92f4a1c5e4f50eac1ca45e9abf399228d3e235dc4cd70115560d05ed16d32139','incremental','ordinary',[], 'looped'],
