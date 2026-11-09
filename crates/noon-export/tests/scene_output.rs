@@ -281,7 +281,11 @@ fn authored_zero_export_retires_click_effect_before_every_frozen_hold_frame() {
     let frame_bytes = 160 * 90 * 4;
     assert_eq!(movies[0].len(), 4 * frame_bytes);
     assert_eq!(movies[1].len(), movies[0].len());
-    assert!(movies[0].chunks_exact(4).any(|pixel| pixel[0] > 200));
+    assert!(movies[0]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel[0] > 200));
     for (index, (authored, clicked)) in movies[0]
         .chunks_exact(frame_bytes)
         .zip(movies[1].chunks_exact(frame_bytes))
