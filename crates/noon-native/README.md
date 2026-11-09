@@ -32,11 +32,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 From a checkout, run `cargo run -p noon-native --example first_lesson`. The
-complete authoring source is in the public `noon` facade README. Space toggles
-playback, Home restarts, and the arrow keys seek. The default host is visual-only;
-`audio` is an optional feature and requires a native audio device and its platform
-build dependencies. Offscreen PNG/MP4 output is provided by `noon-export` and
-does not require the window host.
+complete authoring source is in the public `noon` facade README. The ordinary
+source plays once and the window remains open until closed. The default host is
+visual-only; `audio` is an optional feature and requires a native audio device
+and its platform build dependencies. Offscreen PNG/MP4 output is provided by
+`noon-export` and does not require the window host.
 
 ## License
 
