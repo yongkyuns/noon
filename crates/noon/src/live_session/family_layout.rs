@@ -535,25 +535,6 @@ impl LiveSession<'_> {
         .map_err(LiveSessionError::from)
     }
 
-    /// Align one object to the default frame using its coherent effective bounds.
-    pub fn align_on_frame(
-        &mut self,
-        mobject: &Mobject,
-        direction: (f64, f64),
-        buff: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let target = crate::family_layout::frame_alignment_target(direction, buff)?;
-        self.move_to(
-            mobject,
-            LiveLayoutTarget::Point(target.0, target.1),
-            direction,
-            (
-                if direction.0 == 0.0 { 0.0 } else { 1.0 },
-                if direction.1 == 0.0 { 0.0 } else { 1.0 },
-            ),
-        )
-    }
-
     pub fn move_family_to(
         &mut self,
         family: &MobjectFamily,
@@ -569,23 +550,6 @@ impl LiveSession<'_> {
             target,
             edge,
             mask,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    pub fn next_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
-        args: ManimNextToArgs,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_next_family_to(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            target,
-            args,
         )
         .map_err(LiveSessionError::from)
     }

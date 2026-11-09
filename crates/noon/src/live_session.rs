@@ -4512,10 +4512,10 @@ mod tests {
         reference.set_translation(-3.0, 3.0).unwrap();
         scene.add(&source).unwrap();
         scene.add(&reference).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.session.take_frame_changes();
-        let result = live
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
+        let result = execution
+            .scene_mut()
             .move_to(
                 &source,
                 LiveLayoutTarget::Point(99.0, 5.0),
@@ -4524,25 +4524,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result.impacts().len(), 1);
-        assert_eq!(live.effective_layout(&source).unwrap().center, (2.0, 4.0));
         assert_eq!(
-            live.effective_layout(&reference).unwrap().center,
+            execution.scene().effective_layout(&source).unwrap().center,
+            (2.0, 4.0)
+        );
+        assert_eq!(
+            execution
+                .scene()
+                .effective_layout(&reference)
+                .unwrap()
+                .center,
             (-3.0, 3.0)
         );
-        let target = live.target_editor(&source).unwrap();
-        live.session.take_frame_changes();
-        live.move_to(
-            &target,
-            LiveLayoutTarget::Mobject(&reference),
-            (0.0, 1.0),
-            (0.5, 1.0),
-        )
-        .unwrap();
+        let target = execution.live().target_editor(&source).unwrap();
+        execution.session_mut().take_frame_changes();
+        execution
+            .scene_mut()
+            .move_to(
+                &target,
+                LiveLayoutTarget::Mobject(&reference),
+                (0.0, 1.0),
+                (0.5, 1.0),
+            )
+            .unwrap();
         assert_eq!(target.center().unwrap(), (-0.5, 4.0));
-        assert_eq!(live.effective_layout(&source).unwrap().center, (2.0, 4.0));
-        assert!(live.session.take_frame_changes().is_empty());
-        let publication = live.session.publication_context();
-        assert!(live
+        assert_eq!(
+            execution.scene().effective_layout(&source).unwrap().center,
+            (2.0, 4.0)
+        );
+        assert!(execution.session_mut().take_frame_changes().is_empty());
+        let publication = execution.session().publication_context();
+        assert!(execution
+            .scene_mut()
             .move_to(
                 &target,
                 LiveLayoutTarget::Point(1.0, 2.0),
@@ -4551,7 +4564,8 @@ mod tests {
             )
             .is_err());
         let foreign = Scene::new().circle(1.0).unwrap();
-        assert!(live
+        assert!(execution
+            .scene_mut()
             .move_to(
                 &target,
                 LiveLayoutTarget::Mobject(&foreign),
@@ -4559,7 +4573,7 @@ mod tests {
                 (1.0, 1.0)
             )
             .is_err());
-        assert_eq!(live.session.publication_context(), publication);
+        assert_eq!(execution.session().publication_context(), publication);
         assert_eq!(target.center().unwrap(), (-0.5, 4.0));
     }
 

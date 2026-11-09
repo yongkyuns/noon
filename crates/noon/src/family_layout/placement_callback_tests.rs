@@ -240,42 +240,43 @@ fn callback_move_to_keeps_masked_axes_and_rejects_invalid_targets_atomically() {
     let before = fixture.session.publication_context();
     let authored = fixture.marker.state().unwrap();
     let effective = fixture.transform();
+    let Fixture {
+        mut scene,
+        marker,
+        session,
+        ..
+    } = fixture;
+    scene.install_execution(session);
     let foreign = Scene::new().square(0.5).unwrap();
-    assert!(fixture
-        .scene
-        .live(&mut fixture.session)
+    assert!(scene
         .move_to(
-            &fixture.marker,
+            &marker,
             LiveLayoutTarget::Mobject(&foreign),
             (0.0, 0.0),
             (1.0, 1.0),
         )
         .is_err());
-    assert!(fixture
-        .scene
-        .live(&mut fixture.session)
+    assert!(scene
         .move_to(
-            &fixture.marker,
+            &marker,
             LiveLayoutTarget::Point(1.0, 2.0),
             (0.0, 0.0),
             (f64::NAN, 1.0),
         )
         .is_err());
-    assert_eq!(fixture.session.publication_context(), before);
-    assert_eq!(fixture.marker.state().unwrap(), authored);
-    assert_eq!(fixture.transform(), effective);
-    fixture
-        .scene
-        .live(&mut fixture.session)
+    assert_eq!(scene.owned_execution().publication_context(), before);
+    assert_eq!(marker.state().unwrap(), authored);
+    assert_eq!(scene.effective(&marker).unwrap().transform, effective);
+    scene
         .move_to(
-            &fixture.marker,
+            &marker,
             LiveLayoutTarget::Point(4.0, 99.0),
             (0.0, 0.0),
             (1.0, 0.0),
         )
         .unwrap();
     assert_eq!(
-        fixture.transform().translation,
+        scene.effective(&marker).unwrap().transform.translation,
         Vec2::new(4.0, effective.translation.y)
     );
 }

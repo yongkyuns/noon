@@ -28,13 +28,13 @@ fn zoom_in() -> f64 {
 #[test]
 fn zoom_transports_one_composed_view_without_scene_rows_or_authored_time() {
     let (mut p, old) = ready();
-    let publication = p.session.publication_context();
-    let original = p.session.frame().clone();
+    let publication = p.source.session().publication_context();
+    let original = p.source.session().frame().clone();
     assert_eq!(scroll(&mut p, Some(old), zoom_in()), Ok(Some(true)));
-    assert_eq!(p.session.publication_context(), publication);
-    assert_eq!(p.session.frame(), &original);
+    assert_eq!(p.source.session().publication_context(), publication);
+    assert_eq!(p.source.session().frame(), &original);
     assert_eq!(
-        p.session.camera().unwrap(),
+        p.source.session().camera().unwrap(),
         noon_core::Camera2DState::default()
     );
     let d = delta(&mut p);
@@ -49,19 +49,19 @@ fn zoom_transports_one_composed_view_without_scene_rows_or_authored_time() {
     // A point outside the original unit circle but inside its enlarged image.
     assert!(input(&mut p, "press", 1, Some(new), 1, 250.0).unwrap());
     assert!(input(&mut p, "release", 1, Some(new), 1, 250.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 
 #[test]
 fn inspection_camera_change_cancels_a_captured_translation_drag() {
     let (mut p, circle, displayed) = drag_player();
     assert!(input(&mut p, "press", 1, Some(displayed), 1, 400.0).unwrap());
-    assert!(p.session.translation_drag_active());
+    assert!(p.source.session().translation_drag_active());
 
     assert_eq!(scroll(&mut p, Some(displayed), zoom_in()), Ok(Some(true)));
-    assert!(!p.session.translation_drag_active());
+    assert!(!p.source.session().translation_drag_active());
     assert_eq!(
-        p.session.frame().objects[0].transform.translation,
+        p.source.session().frame().objects[0].transform.translation,
         Vec2::ZERO
     );
     assert_eq!(
@@ -79,7 +79,7 @@ fn capture_consumption_and_delayed_acknowledgement_never_authorize_old_scroll() 
     let old = receipt(&d, 1);
     assert_eq!(scroll(&mut p, None, zoom_in()), Ok(None));
     assert_eq!(scroll(&mut p, Some(old), zoom_in()), Ok(None));
-    assert_eq!(p.session.inspection_view_revision(), 0);
+    assert_eq!(p.source.session().inspection_view_revision(), 0);
     assert!(acknowledge(&mut p, old));
     assert_eq!(scroll(&mut p, None, zoom_in()), Ok(None));
     assert_eq!(scroll(&mut p, Some(old), zoom_in()), Ok(Some(true)));
@@ -104,7 +104,7 @@ fn old_scroll_and_old_presentation_stay_retired_after_camera_aba() {
     let new = receipt(&d, 3);
     assert!(acknowledge(&mut p, new));
     assert_eq!(d.retained.camera, noon_core::Camera2DState::default());
-    assert_eq!(p.session.inspection_view_revision(), 2);
+    assert_eq!(p.source.session().inspection_view_revision(), 2);
     assert!(!acknowledge(&mut p, old));
     assert_eq!(scroll(&mut p, Some(old), zoom_in()), Ok(None));
     assert_eq!(scroll(&mut p, Some(new), zoom_in()), Ok(Some(true)));
@@ -120,13 +120,13 @@ fn changed_view_discards_in_flight_contact_tail_without_second_cancellation() {
         assert!(!input(&mut p, kind, 1, Some(r), 1, 400.0).unwrap());
     }
     assert_eq!(p.next_native_event_sequence, sequence);
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
     let fresh = receipt(&delta(&mut p), 2);
     assert!(acknowledge(&mut p, fresh));
     assert!(!input(&mut p, "release", 1, Some(fresh), 1, 300.0).unwrap());
     assert!(input(&mut p, "press", 2, Some(fresh), 1, 300.0).unwrap());
     assert!(input(&mut p, "release", 2, Some(fresh), 1, 300.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 
 #[test]
@@ -134,17 +134,17 @@ fn no_op_preserves_the_displayed_receipt_and_pending_click() {
     let (mut p, r) = ready();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     assert_eq!(scroll(&mut p, Some(r), 0.0), Ok(Some(false)));
-    assert_eq!(p.session.inspection_view_revision(), 0);
+    assert_eq!(p.source.session().inspection_view_revision(), 0);
     assert!(p.drain_delta_json().unwrap().is_none());
     assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 
 #[test]
 fn malformed_foreign_and_resized_scroll_do_not_mutate_or_cancel() {
     let (mut p, r) = ready();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
-    let before = p.session.frame().clone();
+    let before = p.source.session().frame().clone();
     let sequence = p.next_native_event_sequence;
     for bad in [
         r#"{}"#,
@@ -163,11 +163,11 @@ fn malformed_foreign_and_resized_scroll_do_not_mutate_or_cancel() {
         p.scroll_inspection_view_json(&bad_view.to_string()),
         Ok(None)
     );
-    assert_eq!(p.session.frame(), &before);
+    assert_eq!(p.source.session().frame(), &before);
     assert_eq!(p.next_native_event_sequence, sequence);
-    assert_eq!(p.session.inspection_view_revision(), 0);
+    assert_eq!(p.source.session().inspection_view_revision(), 0);
     assert!(input(&mut p, "release", 1, Some(r), 1, 400.0).unwrap());
-    assert!(p.session.selected_pointer_target().is_some());
+    assert!(p.source.session().selected_pointer_target().is_some());
 }
 
 #[test]
@@ -177,27 +177,28 @@ fn obsolete_quiet_view_refreshes_once_without_replaying_the_wheel() {
     register(&mut p, 1);
     let old = receipt(&delta(&mut p), 1);
     assert!(acknowledge(&mut p, old));
-    p.session.advance_to(0.25).unwrap();
+    p.source.session_mut().advance_to(0.25).unwrap();
     assert_eq!(scroll(&mut p, Some(old), zoom_in()), Ok(None));
-    assert_eq!(p.session.inspection_view_revision(), 0);
+    assert_eq!(p.source.session().inspection_view_revision(), 0);
     let new = receipt(&delta(&mut p), 2);
     assert!(acknowledge(&mut p, new));
     assert!(p.drain_delta_json().unwrap().is_none());
     assert_eq!(scroll(&mut p, Some(new), zoom_in()), Ok(Some(true)));
-    assert_eq!(p.session.frame().time, 0.25);
+    assert_eq!(p.source.session().frame().time, 0.25);
 }
 
 #[test]
 fn replay_seal_allows_view_only_scroll_and_rebind_preserves_only_the_adjustment() {
     let (mut p, r) = ready();
-    p.session
+    p.source
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
-    p.session.seal_replay().unwrap();
-    let stats = p.session.replay_stats();
+    p.source.session_mut().seal_replay().unwrap();
+    let stats = p.source.session().replay_stats();
     assert_eq!(scroll(&mut p, Some(r), zoom_in()), Ok(Some(true)));
-    assert_eq!(p.session.replay_stats(), stats);
-    let expected = p.session.inspection_camera().unwrap();
+    assert_eq!(p.source.session().replay_stats(), stats);
+    let expected = p.source.session().inspection_camera().unwrap();
     p.rebind_transport(2.0, 8).unwrap();
     register(&mut p, 1);
     let d = delta(&mut p);
@@ -240,18 +241,20 @@ fn worker_inspection_during_real_indicate_preserves_restoration_and_authored_gua
     let r = receipt(&delta(&mut p), 1);
     assert!(acknowledge(&mut p, r));
     assert_eq!(scroll(&mut p, Some(r), zoom_in()), Ok(Some(true)));
-    assert_eq!(p.session.frame().time, 0.5);
-    assert!(noon::LiveSession::new(&semantics, root, &mut p.session)
-        .set_translation(&circle, 9.0, 0.0)
-        .is_err());
-    let inspection = p.session.inspection_camera().unwrap();
-    noon::LiveSession::new(&semantics, root, &mut p.session)
+    assert_eq!(p.source.session().frame().time, 0.5);
+    assert!(
+        noon::LiveSession::new(&semantics, root, p.source.session_mut())
+            .set_translation(&circle, 9.0, 0.0)
+            .is_err()
+    );
+    let inspection = p.source.session().inspection_camera().unwrap();
+    noon::LiveSession::new(&semantics, root, p.source.session_mut())
         .advance_segment_to(segment, 1.0)
         .unwrap();
-    noon::LiveSession::new(&semantics, root, &mut p.session)
+    noon::LiveSession::new(&semantics, root, p.source.session_mut())
         .complete_segment(segment)
         .unwrap();
-    let final_state = noon::LiveSession::new(&semantics, root, &mut p.session)
+    let final_state = noon::LiveSession::new(&semantics, root, p.source.session_mut())
         .effective(&circle)
         .unwrap();
     assert_eq!(final_state.transform, original.transform);
@@ -264,18 +267,22 @@ fn worker_scroll_does_not_bypass_a_pending_callback_and_retries_after_completion
     let (mut p, r) = ready();
     assert!(input(&mut p, "press", 1, Some(r), 1, 400.0).unwrap());
     let binding = p.browser_pointer_binding;
-    let phase = p.session.begin_required_callback_phase(0.0, []).unwrap();
+    let phase = p
+        .source
+        .session_mut()
+        .begin_required_callback_phase(0.0, [])
+        .unwrap();
     assert!(scroll(&mut p, Some(r), zoom_in()).is_err());
     assert_eq!(p.browser_pointer_binding, binding);
-    assert_eq!(p.session.inspection_view_revision(), 0);
-    p.session
+    assert_eq!(p.source.session().inspection_view_revision(), 0);
+    p.source
+        .session_mut()
         .commit_required_callback_phase(phase.finish())
         .unwrap();
     // A callback commit can publish a new epoch. Use an actual new displayed
     // frame; never rewrite the old packet's collection receipt to permit retry.
     let mut target = PlayerPointerTarget {
-        session: &mut p.session,
-        semantics: p.semantics.as_ref().unwrap(),
+        source: &mut p.source,
         translation_drag_undo: &mut p.translation_drag_undo,
     };
     p.worker_pointer_presentation

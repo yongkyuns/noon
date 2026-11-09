@@ -23,7 +23,9 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn require_effect_resource_preparation(&mut self) {
-        self.session.require_effect_resource_preparation();
+        self.source
+            .session_mut()
+            .require_effect_resource_preparation();
     }
 
     #[cfg(target_arch = "wasm32")]
