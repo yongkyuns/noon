@@ -27,7 +27,7 @@ It is implementation detail, not a replacement for `docs/architecture.md`.
 
 ## Media
 
-`web/site/examples.json` selects existing curated scenes and clip intervals. The
+`web/site/examples.json` is an editorial allowlist of selected, original showcase scenes and clip intervals. Inclusion in the wider demonstration gallery alone does not approve a scene for project promotion. The
 canonical source paths and durations remain in
 `web/python/examples/noon_showcase_manifest.json`.
 

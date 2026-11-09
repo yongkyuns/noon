@@ -30,3 +30,19 @@ test("website videos and README GIFs use only the selected project examples", as
     assert.ok(readme.includes(`example=${id}`), `${id}: editable README demo`);
   }
 });
+
+test("wave-interference lesson is deliberately selected for project examples", async () => {
+  const selected = JSON.parse(await read("./site/examples.json"));
+  const wave = selected.find(entry => entry.id === "showcase-wave-interference");
+  assert.deepEqual(wave, { id: "showcase-wave-interference", start: 1, end: 9 });
+  const manifest = JSON.parse(await read("./python/examples/noon_showcase_manifest.json"));
+  const lesson = manifest.entries.find(entry => entry.id === wave.id);
+  assert.equal(lesson.title, "Interference is addition");
+  assert.equal(lesson.path, "python/examples/showcase_wave_interference.py");
+  assert.ok(wave.end <= lesson.duration);
+  for (const relative of ["../README.md", "./site/index.html"]) {
+    const content = await read(relative);
+    assert.ok(content.includes("Interference is addition"), relative);
+    assert.ok(content.includes("example=showcase-wave-interference"), relative);
+  }
+});
