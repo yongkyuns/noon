@@ -26,15 +26,15 @@ pub(super) struct FiniteExport {
 
 impl FiniteExport {
     fn validate_owner(&self, player: &SemanticExecutionPlayer) -> Result<(), String> {
-        let publication = player.session.publication_context();
-        if player.session.runtime_identity() != self.runtime
+        let publication = player.source.session().publication_context();
+        if player.source.session().runtime_identity() != self.runtime
             || publication.scene_revision() != self.publication.scene_revision()
             || publication.execution_revision() != self.publication.execution_revision()
-            || player.session.pending_callback_token().is_some()
-            || player.session.replay_scope_active()
+            || player.source.session().pending_callback_token().is_some()
+            || player.source.session().replay_scope_active()
             || player.pending_callback_phase.is_some()
             || player.clock.is_playing()
-            || player.session.interactions_active()
+            || player.source.session().interactions_active()
         {
             return Err("finite export lost its paused immutable execution owner".into());
         }
@@ -195,17 +195,18 @@ impl SemanticExecutionPlayer {
         if self.finite_export.is_some() {
             return Err("a finite export is already active".into());
         }
-        if self.session.frame().time != 0.0
+        if self.source.session().frame().time != 0.0
             || self.clock.is_playing()
-            || self.session.pending_callback_token().is_some()
-            || self.session.replay_scope_active()
+            || self.source.session().pending_callback_token().is_some()
+            || self.source.session().replay_scope_active()
             || self.pending_callback_phase.is_some()
-            || self.session.interactions_active()
+            || self.source.session().interactions_active()
         {
             return Err("finite export requires a fresh paused immutable session without callbacks, history or active input".into());
         }
         let source_end = self
-            .session
+            .source
+            .session()
             .finite_timeline_end_time()
             .ok_or("finite export requires a complete finite immutable timeline (#2263)")?;
         if options_json.len() > 65_536 {
@@ -222,13 +223,14 @@ impl SemanticExecutionPlayer {
         let planned = policy
             .finite_summary(source_end)
             .map_err(|error| error.to_string())?;
-        let audio_grid = if self.session.has_audio() {
+        let audio_grid = if self.source.session().has_audio() {
             let grid = ExportAudioGrid::new(planned, AudioMixFormat::STEREO_48_KHZ)
                 .map_err(|error| error.to_string())?;
             if grid.frames() > MAX_SAFE_JS_INTEGER {
                 return Err("browser export PCM count exceeds exact transport integers".into());
             }
-            self.session
+            self.source
+                .session()
                 .mix_audio_block(grid.scene_start(), grid.frames(), grid.format(), &mut [])
                 .map_err(|error| error.to_string())?;
             Some(grid)
@@ -240,8 +242,8 @@ impl SemanticExecutionPlayer {
             source_end,
             planned,
             audio_grid,
-            runtime: self.session.runtime_identity(),
-            publication: self.session.publication_context(),
+            runtime: self.source.session().runtime_identity(),
+            publication: self.source.session().publication_context(),
             last_observation: None,
         };
         let reply = json!({
@@ -286,8 +288,8 @@ impl SemanticExecutionPlayer {
         };
         let observation = SampleObservation {
             requested_time,
-            published_time: self.session.frame().time,
-            publication: self.session.publication_context(),
+            published_time: self.source.session().frame().time,
+            publication: self.source.session().publication_context(),
         };
         if observation.published_time != requested_time.min(export.source_end)
             || export.last_observation.is_some_and(|previous| {
@@ -336,8 +338,8 @@ impl SemanticExecutionPlayer {
             return Err("finite export has no sample awaiting acknowledgement".into());
         };
         if observation != ObservationWire::from(sample.observation)
-            || self.session.frame().time != sample.observation.published_time
-            || self.session.publication_context() != sample.observation.publication
+            || self.source.session().frame().time != sample.observation.published_time
+            || self.source.session().publication_context() != sample.observation.publication
         {
             return Err(
                 "finite export acknowledgement does not match the pending publication".into(),
@@ -380,7 +382,8 @@ impl SemanticExecutionPlayer {
         let channels = usize::from(grid.format().channels());
         let mut samples = vec![0.0_f32; frames * channels];
         if mixed_frames > 0 {
-            self.session
+            self.source
+                .session()
                 .mix_audio_block(
                     grid.scene_start(),
                     first_frame,

@@ -73,12 +73,12 @@ fn relative_placement_uses_shared_masks_targets_and_one_local_publication() {
     for object in [&first, &second, &anchor] {
         scene.add(object).unwrap();
     }
-    let mut execution = scene.execution_session().unwrap();
-    execution.take_frame_changes();
+    let mut execution = scene.into_execution().unwrap();
+    execution.session_mut().take_frame_changes();
     {
-        let mut live = scene.live(&mut execution);
+        let scene = execution.scene_mut();
         let before = scene.integration_store().borrow().scene_revision();
-        let result = live
+        let result = scene
             .move_family_to(&family, Target::Point(4.0, 9.0), (1.0, 0.0), (1.0, 0.0))
             .unwrap();
         assert_eq!(result.impacts().len(), 2);
@@ -86,25 +86,33 @@ fn relative_placement_uses_shared_masks_targets_and_one_local_publication() {
             scene.integration_store().borrow().scene_revision(),
             before.checked_next().unwrap()
         );
-        live.next_family_to(
-            &family,
-            Target::Mobject(&anchor),
-            ManimNextToArgs {
-                direction: (2.0, 0.0),
-                buff: 0.25,
-                aligned_edge: (0.0, 0.0),
-                mask: (1.0, 0.0),
-            },
-        )
-        .unwrap();
-        live.align_family_to(&family, Target::Family(&target), (0.0, 1.0))
+        scene
+            .next_family_to(
+                &family,
+                Target::Mobject(&anchor),
+                ManimNextToArgs {
+                    direction: (2.0, 0.0),
+                    buff: 0.25,
+                    aligned_edge: (0.0, 0.0),
+                    mask: (1.0, 0.0),
+                },
+            )
             .unwrap();
-        let layout = live.effective_family_layout(&family).unwrap();
+        scene
+            .align_family_to(&family, Target::Family(&target), (0.0, 1.0))
+            .unwrap();
+        let layout = scene.effective_family_layout(&family).unwrap();
         close(layout.center.0, 9.0);
         close(layout.center.1, 3.5);
         assert_eq!(anchor.center().unwrap(), (6.0, 3.0));
     }
-    assert_eq!(execution.take_frame_changes().object_indices(), &[0, 1]);
+    assert_eq!(
+        execution
+            .session_mut()
+            .take_frame_changes()
+            .object_indices(),
+        &[0, 1]
+    );
 }
 
 #[test]
@@ -164,18 +172,25 @@ fn object_move_to_family_anchor_reads_effective_bounds_and_stays_local() {
         live.advance_segment_to(segment, 2.0).unwrap();
         live.complete_segment(segment).unwrap();
     }
-    execution.take_frame_changes();
+    let mut execution = scene.into_execution_with_session(execution).unwrap();
+    execution.session_mut().take_frame_changes();
     {
-        let mut live = scene.live(&mut execution);
-        let result = live
+        let scene = execution.scene_mut();
+        let result = scene
             .move_to(&source, Target::Anchor(&target), (0.0, 1.0), (1.0, 0.5))
             .unwrap();
         assert_eq!(result.impacts().len(), 1);
-        let center = live.effective_layout(&source).unwrap().center;
+        let center = scene.effective_layout(&source).unwrap().center;
         close(center.0, 6.0);
         close(center.1, 2.25);
     }
-    assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
+    assert_eq!(
+        execution
+            .session_mut()
+            .take_frame_changes()
+            .object_indices(),
+        &[0]
+    );
 }
 
 #[test]

@@ -56,7 +56,7 @@ fn settle(player: &mut SemanticExecutionPlayer) -> Value {
 #[test]
 fn policy_retains_every_prefix_and_completion_until_exact_acknowledgement() {
     let mut player = player();
-    let initial_publication = player.session.publication_context();
+    let initial_publication = player.source.session().publication_context();
     let plan = parse(
         player
             .begin_finite_export_json(&options().to_string())
@@ -65,7 +65,10 @@ fn policy_retains_every_prefix_and_completion_until_exact_acknowledgement() {
     assert_eq!(plan["source_end"], 1.125);
     assert_eq!(plan["sampling"]["frames"], 2);
     assert_eq!(plan["audio_frames"], 6_000);
-    assert_eq!(player.session.publication_context(), initial_publication);
+    assert_eq!(
+        player.source.session().publication_context(),
+        initial_publication
+    );
     assert!(player.finite_export_active());
     assert!(player
         .begin_finite_export_json(&options().to_string())
@@ -111,7 +114,7 @@ fn pcm_uses_shared_absolute_grid_without_advancing_publication_and_silences_tail
     player
         .begin_finite_export_json(&options().to_string())
         .unwrap();
-    let publication = player.session.publication_context();
+    let publication = player.source.session().publication_context();
     let full = player.mix_finite_export_audio_block(0, 6_000).unwrap();
     let mut partitioned = Vec::new();
     for (first, count) in [(0, 7), (7, 4_490), (4_497, 1_503)] {
@@ -125,7 +128,7 @@ fn pcm_uses_shared_absolute_grid_without_advancing_publication_and_silences_tail
     assert!((full[600 * 2] - 0.0125).abs() < 1e-7);
     assert!(full[4_500 * 2..].iter().all(|&value| value == 0.0));
     assert_eq!(player.time(), 0.0);
-    assert_eq!(player.session.publication_context(), publication);
+    assert_eq!(player.source.session().publication_context(), publication);
     for (first, frames) in [(0, 0), (0, 16_385), (6_000, 1), (u64::MAX, 1)] {
         assert!(player.mix_finite_export_audio_block(first, frames).is_err());
     }
@@ -201,7 +204,7 @@ fn quiet_wait_publishes_current_receipt_without_dirty_rows_and_holds_reuse_it() 
     loop {
         let previous_time = player.time();
         let sample = settle(&mut player);
-        let publication = player.session.publication_context();
+        let publication = player.source.session().publication_context();
         if previous_time != player.time() {
             // Runtime time and epoch advance through a wait without changing
             // objects. Export still needs a renderer receipt for this exact
@@ -252,7 +255,7 @@ fn wrong_or_stale_acknowledgement_cannot_release_a_pending_publication() {
         .acknowledge_finite_export_json(&wrong.to_string())
         .is_err());
     assert_eq!(parse(player.finite_export_status_json().unwrap()), sample);
-    player.session.advance_to(0.01).unwrap();
+    player.source.session_mut().advance_to(0.01).unwrap();
     assert!(player
         .acknowledge_finite_export_json(&sample["observation"].to_string())
         .is_err());
@@ -269,7 +272,7 @@ fn fresh_paused_and_finite_admission_precedes_policy_or_pcm_allocation() {
         .is_err());
     assert!(!playing.finite_export_active());
     let mut advanced = player();
-    advanced.session.advance_to(0.1).unwrap();
+    advanced.source.session_mut().advance_to(0.1).unwrap();
     assert!(advanced
         .begin_finite_export_json(&options().to_string())
         .is_err());

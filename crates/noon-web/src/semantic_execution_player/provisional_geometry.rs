@@ -29,10 +29,7 @@ impl SemanticExecutionPlayer {
         if token != expected_token {
             return Err("callback provisional geometry token is stale".into());
         }
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("callback provisional geometry requires a live semantic store")?;
+        let semantics = self.source.scene().integration_store().clone();
         let collector = self.callback_membership_transaction.take();
         if collector
             .as_ref()
@@ -166,10 +163,7 @@ impl SemanticExecutionPlayer {
         if token != expected_token {
             return Err("callback provisional geometry token is stale".into());
         }
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("callback provisional geometry requires a live semantic store")?;
+        let semantics = self.source.scene().integration_store().clone();
         let Some(collector) = self.callback_membership_transaction.take() else {
             return Err("callback provisional geometry is unknown".into());
         };
@@ -419,10 +413,7 @@ impl SemanticExecutionPlayer {
         if token != expected_token {
             return Err("callback provisional geometry token is stale".into());
         }
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("callback provisional geometry requires a live semantic store")?;
+        let semantics = self.source.scene().integration_store().clone();
         let Some(mut collector) = self.callback_membership_transaction.take() else {
             return Err("callback provisional geometry is unknown".into());
         };

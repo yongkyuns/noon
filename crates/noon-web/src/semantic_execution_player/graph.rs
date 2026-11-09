@@ -11,16 +11,7 @@ impl SemanticExecutionPlayer {
         edges: Vec<(u32, u32)>,
         options: noon::GraphOptions,
     ) -> Result<NativeGraph, AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
-        let mut live = noon::LiveSession::new(
-            &semantics,
-            self.semantic_root
-                .expect("live semantic store has one scene root"),
-            &mut self.session,
-        );
+        let mut live = self.source.live();
         let graph = if directed {
             NativeGraph::Directed(
                 noon::DiGraph::with_options_live(&mut live, vertices, edges, options)
@@ -40,20 +31,8 @@ impl SemanticExecutionPlayer {
         graph: &mut NativeGraph,
         operation: crate::authoring_graph::GraphOperation,
     ) -> Result<(), AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
         graph
-            .apply_live(
-                &mut noon::LiveSession::new(
-                    &semantics,
-                    self.semantic_root
-                        .expect("live semantic store has one scene root"),
-                    &mut self.session,
-                ),
-                operation,
-            )
+            .apply_live(&mut self.source.live(), operation)
             .map_err(|error| AuthoringFailure::unclassified("graph.mutate", &error))
     }
 
@@ -62,17 +41,8 @@ impl SemanticExecutionPlayer {
         &mut self,
         graph: &NativeGraph,
     ) -> Result<NativeGraph, AuthoringFailure> {
-        let semantics = self
-            .semantics
-            .clone()
-            .ok_or("execution player has no live semantic store")?;
         graph
-            .copy_live(&mut noon::LiveSession::new(
-                &semantics,
-                self.semantic_root
-                    .expect("live semantic store has one scene root"),
-                &mut self.session,
-            ))
+            .copy_live(&mut self.source.live())
             .map_err(|error| AuthoringFailure::unclassified("graph.copy", &error))
     }
 }

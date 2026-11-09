@@ -162,25 +162,19 @@ fn effective_root_layout_reads_each_current_descendant_pose_without_publication(
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut execution)
-        .play_animation(&animation)
-        .unwrap();
-    scene
-        .live(&mut execution)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let segment = execution.live().play_animation(&animation).unwrap();
+    execution.live().advance_segment_to(segment, 1.0).unwrap();
     for time in [1.0, 0.25, 1.5, 0.0, 1.0] {
         execution.seek(time).unwrap();
-        let before = execution.publication_context();
-        let layout = scene.live(&mut execution).effective_layout(&root).unwrap();
+        let before = execution.session().publication_context();
+        let layout = execution.live().effective_layout(&root).unwrap();
         assert_eq!(layout.width, 10.0 + 2.0 * time);
         assert_eq!(layout.center, (4.0 + time, 0.0));
         if time == 1.0 {
             // A driven descendant cannot be baked into a persistent root move.
-            assert!(scene
-                .live(&mut execution)
+            assert!(execution
+                .scene_mut()
                 .move_to(
                     &root,
                     LiveLayoutTarget::Point(0.0, 0.0),
@@ -189,7 +183,7 @@ fn effective_root_layout_reads_each_current_descendant_pose_without_publication(
                 )
                 .is_err());
         }
-        assert_eq!(execution.publication_context(), before);
+        assert_eq!(execution.session().publication_context(), before);
         assert_eq!(root.center().unwrap(), (4.0, 0.0));
     }
 }
@@ -201,19 +195,16 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
     let unrelated = scene.square(1.0).unwrap();
     scene.add(&root).unwrap();
     scene.add(&unrelated).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    execution.take_frame_changes();
-    let before = scene.revision();
-    let publication = execution.publication_context();
+    let mut execution = scene.into_execution().unwrap();
+    execution.session_mut().take_frame_changes();
+    let before = execution.scene().revision();
+    let publication = execution.session().publication_context();
     let states = [
         root.state().unwrap(),
         child.state().unwrap(),
         grandchild.state().unwrap(),
     ];
-    assert!(scene
-        .live(&mut execution)
-        .shift(&root, f64::NAN, 0.0)
-        .is_err());
+    assert!(execution.live().shift(&root, f64::NAN, 0.0).is_err());
     assert_eq!(
         [
             root.state().unwrap(),
@@ -222,12 +213,16 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
         ],
         states
     );
-    assert_eq!(scene.revision(), before);
-    assert_eq!(execution.publication_context(), publication);
-    assert!(execution.take_frame_changes().object_indices().is_empty());
-    let result = scene.live(&mut execution).shift(&root, 2.0, -1.0).unwrap();
+    assert_eq!(execution.scene().revision(), before);
+    assert_eq!(execution.session().publication_context(), publication);
+    assert!(execution
+        .session_mut()
+        .take_frame_changes()
+        .object_indices()
+        .is_empty());
+    let result = execution.live().shift(&root, 2.0, -1.0).unwrap();
     assert_eq!(result.impacts().len(), 3);
-    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(execution.scene().revision(), before.checked_next().unwrap());
     assert_eq!(
         [
             translation(&root),
@@ -236,9 +231,15 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
         ],
         [(2.0, -1.0), (6.0, -1.0), (10.0, -1.0)]
     );
-    assert_eq!(execution.take_frame_changes().object_indices(), &[0, 1, 2]);
-    let result = scene
-        .live(&mut execution)
+    assert_eq!(
+        execution
+            .session_mut()
+            .take_frame_changes()
+            .object_indices(),
+        &[0, 1, 2]
+    );
+    let result = execution
+        .scene_mut()
         .move_to(
             &root,
             LiveLayoutTarget::Point(3.0, 2.0),
@@ -257,11 +258,7 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
     );
     assert_eq!(translation(&unrelated), (0.0, 0.0));
     assert_eq!(
-        scene
-            .live(&mut execution)
-            .effective_layout(&root)
-            .unwrap()
-            .center,
+        execution.live().effective_layout(&root).unwrap().center,
         (3.0, 2.0)
     );
 }

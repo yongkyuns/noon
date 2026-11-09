@@ -127,7 +127,7 @@
         "camera Bloom",
         "animate.set_effect"
       ],
-      "duration": 7.5,
+      "duration": 10,
       "thumbnail_time": 4.75,
       "thumbnail": "thumbnails/showcase/showcase-bloom-emission.png",
       "thumbnail_alt": "A bright cyan source with a soft halo between labels for independent material emission and camera Bloom",
@@ -146,7 +146,7 @@
         ],
         [
           6.75,
-          7.5
+          10
         ]
       ],
       "beats": [
