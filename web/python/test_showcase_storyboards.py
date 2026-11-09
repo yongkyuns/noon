@@ -157,7 +157,8 @@ class FeatureLessonStoryboards(unittest.TestCase):
         source = (WEB / entry["path"]).read_text()
         tree = ast.parse(source, filename=entry["path"])
         scene = next(node for node in tree.body if isinstance(node, ast.ClassDef))
-        construct = next(node for node in scene.body if isinstance(node, ast.AsyncFunctionDef))
+        construct = next(node for node in scene.body
+                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "construct")
         self.assertEqual([base.id for base in scene.bases if isinstance(base, ast.Name)], ["MovingCameraScene"])
         self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                             and node.func.id == "MoveAlongPath" for node in ast.walk(construct)))
@@ -197,8 +198,7 @@ class FeatureLessonStoryboards(unittest.TestCase):
         scene = next(node for node in tree.body if isinstance(node, ast.ClassDef))
         construct = next(node for node in scene.body
                          if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "construct")
-        self.assertIsInstance(construct, ast.AsyncFunctionDef)
-        redraws = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+        redraws = [node for node in ast.walk(construct) if isinstance(node, ast.Call)
                    and isinstance(node.func, ast.Name) and node.func.id == "always_redraw"]
         self.assertEqual(len(redraws), 2)
         produced_shapes = []
