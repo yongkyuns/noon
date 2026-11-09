@@ -129,7 +129,7 @@ An interval shorter than one audio sample can contain no presented audio frames.
 PNG sequences are explicitly visual-only and omit authored audio. The existing
 `export_file` live-program MP4 path still rejects audio until live execution is
 qualified. Finite Python scenes can use the browser capture and native media
-import described below. In-process native CPython bindings, live/history audio
+import described below. In-process native CPython audio bindings, live/history audio
 export and narration remain separate work tracked by #1874 and #2263.
 
 ## Finite Python scenes and prepared media import
@@ -169,8 +169,8 @@ explicitly instead of silently shortening the movie; a general completed
 authoring horizon remains outside this finite profile. The script compares the
 canonical authoring duration with the shared runtime's admitted endpoint without
 overriding either. Scene playback controls cannot mutate an active export.
-The browser is the pixel producer; this path makes no claim that native WGPU
-rendered Python's frames or that a native CPython binding exists.
+The browser is the pixel producer; this path does not use the native CPython
+binding or native WGPU rendering.
 
 Omit `--mp4` to retain only the prepared capture, or supply `--encoder PATH` to use
 an already built `encode_prepared_capture` executable. Without that option, the
