@@ -6,10 +6,53 @@ use noon_runtime::{
     apply_execution_slot_membership_changes, ReplayError, ReplayLimits, ReplayStats,
 };
 
+/// Shared engine reasons why the current source needs observed execution.
+/// These are capability metadata, not permission to speculate callback/input work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceExecutionRequirement {
+    /// The host continuation has no contract permitting execution ahead of presentation.
+    HostEffects,
+    HostCallbacks,
+    EffectiveDisplay,
+    NativeInput,
+    Signals,
+    /// The existing retained scope or new sparse suffix cannot supply playback.
+    ReplayUnavailable(ReplayError),
+    /// The original program must complete its existing rendering-host handshake.
+    ExternalResources,
+}
+
 #[cfg(test)]
 mod prefix_probe;
 
 impl ExecutionSession {
+    /// Classify before any headless advance. The original source/continuation
+    /// must keep executing through its ordinary callback/input protocol; a host
+    /// may not reconstruct it or treat an endpoint-only callback sample as history.
+    pub fn source_execution_requirement(&self) -> Option<SourceExecutionRequirement> {
+        if !self.callback_schedule.is_empty() {
+            Some(SourceExecutionRequirement::HostCallbacks)
+        } else if self.derived_display_plan.is_some() {
+            Some(SourceExecutionRequirement::EffectiveDisplay)
+        } else if self.translation_drag.has_targets()
+            || !self.interaction_bindings.is_empty()
+            || self.reactive_projection.has_native_input_routes()
+        {
+            Some(SourceExecutionRequirement::NativeInput)
+        } else if self.runtime.inset_2d_views().next().is_some() {
+            Some(SourceExecutionRequirement::ReplayUnavailable(
+                ReplayError::UnsupportedDomain,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Read the original journal's status without sealing or advancing it.
+    pub fn replay_retention_status(&self) -> Result<(), ReplayError> {
+        self.runtime.replay_retention_status()
+    }
+
     /// Admit viewer transport over the initial complete immutable projection.
     /// Prior live execution edits retain their explicit history requirements;
     /// seeking to zero does not turn the latest projection into replayable history.
@@ -183,6 +226,6 @@ impl ExecutionSession {
 mod prefix;
 
 #[cfg(feature = "prepared-prefix")]
-pub use prefix::{PrefixReader, SourceExecutionRequirement};
+pub use prefix::PrefixReader;
 #[cfg(all(test, feature = "prepared-prefix"))]
 mod playback_tests;

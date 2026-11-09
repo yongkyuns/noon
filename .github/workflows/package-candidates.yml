@@ -90,15 +90,20 @@ jobs:
             ~/.cargo/git
           key: rust-package-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: rust-package-cargo-
+      - name: Install native graphics and media runtime for Rust archive proof
+        run: bash scripts/ci-install-reference-deps.sh mesa-vulkan-drivers libvulkan1 ffmpeg
       - name: Validate normalized archives and outside-checkout consumers
+        env:
+          WGPU_BACKEND: vulkan
         run: |
           python scripts/test_rust_packages.py -v
-          python scripts/check-rust-packages.py --wasm --output dist/rust
+          python scripts/check-rust-packages.py --wasm --render --output dist/rust
       - name: Retain exact dependency notices and explicit evidence gaps
         run: |
           cargo fetch --locked
           python scripts/collect-release-licenses.py --output dist/rust/licenses --fetch-missing --report-only
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: rust-package-candidates
           path: dist/rust/

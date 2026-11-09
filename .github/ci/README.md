@@ -33,6 +33,12 @@ performance evidence or a free-threaded Python qualification.
 The Rust job builds the publishable workspace archives and tests an independent
 consumer patched exclusively to **extracted archives**. It covers minimal and
 default authoring, native host/export compilation and the WASM/browser graph.
+It also runs the packaged ordinary Rust first-lesson export example verbatim
+against those archives. FFmpeg decodes all 60 frames; independent checks verify
+two-second timing, title and equation pixels, simultaneous group motion, and the
+caption's late appearance. The movie, probe data and per-frame observations are
+retained with the package report. This is offscreen software-renderer evidence,
+not native window or physical-device presentation qualification.
 The reviewed dependency lock seeds the consumer, and the report rejects unreviewed
 registry versions/checksums or a dependency that escapes back to checkout source.
 `noon-python` is a wheel implementation package and is excluded from crates.io.
@@ -64,11 +70,13 @@ resolve every asset, dependency or native library obligation.
 Local equivalents are:
 
 ```sh
-python scripts/check-rust-packages.py --wasm --output dist/rust
+python scripts/check-rust-packages.py --wasm --render --output dist/rust
 python -m build
 python scripts/check-python-package.py dist/<wheel>.whl --sdist dist/<sdist>.tar.gz --render --mp4
 ```
 
+The Rust `--render` check needs a native graphics adapter plus FFmpeg/ffprobe;
+omit it only for a compile/API-only check, which does not qualify lesson output.
 Use `--allow-dirty` explicitly for a local Rust packaging experiment; final
 candidates must identify a clean source commit. The existing optimized-production
 browser job additionally runs:

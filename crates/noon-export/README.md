@@ -11,12 +11,81 @@ A trusted installed FFmpeg build with `libx264`, PNG, MP4 and image2 support is
 required for these file adapters. MP4 soundtrack export also requires its AAC
 encoder and raw `f32le` input support. Capture-only use does not invoke FFmpeg.
 
+### Ordinary Rust source
+
+The first lesson uses the same unchanged synchronous `construct(&BlockingScene)`
+function as `noon_native::run_scene`. Export it without a window:
+
+```sh
+cargo run -p noon-export --example first_lesson -- lesson.mp4
+cargo run -p noon-export --example first_lesson -- --png lesson-images
+```
+
+The packaged [example](examples/first_lesson.rs) renders two seconds at 320×180
+and 30 FPS: 60 frames with a title, equation, two shapes moving together, and a
+caption introduced at 1.5 seconds. Change `CaptureOptions` for a larger output.
+In an application, keep your ordinary source function and pass it to the public
+entry point:
+
+```rust
+use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
+use noon_export::{output::{export_blocking_scene, OutputOptions}, CaptureOptions};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    export_blocking_scene(
+        noon::example_scenes::first_lesson::construct,
+        ExportFrameOptions {
+            frame_rate: FrameRate::new(30, 1)?,
+            start_frame: 0,
+            stop: ExportStop::SourceEnd,
+            max_frames: 3_000,
+            max_transitions_per_sample: 64,
+            final_hold_seconds: 0.0,
+        },
+        CaptureOptions::new(320, 180),
+        OutputOptions::mp4("lesson.mp4"),
+    )?;
+    Ok(())
+}
+```
+
+Source runs once on its original Scene/runtime owner. Every `play` or `wait`
+completes through the shared engine boundary; bounded history retains the
+coherent publication. The completed owner is sealed and handed to the existing
+frame policy, renderer and file sink. Playback and cropping do not rerun source.
+Preparation admits retention, without claiming that a frame was displayed.
+It is live from time zero. Apply mutations through the supplied `BlockingScene`
+(`scene.set_fill`, `scene.shift`, and the other scoped operations), including the
+initial setup. Direct mutable-handle writes that bypass Scene publication cannot
+be admitted to the retained owner.
+
+`export_blocking_scene_with_limits` configures `BlockingSourceLimits`: defaults
+are 100,000 host operations, 10,000 boundaries, and the runtime's 100,000 retained
+revision / 1,000,000 immutable payload budget. Initial construction at time zero
+also uses these budgets. These limits are separate from the output frame cap;
+zero-duration waits cannot bypass the source boundary cap. A static source with
+no elapsed interval needs a positive `final_hold_seconds` to emit frames.
+
+This finite visual profile rejects required callbacks, unrecorded native input,
+unsupported effective display/history and retained-history audio. Use the native
+viewer for sources requiring its observed callback/input protocol. An ordinary
+transactional constructor error may be caught when it leaves the scene valid;
+a retention, cancellation or source-budget failure terminally retires the run.
+Source or host-call panics retire the capability before unwinding, including a
+host-call panic caught by application code. Retained `BlockingScene` clones cannot
+write after completion or failure. Cancellation is cooperative between host
+operations and output samples; arbitrary Rust code between host calls cannot be
+preempted. Source/preparation failure does not create or replace output, and the
+existing file transaction handles capture/encoder failure cleanup.
+
+### Explicit live-program integration
+
 ```sh
 cargo run --release -p noon-export --example render_video -- scene.mp4
 cargo run --release -p noon-export --example render_video -- scene-images --png
 ```
 
-The example exports the existing Rust `FollowingGraphCamera` program at 1280x720,
+This example exports the existing Rust `FollowingGraphCamera` program at 1280x720,
 30 FPS. The library entry point `output::export_file` accepts a normal fresh
 `LiveProgram`, callback table, `ExportFrameOptions`, `CaptureOptions` and
 `OutputOptions`. Use `OutputOptions::mp4(path)` or `::png_sequence(path)`.

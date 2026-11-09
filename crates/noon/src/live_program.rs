@@ -12,7 +12,9 @@ use std::{
     rc::Rc,
 };
 
+mod blocking_replay;
 mod inspection;
+pub use blocking_replay::BlockingReplayError;
 #[cfg(feature = "prepared-prefix")]
 mod playback;
 #[cfg(feature = "prepared-prefix")]

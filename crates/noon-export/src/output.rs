@@ -4,11 +4,17 @@
 //! shell. PNG bundles are lossless diagnostics; MP4 is SDR H.264/YUV420p. No output
 //! is reported successful before EOF, encoder exit and destination publication.
 mod audio;
+mod blocking;
 mod destination;
 mod prepared;
 mod process;
 mod session;
 mod terminal_duration;
+
+pub use blocking::{
+    export_blocking_scene, export_blocking_scene_with_limits, BlockingFileExportError,
+    BlockingSourceLimits,
+};
 
 pub use prepared::{
     export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest,

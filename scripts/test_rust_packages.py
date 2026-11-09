@@ -204,5 +204,63 @@ class ConsumerDependencyCache(unittest.TestCase):
         self.assertEqual((self.downloads, self.metadata_reads), (0, 1))
 
 
+class FirstLessonOutputContract(unittest.TestCase):
+    """Independent timing/content observations must reject plausible bad movies."""
+    def setUp(self):
+        self.metadata = {"streams": [{"codec_name": "h264", "width": 320, "height": 180,
+                                      "nb_frames": "60", "avg_frame_rate": "30/1", "time_base": "1/30",
+                                      "start_pts": 0, "duration_ts": 60}],
+                         "packets": [{"pts": frame, "duration": 1} for frame in range(60)]}
+        # The two 0.5-second steps each move both centers by 0.75 scene units.
+        shifts = [0.0] * 15 + [step / 20 for step in range(30)] + [1.5] * 15
+        self.observations = [{
+            "square": {"pixels": 200, "center_x": 141.5 + 22.5 * shift},
+            "circle": {"pixels": 160, "center_x": 177.5 + 22.5 * shift},
+            "title_white_pixels": 200, "equation_white_pixels": 100,
+            "caption_white_pixels": 60 if index >= 45 else 0,
+        } for index, shift in enumerate(shifts)]
+
+    def test_complete_ordinary_lesson_observations_pass(self):
+        CHECK.validate_lesson_timing(self.metadata)
+        CHECK.validate_lesson_observations(self.observations)
+
+    def test_duplicated_or_retimed_video_frames_fail(self):
+        self.metadata["packets"][20]["pts"] = 19
+        with self.assertRaisesRegex(CHECK.PackageError, "presentation time.*frame 20"):
+            CHECK.validate_lesson_timing(self.metadata)
+
+    def test_static_group_does_not_pass_as_the_animated_lesson(self):
+        for frame in self.observations:
+            frame["square"]["center_x"] = 141.5
+        with self.assertRaisesRegex(CHECK.PackageError, "square did not progress at frame 16"):
+            CHECK.validate_lesson_observations(self.observations)
+
+    def test_adjacent_motion_frames_cannot_swap_with_valid_timestamps(self):
+        self.observations[25], self.observations[26] = self.observations[26], self.observations[25]
+        CHECK.validate_lesson_timing(self.metadata)
+        with self.assertRaisesRegex(CHECK.PackageError, "did not progress at frame 26"):
+            CHECK.validate_lesson_observations(self.observations)
+
+    def test_late_resource_cannot_leak_back_to_the_first_frame(self):
+        self.observations[0]["caption_white_pixels"] = 60
+        with self.assertRaisesRegex(CHECK.PackageError, "caption leaked.*frame 0"):
+            CHECK.validate_lesson_observations(self.observations)
+
+    def test_title_cannot_mask_a_missing_equation(self):
+        self.observations[0]["equation_white_pixels"] = 0
+        with self.assertRaisesRegex(CHECK.PackageError, "equation is missing"):
+            CHECK.validate_lesson_observations(self.observations)
+
+    def test_truncated_decoder_output_fails(self):
+        with self.assertRaisesRegex(CHECK.PackageError, "decoded byte count"):
+            CHECK.inspect_lesson_pixels(b"not a complete movie")
+
+    def test_correct_size_blank_movie_is_not_lesson_output(self):
+        black_frames = bytes(60 * 320 * 180 * 3)
+        observations = CHECK.inspect_lesson_pixels(black_frames)
+        with self.assertRaisesRegex(CHECK.PackageError, "title is missing at frame 0"):
+            CHECK.validate_lesson_observations(observations)
+
+
 if __name__ == "__main__":
     unittest.main()

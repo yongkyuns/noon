@@ -1,7 +1,8 @@
 //! A complete synchronous lesson using ordinary helpers and shared resources.
 //!
 //! The paired Python source is `web/python/examples/first_lesson.py`. Native
-//! execution is `cargo run -p noon-native --example first_lesson`.
+//! execution is `cargo run -p noon-native --example first_lesson`; the same source
+//! exports with `cargo run -p noon-export --example first_lesson -- lesson.mp4`.
 
 use crate::{
     AnimationOptions, BlockingScene, Color, MathTypst, MobjectFamily, RateFunction, ScriptError,

@@ -43,6 +43,7 @@ pub use pixel_readback::{
     PixelChannelOrder, PixelReadbackError, PixelRowOrder, Rgba8ReadbackLayout,
 };
 
+pub use crate::live_program::BlockingReplayError;
 pub use crate::scene_script::{
     BlockingBoundary, BlockingContinuation, BlockingSceneHost, BlockingSceneSetup,
 };
@@ -110,8 +111,8 @@ pub use noon_core::{
 };
 pub use noon_runtime::{
     AudioMixError, AudioMixFormat, EffectiveObjectProperties, FrameChanges, FrameObjectState,
-    FrameState, PreparedAudioMix, RendererPublication, RuntimeIdentity, RuntimeWakeState,
-    TimelineWakeState, MAX_AUDIO_MIX_BLOCK_FRAMES,
+    FrameState, PreparedAudioMix, RendererPublication, ReplayError, ReplayLimits, RuntimeIdentity,
+    RuntimeWakeState, TimelineWakeState, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 
 /// Construct one detached family through an explicitly supplied live execution

@@ -32,7 +32,7 @@ noon-native = { path = "../noon/crates/noon-native" }
 
 Save this as `src/main.rs`, then run `cargo run`. A native graphics driver and a
 desktop session are required for the window. The source authors exactly two
-seconds; the host owns playback, seeking and presentation.
+seconds; the window remains open until you close it.
 
 ```rust
 use noon::{
@@ -107,6 +107,28 @@ explicit provider features. See the repository README for their combinations.
 
 The paired Python lesson is
 [`first_lesson.py`](https://github.com/yongkyuns/noon/blob/master/web/python/examples/first_lesson.py).
+
+## Export the same ordinary source
+
+Add the checkout dependency `noon-export = { path = "../noon/crates/noon-export" }`
+and pass the unchanged `construct` function above to
+`noon_export::output::export_blocking_scene`, together with explicit frame,
+capture and output options. The [complete export example](../noon-export/examples/first_lesson.rs)
+and [export API guide](../noon-export/README.md) use that same two-second lesson:
+
+```sh
+cargo run -p noon-export --example first_lesson -- lesson.mp4
+cargo run -p noon-export --example first_lesson -- --png lesson-images
+```
+
+These commands run from the repository checkout. They produce 60 frames at
+320×180 and 30 FPS through the native renderer and installed FFmpeg, without a
+window. Source executes once, each ordinary boundary completes on the shared
+runtime, and the exact completed Scene/runtime pair transfers to sealed-history
+sampling. Source operations, boundaries and retained history have explicit
+budgets in addition to the output frame cap. Required callbacks, unrecorded input
+and retained-history audio remain outside this finite visual export profile.
+The ordinary native viewer continues to service observed callback/input sources.
 
 ## License
 

@@ -23,6 +23,8 @@ Install the Rust toolchain pinned in `rust-toolchain.toml` (1.98.1), then run:
 
 ```sh
 cargo run -p noon-native --example first_lesson
+cargo run -p noon-export --example first_lesson -- lesson.mp4
+cargo run -p noon-export --example first_lesson -- --png lesson-images
 ```
 
 The [complete ordinary Rust lesson](crates/noon/src/example_scenes/first_lesson.rs)
@@ -33,6 +35,15 @@ runtime as async authoring. The [facade README](crates/noon/README.md) shows a
 complete application and the current checkout dependency setup. Default features
 include native text, Typst, bundled fonts, images and code display; geometry-only
 consumers can set `default-features = false`.
+
+The two export commands pass the unchanged ordinary lesson to
+`noon_export::output::export_blocking_scene`. An installed FFmpeg and a supported
+native GPU driver are required; a desktop window is not. The packaged example
+writes 60 frames at 320×180 and 30 FPS. It executes source once, seals the same
+owner's bounded history, then uses the shared frame policy and renderer for PNG
+or MP4. Required callbacks/input and retained-history audio are outside this
+finite visual profile. See the [export README](crates/noon-export/README.md) for
+the public call, source budgets, cancellation and output controls.
 
 ### First installed Python scene
 

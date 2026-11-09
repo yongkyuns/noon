@@ -558,7 +558,8 @@ pub mod prelude {
 pub use family_gradient::color_gradient;
 
 #[cfg(feature = "prepared-prefix")]
-pub use execution_session::{PrefixReader, SourceExecutionRequirement};
+pub use execution_session::PrefixReader;
+pub use execution_session::SourceExecutionRequirement;
 #[cfg(feature = "prepared-prefix")]
 pub use noon_runtime::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher};
 
