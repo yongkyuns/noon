@@ -21,6 +21,7 @@ use crate::{
 
 mod blocking;
 mod blocking_program;
+mod constructors;
 mod family;
 mod operations;
 pub use blocking::BlockingScene;
@@ -35,6 +36,14 @@ mod tests;
 #[derive(Debug)]
 pub enum ScriptError {
     Authoring(AuthoringError),
+    /// Shared text preparation or semantic resource admission failed.
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    Text(crate::TextAuthoringError),
+    /// Shared code-listing preparation or publication failed.
+    #[cfg(feature = "code")]
+    Code(crate::CodeAuthoringError),
+    /// Shared coordinate-family preparation or publication failed.
+    Coordinate(crate::CoordinateAuthoringError),
     LiveSession(LiveSessionError),
     Callback(RustHostCallbackError),
     CallbackSession(ExecutionSessionCallbackError),
@@ -67,6 +76,11 @@ impl std::fmt::Display for ScriptError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(error) => error.fmt(formatter),
+            #[cfg(any(feature = "native-text", feature = "typst"))]
+            Self::Text(error) => error.fmt(formatter),
+            #[cfg(feature = "code")]
+            Self::Code(error) => error.fmt(formatter),
+            Self::Coordinate(error) => error.fmt(formatter),
             Self::LiveSession(error) => error.fmt(formatter),
             Self::Callback(error) => error.fmt(formatter),
             Self::CallbackSession(error) => error.fmt(formatter),
@@ -108,6 +122,11 @@ impl Error for ScriptError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Authoring(error) => Some(error),
+            #[cfg(any(feature = "native-text", feature = "typst"))]
+            Self::Text(error) => Some(error),
+            #[cfg(feature = "code")]
+            Self::Code(error) => Some(error),
+            Self::Coordinate(error) => Some(error),
             Self::LiveSession(error) => Some(error),
             Self::Callback(error) => Some(error),
             Self::CallbackSession(error) => Some(error),
@@ -130,6 +149,26 @@ impl Error for ScriptError {
 impl From<AuthoringError> for ScriptError {
     fn from(error: AuthoringError) -> Self {
         Self::Authoring(error)
+    }
+}
+
+#[cfg(any(feature = "native-text", feature = "typst"))]
+impl From<crate::TextAuthoringError> for ScriptError {
+    fn from(error: crate::TextAuthoringError) -> Self {
+        Self::Text(error)
+    }
+}
+
+#[cfg(feature = "code")]
+impl From<crate::CodeAuthoringError> for ScriptError {
+    fn from(error: crate::CodeAuthoringError) -> Self {
+        Self::Code(error)
+    }
+}
+
+impl From<crate::CoordinateAuthoringError> for ScriptError {
+    fn from(error: crate::CoordinateAuthoringError) -> Self {
+        Self::Coordinate(error)
     }
 }
 

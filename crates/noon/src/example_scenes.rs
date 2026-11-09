@@ -36,6 +36,8 @@ pub mod family_placement;
 pub mod family_replacement;
 pub mod family_root_points;
 pub mod family_transform_indicate;
+#[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+pub mod first_lesson;
 pub mod following_graph_camera;
 pub mod foreground_matching;
 pub mod foreground_membership;
