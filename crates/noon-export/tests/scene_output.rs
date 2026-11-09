@@ -3,12 +3,17 @@
 
 use std::{
     fs, io,
-    path::PathBuf,
+    path::{Path, PathBuf},
+    process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
-use noon::{AudioClipOptions, AudioResource, Scene, SceneExecution};
+use noon::{AnimationOptions, AudioClipOptions, AudioResource, Mobject, Scene, SceneExecution};
+use noon_core::{
+    NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
+    NativePointerPosition, Vec2,
+};
 use noon_export::output::{
     export_scene_file, export_scene_file_with_interrupt, OutputOptions, SessionFileExportError,
 };
@@ -169,4 +174,122 @@ fn host_interrupt_after_capture_abandons_encoder_and_preserves_destination() {
     );
     assert_eq!(fs::read(&path).unwrap(), b"previous user movie");
     assert_eq!(fs::read_dir(&root.0).unwrap().count(), 1);
+}
+
+fn static_click_scene(clicked: bool) -> (SceneExecution, Mobject) {
+    let mut scene = Scene::new();
+    let mut marker = scene.circle(0.5).unwrap();
+    marker.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    marker.disable_stroke().unwrap();
+    scene.add(&marker).unwrap();
+    let pulse = scene
+        .declare_glow_pulse(&marker, 2.0, AnimationOptions::new().run_time(1.0))
+        .unwrap();
+    scene.on_click(&marker, Some(&pulse)).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    if clicked {
+        execution
+            .session_mut()
+            .configure_native_pointer_input(
+                NativePointerId {
+                    source: 61,
+                    pointer: 1,
+                },
+                1,
+            )
+            .unwrap();
+        let position = NativePointerPosition::new(Vec2::ZERO, Vec2::new(80.0, 45.0)).unwrap();
+        for (sequence, kind) in [
+            (
+                1,
+                NativePointerInputKind::Press {
+                    position,
+                    button: 0,
+                },
+            ),
+            (
+                2,
+                NativePointerInputKind::Release {
+                    position,
+                    button: 0,
+                },
+            ),
+        ] {
+            let token = execution.session().native_pointer_input_token().unwrap();
+            let input = NativePointerInput::new(
+                sequence,
+                token.pointer(),
+                token.context(),
+                NativeInputModifiers::default(),
+                kind,
+            );
+            execution
+                .submit_native_pointer_input(&token, input)
+                .unwrap();
+        }
+        execution.advance_interactions(0.0).unwrap();
+        execution.advance_interactions(0.5).unwrap();
+        assert!(execution.session().interactions_active());
+        assert!(marker.get_effect("glow").is_ok());
+    }
+    assert_eq!(execution.session().frame().time, 0.0);
+    assert_eq!(execution.session().finite_playback_end_time(), Some(0.0));
+    (execution, marker)
+}
+
+fn decode_png_sequence(path: &Path) -> Vec<u8> {
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-framerate", "8", "-i"])
+        .arg(path.join("frames/frame-%010d.png"))
+        .args(["-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+#[test]
+#[ignore = "requires software Vulkan and FFmpeg"]
+fn authored_zero_export_retires_click_effect_before_every_frozen_hold_frame() {
+    let root = Directory::new();
+    let options = ExportFrameOptions {
+        frame_rate: FrameRate::new(8, 1).unwrap(),
+        final_hold_seconds: 0.5,
+        ..frames()
+    };
+    let mut movies = Vec::new();
+    for clicked in [false, true] {
+        let (mut execution, marker) = static_click_scene(clicked);
+        let path = root.0.join(if clicked { "clicked" } else { "authored" });
+        let summary = export_scene_file(
+            &mut execution,
+            options,
+            capture(),
+            OutputOptions::png_sequence(&path),
+        )
+        .unwrap();
+        assert_eq!(summary.capture.sampling.frames, 4);
+        assert_eq!(summary.capture.sampling.source_end, Some(0.0));
+        movies.push(decode_png_sequence(&path));
+        assert!(!execution.session().interactions_active());
+        assert!(marker.get_effect("glow").is_err());
+    }
+    let frame_bytes = 160 * 90 * 4;
+    assert_eq!(movies[0].len(), 4 * frame_bytes);
+    assert_eq!(movies[1].len(), movies[0].len());
+    assert!(movies[0].chunks_exact(4).any(|pixel| pixel[0] > 200));
+    for (index, (authored, clicked)) in movies[0]
+        .chunks_exact(frame_bytes)
+        .zip(movies[1].chunks_exact(frame_bytes))
+        .enumerate()
+    {
+        assert_eq!(
+            clicked, authored,
+            "input-triggered glow leaked into held output frame {index}"
+        );
+    }
 }

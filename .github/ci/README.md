@@ -36,6 +36,11 @@ default authoring, native host/export compilation and the WASM/browser graph.
 The reviewed dependency lock seeds the consumer, and the report rejects unreviewed
 registry versions/checksums or a dependency that escapes back to checkout source.
 `noon-python` is a wheel implementation package and is excluded from crates.io.
+The consumer runs the selected public API fixtures against archive-origin
+libraries. Repository integration tests that read root-level fixtures remain
+checkout qualification in the existing workflows; the archive check does not
+claim that each packaged crate's repository test suite is independently runnable.
+Production resources and normal library builds must remain self-contained.
 
 The Rust candidate also retains a dependency-notice inventory. The collector
 verifies cached crate bytes against `Cargo.lock`, copies upstream notices exactly,
@@ -86,6 +91,49 @@ hosted browser build identity there. Those retained release assets, rather than
 expiring CI artifacts or the moving Pages URL, are the durable browser version.
 Missing matrix cells, dependency redistribution evidence and physical-device
 qualification remain explicit release gates in #2433.
+
+### Assemble the approved release
+
+After the registry names, version and supported matrix are settled, update all
+package/dependency names together and qualify a new clean source commit. Record
+that commit, its tag, each candidate's checksum and the completed matrix in #2433.
+The current `0.1.0` filenames are candidates; their existence does not reserve a
+registry name or approve a release. A name, source, dependency or build-profile
+change requires fresh evidence for the affected artifacts.
+
+Use the `internal_dependencies` entries in the Rust `release-report.json` to
+confirm the publication order. With the current graph, dependency-first groups
+are:
+
+1. `noon-core`
+2. `noon-geometry`, `noon-text`, `noon-typst`
+3. `noon-compile`
+4. `noon-runtime`
+5. `noon`, `noon-render-wgpu`
+6. `noon-export`, `noon-native`, and optionally `noon-web`
+
+Publish each group only after its preceding dependencies are available from the
+registry. `noon-python` remains excluded. Serving the browser application does
+not require publishing `noon-web`; include that crate only if the release also
+promises a downstream Rust/WASM library. Recompute this order after renaming or
+changing dependency edges.
+
+At the separately approved publication step, run Cargo's registry-backed
+`publish --dry-run --locked` for each selected crate after its dependencies are
+available. Inspect any archive or resolved-lock difference from the qualified
+candidate and rerun the affected consumer checks before upload. After upload,
+verify the downloaded archive against the submitted candidate and run a clean
+consumer without local patches. The extracted-archive rehearsal cannot prove
+that a not-yet-published registry graph resolves successfully.
+
+For Python, upload the exact qualified sdist and repaired wheels; retain their
+checksums, native-library inventories and installed-artifact reports. Verify an
+installation from the published index outside the checkout, including the
+documented command and supported output. For the browser, attach the qualified
+static archive and reports to the same source tag, serve its `web/` directory,
+and verify the hosted runtime build identity against the retained manifest.
+Keep the release record's platform and feature claims limited to the matrix
+that actually passed.
 
 ## Qualification cadence
 

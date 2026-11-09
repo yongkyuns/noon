@@ -28,7 +28,8 @@ class ExportLesson(Scene):
         self.add(marker)
         self.play(marker.animate.shift(4 * RIGHT), run_time=0.6, rate_func=linear)
         context["completed"] += 1
-        marker.set_fill(RED)
+        # Use saturated red for the strict decoded-pixel oracle.
+        marker.set_fill(Color(1, 0, 0))
         self.wait(0.13)
 '''
 

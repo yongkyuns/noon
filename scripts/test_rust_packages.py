@@ -7,6 +7,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("rust_package_check", Path(__file__).with_name("check-rust-packages.py"))
 CHECK = importlib.util.module_from_spec(SPEC)
@@ -153,6 +154,54 @@ class ExternalConsumerContract(unittest.TestCase):
             metadata = {"packages": [{"name": "engine", "source": None,
                                       "manifest_path": str(extracted / "engine-0.1.0/Cargo.toml")}]}
             CHECK.validate_external_graph(metadata, consumer, extracted, {"engine": package()})
+
+
+class ConsumerDependencyCache(unittest.TestCase):
+    """Model the clean runner's missing tarball without requiring a network."""
+    def setUp(self):
+        self.reviewed = Path("/reviewed-workspace")
+        self.consumer = Path("/outside-consumer")
+        self.cached = False
+        self.downloads = 0
+        self.metadata_reads = 0
+
+    def cargo(self, arguments, *, cwd, environment, capture=False):
+        if arguments[:2] == ["cargo", "fetch"]:
+            self.assertEqual(cwd, self.reviewed)
+            self.assertIn("--locked", arguments)
+            if not self.cached:
+                if "--offline" in arguments:
+                    raise CHECK.PackageError("dependency source is not cached; offline request forbids downloading")
+                self.downloads += 1
+                self.cached = True
+            return None
+        if arguments[:2] == ["cargo", "metadata"]:
+            self.assertEqual(cwd, self.consumer)
+            self.assertIn("--offline", arguments)
+            self.metadata_reads += 1
+            if not self.cached:
+                raise CHECK.PackageError("failed to download ab_glyph: --offline was specified")
+            return '{"packages": []}'
+        self.fail(f"unexpected Cargo operation: {arguments}")
+
+    def resolve(self, offline):
+        with mock.patch.object(CHECK, "command", side_effect=self.cargo):
+            return CHECK.resolve_consumer_metadata(self.consumer, root=self.reviewed,
+                                                   environment={}, offline=offline)
+
+    def test_clean_cache_is_prepared_before_offline_consumer_resolution(self):
+        self.assertEqual(self.resolve(offline=False), {"packages": []})
+        self.assertEqual((self.downloads, self.metadata_reads), (1, 1))
+
+    def test_explicit_offline_request_never_downloads_missing_sources(self):
+        with self.assertRaisesRegex(CHECK.PackageError, "offline request forbids downloading"):
+            self.resolve(offline=True)
+        self.assertEqual((self.downloads, self.metadata_reads), (0, 0))
+
+    def test_cached_sources_support_an_explicit_offline_request(self):
+        self.cached = True
+        self.assertEqual(self.resolve(offline=True), {"packages": []})
+        self.assertEqual((self.downloads, self.metadata_reads), (0, 1))
 
 
 if __name__ == "__main__":

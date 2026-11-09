@@ -143,7 +143,7 @@ jobs:
       - name: Build repaired wheels from the source archive and test installed commands
         run: |
           python -m pip install cibuildwheel==4.3.1
-          python -c "import pathlib, subprocess, sys; archive, = pathlib.Path('dist').glob('*.tar.gz'); subprocess.run([sys.executable, '-m', 'cibuildwheel', str(archive), '--config-file', '.github/ci/cibuildwheel.toml', '--output-dir', 'wheelhouse'], check=True)"
+          python -c "import pathlib, subprocess, sys; archive, = pathlib.Path('dist').glob('*.tar.gz'); config = pathlib.Path('.github/ci/cibuildwheel.toml').resolve(); output = pathlib.Path('wheelhouse').resolve(); subprocess.run([sys.executable, '-m', 'cibuildwheel', str(archive.resolve()), '--config-file', str(config), '--output-dir', str(output)], check=True)"
       - name: Install Linux graphics and media runtime for installed-wheel proof
         if: runner.os == 'Linux'
         run: bash scripts/ci-install-reference-deps.sh mesa-vulkan-drivers libvulkan1 ffmpeg

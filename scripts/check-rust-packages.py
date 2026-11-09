@@ -256,6 +256,18 @@ use noon_web as _;
     shutil.copyfile(root / "rust-toolchain.toml", consumer / "rust-toolchain.toml")
 
 
+def resolve_consumer_metadata(consumer, *, root, environment, offline):
+    # Packaging with --no-verify can leave a clean Cargo cache without dependency
+    # sources. Fetch the reviewed workspace lock before the consumer's offline
+    # resolution; never relax that resolution or update the reviewed versions.
+    fetch = ["cargo", "fetch", "--locked"]
+    if offline:
+        fetch.append("--offline")
+    command(fetch, cwd=root, environment=environment)
+    return json.loads(command(["cargo", "metadata", "--offline", "--all-features", "--format-version", "1"],
+                              cwd=consumer, environment=environment, capture=True))
+
+
 def qualify_consumer(loaded, workspace, output, *, wasm, offline, environment, root=ROOT):
     expected = {name: value for name, value in workspace.items() if value["publish"]}
     reviewed = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf8"))
@@ -268,8 +280,7 @@ def qualify_consumer(loaded, workspace, output, *, wasm, offline, environment, r
         # Cargo updates only the local root/path identities. Offline resolution
         # and a full checksum comparison prevent a new registry resolution from
         # silently becoming the package proof.
-        metadata = json.loads(command(["cargo", "metadata", "--offline", "--all-features", "--format-version", "1"],
-                                      cwd=consumer, environment=environment, capture=True))
+        metadata = resolve_consumer_metadata(consumer, root=root, environment=environment, offline=offline)
         registry_count = validate_registry_lock(reviewed, tomllib.loads((consumer / "Cargo.lock").read_text(encoding="utf8")))
         validate_external_graph(metadata, consumer, extracted, expected)
         frozen_lock = digest(consumer / "Cargo.lock")

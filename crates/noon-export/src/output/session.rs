@@ -205,7 +205,10 @@ fn export_source(
     )
     .map_err(SessionFileExportError::Output)?;
     interrupt().map_err(SessionFileExportError::Output)?;
-    if source.session().frame().time != 0.0 {
+    // A viewer can remain at authored time zero while an input-triggered effect
+    // is active. Paired seek retires that effect and its temporary attachments
+    // before the first authored sample, including a static scene's frozen hold.
+    if matches!(&source, FiniteSource::Scene(_)) || source.session().frame().time != 0.0 {
         source.sample(0.0)?;
     }
     let mut capture = SessionCapture::new(source.session(), capture_options)
