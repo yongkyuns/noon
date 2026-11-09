@@ -87,6 +87,22 @@ jobs:
         if: ${{ steps.scope.outputs.deploy != 'false' }}
         run: printf '{"commit":"%s"}\n' "$GITHUB_SHA" > web/build-info.json
 
+      - name: Install pinned website capture tools
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Capture actual scenes and validate project website
+        if: ${{ steps.scope.outputs.deploy != 'false' }}
+        run: |
+          node --test scripts/project-site.test.mjs
+          node scripts/capture-project-media.mjs
+          node scripts/build-project-site.mjs
+          node scripts/project-site-smoke.mjs
+
       - name: Configure Pages
         if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/configure-pages@v6
@@ -96,7 +112,7 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
-          path: web
+          path: _site
           include-hidden-files: true
           retention-days: 1
 

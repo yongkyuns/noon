@@ -1,0 +1,75 @@
+# Project website and README media
+
+The public introduction is authored in `web/site/`. The existing playground stays
+in `web/index.html` so engine tests and development URLs do not change.
+`scripts/build-project-site.mjs` copies the built `web/` tree to `_site/`, keeps the
+playground at `playground.html`, and installs the introduction at the site root.
+All runtime modules, workers, manifests, and resources remain beside the
+playground. The staging script never edits its inputs.
+
+Production remains the existing `.github/workflows/pages.yml` deployment. Its
+artifact is now `_site/`; its build-revision check and deployment concurrency are
+unchanged. PRs use `playground-project-site.yml` to build a review artifact, not publish Pages.
+A new site is public only after its change is merged and Pages deployment succeeds.
+
+## Links
+
+The homepage uses directory-relative links, including under the `/noon/` project
+prefix. Existing root links with query parameters redirect to `playground.html`
+with their entire query and fragment preserved. Hash-only homepage links stay on
+the homepage. Explicit playground links work without the redirect script.
+
+The README uses absolute Pages GIF URLs, linked to editable gallery entries. They
+become available after the first deployment of this site. Before that deployment,
+use the PR's `project-site-preview` artifact to review them. `REFERENCE.md` retains
+the previous detailed README at the repository root, preserving relative links.
+It is implementation detail, not a replacement for `docs/architecture.md`.
+
+## Media
+
+`web/site/examples.json` selects existing curated scenes and clip intervals. The
+canonical source paths and durations remain in
+`web/python/examples/noon_showcase_manifest.json`.
+
+`scripts/capture-project-media.mjs` executes those unchanged Python sources through
+the existing Noon raster host and WebGL2 renderer. It advances scene time at 30 Hz
+and captures 10 frames per authored second. FFmpeg makes 480 × 270 GIFs for the
+README and 960 × 540 MP4 clips for the site. Each clip is limited to 6 MB. These
+sampled previews are **not real-time performance measurements**.
+
+The script checks actual presentation, backend, dimensions, changing frames, and
+published time (including the gallery's declared still intervals). It publishes
+the generated bundle only after every clip passes. `site/media/provenance.json`
+records the checkout, runtime identity, source and media hashes, frame times,
+encoder, and browser. No generated illustration or Manim render is substituted.
+The checked-in gallery PNGs provide posters while the videos are not playing.
+
+Media are generated in the build, not committed as growing binary history. Pages
+recaptures them with its runtime; PR qualification does the same with the PR build.
+The homepage does not load the engine, does not autoplay, needs no third-party
+fonts, and remains readable without JavaScript. Video controls are native browser
+controls; reduced-motion users do not receive automatic motion.
+
+## Validation and regeneration
+
+After building the existing browser package, install the repository-pinned
+browser tools and FFmpeg, then run:
+
+```sh
+npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+npx playwright install --with-deps chromium
+# Install ffmpeg through your operating system's package manager.
+node --test scripts/project-site.test.mjs
+node scripts/capture-project-media.mjs
+node scripts/build-project-site.mjs
+node scripts/project-site-smoke.mjs
+python3 -m http.server --directory _site 8080
+```
+
+The structural suite covers curated IDs, links, accessible static markup,
+no-autoplay behavior, legacy routing, and staging without rewriting the original
+playground. The browser smoke checks 1440, 768, 390, and 320 px layouts, expanded
+setup instructions, local assets, GIF decoding, MP4 playback, legacy redirects,
+and no-JavaScript content. Captures and screenshots remain CI review artifacts.
+Review their visible contents before merging; structural checks alone do not
+establish editorial quality or full gallery compatibility.

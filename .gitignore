@@ -19,3 +19,6 @@ __pycache__/
 /tools/python-editor/node_modules
 
 /build/python/
+/_site/
+/web/site/media/
+/browser-smoke-artifacts/project-site/
