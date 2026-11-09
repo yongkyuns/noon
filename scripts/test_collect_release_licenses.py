@@ -131,12 +131,31 @@ class LicenseEvidenceTests(unittest.TestCase):
         item = next(p for p in result["packages"] if p["name"] == "changed")
         self.assertTrue(any("metadata differs" in issue for issue in item["issues"]))
         package["license"] = "MIT"
+        package["license_file"] = "LICENSE"
+        result = self.collect("changed-license-file")
+        item = next(p for p in result["packages"] if p["name"] == "changed")
+        self.assertTrue(any("manifest: license-file" in issue for issue in item["issues"]))
+        package["license_file"] = None
         archive = self.root / "cargo/registry/cache/test-registry/changed-1.0.0.crate"
         archive.write_bytes(archive.read_bytes() + b"changed archive")
         result = self.collect("tampered")
         item = next(p for p in result["packages"] if p["name"] == "changed")
         self.assertTrue(any("checksum" in issue for issue in item["issues"]))
         self.assertEqual(item["noticeFiles"], [])
+
+    def test_empty_registry_and_pinned_upstream_files_do_not_satisfy_notice_evidence(self):
+        dependency = self.fixture.package("empty", {"LICENSE": b" \r\n"}, vcs={"git": {"sha1": REVISION}})
+        self.fixture.edge(self.python, dependency)
+        tree = {"truncated": False, "tree": [{"type": "blob", "mode": "100644", "path": "LICENSE",
+                "sha": hashlib.sha1(b"blob 0\0").hexdigest()}]}
+        fetcher = collector.PinnedGitHub(self.root / "cache")
+        with patch.object(fetcher, "request", side_effect=[json.dumps(tree).encode(), b""]):
+            result = self.collect(fetcher=fetcher)
+        item = next(p for p in result["packages"] if p["name"] == "empty")
+        self.assertTrue(any("empty license or notice text" in issue for issue in item["issues"]))
+        self.assertTrue(any("empty upstream license or notice text" in issue for issue in item["issues"]))
+        self.assertEqual(item["noticeFiles"], [])
+        self.assertEqual(result["summary"]["packagesWithEvidenceGaps"], 1)
 
     def test_pinned_upstream_ancestor_notices_are_hash_checked_and_cached(self):
         vcs = {"git": {"sha1": REVISION}, "path_in_vcs": "crates/member"}

@@ -153,11 +153,16 @@ def archive_evidence(package, expected, output, prefix):
                 for field in ("name", "version", "license", "repository"):
                     if declared_package.get(field) != package.get(field):
                         raise ValueError(f"Cargo metadata differs from checksum-verified manifest: {field}")
+                if declared_package.get("license-file") != declared:
+                    raise ValueError("Cargo metadata differs from checksum-verified manifest: license-file")
             item = put(output, f"{prefix}/registry/{relative}", data)
             item.update({"origin": "checksum-verified-registry-archive", "upstreamPath": relative})
             evidence.append(item)
             if notice:
-                notices.append(item["path"])
+                if data.strip():
+                    notices.append(item["path"])
+                else:
+                    issues.append(f"empty license or notice text: {relative}")
             if relative == ".cargo_vcs_info.json":
                 vcs = json.loads(data)
     if declared and not any(item["upstreamPath"] == declared for item in evidence):
@@ -235,6 +240,8 @@ class PinnedGitHub:
             blob = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
             if blob != entry["sha"]:
                 raise ValueError(f"upstream Git blob hash mismatch: {relative}")
+            if not data.strip():
+                raise ValueError(f"empty upstream license or notice text: {relative}")
             item = put(output, f"{prefix}/upstream/{relative}", data)
             item.update({"origin": "pinned-upstream-ancestor", "url": url, "repository": f"https://github.com/{repo}",
                          "revision": sha, "gitBlobSha1": blob, "upstreamPath": relative,
