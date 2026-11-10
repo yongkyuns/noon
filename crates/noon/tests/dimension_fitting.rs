@@ -157,19 +157,16 @@ fn planar_depth_fitting_and_stretch_preserve_aliases_without_publication() {
     // membership or host wrapper binding.
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
     let revision = scene.revision();
-    let mut session = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     assert_eq!(
-        noon::integration::effective_length_over_dim(
-            scene.integration_store(),
-            &session,
-            noon::MobjectTarget::from(&family),
-            2,
-        )
-        .unwrap(),
+        execution
+            .scene()
+            .effective_length_over_dim((&family).into(), 2)
+            .unwrap(),
         0.0
     );
     {
-        let mut live = scene.live(&mut session);
+        let mut live = execution.live();
         let before_a = live.effective(&a).unwrap();
         live.rescale_to_fit(&source, f64::INFINITY, Depth, true)
             .unwrap();
@@ -180,7 +177,7 @@ fn planar_depth_fitting_and_stretch_preserve_aliases_without_publication() {
         assert!(result.impacts().is_empty());
         assert_eq!(live.effective(&a).unwrap(), before_a);
     }
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(execution.scene().revision(), revision);
     assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
 }
 

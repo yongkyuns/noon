@@ -1370,7 +1370,7 @@ pub(crate) fn effective_path_boundary_point(
 }
 
 /// Observe one dimension's Manim-style extremum from the current execution.
-pub fn effective_extremum_along_dim(
+pub(crate) fn effective_extremum_along_dim(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -1385,7 +1385,7 @@ pub fn effective_extremum_along_dim(
 }
 
 /// Observe the average point position from the current execution publication.
-pub fn effective_center_of_mass(
+pub(crate) fn effective_center_of_mass(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -1394,7 +1394,7 @@ pub fn effective_center_of_mass(
 }
 
 /// Observe the current boundary point with the greatest directional projection.
-pub fn effective_boundary_point(
+pub(crate) fn effective_boundary_point(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -1409,7 +1409,7 @@ pub fn effective_boundary_point(
 }
 
 /// Observe the current point extent along one coordinate dimension.
-pub fn effective_length_over_dim(
+pub(crate) fn effective_length_over_dim(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
