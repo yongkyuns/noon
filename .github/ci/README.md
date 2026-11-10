@@ -205,11 +205,29 @@ all workspace library tests and the shared CPU family target in one Cargo
 invocation; production, toolchain, Cargo configuration and mixed changes retain
 Product qualification.
 
-Pages reuses the complete push-diff classifier on its existing runner. Pushes
-containing only Cargo integration tests, CI policy tests, the CI README or
-unrelated workflows skip compilation and publication. Production, mixed, unknown
-and incomplete-history changes keep the optimized build/deploy/verification path.
-Manual dispatch always deploys; PR validation is unchanged.
+Pages is manual-only. A normal push, merge, successful qualification or release
+label is not deployment authorization. Dispatch `pages.yml` on `master`, supply
+the full approved commit as `expected_sha`, and explicitly set `confirm_deploy`
+to true (its default is false). The job rejects any other event, repository,
+branch or source identity before running; `pages-authorization.mjs` also verifies
+the event payload and actual Git HEAD before building and again before upload.
+Inputs are never interpolated into shell commands. The old push-to-deploy scope
+selector is removed; qualification scope emits no deployment decisions.
+
+The deployment job retains the `github-pages` environment. Required reviewers
+and branch restrictions must be configured by the owner in GitHub settings;
+naming an environment in YAML does not establish an approval rule. This change
+does not configure those administrative settings or assert they are enabled.
+Its Pages/identity write permissions are job-scoped. The pinned optimized build,
+hidden-file handling and deployed-revision check remain mandatory. Other PR and
+master qualification workflows retain their existing triggers and assertions.
+
+Run `node --test web/pages-authorization.test.mjs` for request, actual-checkout,
+workflow-order and negative-policy controls. The existing web preflight runs this
+suite on PRs; no real deployment is necessary to test a rejected request. The
+manual workflow still rebuilds the development demo. It is **not** promotion of
+the separately qualified release archive, redistribution approval or release
+readiness. Exact-byte release assembly/promotion remains open in #2433.
 
 Master CI reads the complete before/after Git diff and skips its compiled/browser
 jobs only for documentation, named preflight-only policies or web unit tests.
