@@ -802,8 +802,8 @@ class NumberLine(_compat.Group):
         """Atomically append DecimalNumber labels before playback; expose .numbers.
 
         Repeated calls append another label family, rather than replacing the
-        earlier one. Call ``await prepare_latex()`` first. Passing ``font`` opts
-        into the native-Text subset. Explicit values keep ordinary numeric labels
+        earlier one. Passing ``font`` opts into the native-Text subset. Explicit
+        values keep ordinary numeric labels
         even when the line has logarithmic scaling.
         """
         from _manim_number_labels import number_mobjects
@@ -936,7 +936,7 @@ class Axes(_compat.Group):
                          buff=_base.SMALL_BUFF, **kwargs):
         """Create a retained label next to the upper-right x-axis edge.
 
-        Strings and numeric values use MathTex; call await prepare_latex() first.
+        Strings and numeric values use MathTex.
         Retained text mobjects are placed without recompiling.
         """
         if kwargs:
@@ -1154,8 +1154,8 @@ class Axes(_compat.Group):
     def add_coordinates(self, *axes_numbers, x_config=None, y_config=None, **kwargs):
         """Add default or positional per-axis coordinate labels.
 
-        Numeric defaults use retained DecimalNumber labels and require
-        ``await prepare_latex()``. Passing ``font`` selects native Text.
+        Numeric defaults use retained DecimalNumber labels. Passing ``font``
+        selects native Text.
         Two-axis numeric labels commit together and must use one text type.
         Add mixed text types or custom mappings one axis at a time.
         """

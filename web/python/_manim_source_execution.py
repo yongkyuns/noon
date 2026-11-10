@@ -990,7 +990,8 @@ class _SourceBindings(ast.NodeVisitor):
 
 
 class _SceneOnlySource(ast.NodeVisitor):
-    def __init__(self, tree, star_exports):
+    def __init__(self, tree, star_exports, *, latex_prepared=False):
+        self.latex_prepared = latex_prepared
         self.tree = tree
         self.admitted_lagged_map_loads = set()
         self.admitted_plot_loads = set()
@@ -3619,7 +3620,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             and isinstance(node.value.value.func, ast.Name)
             and node.value.value.func.id in _SOURCE_RESOURCE_PREPARATIONS
         }
-        preparation_scope = {"awaits": preparation_awaits, "ready": False}
+        preparation_scope = {"awaits": preparation_awaits, "ready": self.latex_prepared}
         self.resource_preparation_scopes.append(preparation_scope)
         self.numpy_safe_containers.append(_safe_numpy_containers(body))
         self.local_scope_names.append(bindings.names | parameters)
@@ -4603,7 +4604,7 @@ class _SceneOnlySource(ast.NodeVisitor):
     visit_Delete = visit_NamedExpr = _opaque
 
 
-def source_execution_proof(source: str) -> dict:
+def source_execution_proof(source: str, *, auto_prepare_latex=False) -> dict:
     """Prove a closed trusted-API subset; unknown Python remains opaque.
 
     This assumes a pristine interpreter (or only preceding proven sources).
@@ -4623,7 +4624,12 @@ def source_execution_proof(source: str) -> dict:
                 if module is None or not isinstance(getattr(module, "__all__", None), (list, tuple)):
                     raise _OpaqueSource(node, "unproven_wildcard_exports")
                 exports[node.module] = frozenset(module.__all__)
-        _SceneOnlySource(tree, exports).visit(tree)
+        latex_prepared = False
+        if auto_prepare_latex and "MathTex" in source:
+            from _manim_namespace import needs_latex
+
+            latex_prepared = needs_latex(tree)
+        _SceneOnlySource(tree, exports, latex_prepared=latex_prepared).visit(tree)
         return {"admitted": True, "reason": None}
     except _OpaqueSource as error:
         node = error.node
@@ -4662,7 +4668,8 @@ RESOURCE_BARRIER_METHODS = frozenset({
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
 })
 
-CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"})
+PORTABLE_VECTOR_METHODS = frozenset({"add_vector", "apply_matrix"})
+CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"}) | PORTABLE_VECTOR_METHODS
 PORTABLE_SPATIAL_METHODS = frozenset({
     "move_camera", "set_camera_orientation", "point_light",
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
@@ -4755,7 +4762,7 @@ _SCENE_CALLS = frozenset({
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "next_section",
-}) | PORTABLE_SPATIAL_METHODS
+}) | PORTABLE_SPATIAL_METHODS | PORTABLE_VECTOR_METHODS
 
 
 class _CooperativeSourceCheckpoints(ast.NodeTransformer):

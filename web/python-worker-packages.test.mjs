@@ -11,6 +11,8 @@ const timingStart = source.indexOf("function preparationTimingEvent(");
 const timingEnd = source.indexOf("function sourceExecutionRequirement(", timingStart);
 assert.ok(start >= 0 && end > start, "production source-startup boundary must exist");
 assert.ok(timingStart >= 0 && timingEnd > timingStart, "production preparation timing helpers must exist");
+const unexpectedLatex = () => assert.fail("unexpected LaTeX preparation");
+let prepareLatexForTest = unexpectedLatex;
 // Exercise the production dependency preparation + source runner without
 // initializing WASM, a worker or Pyodide. Only the interpreter interface is mocked.
 const { prepareAuthoringDependencies, runAuthoringSource } = vm.runInNewContext(
@@ -23,11 +25,11 @@ ${source.slice(timingStart, timingEnd)}
 ${source.slice(start, end)}
 return { prepareAuthoringDependencies, runAuthoringSource };
 })()`,
-  { diagnosedHostCode, withAuthoringDiagnostics, post() {},
+  { diagnosedHostCode, withAuthoringDiagnostics, post() {}, prepareLatex: () => prepareLatexForTest(),
     isRecord: value => value !== null && typeof value === "object" && !Array.isArray(value) },
 );
 
-function interpreter({ compile, load, execute, requiredPackages = [], missingPackages } = {}) {
+function interpreter({ compile, load, execute, requiredPackages = [], missingPackages, latex = false } = {}) {
   const events = [];
   const namespaces = [];
   const pyodide = {
@@ -69,9 +71,9 @@ function interpreter({ compile, load, execute, requiredPackages = [], missingPac
         assert.match(script, /filename=__noon_filename/);
         return compile?.(text, globals);
       }
-      if (script.includes("_manim_namespace.required_packages_json(")) {
+      if (script.includes("_manim_namespace.source_dependencies_json(")) {
         events.push(["implicit-required", globals.values.get("__noon_dependency_source")]);
-        return JSON.stringify(requiredPackages);
+        return JSON.stringify({ packages: requiredPackages, latex });
       }
       if (script.includes("_manim_namespace.missing_packages_json(")) {
         const requested = JSON.parse(globals.values.get("__noon_required_packages_json"));
@@ -165,6 +167,24 @@ test("a failed package load does not poison a later source run", async () => {
   assert.deepEqual(authoringNamespaces(state).map(namespace => namespace.destroyCount), [1, 1]);
   assert.deepEqual(authoringNamespaces(state).map(namespace => namespace.values.get("__noon_revision")),
     ["request-0", "request-1"]);
+});
+
+test("automatic LaTeX preparation finishes before any source executes", async () => {
+  const source = "from noon import *\nresult = Scene()\nresult.add(MathTex('x'))\n";
+  const state = interpreter({ latex: true });
+  const failure = new Error("LaTeX asset unavailable");
+  try {
+    prepareLatexForTest = async () => { throw failure; };
+    await assert.rejects(runAuthoringSource(state.pyodide, source, {}, 0), error => error === failure);
+    assert.equal(state.events.some(([kind]) => kind === "execute"), false);
+    prepareLatexForTest = async () => { state.events.push(["prepare-latex"]); };
+    assert.equal(await runAuthoringSource(state.pyodide, source, {}, 1), "source-result");
+    assert.deepEqual(state.events.map(([kind]) => kind).slice(-5), [
+      "implicit-required", "prepare-latex", "destroy", "execute", "destroy",
+    ]);
+  } finally {
+    prepareLatexForTest = unexpectedLatex;
+  }
 });
 
 test("synchronous loader errors also stop before dependency inspection and authoring", async () => {
