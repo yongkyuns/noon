@@ -7,7 +7,7 @@ import ast
 import re
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import Mock, call
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,7 +103,7 @@ class TraceTests(unittest.TestCase):
 
     def test_construct_uses_the_model_directly(self):
         scene = next(n for n in TREE.body if isinstance(n, ast.ClassDef))
-        method = next(n for n in scene.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "construct")
+        method = next(n for n in scene.body if isinstance(n, ast.FunctionDef) and n.name == "construct")
         traces = next(n.value for n in method.body if isinstance(n, ast.Assign)
                       and any(isinstance(t, ast.Name) and t.id == "traces" for t in n.targets))
         self.assertEqual(ast.unparse(traces), "[reference_trace(s, COLUMN) for s in (32, 33)]")
@@ -214,22 +214,10 @@ class SourceContracts(unittest.TestCase):
 
     def test_data_motion_establishes_focus_first(self):
         scene = next(n for n in TREE.body if isinstance(n, ast.ClassDef))
-        method = next(n for n in scene.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "move_step")
-        exprs = [n.value.value for n in method.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Await)]
+        method = next(n for n in scene.body if isinstance(n, ast.FunctionDef) and n.name == "move_step")
+        exprs = [n.value for n in method.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)]
         self.assertEqual([ast.unparse(n.func) for n in exprs], ["self.focus", "self.play_for"])
         self.assertEqual(ast.unparse(exprs[0].args[0]), "step")
-
-    def test_browser_portable_playback_awaits_each_animation_helper(self):
-        scene = next(n for n in TREE.body if isinstance(n, ast.ClassDef))
-        methods = {n.name: n for n in scene.body if isinstance(n, ast.AsyncFunctionDef)}
-        self.assertIn("construct", methods)
-        awaited = set(methods) | {"play", "wait"}
-        parents = {child: node for node in ast.walk(scene) for child in ast.iter_child_nodes(node)}
-        for node in ast.walk(scene):
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
-                    and node.func.attr in awaited):
-                self.assertIsInstance(parents[node], ast.Await, ast.unparse(node))
 
     def test_no_per_frame_callback_or_secondary_engine(self):
         classes = [n for n in TREE.body if isinstance(n, ast.ClassDef)]
@@ -249,7 +237,7 @@ class SourceContracts(unittest.TestCase):
 
     def test_load_ready_count_updates_after_motion(self):
         scene = next(n for n in TREE.body if isinstance(n, ast.ClassDef))
-        method = next(n for n in scene.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "load_tile")
+        method = next(n for n in scene.body if isinstance(n, ast.FunctionDef) and n.name == "load_tile")
         loop = next(n for n in ast.walk(method) if isinstance(n, ast.For) and isinstance(n.target, ast.Tuple))
         calls = [n for n in ast.walk(loop) if isinstance(n, ast.Call)]
         motion = next(n for n in calls if ast.unparse(n.func) == "self.move_step"
@@ -262,7 +250,7 @@ class SourceContracts(unittest.TestCase):
 
     def test_global_store_waits_for_all_read_batches(self):
         scene = next(n for n in TREE.body if isinstance(n, ast.ClassDef))
-        method = next(n for n in scene.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "bank_replay")
+        method = next(n for n in scene.body if isinstance(n, ast.FunctionDef) and n.name == "bank_replay")
         loop = next(n for n in method.body if isinstance(n, ast.For) and ast.unparse(n.iter) == "batches")
         store = next(n for n in ast.walk(method) if isinstance(n, ast.Call)
                      and ast.unparse(n.func) == "self.move_step" and n.args
@@ -299,7 +287,7 @@ def helper_namespace():
             if names and names <= PURE_CONSTANTS:
                 nodes.append(node)
         if isinstance(node, ast.ClassDef) and node.name == 'CudaTransposeBanks':
-            nodes.extend(n for n in node.body if isinstance(n, ast.AsyncFunctionDef)
+            nodes.extend(n for n in node.body if isinstance(n, ast.FunctionDef)
                          and n.name == 'focus')
     ns = {}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<authoring helper unit tests>', 'exec'), ns)
@@ -424,22 +412,22 @@ class PacketMotionTests(unittest.TestCase):
                 self.assertNotIn(name, forbidden)
 
 
-class HighlightTests(unittest.IsolatedAsyncioTestCase):
+class HighlightTests(unittest.TestCase):
     def setUp(self):
         self.ns = helper_namespace()
 
     def scene_spy(self, active=()):
         keys = {'load_dst', 'load_src', 'read_src', 'store_dst'}
         return SimpleNamespace(active_keys=active,
-                               highlights={key: leaf_spy(key) for key in keys}, play_for=AsyncMock())
+                               highlights={key: leaf_spy(key) for key in keys}, play_for=Mock())
 
-    async def test_active_highlight_is_twenty_percent_fill_no_outline(self):
+    def test_active_highlight_is_twenty_percent_fill_no_outline(self):
         self.assertEqual(self.ns['CODE_HIGHLIGHT_FILL'], 0.20)
         self.assertEqual(self.ns['CODE_HIGHLIGHT_STROKE'], 0)
         self.assertIn('CODE_HIGHLIGHT_COLOR = color_from_hex("#68839B")', SOURCE)
         self.assertNotIn('.set_opacity(', SOURCE)
         s = self.scene_spy(('load_dst', 'load_src'))
-        await self.ns['focus'](s, 'read')
+        self.ns['focus'](s, 'read')
         for key in ('load_dst', 'load_src'):
             s.highlights[key].animate.set_fill.assert_called_once_with(opacity=0.0)
         s.highlights['read_src'].animate.set_fill.assert_called_once_with(opacity=0.20)
@@ -447,25 +435,25 @@ class HighlightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(s.play_for.call_args.args), 3)
         self.assertEqual(s.play_for.call_args.kwargs, {'seconds': 0.16})
 
-    async def test_focus_highlights_both_assignment_lines(self):
+    def test_focus_highlights_both_assignment_lines(self):
         s = self.scene_spy()
-        await self.ns['focus'](s, 'copy')
+        self.ns['focus'](s, 'copy')
         self.assertEqual(s.active_keys, ('load_dst', 'load_src'))
         for key in s.active_keys:
             s.highlights[key].animate.set_fill.assert_called_once_with(opacity=0.20)
         self.assertEqual(len(s.play_for.call_args.args), 2)
 
-    async def test_repeated_focus_does_not_restart_animation(self):
+    def test_repeated_focus_does_not_restart_animation(self):
         s = self.scene_spy(('read_src',))
-        await self.ns['focus'](s, 'read')
+        self.ns['focus'](s, 'read')
         s.play_for.assert_not_called()
         s.highlights['read_src'].animate.set_fill.assert_not_called()
 
-    async def test_missing_source_line_fails_before_play(self):
+    def test_missing_source_line_fails_before_play(self):
         s = self.scene_spy()
         del s.highlights['read_src']
         with self.assertRaisesRegex(ValueError, 'missing from the displayed CUDA page'):
-            await self.ns['focus'](s, 'read')
+            self.ns['focus'](s, 'read')
         s.play_for.assert_not_called()
 
 class AttributionTests(unittest.TestCase):

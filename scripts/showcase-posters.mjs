@@ -120,9 +120,7 @@ export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
   assert.equal(record.sample.column, 3);
   const capture = record.capture;
   assert.equal(capture.repository, "yongkyuns/noon");
-  assert.equal(capture.workflowRunId, 39055762669);
-  assert.equal(capture.artifactId, 12110234543);
-  assert.equal(capture.testedPrHead, "70f6b0d84c0ac7926ebc1c04affe2d1616622d2d");
+  assert.equal(capture.script, "scripts/cuda-transpose-qualification.mjs");
   assert.equal(capture.reportStatus, "passed");
   assert.ok(Number.isFinite(capture.authoredDurationSeconds) &&
     Math.abs(capture.authoredDurationSeconds - entry.duration) <= 1e-9,
