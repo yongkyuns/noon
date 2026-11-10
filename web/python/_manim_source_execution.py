@@ -5169,8 +5169,10 @@ def compile_authoring_source(
         if replacement is not None and replacement.co_freevars == code.co_freevars:
             pairs[code] = replacement
     for location, dependencies in compiler.helpers.items():
-        construct = original_codes[location]
-        helpers = {name: original_codes[(name, line)] for name, line in dependencies.items()}
+        construct = original_codes.get(location)
+        if construct not in pairs:
+            continue
+        helpers = {name: original_codes.get((name, line)) for name, line in dependencies.items()}
         if all(code in pairs for code in helpers.values()):
             pairs.helpers[construct] = helpers
         else:
@@ -5194,6 +5196,8 @@ def bind_portable_construct(
     if not isinstance(method, MethodType) or not isinstance(method.__func__, FunctionType):
         return None
     original = method.__func__
+    if original.__code__.co_name != "construct":
+        return None
     code = code_pairs.get(original.__code__)
     if code is None:
         return None

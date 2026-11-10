@@ -319,6 +319,7 @@ value: MissingName = 2
         scene = namespace["Example"]()
         scene._canonical_authoring_context = object()
         original = scene.outer.__func__
+        self.assertIsNone(bind_portable_construct(scene.outer, pairs))
         with patch.object(noon.Scene, "wait", wait):
             task = asyncio.create_task(_manim_scene.execute_construct(scene, portable_constructs=pairs))
             await asyncio.sleep(0)
@@ -336,6 +337,21 @@ value: MissingName = 2
         self.assertIsNone(bind_portable_helpers(scene.construct, pairs))
         await _manim_scene.execute_construct(scene, portable_constructs=pairs)
         self.assertEqual(events[-1], "override")
+
+    def test_unreachable_helper_graph_preserves_live_construct(self):
+        scene, portable, _ = self.compile_scene('''
+            if False:
+                class Unreachable:
+                    def construct(self):
+                        self.step()
+                    def step(self):
+                        self.wait(1)
+            class Example:
+                def construct(self):
+                    self.wait(1)
+        ''')
+        self.assertIsNotNone(portable)
+        self.assertIs(portable.__self__, scene)
 
     async def test_effect_preparation_suspends_before_later_source_calls(self):
         events, release = [], asyncio.Event()
