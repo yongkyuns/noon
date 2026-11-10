@@ -228,26 +228,26 @@ class _PendingOptionalNamespace:
         return f"<pending Manim namespace {self.alias!r} -> {self.package!r}>"
 
 
-def _loaded_names(source: str) -> set[str]:
+def _loaded_names(tree: ast.AST) -> set[str]:
     """Collect loaded names, attribute access and explicit namespace imports."""
 
-    tree = ast.parse(source, mode="exec")
-    names = {
-        node.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
-    }
-    names.update(node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute))
-    names.update(alias.name for node in ast.walk(tree)
-                 if isinstance(node, ast.ImportFrom) and node.module in {"manim", "noon", "_manim_iterables", "_manim_simple_functions"}
-                 for alias in node.names)
+    names = set()
+    for node in ast.walk(tree):
+        match node:
+            case ast.Name(id=name, ctx=ast.Load()) | ast.Attribute(attr=name):
+                names.add(name)
+            case ast.ImportFrom(module="manim" | "noon" | "_manim_iterables" | "_manim_simple_functions"):
+                names.update(alias.name for alias in node.names)
     return names
 
 
 def required_packages(source: str) -> tuple[str, ...]:
     """Return packages needed by optional namespace aliases and data helpers."""
 
-    names = _loaded_names(source)
+    return _required_packages(_loaded_names(ast.parse(source)))
+
+
+def _required_packages(names: set[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(
         package
         for alias, package in {**_OPTIONAL_NAMESPACE_PACKAGES, **_OPTIONAL_HELPER_PACKAGES}.items()
@@ -255,8 +255,77 @@ def required_packages(source: str) -> tuple[str, ...]:
     ))
 
 
-def required_packages_json(source: str) -> str:
-    return json.dumps(required_packages(source), separators=(",", ":"))
+_LATEX_NAMES = frozenset("""
+Tex MathTex DecimalNumber Integer Variable BarChart get_bar_labels
+Matrix IntegerMatrix DecimalMatrix MobjectMatrix MathTable IntegerTable DecimalTable get_axis_labels
+""".split())
+_NUMERIC_LABEL_METHODS = frozenset({
+    "add_coordinates", "add_numbers", "get_number_mobject", "get_number_mobjects",
+})
+_AXIS_LABEL_METHODS = frozenset({"get_x_axis_label", "get_y_axis_label", "get_z_axis_label"})
+_LABEL_METHODS = _NUMERIC_LABEL_METHODS | _AXIS_LABEL_METHODS
+_NATIVE_TEXT_NAMES = frozenset({"Text", "MarkupText", "Typst", "MathTypst"})
+_NUMERIC_LABEL_OPTIONS = frozenset({"include_numbers", "numbers_to_include", "show_coordinates"})
+
+
+def _native_label_font(keywords):
+    return (
+        any(kw.arg == "font" and isinstance(kw.value, ast.Constant)
+            and isinstance(kw.value.value, str) for kw in keywords)
+        and all(kw.arg not in {None, "x_config", "y_config"} for kw in keywords)
+    )
+
+
+def _numeric_label_option(name, value):
+    return name in _NUMERIC_LABEL_OPTIONS and not (
+        isinstance(value, ast.Constant) and (value.value is False or value.value is None)
+    )
+
+
+def needs_latex(tree: ast.AST, names: set[str] | None = None) -> bool:
+    """Discover browser compiler use before executing any authored Python."""
+    if names is None:
+        names = _loaded_names(tree)
+    if "prepare_latex" in names:
+        # Explicit callers own the placement and error handling of that wait.
+        return False
+    if not _LATEX_NAMES.isdisjoint(names):
+        return True
+    label_accesses = set()
+    native_label_calls = set()
+    for node in ast.walk(tree):
+        match node:
+            case ast.Call(func=ast.Attribute(attr=method), keywords=keywords) if method in _NUMERIC_LABEL_METHODS:
+                if not _native_label_font(keywords):
+                    return True
+                native_label_calls.add(id(node.func))
+            case ast.Call(func=ast.Attribute(attr=method), args=args, keywords=keywords) if method in _AXIS_LABEL_METHODS:
+                label = args[0] if args else next((kw.value for kw in keywords if kw.arg == "label"), None)
+                match label:
+                    case ast.Call(func=ast.Name(id=name) | ast.Attribute(attr=name)) if name in _NATIVE_TEXT_NAMES:
+                        native_label_calls.add(id(node.func))
+                        continue
+                return True
+            case ast.Attribute(attr=method, ctx=ast.Load()) if method in _LABEL_METHODS:
+                label_accesses.add(id(node))
+            case ast.Call(func=ast.Name(id="getattr"), args=[_, ast.Constant(value=str(name)), *_]):
+                if name in _LATEX_NAMES or name in _LABEL_METHODS:
+                    return True
+            case ast.keyword(arg=name, value=value):
+                if _numeric_label_option(name, value):
+                    return True
+            case ast.Dict(keys=keys, values=values):
+                if any(isinstance(key, ast.Constant) and isinstance(key.value, str)
+                       and _numeric_label_option(key.value, value) for key, value in zip(keys, values)):
+                    return True
+    return bool(label_accesses - native_label_calls)
+
+
+def source_dependencies_json(source: str) -> str:
+    tree = ast.parse(source)
+    names = _loaded_names(tree)
+    return json.dumps({"packages": _required_packages(names), "latex": needs_latex(tree, names)},
+                      separators=(",", ":"))
 
 
 def missing_packages(packages: list[str] | tuple[str, ...]) -> tuple[str, ...]:

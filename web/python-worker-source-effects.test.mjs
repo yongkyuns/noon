@@ -32,7 +32,7 @@ function worker() {
     (type, value) => diagnostics.push({ type, ...value }));
   const pyodide = proof => ({
     runPython(code) {
-      assert.match(code, /source_execution_proof\(__noon_source\)/); events.push("proof");
+      assert.match(code, /source_execution_proof\(__noon_source, auto_prepare_latex=True\)/); events.push("proof");
       return JSON.stringify({ admitted: proof, reason: proof ? null : { code: "unknown_name", span: null } });
     },
     async runPythonAsync() { events.push("source"); return "result"; },

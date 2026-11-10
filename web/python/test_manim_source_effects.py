@@ -635,7 +635,11 @@ def tokens(value):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_latex_create.py"
         ).read_text()
-        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        self.assertEqual(source_execution_proof(source, auto_prepare_latex=True),
+                         {"admitted": True, "reason": None})
+        self.assertFalse(source_execution_proof(source)["admitted"])
+        dynamic_options = source.replace("font_size=88", 'font_size=context["size"]', 1)
+        self.assertFalse(source_execution_proof(dynamic_options, auto_prepare_latex=True)["admitted"])
 
         safe = '''from noon import *
 class Example(Scene):
