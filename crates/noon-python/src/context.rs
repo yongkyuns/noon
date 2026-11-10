@@ -8,7 +8,9 @@ use crate::{
     geometry::GeometryOptions,
     mobject::{pivot, LayoutAnchor, LayoutObservation, MobjectHandle},
 };
-use noon::integration::{HostCallbackId, SemanticMutationTransaction, SemanticStore};
+use noon::integration::{
+    scene_execution, HostCallbackId, SemanticMutationTransaction, SemanticStore,
+};
 use noon::{
     ExecutionSegment, ExecutionSession, Mobject, MobjectTarget, Scene, SceneMembershipRequest,
 };
@@ -209,7 +211,6 @@ pub struct Context {
     pub(crate) scene: Scene,
     // Host binding provenance only; membership and object state stay in Rust Scene.
     bound_ids: HashSet<noon_core::SemanticNodeId>,
-    pub(crate) execution: Option<ExecutionSession>,
     pub(crate) segment: Option<ExecutionSegment>,
     pub(crate) terminal: bool,
     pub(crate) sample_hz: f64,
@@ -231,7 +232,6 @@ impl Context {
         Self {
             scene,
             bound_ids: HashSet::new(),
-            execution: None,
             segment: None,
             terminal: false,
             sample_hz: 60.0,
@@ -253,9 +253,7 @@ impl Context {
         pending: noon::StagedEffectPublication,
         bindings: Vec<Mobject>,
     ) -> PyResult<crate::effects::StagedEffectPublication> {
-        let runtime = self
-            .execution
-            .as_ref()
+        let runtime = scene_execution::session(&self.scene)
             .ok_or_else(|| engine_error("no execution session"))?
             .runtime_identity();
         Ok(crate::effects::StagedEffectPublication {
@@ -278,23 +276,41 @@ impl Context {
         Ok(session)
     }
 
+    fn attach_session(&mut self, session: ExecutionSession) -> PyResult<()> {
+        scene_execution::attach(&mut self.scene, session)
+            .map_err(|error| engine_error(error.to_string()))
+    }
+
+    fn with_bootstrapped_live<T>(
+        &mut self,
+        operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
+    ) -> PyResult<T> {
+        if self.has_execution() {
+            return self.with_live(operation);
+        }
+        let mut session = self.bootstrap()?;
+        let result = operation(&mut self.scene.live(&mut session)).map_err(engine_error)?;
+        self.attach_session(session)?;
+        Ok(result)
+    }
+
     pub(crate) fn prepare_viewer(&mut self) -> PyResult<noon::SceneExecution> {
         self.available()?;
-        let mut session = match self.execution.take() {
-            Some(session) => session,
-            None => self.bootstrap()?,
-        };
+        if !self.has_execution() {
+            let session = self.bootstrap()?;
+            self.attach_session(session)?;
+        }
+        let (_, _, session) = scene_execution::parts_mut(&mut self.scene)
+            .expect("viewer bootstrap installed execution");
         if self.retain_history {
-            if let Err(error) = session.seal_replay_for_viewer() {
-                self.execution = Some(session);
-                return Err(engine_error(noon::integration::AuthoringFailure::new(
+            session.seal_replay_for_viewer().map_err(|error| {
+                engine_error(noon::integration::AuthoringFailure::new(
                     "unsupported_operation",
                     "python.preview_history",
                     error,
-                )));
-            }
+                ))
+            })?;
         } else if !session.supports_immutable_playback() {
-            self.execution = Some(session);
             return Err(engine_error(
                 "prepare the source with retain_history=True before native preview",
             ));
@@ -308,7 +324,7 @@ impl Context {
         }
         self.terminal = true;
         let mut execution = scene
-            .into_execution_with_session(session)
+            .into_execution()
             .map_err(|e| engine_error(e.to_string()))?;
         execution
             .seek(0.0)
@@ -355,17 +371,39 @@ impl Context {
             Ok(())
         }
     }
+    pub(crate) fn has_execution(&self) -> bool {
+        scene_execution::session(&self.scene).is_some()
+    }
+
+    pub(crate) fn live_session(&mut self) -> Option<noon::LiveSession<'_>> {
+        let (store, root, session) = scene_execution::parts_mut(&mut self.scene)?;
+        Some(noon::LiveSession::new(store, root, session))
+    }
+
     pub(crate) fn with_live<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,
     ) -> PyResult<T> {
         self.require_active()?;
-        let session = self
-            .execution
-            .as_mut()
+        let mut live = self
+            .live_session()
             .ok_or_else(|| engine_error("no execution session"))?;
-        operation(&mut self.scene.live(session)).map_err(engine_error)
+        operation(&mut live).map_err(engine_error)
     }
+
+    fn place<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<()> {
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        operation(&mut self.scene)
+            .map(|_| ())
+            .map_err(noon::LiveSessionError::from)
+            .map_err(engine_error)
+    }
+
     fn publish_path_edit(
         &mut self,
         target: &MobjectHandle,
@@ -373,21 +411,14 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        let execution = self
-            .execution
-            .as_mut()
+        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_borrowed_path_edit(
-            self.scene.integration_store(),
-            self.scene.root(),
-            execution,
-            edit,
-        )
-        .map_err(engine_error)
+        noon::integration::publish_borrowed_path_edit(store, root, execution, edit)
+            .map_err(engine_error)
     }
     fn publish(&mut self, transaction: SemanticMutationTransaction) -> PyResult<()> {
         self.require_active()?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.apply(transaction).map(|_| ()))
         } else {
             transaction
@@ -580,7 +611,7 @@ impl Context {
         far: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "3D camera must be declared before execution starts",
             ));
@@ -617,7 +648,7 @@ impl Context {
         far: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "3D camera must be declared before execution starts",
             ));
@@ -639,7 +670,7 @@ impl Context {
         intensity: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "3D point lights must be created before execution starts",
             ));
@@ -662,7 +693,7 @@ impl Context {
         self.same_store(target)?;
         let transform = noon::integration::spatial_input::world_transform_from_values(&values)
             .map_err(engine_error)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.set_world_transform(&target.handle, transform))
         } else {
             self.scene
@@ -674,7 +705,7 @@ impl Context {
     fn world_transform(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if self.execution.is_some() {
+        let value = if self.has_execution() {
             self.with_live(|live| live.effective_world_transform(&target.handle))
         } else {
             target.handle.world_transform().map_err(engine_error)
@@ -685,7 +716,7 @@ impl Context {
     fn world_center(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if self.execution.is_some() {
+        let value = if self.has_execution() {
             self.with_live(|live| live.effective_world_center(&target.handle))
         } else {
             target.handle.world_center().map_err(engine_error)
@@ -696,7 +727,7 @@ impl Context {
     fn world_family_center(&mut self, target: &crate::family::FamilyHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if self.execution.is_some() {
+        let value = if self.has_execution() {
             self.with_live(|live| live.effective_world_family_center(&target.family))
         } else {
             target.family.world_center().map_err(engine_error)
@@ -707,7 +738,7 @@ impl Context {
     fn effective_camera_profile(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if self.execution.is_some() {
+        let value = if self.has_execution() {
             self.with_live(|live| live.effective_camera_profile(&target.handle))
         } else {
             self.scene
@@ -724,7 +755,7 @@ impl Context {
         self.same_store(target)?;
         let profile =
             noon::integration::spatial_input::camera_profile(&values).map_err(engine_error)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.set_camera_profile(&target.handle, profile))
         } else {
             self.scene
@@ -745,7 +776,7 @@ impl Context {
         let surface =
             noon::SurfaceFamily::from_family(target.family.clone()).map_err(engine_error)?;
         let colors = crate::spatial::checkerboard(&first, &second)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.set_surface_checkerboard(&surface, colors, opacity))
         } else {
             self.scene
@@ -862,7 +893,7 @@ impl Context {
             "gamma" => noon_core::CameraRotationAxis::Gamma,
             _ => return Err(engine_error("unknown ambient camera rotation axis")),
         };
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.begin_ambient_camera_rotation(&target.handle, axis, rate))
         } else {
             self.scene
@@ -874,7 +905,7 @@ impl Context {
     fn stop_ambient_camera_rotation(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.stop_ambient_camera_rotation(&target.handle))
         } else {
             self.scene
@@ -893,7 +924,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| {
                 live.begin_3dillusion_camera_rotation(
                     &target.handle,
@@ -912,7 +943,7 @@ impl Context {
     fn stop_3dillusion_camera_rotation(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.stop_3dillusion_camera_rotation(&target.handle))
         } else {
             self.scene
@@ -923,16 +954,12 @@ impl Context {
     #[pyo3(name = "createValueTracker")]
     fn create_tracker(&mut self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
         self.available()?;
-        let value = if let Some(execution) = self.execution.as_mut() {
-            noon::integration::publish_value_tracker_creation(
-                self.scene.integration_store(),
-                self.scene.root(),
-                execution,
-                initial,
-            )
-        } else {
-            self.scene.value_tracker(initial)
-        };
+        let value =
+            if let Some((store, root, execution)) = scene_execution::parts_mut(&mut self.scene) {
+                noon::integration::publish_value_tracker_creation(store, root, execution, initial)
+            } else {
+                self.scene.value_tracker(initial)
+            };
         value
             .map(|value| crate::signals::ValueTrackerHandle { value })
             .map_err(engine_error)
@@ -940,10 +967,10 @@ impl Context {
     #[pyo3(name = "associateValueTracker")]
     fn associate_tracker(&mut self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<()> {
         self.available()?;
-        if let Some(execution) = self.execution.as_mut() {
+        if let Some((store, root, execution)) = scene_execution::parts_mut(&mut self.scene) {
             noon::integration::publish_value_tracker_association(
-                self.scene.integration_store(),
-                self.scene.root(),
+                store,
+                root,
                 execution,
                 &tracker.value,
             )
@@ -964,7 +991,7 @@ impl Context {
             .semantic_signal_state(tracker.value.node_id())
             .map_err(noon::AuthoringError::from)
             .map_err(engine_error)?;
-        if let Some(execution) = self.execution.as_ref() {
+        if let Some(execution) = scene_execution::session(&self.scene) {
             match execution
                 .effective_signal_value(tracker.value.node_id())
                 .ok_or_else(|| {
@@ -986,7 +1013,7 @@ impl Context {
         value: f64,
     ) -> PyResult<()> {
         self.available()?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.set_value(&tracker.value, value))
         } else {
             self.scene
@@ -1004,7 +1031,7 @@ impl Context {
         y: f64,
     ) -> PyResult<crate::signals::TrackerPositionHandle> {
         self.available()?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "native signal bindings must be authored before execution",
             ));
@@ -1026,7 +1053,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "native signal bindings must be authored before execution",
             ));
@@ -1043,7 +1070,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "native signal bindings must be authored before execution",
             ));
@@ -1060,7 +1087,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "native signal bindings must be authored before execution",
             ));
@@ -1085,8 +1112,8 @@ impl Context {
         my: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.next_layout_to_aligned(
+        self.place(|scene| {
+            scene.next_layout_to_aligned(
                 &source.anchor,
                 noon::LiveLayoutTarget::Anchor(&target.anchor),
                 &aligner.anchor,
@@ -1097,7 +1124,6 @@ impl Context {
                     mask: (mx, my),
                 },
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveNextLayoutToPoint")]
@@ -1116,8 +1142,8 @@ impl Context {
         my: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.next_layout_to_aligned(
+        self.place(|scene| {
+            scene.next_layout_to_aligned(
                 &source.anchor,
                 noon::LiveLayoutTarget::Point(x, y),
                 &aligner.anchor,
@@ -1128,7 +1154,6 @@ impl Context {
                     mask: (mx, my),
                 },
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveNextLayoutToEdgeInFrame")]
@@ -1168,10 +1193,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.arrange_family_with_options(&target.family, &options.options)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.arrange_family_with_options(&target.family, &options.options))
     }
     #[pyo3(name = "liveArrangeFamilyInGrid")]
     fn arrange_family_in_grid_with_options(
@@ -1181,9 +1203,8 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.arrange_family_in_grid_with_options(&target.family, &options.options)
-                .map(|_| ())
+        self.place(|scene| {
+            scene.arrange_family_in_grid_with_options(&target.family, &options.options)
         })
     }
     #[pyo3(name = "liveMoveFamilyToPoint")]
@@ -1199,14 +1220,13 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.move_family_to(
+        self.place(|scene| {
+            scene.move_family_to(
                 &target.family,
                 noon::LiveLayoutTarget::Point(x, y),
                 (ex, ey),
                 (mx, my),
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveMoveFamilyToMobject")]
@@ -1222,14 +1242,13 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.same_store(other)?;
-        self.with_live(|live| {
-            live.move_family_to(
+        self.place(|scene| {
+            scene.move_family_to(
                 &target.family,
                 noon::LiveLayoutTarget::Mobject(&other.handle),
                 (ex, ey),
                 (mx, my),
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveMoveFamilyToFamily")]
@@ -1245,14 +1264,13 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.same_family_store(other)?;
-        self.with_live(|live| {
-            live.move_family_to(
+        self.place(|scene| {
+            scene.move_family_to(
                 &target.family,
                 noon::LiveLayoutTarget::Family(&other.family),
                 (ex, ey),
                 (mx, my),
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveAlignFamilyToPoint")]
@@ -1266,13 +1284,12 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.align_family_to(
+        self.place(|scene| {
+            scene.align_family_to(
                 &target.family,
                 noon::LiveLayoutTarget::Point(x, y),
                 (ex, ey),
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveAlignFamilyToMobject")]
@@ -1286,13 +1303,12 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.same_store(other)?;
-        self.with_live(|live| {
-            live.align_family_to(
+        self.place(|scene| {
+            scene.align_family_to(
                 &target.family,
                 noon::LiveLayoutTarget::Mobject(&other.handle),
                 (ex, ey),
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveAlignFamilyToFamily")]
@@ -1306,13 +1322,12 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.same_family_store(other)?;
-        self.with_live(|live| {
-            live.align_family_to(
+        self.place(|scene| {
+            scene.align_family_to(
                 &target.family,
                 noon::LiveLayoutTarget::Family(&other.family),
                 (ex, ey),
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "liveAlignFamilyOnFrame")]
@@ -1325,10 +1340,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.align_family_on_frame(&target.family, (x, y), buff)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.align_family_on_frame(&target.family, (x, y), buff))
     }
 
     #[pyo3(name = "liveSetFamilyObjectOpacity")]
@@ -1348,7 +1360,7 @@ impl Context {
     #[pyo3(name = "createCameraFrame")]
     fn camera_frame(&mut self, _id: &str) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error("camera initialization must precede execution"));
         }
         let handle = self.scene.camera_frame().map_err(engine_error)?;
@@ -1360,7 +1372,7 @@ impl Context {
         self.available()?;
         self.same_store(target)?;
         let value = noon::integration::camera_color_profile(value).map_err(engine_error)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.set_view_color_profile(&target.handle, value))
         } else {
             self.scene
@@ -1407,10 +1419,8 @@ impl Context {
         let plane = noon::ManimNumberPlane::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(session) = self.execution.as_mut() {
-            self.scene
-                .live(session)
-                .effective_number_plane_frame(&plane)
+        let value = if let Some(live) = self.live_session() {
+            live.effective_number_plane_frame(&plane)
         } else {
             plane.authored_frame()
         };
@@ -1429,8 +1439,8 @@ impl Context {
         let plane = noon::ManimPolarPlane::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(session) = self.execution.as_mut() {
-            self.scene.live(session).effective_polar_plane_frame(&plane)
+        let value = if let Some(live) = self.live_session() {
+            live.effective_polar_plane_frame(&plane)
         } else {
             plane.authored_polar_frame()
         };
@@ -1450,10 +1460,8 @@ impl Context {
         let coordinates = noon::ManimNumberLine::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(session) = self.execution.as_mut() {
-            self.scene
-                .live(session)
-                .effective_number_line_frame(&coordinates)
+        let value = if let Some(live) = self.live_session() {
+            live.effective_number_line_frame(&coordinates)
         } else {
             coordinates.authored_frame()
         };
@@ -1472,8 +1480,8 @@ impl Context {
         let coordinates = noon::ManimAxes::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(session) = self.execution.as_mut() {
-            self.scene.live(session).effective_axes_frame(&coordinates)
+        let value = if let Some(live) = self.live_session() {
+            live.effective_axes_frame(&coordinates)
         } else {
             coordinates.authored_frame()
         };
@@ -1492,10 +1500,8 @@ impl Context {
         let coordinates = noon::ManimThreeDAxes::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(session) = self.execution.as_mut() {
-            self.scene
-                .live(session)
-                .effective_three_d_axes_frame(&coordinates)
+        let value = if let Some(live) = self.live_session() {
+            live.effective_three_d_axes_frame(&coordinates)
         } else {
             coordinates.authored_frame()
         };
@@ -1521,7 +1527,7 @@ impl Context {
                 "published association accepts add binding reservations only",
             ));
         }
-        let execution = self.execution.as_ref().ok_or_else(|| {
+        let execution = scene_execution::session(&self.scene).ok_or_else(|| {
             engine_error("published association requires the local completed execution player")
         })?;
         if execution.publication_context().scene_revision() != self.scene.revision() {
@@ -1594,7 +1600,7 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_vector_boundary_points_3d(
                 self.scene.integration_store(),
                 execution,
@@ -1612,7 +1618,7 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_all_points_3d(
                 self.scene.integration_store(),
                 execution,
@@ -1633,7 +1639,7 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_vector_boundary_points_3d(
                 self.scene.integration_store(),
                 execution,
@@ -1651,7 +1657,7 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_all_points_3d(
                 self.scene.integration_store(),
                 execution,
@@ -1668,7 +1674,7 @@ impl Context {
     fn point_count(&mut self, target: &MobjectHandle) -> PyResult<usize> {
         self.require_active()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.get_num_points(&target.handle))
         } else {
             target.handle.get_num_points().map_err(engine_error)
@@ -1680,7 +1686,7 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_point_array(
                 self.scene.integration_store(),
                 execution,
@@ -1701,7 +1707,7 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_point_array(
                 self.scene.integration_store(),
                 execution,
@@ -1957,7 +1963,7 @@ impl Context {
     fn layout_dimension_length(&mut self, source: &LayoutAnchor, dimension: u32) -> PyResult<f64> {
         self.require_active()?;
         let dimension = dimension.try_into().map_err(engine_error)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.dimension_length(&source.anchor, dimension))
         } else {
             source
@@ -2003,7 +2009,7 @@ impl Context {
     fn mobject_requires_content_boundary(&self, target: &MobjectHandle) -> PyResult<bool> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_requires_content_boundary(
                 self.scene.integration_store(),
                 execution,
@@ -2026,7 +2032,7 @@ impl Context {
     ) -> PyResult<(f64, f64, f64)> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_critical_point_3d(
                 self.scene.integration_store(),
                 execution,
@@ -2055,7 +2061,7 @@ impl Context {
     ) -> PyResult<bool> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_requires_content_boundary(
                 self.scene.integration_store(),
                 execution,
@@ -2078,7 +2084,7 @@ impl Context {
     ) -> PyResult<(f64, f64, f64)> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             noon::integration::effective_critical_point_3d(
                 self.scene.integration_store(),
                 execution,
@@ -2110,7 +2116,7 @@ impl Context {
     ) -> PyResult<(f64, f64, f64)> {
         self.require_active()?;
         let direction = noon::SemanticVec3::new(x, y, z);
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.layout_critical_point_3d(&anchor.anchor, direction))
                 .map(|p| (p.x, p.y, p.z))
         } else {
@@ -2128,7 +2134,7 @@ impl Context {
     #[pyo3(name = "requiresLiveMutationRouting")]
     fn requires_live_mutation_routing(&self) -> PyResult<bool> {
         self.require_active()?;
-        Ok(self.execution.is_some())
+        Ok(self.has_execution())
     }
     #[cfg(feature = "native-text")]
     #[pyo3(name = "liveCreateManimText", signature = (source, family, size, spacing, r, g, b, a, opacity, colors=None, face=None))]
@@ -2175,7 +2181,7 @@ impl Context {
     fn set_angle_value(&mut self, target: &MobjectHandle, radians: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.set_angle_value(&target.handle, radians))
                 .map(|_| ())
         } else {
@@ -2205,7 +2211,7 @@ impl Context {
     #[pyo3(name = "liveExecutionOwnership")]
     fn ownership(&self) -> PyResult<&'static str> {
         self.require_active()?;
-        Ok(if self.execution.is_some() {
+        Ok(if self.has_execution() {
             "active"
         } else {
             "none"
@@ -2260,7 +2266,7 @@ impl Context {
     }
     #[pyo3(name = "liveHandoffDuration")]
     fn handoff(&self) -> Option<f64> {
-        self.execution.as_ref().map(|s| {
+        scene_execution::session(&self.scene).map(|s| {
             self.segment.map_or(s.effective_time(), |segment| {
                 s.effective_time().max(segment.end_time())
             })
@@ -2307,26 +2313,22 @@ impl Context {
                     "spatial composition requires an add membership batch",
                 ));
             }
-            if let Some(session) = self.execution.as_mut() {
+            if let Some(mut live) = self.live_session() {
                 domain
-                    .apply_live(&mut self.scene.live(session), &targets)
+                    .apply_live(&mut live, &targets)
                     .map_err(engine_error)?;
             } else {
                 domain
                     .apply_scene(&mut self.scene, &targets)
                     .map_err(engine_error)?;
             }
-        } else if let Some(session) = self.execution.as_mut() {
-            match self.scene.live(session).edit_membership(request) {
+        } else if let Some(mut live) = self.live_session() {
+            match live.edit_membership(request) {
                 Ok(_) => {}
                 Err(noon::LiveSessionError::Publication(
                     noon::ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
                 )) => {
-                    let pending = self
-                        .scene
-                        .live(session)
-                        .prepare_membership(request)
-                        .map_err(engine_error)?;
+                    let pending = live.prepare_membership(request).map_err(engine_error)?;
                     return self.staged(pending, batch.bindings.clone()).map(Some);
                 }
                 Err(error) => return Err(engine_error(error)),
@@ -2342,7 +2344,7 @@ impl Context {
     fn contains(&mut self, target: &MobjectHandle) -> PyResult<bool> {
         self.require_active()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.contains(&target.handle))
         } else {
             noon_core::semantic_scene_root_contains(
@@ -2409,7 +2411,7 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let query = match self.execution.as_ref() {
+        let query = match scene_execution::session(&self.scene) {
             Some(execution) => noon::integration::effective_path_query(
                 self.scene.integration_store(),
                 execution,
@@ -2431,7 +2433,7 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let color = if self.execution.is_some() {
+        let color = if self.has_execution() {
             self.with_live(|live| live.effective_manim_color(&target.handle))?
         } else {
             target.handle.manim_color().map_err(engine_error)?
@@ -2463,13 +2465,11 @@ impl Context {
         if batch.kind != "add" {
             return Err(engine_error("family creation requires an add batch"));
         }
-        let execution = self
-            .execution
-            .as_mut()
+        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution session"))?;
         noon::integration::publish_family_creation_with_presentation(
-            self.scene.integration_store(),
-            self.scene.root(),
+            store,
+            root,
             execution,
             &batch.targets(),
             z_index,
@@ -2522,7 +2522,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.shift_family(&target.family, x, y).map(|_| ()))
+        self.place(|scene| scene.shift_family(&target.family, x, y))
     }
     #[pyo3(name = "liveScaleFamily")]
     fn scale_family(
@@ -2632,7 +2632,7 @@ impl Context {
     ) -> PyResult<LayoutObservation> {
         self.require_active()?;
         self.same_family_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.effective_family_layout(&target.family))
                 .map(LayoutObservation::from_effective)
         } else {
@@ -2648,7 +2648,7 @@ impl Context {
     fn layout(&mut self, target: &MobjectHandle) -> PyResult<LayoutObservation> {
         self.require_active()?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.effective_layout(&target.handle))
                 .map(LayoutObservation::from_effective)
         } else {
@@ -2703,13 +2703,11 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        let execution = self
-            .execution
-            .as_mut()
+        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution session"))?;
         noon::integration::publish_borrowed_path_edit(
-            self.scene.integration_store(),
-            self.scene.root(),
+            store,
+            root,
             execution,
             noon::integration::BorrowedPathEdit::FamilyAnchorMode {
                 family: &target.family,
@@ -2725,7 +2723,7 @@ impl Context {
     ) -> PyResult<crate::path_query::PathQuery> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if let Some(execution) = self.execution.as_ref() {
+        let value = if let Some(execution) = scene_execution::session(&self.scene) {
             target.family.effective_own_path_query(execution)
         } else {
             target.family.own_path_query()
@@ -3359,9 +3357,7 @@ impl Context {
     #[pyo3(name = "liveZIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
         self.require_active()?;
-        let execution = self
-            .execution
-            .as_ref()
+        let execution = scene_execution::session(&self.scene)
             .ok_or_else(|| engine_error("no execution session"))?;
         noon::integration::effective_z_index(
             self.scene.integration_store(),
@@ -3373,19 +3369,10 @@ impl Context {
     #[pyo3(name = "liveSetZIndex")]
     fn set_z_index(&mut self, target: &LayoutAnchor, value: f64, family: bool) -> PyResult<()> {
         self.available()?;
-        let execution = self
-            .execution
-            .as_mut()
+        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_z_index(
-            self.scene.integration_store(),
-            self.scene.root(),
-            execution,
-            &target.anchor,
-            value,
-            family,
-        )
-        .map_err(engine_error)
+        noon::integration::publish_z_index(store, root, execution, &target.anchor, value, family)
+            .map_err(engine_error)
     }
     #[pyo3(name = "liveScaleLayout")]
     fn scale(
@@ -3467,20 +3454,9 @@ impl Context {
         candidate: &Composition,
     ) -> PyResult<crate::effects::StagedEffectPublication> {
         self.available()?;
-        let pending = if self.execution.is_none() {
-            let mut session = self.bootstrap()?;
-            let pending = self
-                .scene
-                .live(&mut session)
-                .prepare_composition(&candidate.request(), candidate.play_options)
-                .map_err(engine_error)?;
-            self.execution = Some(session);
-            pending
-        } else {
-            self.with_live(|live| {
-                live.prepare_composition(&candidate.request(), candidate.play_options)
-            })?
-        };
+        let pending = self.with_bootstrapped_live(|live| {
+            live.prepare_composition(&candidate.request(), candidate.play_options)
+        })?;
         self.staged(pending, candidate.bindings.clone())
     }
     fn publish_prepared_effects(
@@ -3489,9 +3465,7 @@ impl Context {
         mut staged: PyRefMut<'_, crate::effects::StagedEffectPublication>,
     ) -> PyResult<Option<Py<pyo3::types::PyDict>>> {
         self.available()?;
-        let session = self
-            .execution
-            .as_ref()
+        let session = scene_execution::session(&self.scene)
             .ok_or_else(|| engine_error("no execution session"))?;
         if session.runtime_identity() != staged.runtime {
             return Err(engine_error(noon::integration::AuthoringFailure::new(
@@ -3550,20 +3524,9 @@ impl Context {
     #[pyo3(name = "beginOrdinaryComposition")]
     fn begin(&mut self, candidate: &Composition) -> PyResult<()> {
         self.available()?;
-        if self.execution.is_none() {
-            let mut session = self.bootstrap()?;
-            let segment = self
-                .scene
-                .live(&mut session)
-                .declare_and_activate_composition(&candidate.request(), candidate.play_options)
-                .map_err(engine_error)?;
-            self.execution = Some(session);
-            self.segment = Some(segment);
-        } else {
-            self.segment = Some(self.with_live(|live| {
-                live.declare_and_activate_composition(&candidate.request(), candidate.play_options)
-            })?);
-        }
+        self.segment = Some(self.with_bootstrapped_live(|live| {
+            live.declare_and_activate_composition(&candidate.request(), candidate.play_options)
+        })?);
         self.bound_ids
             .extend(candidate.bindings.iter().map(|handle| handle.node_id()));
         self.segments += 1;
@@ -3580,7 +3543,7 @@ impl Context {
         self.available()?;
         self.same_store(source)?;
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error(
                 "declare live animations before beginning execution",
             ));
@@ -3609,9 +3572,9 @@ impl Context {
                 "playback duration is shorter than the live handoff",
             ));
         }
-        if self.execution.is_none() {
+        if !self.has_execution() {
             let session = self.bootstrap()?;
-            self.execution = Some(session);
+            self.attach_session(session)?;
         }
         self.observation_horizon = Some(duration);
         Ok(())
@@ -3672,13 +3635,11 @@ impl Context {
                 "requested time is outside the live observation range",
             )));
         }
-        let session = self
-            .execution
-            .as_mut()
+        let (store, _, session) = scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution session"))?;
         if time < session.frame().time {
             session
-                .seek_with_store(&mut self.scene.integration_store().borrow_mut(), time)
+                .seek_with_store(&mut store.borrow_mut(), time)
                 .map_err(|e| engine_error(e.to_string()))?;
         } else {
             session
@@ -3751,18 +3712,7 @@ impl Context {
     #[pyo3(name = "beginOrdinaryWait")]
     fn wait(&mut self, duration: f64) -> PyResult<()> {
         self.available()?;
-        if self.execution.is_none() {
-            let mut session = self.bootstrap()?;
-            let segment = self
-                .scene
-                .live(&mut session)
-                .wait_segment(duration)
-                .map_err(engine_error)?;
-            self.execution = Some(session);
-            self.segment = Some(segment);
-        } else {
-            self.segment = Some(self.with_live(|live| live.wait_segment(duration))?);
-        }
+        self.segment = Some(self.with_bootstrapped_live(|live| live.wait_segment(duration))?);
         self.segments += 1;
         Ok(())
     }
@@ -3826,7 +3776,7 @@ impl Context {
         if !sample_hz.is_finite() || sample_hz <= 0.0 {
             return Err(engine_error("sample rate must be positive and finite"));
         }
-        if self.execution.is_some() {
+        if self.has_execution() {
             return Err(engine_error("configure sample rate before execution"));
         }
         self.sample_hz = sample_hz;
@@ -3838,18 +3788,14 @@ impl Context {
         if self.terminal {
             return Ok(());
         }
-        if let Some(session) = self.execution.as_mut() {
+        if let Some((_, _, session)) = scene_execution::parts_mut(&mut self.scene) {
             if let Some(token) = session.pending_callback_token() {
                 session
                     .interrupt_required_callback_phase(token)
                     .map_err(engine_error)?;
             }
-            session
-                .retire_interactions_for_source_replacement(
-                    &mut self.scene.integration_store().borrow_mut(),
-                )
-                .map_err(|e| engine_error(e.to_string()))?;
         }
+        scene_execution::retire(&mut self.scene).map_err(|e| engine_error(e.to_string()))?;
         #[cfg(feature = "capture")]
         {
             self.effect_preparer = None;
@@ -3858,7 +3804,6 @@ impl Context {
         self.segment = None;
         self.pending_ack = None;
         self.requested_sample = None;
-        self.execution = None;
         Ok(())
     }
     #[pyo3(name="callbackRotateTransformAboutPoint",signature=(translation_x,translation_y,rotation,scale_x,scale_y,angle,pivot_x,pivot_y))]
@@ -4053,7 +3998,7 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let value = if self.execution.is_some() {
+        let value = if self.has_execution() {
             self.with_live(|live| live.effective_line_endpoints(&target.handle))?
         } else {
             target.handle.manim_line_endpoints().map_err(engine_error)?
@@ -4071,7 +4016,7 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let color = if self.execution.is_some() {
+        let color = if self.has_execution() {
             self.with_live(|live| live.effective_fill_color(&target.handle))?
         } else {
             target.handle.fill_color().map_err(engine_error)?
@@ -4088,7 +4033,7 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let color = if self.execution.is_some() {
+        let color = if self.has_execution() {
             self.with_live(|live| live.effective_stroke_color(&target.handle))?
         } else {
             target.handle.stroke_color().map_err(engine_error)?
@@ -4098,7 +4043,7 @@ impl Context {
     #[pyo3(name = "queryMobjectFillOpacity")]
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.effective(&target.handle))
                 .map(|v| v.fill_opacity())
         } else {
@@ -4108,7 +4053,7 @@ impl Context {
     #[pyo3(name = "queryMobjectStrokeOpacity")]
     fn query_stroke_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.effective(&target.handle))
                 .map(|v| v.stroke_opacity())
         } else {
@@ -4118,7 +4063,7 @@ impl Context {
     #[pyo3(name = "queryMobjectStrokeWidth")]
     fn query_stroke_width(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
-        if self.execution.is_some() {
+        if self.has_execution() {
             self.with_live(|live| live.effective_stroke_width(&target.handle))
         } else {
             target.handle.stroke_width().map_err(engine_error)
@@ -4137,19 +4082,40 @@ impl Context {
         my: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.move_to(
+        self.place(|scene| {
+            scene.move_to(
                 &target.handle,
                 noon::LiveLayoutTarget::Point(x, y),
                 (ex, ey),
                 (mx, my),
             )
-            .map(|_| ())
+        })
+    }
+    #[pyo3(name = "liveMoveToMobject")]
+    fn move_to_mobject(
+        &mut self,
+        target: &MobjectHandle,
+        reference: &MobjectHandle,
+        ex: f64,
+        ey: f64,
+        mx: f64,
+        my: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.same_store(reference)?;
+        self.place(|scene| {
+            scene.move_to(
+                &target.handle,
+                noon::LiveLayoutTarget::Mobject(&reference.handle),
+                (ex, ey),
+                (mx, my),
+            )
         })
     }
     fn runtime_identity(&self) -> PyResult<Option<u64>> {
         self.require_active()?;
-        Ok(self.execution.as_ref().map(|s| s.runtime_identity().get()))
+        Ok(scene_execution::session(&self.scene).map(|s| s.runtime_identity().get()))
     }
     #[pyo3(name = "liveSetStroke")]
     fn set_stroke(

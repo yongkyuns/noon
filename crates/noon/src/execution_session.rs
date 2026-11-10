@@ -52,7 +52,8 @@ pub use publication::{
     StructuralPublicationStats,
 };
 #[cfg(feature = "prepared-prefix")]
-pub use replay::{PrefixReader, SourceExecutionRequirement};
+pub use replay::PrefixReader;
+pub use replay::SourceExecutionRequirement;
 
 use callback::{CallbackPublicationReceipt, CallbackSchedule, PendingCallbackPhase};
 use noon_runtime::SignalTimelineSchedule;

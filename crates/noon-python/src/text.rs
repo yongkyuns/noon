@@ -183,7 +183,7 @@ pub(crate) fn live(
     let text = prepare(source, family, size, spacing, colors, face, markup)?;
     let opacity = noon::integration::text_color_channel(opacity).map_err(engine_error)?;
     let text = text.color(color(r, g, b, a)?).set_opacity(opacity);
-    if context.execution.is_some() {
+    if context.has_execution() {
         context.with_live(|live| live.create_text(text))
     } else {
         noon::Mobject::from_text(Rc::clone(context.scene.integration_store()), text)

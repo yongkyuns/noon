@@ -356,16 +356,18 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
             .run_time(2.0)
             .rate_func(RateFunction::Linear),
     )?;
-    let mut session = scene.execution_session()?;
-    let segment = scene.live(&mut session).play_animation(&animation)?;
-    scene.live(&mut session).advance_segment_to(segment, 1.0)?;
-    session.take_frame_changes();
-    let before = snapshot(&scene, &[&object, &unaffected]);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let unaffected_id = session.execution_object_id(unaffected.node_id());
-    let error = scene
-        .live(&mut session)
+    let mut execution = scene.into_execution()?;
+    let segment = execution.live().play_animation(&animation)?;
+    execution.live().advance_segment_to(segment, 1.0)?;
+    execution.session_mut().take_frame_changes();
+    let before = snapshot(execution.scene(), &[&object, &unaffected]);
+    let frame = execution.session().frame().clone();
+    let publication = execution.session().publication_context();
+    let unaffected_id = execution
+        .session()
+        .execution_object_id(unaffected.node_id());
+    let error = execution
+        .scene_mut()
         .arrange_family_with_options(
             &family,
             &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
@@ -373,51 +375,29 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
         .unwrap_err();
     assert!(matches!(
         error,
-        LiveSessionError::Authoring(AuthoringError::Unsupported(
-            UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
-        ))
+        AuthoringError::Unsupported(UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver)
     ));
     assert!(error
         .source()
         .unwrap()
-        .source()
-        .unwrap()
         .is::<UnsupportedAuthoringOperation>());
-    assert_live_unchanged(
-        &scene,
-        &mut session,
-        &[&object, &unaffected],
-        before,
-        frame,
-        publication,
-    );
-    assert_eq!(
-        scene
-            .live(&mut session)
-            .authored(&object)?
-            .transform
-            .translation
-            .x,
-        0.0
-    );
-    assert_eq!(
-        scene
-            .live(&mut session)
-            .effective(&object)?
-            .transform
-            .translation
-            .x,
-        2.0
-    );
-    let mut live = scene.live(&mut session);
+    assert_eq!(snapshot(execution.scene(), &[&object, &unaffected]), before);
+    assert_eq!(execution.session().frame(), &frame);
+    assert_eq!(execution.session().publication_context(), publication);
+    assert!(execution.session_mut().take_frame_changes().is_empty());
+    let mut live = execution.live();
+    assert_eq!(live.authored(&object)?.transform.translation.x, 0.0);
+    assert_eq!(live.effective(&object)?.transform.translation.x, 2.0);
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
-    live.arrange_family_with_options(
+    execution.scene_mut().arrange_family_with_options(
         &family,
         &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
     )?;
     assert_eq!(
-        session.execution_object_id(unaffected.node_id()),
+        execution
+            .session()
+            .execution_object_id(unaffected.node_id()),
         unaffected_id
     );
     Ok(())

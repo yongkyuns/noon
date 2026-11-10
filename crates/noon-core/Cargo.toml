@@ -1,8 +1,11 @@
 [package]
 name = "noon-core"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Renderer-independent semantic core for Noon"
 
 [features]

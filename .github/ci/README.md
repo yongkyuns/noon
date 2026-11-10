@@ -11,6 +11,178 @@ day. Every upload declares `retention-days` explicitly, including shared actions
 and failure diagnostics. The CI contract suite checks this policy with
 `node --test .github/ci/artifact-retention.test.mjs`.
 
+## Initial package candidates
+
+`Package candidates` qualifies the files that users install. It performs no
+registry upload, GitHub Release publication or deployment. Registry names remain
+pending in [#2433](https://github.com/yongkyuns/noon/issues/2433); local artifacts
+currently use version `0.1.0` and the existing checkout names.
+
+The source job builds an sdist and checks its complete Rust/resource closure,
+canonical Python modules, metadata, dependency declarations and notices. Each
+wheel job builds **from that sdist** with cibuildwheel 4.3.1, applies its normal
+auditwheel/delocate/delvewheel repair, audits the resulting archive and exercises
+the installed command from outside the checkout. Ordinary PR events test CPython
+3.11 on Linux x86_64, the native macOS runner architecture and Windows x64.
+Explicit dispatch or applying the `release-full-matrix` PR label builds CPython
+3.11–3.15 with the normal GIL on those same hosts. The label selects only its
+`labeled` event: later pushes remain minimum-version runs even while the label
+is present. Remove and reapply it for another deliberate full qualification.
+Unrelated label events skip candidate builds, and label-triggered runs are
+isolated from ordinary branch concurrency so they cannot cancel an active
+candidate. This permits full qualification before the new workflow reaches the
+default branch; it requires no publication or merge. The lightweight profile job
+tests and reads the actual event payload,
+then passes constant build selectors to the existing source/Rust/wheel jobs.
+Each host then requires exactly one repaired native wheel for every selected
+interpreter. The matrix verifier binds each archive report to the actual wheel's
+SHA256, rejects missing/duplicate/stale or unsupported ABI cells, and retains a
+JSON result even on failure. A successful build with an omitted interpreter is
+therefore an incomplete candidate. Exercise the event/output-protocol and
+matrix-completeness controls locally with
+`node --test .github/ci/package-candidate-profile.test.mjs .github/ci/check-wheel-matrix.test.mjs`.
+
+The Linux job also renders a PNG, probes/decodes a rational-FPS MP4 and runs the
+real export regressions against the repaired installed wheel. A successful run qualifies only
+its recorded interpreter, platform tags and host; it is not physical-device
+performance evidence or a free-threaded Python qualification.
+
+The Rust job builds the publishable workspace archives and tests an independent
+consumer patched exclusively to **extracted archives**. It covers minimal and
+default authoring, native host/export compilation and the WASM/browser graph.
+It also runs the packaged ordinary Rust first-lesson export example verbatim
+against those archives. FFmpeg decodes all 60 frames; independent checks verify
+two-second timing, title and equation pixels, simultaneous group motion, and the
+caption's late appearance. The movie, probe data and per-frame observations are
+retained with the package report. This is offscreen software-renderer evidence.
+The separate `--window` check copies the sole Rust application block from the
+packaged facade README verbatim into the outside-checkout consumer, builds it,
+and observes its actual X11 window under Xvfb. The observer checks title/equation
+pixels, initial and final shape positions, simultaneous motion and the late
+caption, then requests `WM_DELETE_WINDOW` and requires a clean process exit.
+It retains presented pixels, source/binary hashes, observations and failure logs.
+The ordinary default application does not enable playback controls, so this
+check makes no keyboard-control claim. Virtual-window/software-renderer checks
+do not qualify physical-device presentation or pacing.
+The reviewed dependency lock seeds the consumer, and the report rejects unreviewed
+registry versions/checksums or a dependency that escapes back to checkout source.
+`noon-python` is a wheel implementation package and is excluded from crates.io.
+The consumer runs the selected public API fixtures against archive-origin
+libraries. Repository integration tests that read root-level fixtures remain
+checkout qualification in the existing workflows; the archive check does not
+claim that each packaged crate's repository test suite is independently runnable.
+Production resources and normal library builds must remain self-contained.
+
+The Rust candidate also retains a dependency-notice inventory. The collector
+verifies cached crate bytes against `Cargo.lock`, copies upstream notices exactly,
+and can fill missing files only from the GitHub revision recorded in the verified
+crate. Its all-target normal/build dependency graph is explicitly a conservative
+superset, and it reports missing files and ancestor-file applicability separately.
+Every repaired wheel report lists its native payloads and bundled notices so any
+additional shared libraries can be matched to their redistribution terms. These
+are review inputs; candidate CI's report-only collection is not a license approval.
+
+```sh
+cargo fetch --locked
+python scripts/collect-release-licenses.py --output dist/release-licenses --fetch-missing --wheel dist/<wheel>.whl
+```
+
+Without `--report-only`, missing Cargo notice evidence returns a failing exit
+status after preserving the report. Review the complete evidence set and actual
+wheel repair output before publication; finding a license file alone does not
+resolve every asset, dependency or native library obligation.
+
+Local equivalents are:
+
+```sh
+python scripts/check-rust-packages.py --wasm --render --output dist/rust
+env -u WAYLAND_DISPLAY xvfb-run -a -s "-screen 0 1280x720x24 -dpi 96" \
+  python scripts/check-rust-packages.py --wasm --render --window --output dist/rust
+python -m build
+python scripts/check-python-package.py dist/<wheel>.whl --sdist dist/<sdist>.tar.gz --render --mp4
+```
+
+The Rust `--render` check needs a native graphics adapter plus FFmpeg/ffprobe;
+omit it only for a compile/API-only check, which does not qualify lesson output.
+The optional `--window` check additionally needs Xvfb/Xauth, the native X11
+runtime and the CI observer dependency `python-xlib==0.33`. Without that flag,
+the archive check does not claim native-window presentation.
+Use `--allow-dirty` explicitly for a local Rust packaging experiment; final
+candidates must identify a clean source commit. The existing optimized-production
+browser job additionally runs:
+
+```sh
+node scripts/package-browser-release.mjs --version 0.1.0 --output dist/browser
+```
+
+Run that command after the production `prepare`, build and `stamp` steps in
+`optimized-replay-artifact.mjs`. It rejects a development/replay build, stale
+hashes or a dirty/mismatched source. The archive retains the entire deployable
+`web/` tree, notices, original runtime build identity, source SHA and checksums.
+The browser's existing external CDN dependencies still require network access.
+No npm publication is needed to serve its `web/` directory.
+
+A separate platform job downloads that complete release archive, verifies its
+checksum/manifest and every payload, and extracts it outside the checkout.
+The existing product harness serves those exact bytes and exercises the packaged
+first-scene lesson through cold, warm and edited execution, rendered endpoints
+and nonblank pixel checks. Runtime/source identity and the complete extracted
+inventory are checked again afterward. No WASM rebuild or diagnostic replay
+package substitutes for the production archive. The job retains its report,
+pixels and failure evidence for the existing three days; this software-WebGL
+check is separate from physical-device performance and release deployment.
+
+Candidate artifacts still expire after **three days** under the policy above.
+At the approved release step, attach the exact qualified archives, checksum
+files and reports to the matching source tag's GitHub Release and record the
+hosted browser build identity there. Those retained release assets, rather than
+expiring CI artifacts or the moving Pages URL, are the durable browser version.
+Missing matrix cells, dependency redistribution evidence and physical-device
+qualification remain explicit release gates in #2433.
+
+### Assemble the approved release
+
+After the registry names, version and supported matrix are settled, update all
+package/dependency names together and qualify a new clean source commit. Record
+that commit, its tag, each candidate's checksum and the completed matrix in #2433.
+The current `0.1.0` filenames are candidates; their existence does not reserve a
+registry name or approve a release. A name, source, dependency or build-profile
+change requires fresh evidence for the affected artifacts.
+
+Use the `internal_dependencies` entries in the Rust `release-report.json` to
+confirm the publication order. With the current graph, dependency-first groups
+are:
+
+1. `noon-core`
+2. `noon-geometry`, `noon-text`, `noon-typst`
+3. `noon-compile`
+4. `noon-runtime`
+5. `noon`, `noon-render-wgpu`
+6. `noon-export`, `noon-native`, and optionally `noon-web`
+
+Publish each group only after its preceding dependencies are available from the
+registry. `noon-python` remains excluded. Serving the browser application does
+not require publishing `noon-web`; include that crate only if the release also
+promises a downstream Rust/WASM library. Recompute this order after renaming or
+changing dependency edges.
+
+At the separately approved publication step, run Cargo's registry-backed
+`publish --dry-run --locked` for each selected crate after its dependencies are
+available. Inspect any archive or resolved-lock difference from the qualified
+candidate and rerun the affected consumer checks before upload. After upload,
+verify the downloaded archive against the submitted candidate and run a clean
+consumer without local patches. The extracted-archive rehearsal cannot prove
+that a not-yet-published registry graph resolves successfully.
+
+For Python, upload the exact qualified sdist and repaired wheels; retain their
+checksums, native-library inventories and installed-artifact reports. Verify an
+installation from the published index outside the checkout, including the
+documented command and supported output. For the browser, attach the qualified
+static archive and reports to the same source tag, serve its `web/` directory,
+and verify the hosted runtime build identity against the retained manifest.
+Keep the release record's platform and feature claims limited to the matrix
+that actually passed.
+
 ## Qualification cadence
 
 The exhaustive pinned Manim raster oracle runs nightly at 06:17 UTC and on

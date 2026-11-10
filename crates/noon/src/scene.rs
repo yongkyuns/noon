@@ -9,7 +9,7 @@ use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,
 };
-pub use execution::{SceneExecution, SceneExecutionError};
+pub use execution::{host_execution, SceneExecution, SceneExecutionError};
 use noon_core::{
     AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,

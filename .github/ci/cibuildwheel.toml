@@ -1,0 +1,28 @@
+[tool.cibuildwheel]
+archs = ["auto64"]
+skip = ["*-musllinux_*", "cp3??t-*"]
+build-frontend = "build"
+test-command = "python {project}/scripts/check-python-package.py --installed"
+audit-command = "python {project}/scripts/check-python-package.py --check-only {wheel}"
+
+[tool.cibuildwheel.environment]
+CARGO_INCREMENTAL = "0"
+CARGO_BUILD_JOBS = "2"
+RUSTUP_TOOLCHAIN = "1.98.1"
+
+[tool.cibuildwheel.linux]
+manylinux-x86_64-image = "manylinux_2_28"
+before-all = "bash {project}/scripts/ci-python-wheel-linux.sh"
+
+[tool.cibuildwheel.linux.environment]
+PATH = "$HOME/.cargo/bin:$PATH"
+CARGO_INCREMENTAL = "0"
+CARGO_BUILD_JOBS = "2"
+CARGO_TARGET_DIR = "/tmp/noon-wheel-target"
+RUSTUP_TOOLCHAIN = "1.98.1"
+
+[tool.cibuildwheel.macos.environment]
+MACOSX_DEPLOYMENT_TARGET = "12.0"
+CARGO_INCREMENTAL = "0"
+CARGO_BUILD_JOBS = "2"
+RUSTUP_TOOLCHAIN = "1.98.1"

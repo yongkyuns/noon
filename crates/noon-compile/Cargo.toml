@@ -1,14 +1,16 @@
 [package]
 name = "noon-compile"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-description = "Typed semantic lowering into renderer-independent execution data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 readme = "README.md"
+description = "Typed semantic lowering into renderer-independent execution data"
 
 [dependencies]
-noon-core = { path = "../noon-core" }
-noon-geometry = { path = "../noon-geometry" }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-geometry = { version = "0.1.0", path = "../noon-geometry" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

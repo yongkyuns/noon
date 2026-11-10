@@ -1,8 +1,11 @@
 [package]
 name = "noon-native"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Native window host for typed Noon execution sessions"
 
 [features]
@@ -16,9 +19,9 @@ required-features = ["wgsl-effects"]
 
 [dependencies]
 cpal = { version = "=0.18.2", default-features = false, optional = true }
-noon = { path = "../noon", features = ["prepared-prefix"] }
-noon-core = { path = "../noon-core" }
-noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["native"] }
+noon = { version = "0.1.0", path = "../noon", features = ["prepared-prefix"] }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-render-wgpu = { version = "0.1.0", path = "../noon-render-wgpu", default-features = false, features = ["native"] }
 pollster = "1.0"
 wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
 winit = "0.30.13"

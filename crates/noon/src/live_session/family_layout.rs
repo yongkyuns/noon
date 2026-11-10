@@ -572,23 +572,6 @@ impl LiveSession<'_> {
         .map_err(LiveSessionError::from)
     }
 
-    pub fn align_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
-        axis: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_align_family_to(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            target,
-            axis,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
     /// Place an entire object/family from selected effective bounds. All anchor
     /// resolution and driver validation precede one local mutation transaction.
     pub fn next_layout_to_aligned(

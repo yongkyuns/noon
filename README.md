@@ -86,8 +86,8 @@ PYTHONPATH=build/python python3 -m noon_native web/python/examples/ordinary_affi
 
 This is the native CPython path, not the browser exporter. See
 [Native CPython](REFERENCE.md#native-cpython) for headless execution, snapshots,
-scene selection, and current limitations. The native Python extension is
-currently built from source.
+scene selection, and current limitations. This command builds the extension
+from the checkout; prepublication wheel candidates are described below.
 
 ### Rust
 
@@ -104,6 +104,14 @@ and sequential animation. Rust also runs as WebAssembly; host setup differs
 from the native runner.
 
 For a local browser build, follow the [web guide](web/README.md).
+
+## Release candidates
+
+Registry names are not yet finalized, and the existing `noon` entries on
+crates.io and PyPI are unrelated projects. The current checkout supports
+packaging and qualifying Rust crates, native Python wheels, and versioned
+browser archives without publishing them. For the commands, supported
+platforms, and limitations, see [initial release candidates](REFERENCE.md#initial-release-candidates).
 
 ## Current scope and Manim compatibility
 

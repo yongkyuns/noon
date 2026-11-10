@@ -20,3 +20,9 @@ CPU shaping, glyph rasterization and Typst compilation remain provider dependenc
 Platform hosts own native window or browser-canvas lifecycle, surface creation/configuration, event-loop/frame scheduling, input translation, presentation, and recovery policy. `noon-native` owns native lifecycle; `noon-web` owns browser/WASM integration. Keeping those concerns outside this crate leaves the renderer reusable by both hosts.
 
 This boundary follows `docs/architecture.md` and the Phase A5 normalization rules in #960.
+
+## Release candidates
+
+Registry names are still being selected in [#2433](https://github.com/yongkyuns/noon/issues/2433).
+The current 0.1.0 artifacts are local candidates; the existing crates.io/PyPI
+`noon` projects are unrelated. Rust builds require version 1.98.1 or newer.

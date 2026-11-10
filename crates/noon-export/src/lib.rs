@@ -1,9 +1,9 @@
 //! Native, windowless frame capture over Noon's shared execution and renderer.
 //!
 //! This crate is the native GPU/output dependency boundary: it does not depend
-//! on the window host, Python, WASM, or browser infrastructure. Scheduling and
-//! continuation semantics remain in `noon::integration::ExportFrames`; retained
-//! preparation and composition remain in `noon-render-wgpu`.
+//! on the window host, Python, WASM, or browser infrastructure. Execution and
+//! continuation semantics remain in `noon`; output uses its shared frame policy.
+//! Retained rendering preparation and composition remain in `noon-render-wgpu`.
 //!
 //! The first implementation is deliberately serial. One GPU target, one staging
 //! buffer and one reusable CPU pixel buffer belong to a run. The consumer borrows

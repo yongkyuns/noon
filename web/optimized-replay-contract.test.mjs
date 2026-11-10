@@ -154,5 +154,12 @@ test("workflow retains production before replay and retries browsers without com
   assert.match(browser, /optimized-replay-artifact\.mjs verify replay \./);
   assert.match(browser, /node scripts\/deterministic-replay-smoke\.mjs/);
   assert.doesNotMatch(browser, /cargo |rustup |wasm-pack |build-web-demo\.sh/);
+  const release = workflow.split("\n  browser-release:\n")[1]?.split("\n  optimized-replay:\n")[0];
+  assert.ok(release, "the complete production release needs its own archive consumer");
+  assert.match(release, /needs: optimized-wasm/);
+  assert.match(release, /name: browser-release-candidate/);
+  assert.match(release, /check-browser-release\.mjs --archive/);
+  assert.match(release, /if: always\(\)/);
+  assert.doesNotMatch(release, /optimized-replay-pkg|optimized-web-pkg|cargo |rustup |wasm-pack |build-web-demo\.sh/);
   assert.doesNotMatch(workflow, /continue-on-error: true|CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS|NOON_WASM_PROFILE:.*dev|NOON_WASM_SKIP_OPT:.*1/);
 });
