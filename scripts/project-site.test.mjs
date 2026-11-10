@@ -26,19 +26,20 @@ test("homepage and its section anchors do not redirect", () => {
   assert.equal(playgroundRedirect(new URL("https://example.test/noon/#start")), null);
 });
 
-test("every selected clip and editable link resolves to a current curated source", async () => {
+test("every selected live scene and README clip resolves to a current curated source", async () => {
   const selected = JSON.parse(await read("web/site/examples.json"));
   const gallery = JSON.parse(await read("web/python/examples/noon_showcase_manifest.json"));
   const html = await read("web/site/index.html");
   const readme = await read("README.md");
   assert.equal(new Set(selected.map(entry => entry.id)).size, selected.length);
+  assert.equal([...html.matchAll(/data-demo="/g)].length, selected.length);
   for (const { id, start, end } of selected) {
     const entry = gallery.entries.find(item => item.id === id);
     assert.ok(entry, id);
     assert.ok(Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start && end <= entry.duration);
     await readFile(path.join(root, "web", entry.path));
     await readFile(path.join(root, "web", entry.thumbnail));
-    assert.ok(html.includes(`${id}.mp4`) && html.includes(`example=${id}`), id);
+    assert.ok(html.includes(`data-demo="${id}"`) && html.includes(`example=${id}`), id);
     assert.ok(readme.includes(`${id}.gif`) && readme.includes(`example=${id}`), id);
   }
   for (const match of html.matchAll(/example=(showcase-[a-z0-9-]+)/g)) {
@@ -46,16 +47,14 @@ test("every selected clip and editable link resolves to a current curated source
   }
 });
 
-test("homepage is usable without JS, never autoplays, and loads no third-party presentation assets", async () => {
+test("homepage keeps no-JS navigation but uses live scenes rather than videos or posters", async () => {
   const html = await read("web/site/index.html");
   assert.match(html, /class="skip" href="#main"/);
   assert.equal([...html.matchAll(/<h1\b/g)].length, 1);
-  for (const [video] of html.matchAll(/<video\b[^>]*>/g)) {
-    assert.match(video, /\bcontrols\b/);
-    assert.match(video, /preload="none"/);
-    assert.match(video, /aria-label="[^"]+"/);
-    assert.doesNotMatch(video, /\bautoplay\b/);
-  }
+  assert.doesNotMatch(html, /<video\b|demo-poster|data-demo-open/);
+  assert.match(html, /data-frame-src="\.\/embed\.html\?/);
+  assert.match(html, /<noscript>/);
+  assert.match(await read("web/site/site.js"), /installPreviews/);
   assert.doesNotMatch(html, /(?:src|poster)="https?:/);
   for (const [, id] of html.matchAll(/href="#([^"]+)"/g)) assert.ok(html.includes(`id="${id}"`), id);
   assert.match(await read("web/site/site.css"), /prefers-reduced-motion/);

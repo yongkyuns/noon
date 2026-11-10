@@ -146,13 +146,11 @@ nav a {
   border:1px solid var(--rule);
   padding:.6rem;
   background:#e6e6df}
-.featured video,.example video {
+.featured .demo-card,.example .demo-card {
   display:block;
   width:100%;
-  height:auto;
-  aspect-ratio:16/9;
-  background:#0d111b;
-  object-fit:contain}
+  background:#0d111b}
+
 .featured figcaption {
   display:flex;
   justify-content:space-between;

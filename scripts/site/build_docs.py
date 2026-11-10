@@ -140,18 +140,18 @@ class Links(HTMLParser):
 
 
 def build_embed(root: Path, site: Path):
-    """Reuse the original shell, main.js and its teardown; no editor bootstrap."""
+    """Reuse the gallery shell, editor, automatic startup and hot reload."""
     markup = (root / 'web/index.html').read_text(encoding='utf-8')
     bootstrap = '<script type="module" src="./python-editor-bootstrap.js"></script>'
     main = '<script type="module" src="./main.js"></script>'
     if (markup.count(bootstrap) != 1 or markup.count(main) != 1 or
             markup.count('</head>') != 1 or markup.count('<html lang="en">') != 1):
         raise ValueError('Unexpected playground shell: re-review embed generation')
-    markup = markup.replace(bootstrap, '')
     markup = markup.replace('<html lang="en">', '<html lang="en" data-noon-embed="true">', 1)
     markup = markup.replace('</head>', '<script src="./site/theme-init.js"></script><link rel="stylesheet" href="./site/embed.css"></head>', 1)
-    # A classic script runs after the DOM is parsed, before the module initializes.
-    markup = markup.replace(main, '<script src="./site/embed-host.js"></script>\n' + main +
+    # Configure presentation/auto-run before the unchanged gallery bootstrap.
+    markup = markup.replace(bootstrap, '<script type="module" src="./site/embed-host.js"></script>\n' + bootstrap, 1)
+    markup = markup.replace(main, main +
         '<script type="module">import {installTheme} from "./site/theme.js"; installTheme();</script>', 1)
     (site / 'embed.html').write_text(markup, encoding='utf-8')
 
@@ -196,16 +196,11 @@ class Builder:
         if identifier not in self.selected or identifier == 'showcase-triangle-light':
             raise ValueError(f'Unselected documentation demo: {identifier}')
         entry = self.examples[identifier]
-        full = f'../../playground.html?catalog=showcase&amp;example={identifier}'
         frame = f'../../embed.html?catalog=showcase&amp;example={identifier}'
-        image = '../../' + entry['thumbnail']
         return f'''<figure class="demo-card" data-demo="{identifier}" data-frame-src="{frame}">
-<img class="demo-poster" src="{E(image)}" alt="Captured frame: {E(entry['title'])}" loading="lazy" width="960" height="540">
-<div class="demo-actions"><button type="button" data-demo-open>Open interactive preview</button>
-<button type="button" data-demo-close hidden>Close preview</button><a href="{full}">Open full editor</a>
-<a href="../../{E(entry['path'])}">Python source</a></div>
-<div data-demo-frame></div><figcaption data-demo-status role="status">Captured poster. No runtime loaded.</figcaption>
-<noscript><p>JavaScript is disabled. Open the full editor to run this example.</p></noscript></figure>'''
+<div data-demo-frame></div><p data-demo-status role="status">Loading live scene…</p>
+<button type="button" data-demo-retry hidden>Retry</button>
+<noscript><p>JavaScript is required for this live scene. <a href="../../{E(entry['path'])}">Read Python source</a>.</p></noscript></figure>'''
 
     def api_index(self):
         rows = []
@@ -257,7 +252,7 @@ class Builder:
         return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark"><meta name="description" content="{E(title)} — Noon documentation for source revision {self.revision[:7]}.">
-<title>{E(title)} — Noon</title><script src="../theme-init.js"></script><link rel="stylesheet" href="../docs.css">
+<title>{E(title)} — Noon</title><script src="../theme-init.js"></script><link rel="stylesheet" href="../docs.css"><link rel="stylesheet" href="../live.css">
 <script type="module" src="../docs.js"></script></head><body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header"><a class="wordmark" href="../../index.html" aria-label="Noon home">noon<span>.</span></a>

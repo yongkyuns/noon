@@ -7,16 +7,17 @@ package named `noon` from a public registry.
 
 ## Browser
 
-Open an example below, then press **Run** in the preview. The preview executes
-the same Rust/WASM and Pyodide path as the full playground. **Open full editor**
-lets you change the source. The first run downloads runtime resources, so it
-requires network access and can take longer than subsequent runs.
+The scene below starts automatically using the same Rust/WASM and Pyodide path
+as the full playground. Switch to **Code**, change its Python, then switch back
+to **View**. A typing pause hot-loads the edited scene through the gallery's
+existing auto-run behavior. No separate Run step is needed.
+
+The first load downloads runtime resources and can take longer than later runs.
 
 <!-- noon:demo showcase-first-scene -->
 
-Preview activation is explicit. Reading a guide does not start WASM or Python.
-Only one documentation preview is open at a time; closing it, opening another,
-or hiding the tab retires its embedded browsing context. Reopening starts fresh.
+Switching views keeps the same editor, draft and live scene. Each embedded
+example runs independently. Leaving the page retires its runtime workers.
 
 ## Native Python
 

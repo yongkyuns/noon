@@ -6,18 +6,19 @@ when reporting a problem.
 
 ## The preview is blank
 
-Opening the preview loads its interface; **Run** starts source execution. Check
-the status and expand diagnostics. The first execution needs network access for
-Pyodide resources. Confirm the full editor can run the same unchanged example.
-An unavailable GPU backend, worker startup failure and a Python exception require
-different fixes; do not infer success from the presence of an empty canvas.
+Scenes start automatically. The first execution needs network access for Pyodide
+and a supported graphics backend. A loading message is not proof of rendered
+output. A failed document load has a **Retry** action. For Python/runtime errors,
+switch to **Code** and inspect the existing gallery diagnostics; correcting the
+source runs it again automatically.
 
-## A preview disappeared
+## Editing does not update the view
 
-Documentation previews are released when the tab is hidden, another preview is
-opened, or Close is pressed. This avoids leaving several rendering contexts and
-Python workers active. Reopen and Run explicitly. For sustained editing, use the
-full editor instead of the documentation preview.
+Wait for a typing pause or finish an input-method composition. The embed uses
+the gallery's debounced auto-run, not execution after each partial keystroke.
+View/Code changes retain the draft; they do not submit source or restart playback.
+Use the [full playground](../../playground.html?catalog=showcase) to inspect
+playback and recovery controls or compare the same unchanged source.
 
 ## Import or native build fails
 

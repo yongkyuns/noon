@@ -1,0 +1,9 @@
+/* Shared by homepage and documentation: no screenshots or activation chrome. */
+.demo-card{position:relative;margin:0;min-width:0;overflow:hidden;border-radius:.35rem;background:var(--paper,#111821)}
+.demo-card [data-demo-frame]{position:relative;width:100%;aspect-ratio:16/9;min-height:11rem}
+.demo-card iframe{position:absolute;inset:0;display:block;width:100%;height:100%;border:0;background:transparent}
+.demo-card[data-embed-view=code] [data-demo-frame]{aspect-ratio:auto;height:26rem}
+.demo-card [data-demo-status]{position:absolute;left:.5rem;bottom:.5rem;max-width:calc(100% - 1rem);padding:.45rem .7rem;margin:0;border:1px solid var(--line,var(--rule,#394750));border-radius:.3rem;color:var(--ink,#edf0f2);background:var(--paper,#111821);font:.8rem/1.4 ui-sans-serif,system-ui,sans-serif}
+.demo-card [data-demo-retry]{position:absolute;right:.5rem;top:.5rem;min-height:44px;padding:.5rem .8rem;border:1px solid var(--line,var(--rule,#394750));border-radius:.3rem;color:var(--ink,#edf0f2);background:var(--paper,#111821);cursor:pointer}
+.demo-card [hidden]{display:none!important}
+.docs-content .demo-card{margin:1.5rem 0 2rem;border:1px solid var(--line)}

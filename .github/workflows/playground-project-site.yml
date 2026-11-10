@@ -14,6 +14,10 @@ on:
       - 'web/python/**'
       - 'web/index.html'
       - 'web/main.js'
+      - 'web/python-editor*.js'
+      - 'web/live-authoring-bootstrap.js'
+      - 'web/playground-run-request-router.js'
+      - 'web/playground-playback-controls.js'
       - 'web/project-site*.mjs'
       - 'scripts/site/**'
       - 'scripts/build-project-docs.sh'
@@ -43,6 +47,7 @@ jobs:
           node --test scripts/project-site.test.mjs web/project-site-editorial.test.mjs web/project-site-controls.test.mjs
           node --check scripts/capture-project-media.mjs
           node --check scripts/project-site-smoke.mjs
+          node --check scripts/project-site-embed-smoke.mjs
       - name: Build the exact-source browser runtime
         uses: ./.github/actions/dev-wasm-build
       - name: Install pinned capture tools
