@@ -88,7 +88,7 @@ pub(crate) fn live(
     // Match consumed WASM arguments on success and rejection.
     let options = input.take()?;
     context.available()?;
-    if context.execution.is_some() {
+    if context.has_execution() {
         context.with_live(|live| live.create_image(options))
     } else {
         noon::Mobject::from_image(

@@ -218,9 +218,7 @@ impl Context {
         let segment = self
             .segment
             .ok_or_else(|| engine_error("no pending segment"))?;
-        let session = self
-            .execution
-            .as_mut()
+        let (store, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution"))?;
         loop {
             let requested = match self.requested_sample {
@@ -273,9 +271,9 @@ impl Context {
                 .saturating_add(1)
                 .max(((requested * self.sample_hz).floor() as u64).saturating_add(1));
             if session.frame().time >= segment.end_time() {
-                self.scene
-                    .live(session)
-                    .complete_segment(segment)
+                session
+                    .complete_segment(&mut store.borrow_mut(), segment)
+                    .map_err(noon::LiveSessionError::from)
                     .map_err(engine_error)?;
                 self.segment = None;
                 return event(py, "complete", None);
@@ -290,9 +288,7 @@ impl Context {
         value: &Bound<'_, PyDict>,
     ) -> PyResult<Py<PyDict>> {
         self.require_active()?;
-        let session = self
-            .execution
-            .as_mut()
+        let (_, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution"))?;
         let expected = session
             .pending_callback_token()
@@ -409,9 +405,7 @@ impl Context {
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyDict>> {
         self.require_active()?;
-        let session = self
-            .execution
-            .as_mut()
+        let (_, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution"))?;
         let expected = session
             .pending_callback_token()
@@ -447,9 +441,7 @@ impl Context {
         message: &str,
     ) -> PyResult<()> {
         self.require_active()?;
-        let session = self
-            .execution
-            .as_mut()
+        let (_, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution"))?;
         let expected = session
             .pending_callback_token()

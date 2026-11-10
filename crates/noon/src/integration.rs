@@ -89,6 +89,7 @@ pub use crate::path_queries::{
     effective_vector_boundary_points, effective_vector_boundary_points_3d,
 };
 pub use crate::point_matching::publish_match_points;
+pub use crate::scene::host_execution as scene_execution;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
 #[cfg(feature = "native-text")]
 pub use crate::text_authoring::NATIVE_POINT_TO_SCENE_SCALE;

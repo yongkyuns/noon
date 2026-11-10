@@ -65,7 +65,7 @@ pub(crate) fn live(
             .with_font_size(size)
             .color(color)
             .set_opacity(opacity);
-        if context.execution.is_some() {
+        if context.has_execution() {
             context.with_live(|live| live.create_math_typst(text))
         } else {
             noon::Mobject::from_math_typst(Rc::clone(context.scene.integration_store()), text)
@@ -76,7 +76,7 @@ pub(crate) fn live(
             .with_font_size(size)
             .color(color)
             .set_opacity(opacity);
-        if context.execution.is_some() {
+        if context.has_execution() {
             context.with_live(|live| live.create_typst(text))
         } else {
             noon::Mobject::from_typst(Rc::clone(context.scene.integration_store()), text)

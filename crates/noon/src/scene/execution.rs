@@ -60,13 +60,7 @@ impl Scene {
         mut self,
         session: ExecutionSession,
     ) -> Result<SceneExecution, SceneExecutionError> {
-        if self.execution.is_some() {
-            return Err(SceneExecutionError::AlreadyExecuting);
-        }
-        session
-            .require_scene_owner(&self.store.borrow(), self.root)
-            .map_err(SceneExecutionError::Publication)?;
-        self.install_execution(session);
+        host_execution::attach(&mut self, session)?;
         Ok(SceneExecution { scene: self })
     }
 
@@ -105,6 +99,48 @@ impl Scene {
             execution: None,
             source_generation: None,
         })
+    }
+}
+
+/// Execution services for hosts that retain an authoring Scene across bootstrap.
+pub mod host_execution {
+    use super::*;
+
+    /// Install a prepared session only if it belongs to this exact Scene.
+    pub fn attach(scene: &mut Scene, session: ExecutionSession) -> Result<(), SceneExecutionError> {
+        if scene.execution.is_some() {
+            return Err(SceneExecutionError::AlreadyExecuting);
+        }
+        session
+            .require_scene_owner(&scene.store.borrow(), scene.root)
+            .map_err(SceneExecutionError::Publication)?;
+        scene.install_execution(session);
+        Ok(())
+    }
+
+    pub fn session(scene: &Scene) -> Option<&ExecutionSession> {
+        scene.running_execution()
+    }
+
+    /// Borrow the original store and root alongside the installed execution.
+    pub fn parts_mut(
+        scene: &mut Scene,
+    ) -> Option<(
+        &Rc<RefCell<SemanticStore>>,
+        SemanticNodeId,
+        &mut ExecutionSession,
+    )> {
+        Some((&scene.store, scene.root, scene.execution.as_mut()?))
+    }
+
+    /// Retire input-owned state before discarding execution. Keep the authored
+    /// Scene so existing handles retain their semantic identity.
+    pub fn retire(scene: &mut Scene) -> Result<(), ExecutionSessionInputError> {
+        if let Some((store, _, session)) = parts_mut(scene) {
+            session.retire_interactions_for_source_replacement(&mut store.borrow_mut())?;
+        }
+        scene.execution = None;
+        Ok(())
     }
 }
 

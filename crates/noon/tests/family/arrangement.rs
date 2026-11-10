@@ -69,12 +69,12 @@ fn selected_member_options_are_shared_by_authored_and_live_arrangement() {
             for object in [&first, &second, &third, &fourth] {
                 scene.add(object).unwrap();
             }
-            let mut execution = scene.execution_session().unwrap();
-            let mut live = scene.live(&mut execution);
-            let result = live.arrange_family_with_options(&outer, &options).unwrap();
+            let mut execution = scene.into_execution().unwrap();
+            let scene = execution.scene_mut();
+            let result = scene.arrange_family_with_options(&outer, &options).unwrap();
             assert_eq!(result.impacts().len(), 2);
-            close(live.effective_layout(&third).unwrap().center, (3.25, 0.0));
-            close(live.effective_layout(&fourth).unwrap().center, (7.25, 0.0));
+            close(scene.effective_layout(&third).unwrap().center, (3.25, 0.0));
+            close(scene.effective_layout(&fourth).unwrap().center, (7.25, 0.0));
         } else {
             outer.arrange_with_options(&options).unwrap();
             close(third.center().unwrap(), (3.25, 0.0));
@@ -107,16 +107,20 @@ fn late_invalid_selection_and_foreign_aligner_never_publish_a_prefix() {
     for object in [&first, &second] {
         scene.add(object).unwrap();
     }
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
+    let mut execution = scene.into_execution().unwrap();
+    let scene = execution.scene_mut();
     let before = scene.integration_store().borrow().scene_revision();
-    assert!(live.arrange_family_with_options(&family, &options).is_err());
+    assert!(scene
+        .arrange_family_with_options(&family, &options)
+        .is_err());
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    close(live.effective_layout(&second).unwrap().center, (0.0, 0.0));
+    close(scene.effective_layout(&second).unwrap().center, (0.0, 0.0));
     let mut other = Scene::new();
     options.member_index = None;
     options.aligner = Some(LayoutAnchor::from(&other.square(1.0).unwrap()));
-    assert!(live.arrange_family_with_options(&family, &options).is_err());
+    assert!(scene
+        .arrange_family_with_options(&family, &options)
+        .is_err());
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
 }
 

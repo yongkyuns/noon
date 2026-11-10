@@ -2976,22 +2976,6 @@ impl<'a> LiveSession<'a> {
         .map_err(LiveSessionError::from)
     }
 
-    /// Stage sequential layout observations and publish one atomic family edit.
-    pub fn arrange_family_with_options(
-        &mut self,
-        family: &MobjectFamily,
-        options: &crate::FamilyArrangeOptions,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_arrange_family(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            options,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
     /// Grid alignment and sizing consume coherent live bounds and publish atomically.
     pub fn arrange_family_in_grid_with_options(
         &mut self,
@@ -6992,16 +6976,17 @@ mod recursive_composition_tests {
         let first = scene.square(0.4).unwrap();
         let second = scene.circle(0.2).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let before = session.publication_context();
-        let mut live = scene.live(&mut session);
+        let session = scene.execution_session().unwrap();
+        scene.install_execution(session);
+        let before = scene.owned_execution().publication_context();
 
-        live.arrange_family_with_options(
-            &family,
-            &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
-        )
-        .unwrap();
-        let publication = live.session.publication_context();
+        scene
+            .arrange_family_with_options(
+                &family,
+                &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+            )
+            .unwrap();
+        let publication = scene.owned_execution().publication_context();
         let first_center = first.center().unwrap();
         let second_center = second.center().unwrap();
 
@@ -7034,42 +7019,64 @@ mod recursive_composition_tests {
                 scene.add(&first).unwrap();
                 scene.add(&second).unwrap();
             }
-            let mut session = scene.execution_session().unwrap();
-            let mut live = scene.live(&mut session);
-            let before = live.session.publication_context();
-            let unrelated_before = live.effective(&unrelated).unwrap();
+            let session = scene.execution_session().unwrap();
+            scene.install_execution(session);
+            let before = scene.owned_execution().publication_context();
+            let unrelated_before = scene.owned_live().effective(&unrelated).unwrap();
 
-            assert!(live
+            assert!(scene
                 .arrange_family_with_options(
                     &outer,
                     &crate::FamilyArrangeOptions::new(1.0, 0.0, f64::NAN, true)
                 )
                 .is_err());
-            assert_eq!(live.session.publication_context(), before);
+            assert_eq!(scene.owned_execution().publication_context(), before);
             assert_eq!(first.center().unwrap(), (0.0, 0.0));
             assert_eq!(second.center().unwrap(), (2.0, 0.0));
 
-            live.arrange_family_with_options(
-                &outer,
-                &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
-            )
-            .unwrap();
+            scene
+                .arrange_family_with_options(
+                    &outer,
+                    &crate::FamilyArrangeOptions::new(1.0, 0.0, 0.2, true),
+                )
+                .unwrap();
             assert_eq!(
-                live.session.publication_context().scene_revision(),
+                scene
+                    .owned_execution()
+                    .publication_context()
+                    .scene_revision(),
                 before.scene_revision().checked_next().unwrap()
             );
             assert!((first.center().unwrap().0 + 1.0).abs() < 1e-6);
             assert!((second.center().unwrap().0 - 1.0).abs() < 1e-6);
-            let unrelated_after = live.effective(&unrelated).unwrap();
+            let unrelated_after = scene.owned_live().effective(&unrelated).unwrap();
             assert_eq!(unrelated_after.transform, unrelated_before.transform);
             assert_eq!(unrelated_after.style, unrelated_before.style);
             assert_eq!(unrelated_after.appearance, unrelated_before.appearance);
             if mounted {
                 assert!(
-                    (live.effective(&first).unwrap().transform.translation.x + 1.0).abs() < 1e-6
+                    (scene
+                        .owned_live()
+                        .effective(&first)
+                        .unwrap()
+                        .transform
+                        .translation
+                        .x
+                        + 1.0)
+                        .abs()
+                        < 1e-6
                 );
                 assert!(
-                    (live.effective(&second).unwrap().transform.translation.x - 1.0).abs() < 1e-6
+                    (scene
+                        .owned_live()
+                        .effective(&second)
+                        .unwrap()
+                        .transform
+                        .translation
+                        .x
+                        - 1.0)
+                        .abs()
+                        < 1e-6
                 );
             }
         }
