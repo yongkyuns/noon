@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="API entry points, qualified surface areas, and source-of-truth references."><meta name="color-scheme" content="light dark">
+<title>API reference — Noon</title><link rel="stylesheet" href="../site.css"><script type="module" src="../site.js"></script></head>
+<body><a class="skip" href="#main">Skip to content</a>
+<header class="wrap header"><a class="wordmark" href="../../" aria-label="Noon home">noon<span aria-hidden="true">.</span></a>
+<nav aria-label="Main navigation"><a href="../../">Home</a><a href="getting-started.html">Docs</a><a href="../../playground.html?catalog=showcase">Playground</a><a href="https://github.com/yongkyuns/noon">GitHub</a><button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle color theme">Theme</button></nav></header>
+<main class="wrap docs-layout" id="main"><aside class="docs-sidebar" aria-label="Documentation">
+<span class="sidebar-label">Documentation</span><a href="getting-started.html">Getting started</a><a href="guide.html">User guide</a><a href="examples.html">Examples</a><a href="api.html" aria-current="page">API reference</a><a href="architecture.html">Architecture</a></aside>
+<article class="docs-content"><div class="docs-breadcrumb"><a href="../../">Noon</a> / Docs / API reference</div>
+<h1>API reference</h1>
+<p class="docs-lede">The public API is evolving. This page identifies the main authoring surfaces and canonical source paths rather than presenting an unverified exhaustive generated reference.</p>
+<h2 id="python">Python authoring</h2>
+<table><thead><tr><th>Surface</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>Scene</code>, <code>construct</code></td><td>Scene and sequential authoring entry point</td></tr>
+<tr><td><code>Circle</code>, <code>Square</code>, <code>Text</code></td><td>Basic geometry and text declarations</td></tr>
+<tr><td><code>self.play(...)</code>, <code>self.wait(...)</code></td><td>Animation scheduling and authored time</td></tr>
+<tr><td><code>Create</code>, <code>Transform</code>, <code>.animate</code></td><td>Common animation declarations</td></tr>
+<tr><td><code>self.next_section(name)</code></td><td>Optional lesson navigation markers</td></tr></tbody></table>
+<p>Source: <a href="https://github.com/yongkyuns/noon/blob/master/web/python/noon.py"><code>web/python/noon.py</code></a> and the <a href="https://github.com/yongkyuns/noon/tree/master/web/python/examples">Python example corpus</a>. Manim compatibility and browser/native limitations are described in the <a href="https://github.com/yongkyuns/noon/blob/master/REFERENCE.md">implementation reference</a>.</p>
+<h2 id="rust">Rust authoring</h2><p>Rust callers work directly with typed scene operations and execution sessions. Begin with <a href="https://github.com/yongkyuns/noon/tree/master/crates/noon/src">noon crate source</a>, <a href="https://github.com/yongkyuns/noon/tree/master/crates/noon-native/examples">native examples</a>, and the <a href="https://github.com/yongkyuns/noon/blob/master/REFERENCE.md#authoring">Rust authoring section</a>.</p>
+<h2 id="web">Browser and WASM</h2><p>The browser shell loads an optimized <code>noon-web</code> WASM package and optionally Python through Pyodide. The browser playground exercises real public interfaces; it is not a separate mock engine. See <a href="https://github.com/yongkyuns/noon/tree/master/crates/noon-web">web host source</a> and <a href="https://github.com/yongkyuns/noon/blob/master/web/README.md">web setup</a>.</p>
+<h2 id="contracts">Compatibility and coverage</h2><p>Support differs across native Rust, native Python, and browser Python. Native Python does not currently qualify the full browser gallery, particularly audio. Some input-driven and callback-driven scenes cannot replay. API names and packaging are subject to change.</p>
+<div class="docs-callout"><p><strong>Reference policy:</strong> before publishing a generated API listing, it should be derived from the current source and validated in CI. This curated reference does not claim exhaustive symbol coverage.</p></div>
+</article></main>
+<footer class="wrap footer"><a class="wordmark" href="../../">noon<span>.</span></a><p>Experimental animation tooling · Rust, Python, and WebAssembly</p><a href="https://github.com/yongkyuns/noon">Source</a></footer></body></html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Write and run your first Noon scene in the browser, Python, or Rust."><meta name="color-scheme" content="light dark">
+<title>Getting started — Noon</title><link rel="stylesheet" href="../site.css"><script type="module" src="../site.js"></script></head>
+<body><a class="skip" href="#main">Skip to content</a>
+<header class="wrap header"><a class="wordmark" href="../../" aria-label="Noon home">noon<span aria-hidden="true">.</span></a>
+<nav aria-label="Main navigation"><a href="../../">Home</a><a href="getting-started.html">Docs</a><a href="../../playground.html?catalog=showcase">Playground</a><a href="https://github.com/yongkyuns/noon">GitHub</a><button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle color theme">Theme</button></nav></header>
+<main class="wrap docs-layout" id="main"><aside class="docs-sidebar" aria-label="Documentation">
+<span class="sidebar-label">Documentation</span><a href="getting-started.html" aria-current="page">Getting started</a><a href="guide.html">User guide</a><a href="examples.html">Examples</a><a href="api.html">API reference</a><a href="architecture.html">Architecture</a></aside>
+<article class="docs-content"><div class="docs-breadcrumb"><a href="../../">Noon</a> / Docs / Getting started</div>
+<h1>Getting started</h1>
+<p class="docs-lede">Start in the browser without installing anything, or run Noon locally through native Python or Rust. All three paths use shared Rust scene semantics.</p>
+<div class="docs-callout"><p><strong>Experimental:</strong> APIs, platform coverage, and packaging are changing. The current crate and PyPI names are not finalized.</p></div>
+<h2 id="browser">Start in the browser</h2>
+<p>Open the playground, select <strong>Your first scene</strong>, and press <strong>Run</strong>. Edit the Python source and run it again. The first execution loads the WebAssembly engine and Pyodide.</p>
+<pre><code class="language-python">from noon import *
+
+class Demo(Scene):
+    def construct(self):
+        circle = Circle(color=BLUE)
+        square = Square(color=PINK)
+        square.next_to(circle, RIGHT)
+        self.play(Create(circle), Create(square))
+        self.play(circle.animate.shift(UP),
+                  square.animate.rotate(PI / 4),
+                  run_time=2)
+        self.wait(1)</code></pre>
+<figure class="demo-embed"><iframe title="Your first scene — live Noon WebAssembly playground" src="../../playground.html?catalog=showcase&amp;example=showcase-first-scene" loading="lazy" referrerpolicy="same-origin" allow="fullscreen"></iframe><figcaption>Actual Noon WASM and Pyodide runtime. <a href="../../playground.html?catalog=showcase&amp;example=showcase-first-scene">Open the full editor</a> for a larger view.</figcaption></figure>
+<h2 id="native">Build from source</h2>
+<p>Use CPython 3.11+ and the pinned Rust toolchain from <code>rust-toolchain.toml</code>.</p>
+<pre><code class="language-bash">git clone https://github.com/yongkyuns/noon.git
+cd noon
+python3 scripts/build-native-python.py --profile dev
+PYTHONPATH=build/python python3 -m noon_native web/python/examples/ordinary_affine_play.py</code></pre>
+<p>Or run an existing Rust example without Python:</p>
+<pre><code class="language-bash">cargo run -p noon-native --example ordinary_affine_play</code></pre>
+<h2 id="next">Next steps</h2>
+<div class="docs-links"><a href="guide.html">Scene authoring <span>Play, wait, composition, and controls</span></a><a href="examples.html">More examples <span>Browse editable originals and live demonstrations</span></a></div>
+</article></main>
+<footer class="wrap footer"><a class="wordmark" href="../../">noon<span>.</span></a><p>Experimental animation tooling · Rust, Python, and WebAssembly</p><a href="https://github.com/yongkyuns/noon">Source</a></footer></body></html>
