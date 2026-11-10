@@ -3357,21 +3357,21 @@ impl Context {
     #[pyo3(name = "liveZIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
         self.require_active()?;
-        let execution = scene_execution::session(&self.scene)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::effective_z_index(
-            self.scene.integration_store(),
-            execution,
-            &target.anchor,
-        )
-        .map_err(engine_error)
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .effective_z_index(&target.anchor)
+            .map_err(engine_error)
     }
     #[pyo3(name = "liveSetZIndex")]
     fn set_z_index(&mut self, target: &LayoutAnchor, value: f64, family: bool) -> PyResult<()> {
         self.available()?;
-        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_z_index(store, root, execution, &target.anchor, value, family)
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .set_z_index(&target.anchor, value, family)
             .map_err(engine_error)
     }
     #[pyo3(name = "liveScaleLayout")]

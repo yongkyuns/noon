@@ -24,38 +24,18 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         assert_eq!(copied.root().z_index()?, -3.);
         assert_eq!(copied.mobject(&a)?.z_index()?, 1.);
         scene.add_many(&[(&family).into(), (&c).into()])?;
-        let mut session = scene.execution_session()?;
-        crate::z_index::publish_z_index(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            &(&c).into(),
-            2.25,
-            true,
-        )?;
-        crate::z_index::publish_z_index(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            &(&a).into(),
-            3.5,
-            true,
-        )?;
-        crate::z_index::publish_z_index(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            &(&family).into(),
-            0.5,
-            false,
-        )?;
-        assert_eq!(a.z_index()?, 3.5);
-        assert_eq!(b.z_index()?, 1.);
-        let mut live = scene.live(&mut session);
+        let mut execution = scene.into_execution()?;
+        let scene = execution.scene_mut();
+        scene.set_z_index(&(&c).into(), 2.25, true)?;
+        scene.set_z_index(&(&a).into(), 3.5, true)?;
+        scene.set_z_index(&(&family).into(), 0.5, false)?;
+        assert_eq!(scene.effective_z_index(&(&a).into())?, 3.5);
+        assert_eq!(scene.effective_z_index(&(&b).into())?, 1.);
+        let mut live = execution.live();
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(execution)
     };
     build().map_err(|error| error.to_string())
 }

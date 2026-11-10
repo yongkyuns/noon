@@ -95,7 +95,6 @@ pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_m
 pub use crate::text_authoring::NATIVE_POINT_TO_SCENE_SCALE;
 #[cfg(feature = "typst")]
 pub use crate::text_authoring::SCALE_FACTOR_PER_FONT_POINT;
-pub use crate::z_index::{effective_z_index, publish_z_index};
 pub use noon_core::{
     GeometryResource, GeometryResourceArena, GeometryResourceError, GeometryResourceHandle,
     GeometryResourceLookup, HostCallbackId, SemanticFamilyPairingError, SemanticLoweringError,

@@ -1042,15 +1042,6 @@ impl Scene {
         })
     }
 
-    /// Observe effective Runtime priority without creating a borrowed LiveSession facade.
-    /// Cold Scenes fail explicitly rather than returning authored state as effective state.
-    pub fn effective_z_index(&self, source: &crate::LayoutAnchor) -> Result<f64, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
-        crate::z_index::effective_z_index(&self.store, execution, source)
-    }
-
     /// Prepare boolean geometry from the current coherent Runtime publication.
     /// Cold Scenes fail explicitly rather than substituting authored geometry.
     pub fn effective_boolean_geometry_options(
