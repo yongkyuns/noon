@@ -1,26 +1,40 @@
 name: Deploy Noon Playground
 
+# A successful build or ordinary merge is not deployment authorization.
+# Run manually on master with the exact approved commit and explicit confirmation.
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: 'Full master commit SHA explicitly approved for demo deployment'
+        required: true
+        type: string
+      confirm_deploy:
+        description: 'Deploy this demo revision to the public Pages site (not a package release)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
-  # Production deployments must finish even when master is moving quickly.
-  # New pushes queue behind the in-flight deployment instead of starving Pages.
+  # An authorized deployment must finish; another manual request queues behind it.
   cancel-in-progress: false
 
 jobs:
   build:
     name: Build and deploy browser demo
-    # Keep the allocated runner through publication instead of queuing a second job.
+    # Fail closed before allocating a privileged environment/runner. The helper
+    # checks the actual checkout again, including immediately before publication.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'yongkyuns/noon' && github.ref == 'refs/heads/master' && inputs.confirm_deploy == true && inputs.expected_sha == github.sha }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    # Required reviewers must be configured by the owner in GitHub settings.
+    # Naming this environment alone does not configure an approval rule.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -36,15 +50,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Classify complete push for deployment
-        id: scope
-        env:
-          BEFORE_REVISION: ${{ github.event.before }}
-        run: node scripts/ci-qualification-scope.mjs pages
+      - name: Authorize exact demo revision
+        run: node .github/ci/pages-authorization.mjs
 
       - name: Use repository-pinned Rust and WASM target
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         run: |
           rustup install
           rustup show active-toolchain
@@ -52,7 +65,6 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Cache Cargo sources
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/cache@v6
         with:
           path: |
@@ -63,36 +75,34 @@ jobs:
             ${{ runner.os }}-cargo-sources-
 
       - name: Use sccache
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.16.0
 
       - name: Install pinned wasm-pack
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-pack@0.15.0
           fallback: none
 
       - name: Install pinned wasm-opt
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: ./.github/actions/install-wasm-opt
 
+      # This remains the demo rebuild path, not promotion of the separately
+      # qualified release archive. Exact-byte release promotion is still #2433 work.
       - name: Build and validate playground
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         run: bash scripts/build-web-demo.sh
 
       - name: Stamp deployed revision
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         run: printf '{"commit":"%s"}\n' "$GITHUB_SHA" > web/build-info.json
 
+      - name: Recheck deployment authorization
+        run: node .github/ci/pages-authorization.mjs
+
       - name: Configure Pages
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/configure-pages@v6
 
       - name: Upload Pages artifact
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         uses: actions/upload-pages-artifact@v5
         with:
           name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
@@ -101,14 +111,12 @@ jobs:
           retention-days: 1
 
       - name: Deploy
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         id: deployment
         uses: actions/deploy-pages@v5
         with:
           artifact_name: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify deployed revision
-        if: ${{ steps.scope.outputs.deploy != 'false' }}
         env:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
           EXPECTED_SHA: ${{ github.sha }}
