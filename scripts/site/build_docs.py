@@ -47,8 +47,16 @@ class SiteMarkdown(mistune.HTMLRenderer):
         super().__init__(escape=True)
         self.builder, self.source, self.destination = builder, source, destination
         self.headings, self.ids = [], set()
+        self.has_title, self.section_offset = False, 0
 
     def heading(self, text, level, **attrs):
+        # Canonical documents may contain several top-level parts (for example,
+        # architecture and roadmap). Keep their text and stable fragment IDs,
+        # but nest later parts and their descendants beneath one page title.
+        if level == 1:
+            self.section_offset = 1 if self.has_title else 0
+            self.has_title = True
+        level = min(6, level + self.section_offset)
         identifier, index = slug(text), 0
         base = identifier
         while identifier in self.ids:
@@ -119,7 +127,9 @@ class Links(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.ids, self.links = set(), []
+        self.titles = 0
     def handle_starttag(self, tag, pairs):
+        if tag == 'h1': self.titles += 1
         attrs = dict(pairs)
         if 'id' in attrs:
             if attrs['id'] in self.ids:
@@ -329,7 +339,10 @@ class Builder:
                 p = Links(); p.feed(path.read_text()); cache[path] = p
             return cache[path]
         for page in self.generated:
-            for tag, attr, url in parsed(page).links:
+            document = parsed(page)
+            if document.titles != 1:
+                raise ValueError(f'Expected one page title in {page.name}; found {document.titles}')
+            for tag, attr, url in document.links:
                 split = urlsplit(url)
                 if split.scheme or split.netloc: continue
                 target = (page.parent / unquote(split.path)).resolve() if split.path else page

@@ -26,21 +26,13 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         front.shift(0.5, 0.5)?;
         scene.add(&back)?;
         scene.add(&front)?;
-        let mut session = scene.execution_session()?;
+        let mut execution = scene.into_execution()?;
         for priority in [2.0, -1.0] {
-            let target = {
-                let mut live = scene.live(&mut session);
-                live.target_editor(&back)?
-            };
-            crate::z_index::publish_z_index(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                &(&target).into(),
-                priority,
-                true,
-            )?;
-            let mut live = scene.live(&mut session);
+            let target = execution.live().target_editor(&back)?;
+            execution
+                .scene_mut()
+                .set_z_index(&(&target).into(), priority, true)?;
+            let mut live = execution.live();
             let request = Request::TransformTo(
                 TransformToRequest::new(
                     &back,
@@ -61,23 +53,12 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         }
         // A short child of AnimationGroup finishes with the group, not at its
         // interpolation endpoint. The other child makes that distinction visible.
-        let back_target = {
-            let mut live = scene.live(&mut session);
-            live.target_editor(&back)?
-        };
-        crate::z_index::publish_z_index(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            &(&back_target).into(),
-            2.0,
-            true,
-        )?;
-        let front_target = {
-            let mut live = scene.live(&mut session);
-            live.target_editor(&front)?
-        };
-        let mut live = scene.live(&mut session);
+        let back_target = execution.live().target_editor(&back)?;
+        execution
+            .scene_mut()
+            .set_z_index(&(&back_target).into(), 2.0, true)?;
+        let front_target = execution.live().target_editor(&front)?;
+        let mut live = execution.live();
         live.shift(&front_target, -1.0, 0.0)?;
         let request = Request::Composition {
             kind: crate::SemanticAnimationCompositionKind::Parallel,
@@ -111,7 +92,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let wait = live.wait_segment(0.25)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(execution)
     };
     build().map_err(|error| error.to_string())
 }

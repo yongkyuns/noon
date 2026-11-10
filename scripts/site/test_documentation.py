@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from build_docs import Builder, SiteMarkdown, build_embed, slug
+from build_docs import Builder, Links, SiteMarkdown, build_embed, slug
 from python_reference import PythonReference, ReferenceError
 
 REVISION = 'a' * 40
@@ -142,6 +142,44 @@ class Shape:
         self.assertEqual([h[1] for h in headings],['test','same','same-1'])
         self.assertNotIn('<script>',content)
         self.assertIn('&lt;script&gt;',content)
+
+    def test_multipart_canonical_document_keeps_links_and_source(self):
+        builder, rust = self.builder()
+        source = self.root/'docs/architecture.md'
+        source.write_text(source.read_text() + '\n# Roadmap\n\n## Ownership\n\n### Next\n\n###### Detail\n\n# Appendix\n\n## Notes\n')
+        before = source.read_bytes()
+        index = self.root/'docs/site/index.md'
+        index.write_text(index.read_text() + '\n[Roadmap](../architecture.md#roadmap) and [later ownership](../architecture.md#ownership-1).\n')
+        builder.build(rust)
+        markup = (builder.out/'architecture.html').read_text()
+        document = Links(); document.feed(markup)
+        self.assertEqual(document.titles, 1)
+        self.assertIn('<h2 id="roadmap">', markup)
+        self.assertIn('<h3 id="ownership-1">', markup)
+        self.assertIn('<h4 id="next">', markup)
+        self.assertIn('<h6 id="detail">', markup)
+        self.assertIn('<h2 id="appendix">', markup)
+        self.assertIn('<h3 id="notes">', markup)
+        self.assertIn('href="#roadmap" class="toc-level-2"', markup)
+        self.assertIn('href="#ownership-1" class="toc-level-3"', markup)
+        self.assertEqual(source.read_bytes(), before)
+        records = json.loads((builder.out/'search-index.json').read_text())
+        self.assertTrue(any(row['url'] == 'architecture.html#roadmap' for row in records))
+        self.assertTrue(any(row['url'] == 'architecture.html#ownership-1' for row in records))
+
+    def test_missing_title_blocks_generated_page(self):
+        builder, rust = self.builder()
+        self.write('docs/site/examples.md', '## Not a page title\n\nExample.\n')
+        with self.assertRaisesRegex(ValueError, 'one page title in examples.html; found 0'):
+            builder.build(rust)
+
+    def test_duplicate_title_blocks_generated_page(self):
+        builder, rust = self.builder()
+        builder.build(rust)
+        page = builder.out/'python-Scene.html'
+        page.write_text(page.read_text().replace('</main>', '<h1>Accidental second title</h1></main>'))
+        with self.assertRaisesRegex(ValueError, 'one page title in python-Scene.html; found 2'):
+            builder.check_links()
 
     def test_escape_and_javascript_urls_rejected(self):
         builder, _ = self.builder()

@@ -658,8 +658,7 @@ test("product camera measurements reuse the restored packages and fixed alternat
   assert.doesNotMatch(measurements, /build-web-demo|cargo |wasm-pack/);
 });
 
-test("Pages builds and deploys the optimized production package on one runner", async () => {
-  const workflow = await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8");
+function assertPagesBuildWorkflow(workflow) {
   const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
   assert.deepEqual([...jobs.matchAll(/^  ([\w-]+):\s*$/gm)].map(match => match[1]), ["build"],
     "Pages must not queue another runner after the package is built");
@@ -676,13 +675,27 @@ test("Pages builds and deploys the optimized production package on one runner", 
   assert.match(buildJob, /environment:\n\s+name: github-pages\n\s+url: \$\{\{ steps\.deployment\.outputs\.page_url \}\}/);
   assert.doesNotMatch(buildJob, /^\s+continue-on-error:/m);
   const steps = buildJob.split("      - name: ").slice(1);
-  assert.equal(steps[1].split("\n")[0], "Classify complete push for deployment");
-  assert.match(steps[1], /BEFORE_REVISION: \$\{\{ github\.event\.before \}\}/);
-  for (const step of steps.slice(2)) {
-    assert.match(step, /^        if: \$\{\{ steps\.scope\.outputs\.deploy != 'false' \}\}$/m,
-      "only an explicit false skips work; implicit success() keeps failures blocking");
-    assert.equal([...step.matchAll(/^\s+if:/gm)].length, 1);
+  assert.equal(steps[1].split("\n")[0], "Authorize exact demo revision");
+  assert.match(steps[1], /^        run: node \.github\/ci\/pages-authorization\.mjs$/m);
+  assert.match(steps[0], /ref: \$\{\{ github\.sha \}\}\n          persist-credentials: false/);
+  const recheck = steps.findIndex(step => step.startsWith("Recheck deployment authorization\n"));
+  const configure = steps.findIndex(step => step.startsWith("Configure Pages\n"));
+  const build = steps.findIndex(step => step.startsWith("Build and validate playground\n"));
+  assert.ok(build > 1 && recheck > build && configure === recheck + 1,
+    "exact-source authorization must run before build and immediately before Pages configuration");
+  assert.match(steps[build], /^        run: bash scripts\/build-web-demo\.sh$/m);
+  assert.match(steps[recheck], /^        run: node \.github\/ci\/pages-authorization\.mjs$/m);
+  // Authorization belongs to the job. Once admitted, every step retains the
+  // implicit success() condition; no per-step skip or failure override is allowed.
+  for (const step of steps) {
+    assert.doesNotMatch(step, /^\s+if:/m,
+      "authorized Pages steps must run sequentially and stop on any earlier failure");
   }
+  assert.match(buildJob, /^    if: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.repository == 'yongkyuns\/noon' && github\.ref == 'refs\/heads\/master' && inputs\.confirm_deploy == true && inputs\.expected_sha == github\.sha \}\}$/m);
+  const events = workflow.split("\non:\n")[1]?.split("\npermissions:\n")[0];
+  assert.ok(events, "Pages must declare its manual-only event");
+  assert.deepEqual([...events.matchAll(/^  ([\w-]+):\s*$/gm)].map(match => match[1]), ["workflow_dispatch"]);
+  assert.doesNotMatch(workflow, /steps\.scope\.outputs\.deploy|ci-qualification-scope/);
   assert.match(workflow, /cancel-in-progress: false/);
 
   const product = productConfig("candidate");
@@ -693,6 +706,36 @@ test("Pages builds and deploys the optimized production package on one runner", 
   assert.match(buildJob, new RegExp(`^\\s+NOON_WASM_PROFILE: ${product.profile}$`, "m"));
   assert.match(buildJob, new RegExp(`^\\s+NOON_WASM_SKIP_OPT: "${product.skipOpt}"$`, "m"));
   assert.match(buildJob, new RegExp(`^\\s+NOON_RENDERER_SMOKE: "${product.rendererSmoke}"$`, "m"));
+}
+
+test("Pages builds and deploys the optimized production package on one runner", async () => {
+  assertPagesBuildWorkflow(await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8"));
+});
+
+test("Pages build contract rejects authorization and execution regressions", async () => {
+  const workflow = await readFile(new URL("../workflows/pages.yml", import.meta.url), "utf8");
+  for (const [before, after] of [
+    ["on:\n", "on:\n  push:\n    branches: [master]\n"],
+    ["inputs.confirm_deploy == true", "true"],
+    ["inputs.expected_sha == github.sha", "true"],
+    ["persist-credentials: false", "persist-credentials: true"],
+    ["        run: node .github/ci/pages-authorization.mjs", "        run: echo omitted"],
+    ["Recheck deployment authorization\n        run: node .github/ci/pages-authorization.mjs",
+      "Recheck deployment authorization\n        run: echo omitted"],
+    ["        run: bash scripts/build-web-demo.sh", "        run: echo omitted"],
+    ["uses: ./.github/actions/install-wasm-opt", "uses: ./missing-installer"],
+    ["NOON_WASM_PROFILE: release", "NOON_WASM_PROFILE: dev"],
+    ['NOON_WASM_SKIP_OPT: "0"', 'NOON_WASM_SKIP_OPT: "1"'],
+    ['NOON_RENDERER_SMOKE: "0"', 'NOON_RENDERER_SMOKE: "1"'],
+    ["      - name: Upload Pages artifact\n", "      - name: Upload Pages artifact\n        if: false\n"],
+    ["      - name: Deploy\n", "      - name: Deploy\n        if: always()\n"],
+    ["      - name: Build and validate playground\n",
+      "      - name: Build and validate playground\n        continue-on-error: true\n"],
+  ]) {
+    assert.ok(workflow.includes(before), `invalid mutation fixture: ${before}`);
+    assert.throws(() => assertPagesBuildWorkflow(workflow.replace(before, after)),
+      `Pages contract missed a regression: ${before}`);
+  }
 });
 
 test("unknown product roles cannot select a default build", () => {

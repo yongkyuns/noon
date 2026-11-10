@@ -7,10 +7,20 @@ playground at `playground.html`, and installs the introduction at the site root.
 All runtime modules, workers, manifests, and resources remain beside the
 playground. The staging script never edits its inputs.
 
-Production remains the existing `.github/workflows/pages.yml` deployment. Its
-artifact is now `_site/`; its build-revision check and deployment concurrency are
-unchanged. PRs use `playground-project-site.yml` to build a review artifact, not publish Pages.
-A new site is public only after its change is merged and Pages deployment succeeds.
+Production uses the manual-only `.github/workflows/pages.yml` deployment. A merge
+or successful PR check does not publish the site. After separate deployment
+approval, dispatch on `master` with its full approved commit as `expected_sha` and
+`confirm_deploy=true` (the default is false). The request and actual checkout are
+checked before building and again after media capture, staging and site smoke,
+immediately before Pages configuration and upload. Required environment reviewers
+remain owner-managed GitHub settings; naming `github-pages` does not enable them.
+
+The uploaded artifact remains `_site/`, containing both the introduction and the
+playground. Capture tools, all four website validation/generation commands,
+hidden files, build-revision verification and deployment concurrency are retained.
+PRs use `playground-project-site.yml` to build a review artifact, not publish Pages.
+This manual demo rebuild is not exact-byte promotion of the separately qualified
+release archive, redistribution approval or release readiness; those remain #2433 work.
 
 ## Links
 
@@ -73,3 +83,9 @@ setup instructions, local assets, GIF decoding, MP4 playback, legacy redirects,
 and no-JavaScript content. Captures and screenshots remain CI review artifacts.
 Review their visible contents before merging; structural checks alone do not
 establish editorial quality or full gallery compatibility.
+
+Run `node --test web/pages-authorization.test.mjs web/pages-project-site.test.mjs`
+for the deployment request and combined website workflow contracts. These tests
+reject omitted/reordered capture checks, restored push-scope guards, wrong upload
+directories and an authorization recheck before site generation. They make no
+network deployment and do not replace actual browser capture/smoke qualification.
