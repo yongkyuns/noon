@@ -23,3 +23,6 @@ __pycache__/
 /build/bdist*/
 /dist/
 /web/python/*.egg-info/
+/_site/
+/web/site/media/
+/browser-smoke-artifacts/project-site/
