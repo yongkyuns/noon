@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
+import { qualifyDocumentation } from "./project-site-docs-smoke.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, "browser-smoke-artifacts/project-site");
@@ -68,6 +69,7 @@ try {
   assert.equal(await plain.locator("h1").isVisible(), true);
   assert.ok(await plain.locator('a[href*="playground.html"]').count() > 0);
   await noJs.close();
+  await qualifyDocumentation(browser, base, output);
   console.log("Project site: responsive layout, no-JS content, media, and legacy routing passed");
 } finally {
   await browser?.close();

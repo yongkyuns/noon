@@ -57,7 +57,9 @@ h3 {
   z-index:10;
   padding:1rem;
   background:var(--ink);
-  color:white}
+  color:var(--paper)}
+.skip:hover {
+  color:var(--paper)}
 .skip:focus {
   top:1rem}
 .header {
@@ -130,7 +132,7 @@ nav a {
   font-weight:550}
 .button:hover {
   background:var(--accent);
-  color:white}
+  color:var(--paper)}
 .text-link {
   font-size:.88rem;
   font-weight:550}
@@ -418,8 +420,6 @@ pre {
 details {border-color:var(--rule)}
 .theme-toggle {cursor:pointer;border:1px solid var(--rule);background:var(--panel);color:var(--ink);border-radius:5px;padding:.45rem .7rem;font:inherit}
 .theme-toggle:focus-visible {outline:3px solid var(--accent);outline-offset:3px}
-:root[data-theme="dark"] .button {background:var(--ink);color:var(--paper)}
-:root[data-theme="dark"] .button:hover {background:var(--accent);color:#111821}
 .docs-layout {display:grid;grid-template-columns:210px minmax(0,1fr);gap:4rem;align-items:start;padding-block:3rem 6rem}
 .docs-sidebar {position:sticky;top:1rem;border-right:1px solid var(--rule);padding-right:1.4rem;display:grid;gap:.45rem;font-size:.9rem}
 .docs-sidebar .sidebar-label {font-size:.7rem;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);margin-bottom:.6rem}
