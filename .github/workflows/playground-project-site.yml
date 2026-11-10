@@ -1,0 +1,59 @@
+name: Project website
+
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'REFERENCE.md'
+      - 'web/site/**'
+      - 'docs/project-site.md'
+      - 'scripts/build-project-site.mjs'
+      - 'scripts/capture-project-media.mjs'
+      - 'scripts/project-site*'
+      - '.github/workflows/playground-project-site.yml'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Capture and validate project website
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check site source contracts
+        run: |
+          node --test scripts/project-site.test.mjs web/project-site-editorial.test.mjs
+          node --check scripts/capture-project-media.mjs
+          node --check scripts/project-site-smoke.mjs
+      - name: Build the exact-source browser runtime
+        uses: ./.github/actions/dev-wasm-build
+      - name: Install pinned capture tools
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Capture actual scenes and stage the site
+        run: |
+          node scripts/capture-project-media.mjs
+          printf '{"commit":"%s"}\n' "$GITHUB_SHA" > web/build-info.json
+          node scripts/build-project-site.mjs
+          node scripts/project-site-smoke.mjs
+      - name: Retain website and visual review evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: project-site-preview
+          path: |
+            _site/
+            browser-smoke-artifacts/project-site/
+          if-no-files-found: warn
+          retention-days: 3

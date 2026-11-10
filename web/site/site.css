@@ -1,0 +1,407 @@
+:root {
+  color-scheme:light;
+  --paper:#f5f3ed;
+  --ink:#20262b;
+  --muted:#5c6469;
+  --rule:#d5d6ce;
+  --accent:#b44328;
+  --panel:#ebeae3;
+  font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color:var(--ink);
+  background:var(--paper);
+  font-synthesis:none}
+
+* {
+  box-sizing:border-box}
+html {
+  scroll-behavior:smooth;
+  scroll-padding-top:2rem}
+body {
+  margin:0}
+a {
+  color:inherit;
+  text-underline-offset:.22em;
+  text-decoration-thickness:1px}
+a:hover {
+  color:var(--accent)}
+a:focus-visible,summary:focus-visible,video:focus-visible {
+  outline:3px solid var(--accent);
+  outline-offset:5px}
+p {
+  line-height:1.65}
+h1,h2,h3,p,figure {
+  margin-top:0}
+h1,h2,h3 {
+  font-weight:550}
+h1 {
+  font-size:clamp(2.7rem,4.8vw,4.7rem);
+  line-height:1.06;
+  letter-spacing:-.065em;
+  margin-bottom:1.5rem}
+h2 {
+  font-size:clamp(2rem,3.2vw,3.1rem);
+  line-height:1.13;
+  letter-spacing:-.045em;
+  margin-bottom:1rem}
+h3 {
+  font-size:1.2rem;
+  letter-spacing:-.025em;
+  margin-bottom:.65rem}
+.wrap {
+  width:min(1220px,calc(100% - 5rem));
+  margin-inline:auto}
+.skip {
+  position:absolute;
+  top:-100px;
+  left:1rem;
+  z-index:10;
+  padding:1rem;
+  background:var(--ink);
+  color:white}
+.skip:focus {
+  top:1rem}
+.header {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:2rem;
+  padding-block:1.8rem;
+  border-bottom:1px solid var(--rule)}
+.wordmark {
+  font-weight:750;
+  font-size:2.4rem;
+  letter-spacing:-.08em;
+  line-height:1;
+  text-decoration:none}
+.wordmark span {
+  color:var(--accent)}
+nav {
+  display:flex;
+  gap:1.8rem;
+  font-size:.88rem}
+nav a {
+  text-decoration:none}
+.hero {
+  display:grid;
+  grid-template-columns:1fr 1.1fr;
+  gap:4rem;
+  align-items:center;
+  padding-block:5.5rem 4.5rem}
+.eyebrow {
+  text-transform:uppercase;
+  font-size:.67rem;
+  font-weight:650;
+  letter-spacing:.13em;
+  line-height:1.5;
+  margin-bottom:1.4rem}
+.dot {
+  display:inline-block;
+  width:.5rem;
+  height:.5rem;
+  border-radius:50%;
+  background:var(--accent);
+  margin-right:.5rem}
+.lede {
+  font-size:1.1rem;
+  line-height:1.65;
+  max-width:34em}
+.intro {
+  font-size:.95rem;
+  color:var(--muted);
+  max-width:34em}
+.actions {
+  display:flex;
+  align-items:center;
+  gap:1.5rem;
+  flex-wrap:wrap;
+  margin-top:1.8rem}
+.button {
+  display:inline-flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:1.5rem;
+  min-height:48px;
+  background:var(--ink);
+  color:var(--paper);
+  padding:.85rem 1.1rem;
+  text-decoration:none;
+  border-radius:3px;
+  font-size:.88rem;
+  font-weight:550}
+.button:hover {
+  background:var(--accent);
+  color:white}
+.text-link {
+  font-size:.88rem;
+  font-weight:550}
+.aside {
+  font-size:.75rem;
+  color:var(--muted);
+  margin-top:1.2rem;
+  margin-bottom:0}
+.featured {
+  margin:0;
+  border:1px solid var(--rule);
+  padding:.6rem;
+  background:#e6e6df}
+.featured video,.example video {
+  display:block;
+  width:100%;
+  height:auto;
+  aspect-ratio:16/9;
+  background:#0d111b;
+  object-fit:contain}
+.featured figcaption {
+  display:flex;
+  justify-content:space-between;
+  align-items:end;
+  gap:1rem;
+  padding:.9rem .3rem .3rem;
+  font-size:.8rem}
+.featured strong {
+  display:block;
+  font-size:.96rem;
+  font-weight:550}
+.caption-label {
+  display:block;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-size:.6rem;
+  color:var(--muted);
+  margin-bottom:.4rem}
+.platform-strip {
+  display:flex;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:1rem;
+  border-block:1px solid var(--rule);
+  padding-block:1.15rem;
+  color:var(--muted);
+  font-size:.75rem}
+.section {
+  padding-block:4.8rem}
+.section-heading {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:2rem}
+.section-heading .eyebrow {
+  margin-bottom:.8rem}
+.section-intro {
+  max-width:50em;
+  color:var(--muted);
+  font-size:.95rem;
+  margin-bottom:2rem}
+.examples {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:1.4rem}
+.example {
+  border:1px solid var(--rule);
+  background:#faf9f5;
+  min-width:0}
+.example-body {
+  padding:1.4rem}
+.example .eyebrow {
+  color:var(--muted);
+  margin-bottom:.9rem}
+.example h3 a {
+  text-decoration:none;
+  display:flex;
+  justify-content:space-between;
+  gap:.6rem}
+.example p:not(.eyebrow) {
+  font-size:.87rem;
+  color:var(--muted);
+  min-height:3em;
+  margin-bottom:1.15rem}
+.source {
+  font-size:.75rem}
+.footnote {
+  font-size:.78rem;
+  color:var(--muted);
+  max-width:65em;
+  margin:1.5rem 0 0}
+.start-section {
+  background:var(--panel);
+  border-block:1px solid var(--rule)}
+.start-grid {
+  display:grid;
+  grid-template-columns:1fr 1.3fr;
+  gap:4rem;
+  margin-top:1.6rem;
+  align-items:start}
+.start-intro p {
+  color:var(--muted);
+  font-size:.95rem}
+.start-intro .button {
+  margin-top:.6rem}
+.code-panel {
+  background:#1d252d;
+  color:#e9e9df;
+  border-radius:4px;
+  overflow:hidden}
+.code-label {
+  display:flex;
+  justify-content:space-between;
+  gap:1rem;
+  padding:1rem 1.35rem;
+  border-bottom:1px solid #455057;
+  color:#cad3d4;
+  font-size:.7rem}
+.code-label a {
+  white-space:nowrap}
+pre {
+  overflow:auto;
+  max-width:100%;
+  margin:0;
+  padding:1.4rem;
+  font: .8rem/1.75 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+code {
+  font:inherit}
+.local-options {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:1.4rem;
+  margin-top:2rem}
+details {
+  border-block:1px solid #bfc2ba;
+  min-width:0}
+summary {
+  cursor:pointer;
+  padding:1.2rem 0;
+  font-size:.95rem;
+  font-weight:600}
+summary span {
+  float:right;
+  font-weight:400;
+  color:var(--muted);
+  font-size:.75rem;
+  padding-top:.2rem}
+.details-body {
+  padding-bottom:1rem}
+.details-body p {
+  font-size:.85rem;
+  color:var(--muted)}
+.details-body pre {
+  background:var(--paper);
+  border:1px solid var(--rule);
+  margin-bottom:1rem;
+  font-size:.74rem}
+.about {
+  display:grid;
+  grid-template-columns:1fr 1.3fr;
+  gap:4rem}
+.about-copy h3 {
+  font-size:1rem;
+  margin-bottom:.5rem}
+.about-copy p {
+  color:var(--muted);
+  font-size:.92rem;
+  margin-bottom:1.6rem}
+.about-copy p:last-child {
+  font-size:.8rem;
+  margin-bottom:0}
+.footer {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:2rem;
+  border-top:1px solid var(--rule);
+  padding-block:2rem}
+.footer .wordmark {
+  font-size:1.8rem}
+.footer p {
+  margin:0;
+  font-size:.8rem;
+  color:var(--muted)}
+.footer>a:last-child {
+  font-size:.8rem}
+
+@media(max-width:1050px) {
+  .wrap {
+  width:calc(100% - 3rem)}
+.hero {
+  gap:2rem;
+  padding-block:4rem}
+.start-grid,.about {
+  gap:2rem}
+.examples {
+  gap:1rem}
+.example-body {
+  padding:1rem}
+.local-options {
+  grid-template-columns:1fr}
+h1 {
+  font-size:3.5rem}
+}
+
+@media(max-width:760px) {
+  .wrap {
+  width:calc(100% - 2rem)}
+.header {
+  padding-block:1.35rem;
+  gap:1rem}
+nav {
+  gap:1rem;
+  font-size:.75rem}
+.wordmark {
+  font-size:2rem}
+.hero,.start-grid,.about {
+  grid-template-columns:1fr}
+.hero {
+  padding-block:3rem;
+  gap:2.2rem}
+h1 {
+  font-size:3.5rem}
+.lede {
+  font-size:1.05rem}
+.platform-strip {
+  justify-content:flex-start;
+  font-size:.7rem;
+  gap:.65rem 1.5rem}
+.section {
+  padding-block:3rem}
+.section-heading {
+  align-items:start;
+  flex-direction:column;
+  gap:.4rem;
+  margin-bottom:1.3rem}
+.section-heading h2 {
+  margin-bottom:.5rem}
+.examples {
+  grid-template-columns:1fr;
+  gap:1.4rem}
+.example-body {
+  padding:1.35rem}
+.example p:not(.eyebrow) {
+  min-height:0}
+.start-grid {
+  gap:1.8rem}
+.about {
+  gap:1rem}
+.footer {
+  flex-wrap:wrap;
+  gap:1rem}
+.footer p {
+  display:none}
+.code-label {
+  flex-wrap:wrap}
+summary span {
+  float:none;
+  display:block;
+  margin-top:.4rem}
+.featured figcaption {
+  font-size:.73rem}
+.featured strong {
+  font-size:.9rem}
+pre {
+  font-size:.72rem;
+  padding:1rem}
+}
+
+@media(prefers-reduced-motion:reduce) {
+  html {
+  scroll-behavior:auto}
+}
+
