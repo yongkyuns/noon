@@ -57,7 +57,9 @@ h3 {
   z-index:10;
   padding:1rem;
   background:var(--ink);
-  color:white}
+  color:var(--paper)}
+.skip:hover {
+  color:var(--paper)}
 .skip:focus {
   top:1rem}
 .header {
@@ -130,7 +132,7 @@ nav a {
   font-weight:550}
 .button:hover {
   background:var(--accent);
-  color:white}
+  color:var(--paper)}
 .text-link {
   font-size:.88rem;
   font-weight:550}
@@ -405,3 +407,18 @@ pre {
   scroll-behavior:auto}
 }
 
+
+/* Shared site + documentation themes */
+:root { --card:#faf9f5; --featured:#e6e6df; --code-bg:#1d252d; --code-ink:#e9e9df; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme:dark;--paper:#111821;--ink:#edf0f2;--muted:#b1bbc3;--rule:#34414b;--accent:#ed947a;--panel:#19232e;--card:#202d37;--featured:#283641;--code-bg:#0b121b;--code-ink:#e9e9df; }
+}
+:root[data-theme="dark"] { color-scheme:dark;--paper:#111821;--ink:#edf0f2;--muted:#b1bbc3;--rule:#34414b;--accent:#ed947a;--panel:#19232e;--card:#202d37;--featured:#283641;--code-bg:#0b121b;--code-ink:#e9e9df; }
+.example { background:var(--card); }
+.featured { background:var(--featured); }
+.code-panel {background:var(--code-bg);color:var(--code-ink)}
+details {border-color:var(--rule)}
+@media(max-width:800px) { .header nav {flex-wrap:wrap;justify-content:flex-end;gap:.55rem} }
+.theme-label {display:flex;align-items:center;gap:.35rem;font-size:.75rem}
+.theme-label select {font:inherit;min-height:40px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);border-radius:4px;padding:.35rem}
+.theme-label select:focus-visible {outline:3px solid var(--accent);outline-offset:3px}

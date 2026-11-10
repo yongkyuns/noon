@@ -1,3 +1,4 @@
+import { installTheme } from "./theme.js";
 // Existing shared links used the playground at the project root. A query means
 // "open the playground"; section anchors without a query remain on the website.
 export function playgroundRedirect(locationLike) {
@@ -9,11 +10,17 @@ export function playgroundRedirect(locationLike) {
 }
 
 if (typeof window !== "undefined") {
-  const target = playgroundRedirect(window.location);
-  if (target) window.location.replace(target);
+  // The legacy query redirect applies only to the project homepage.
+  // Documentation pages must retain their own search parameters.
+  if (/\/(?:index\.html)?$/.test(window.location.pathname)) {
+    const target = playgroundRedirect(window.location);
+    if (target) window.location.replace(target);
+  }
   // No autoplay: clips start only after an explicit gesture, including when the
   // visitor prefers reduced motion. Native controls work without JavaScript.
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) document.querySelectorAll("video").forEach(video => video.pause());
   });
 }
+
+if (typeof document !== "undefined") installTheme();

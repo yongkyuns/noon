@@ -1,0 +1,2 @@
+# Build-time Markdown parser; no runtime dependency for documentation readers.
+mistune==3.2.1

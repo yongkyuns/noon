@@ -1,0 +1,19 @@
+[
+  {"slug":"index","title":"Documentation","group":"Start","source":"docs/site/index.md"},
+  {"slug":"getting-started","title":"Getting started","group":"Start","source":"docs/site/getting-started.md"},
+  {"slug":"python","title":"Python walkthrough","group":"Learn","source":"docs/site/python.md"},
+  {"slug":"rust","title":"Rust walkthrough","group":"Learn","source":"docs/site/rust.md"},
+  {"slug":"guide","title":"Scene authoring","group":"Learn","source":"docs/site/guide.md"},
+  {"slug":"playback","title":"Playback and interaction","group":"Learn","source":"docs/site/playback.md"},
+  {"slug":"export","title":"Exporting visuals","group":"Learn","source":"docs/site/export.md"},
+  {"slug":"examples","title":"Examples","group":"Explore","source":"docs/site/examples.md"},
+  {"slug":"troubleshooting","title":"Troubleshooting","group":"Explore","source":"docs/site/troubleshooting.md"},
+  {"slug":"api","title":"API reference","group":"Reference","source":"docs/site/api.md"},
+  {"slug":"reference","title":"Implementation reference","group":"Reference","source":"REFERENCE.md"},
+  {"slug":"web-runtime","title":"Browser integration","group":"Reference","source":"web/README.md"},
+  {"slug":"native-python","title":"Native Python details","group":"Reference","source":"crates/noon-python/README.md"},
+  {"slug":"native-rust","title":"Rust library details","group":"Reference","source":"crates/noon/README.md"},
+  {"slug":"export-details","title":"Native export details","group":"Reference","source":"crates/noon-export/README.md"},
+  {"slug":"architecture","title":"Architecture","group":"Internals","source":"docs/architecture.md"},
+  {"slug":"internals","title":"Type and crate map","group":"Internals","source":"docs/type-map.md"}
+]

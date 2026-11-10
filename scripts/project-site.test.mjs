@@ -82,3 +82,25 @@ test("staging preserves the tested playground, runtime paths, build identity and
     assert.equal(await readFile(path.join(staged, "index.html"), "utf8"), "new homepage", "failed admission must not delete a prior staged bundle");
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
+
+test("documentation is generated from canonical sources with an explicit preview allowlist", async () => {
+  const navigation = JSON.parse(await read("scripts/site/navigation.json"));
+  const slugs = navigation.map(page => page.slug);
+  assert.equal(new Set(slugs).size, slugs.length);
+  for (const required of ["index", "getting-started", "python", "rust", "guide", "export", "troubleshooting", "examples", "api", "architecture"]) assert.ok(slugs.includes(required), required);
+  assert.equal(navigation.find(page => page.slug === "architecture").source, "docs/architecture.md");
+  assert.equal(navigation.find(page => page.slug === "reference").source, "REFERENCE.md");
+  assert.match(await read("web/site/index.html"), /data-theme-choice/);
+  assert.match(await read("web/site/index.html"), /theme-init\.js/);
+  assert.match(await read("web/site/theme.js"), /noon-site-theme/);
+  assert.match(await read("web/site/theme.js"), /removeItem/);
+  const examples = await read("docs/site/examples.md");
+  const selected = JSON.parse(await read("web/site/examples.json"));
+  for (const { id } of selected) assert.ok(examples.includes("noon:demo " + id));
+  assert.doesNotMatch(examples, /showcase-triangle-light|<iframe/);
+  const builder = await read("scripts/build-project-site.mjs");
+  assert.match(builder, /build-project-docs\.sh/);
+  const docsBuilder = await read("scripts/site/build_docs.py");
+  assert.match(docsBuilder, /check_links/);
+  assert.match(docsBuilder, /build_embed/);
+});
