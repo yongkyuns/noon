@@ -8,3 +8,7 @@
 pre.docstring {white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--font);font-size:.9rem}
 /* Long source-derived API symbols must wrap instead of widening the document. */
 h1,h2,h3,h4,.breadcrumb,.page-contents a {overflow-wrap:anywhere}
+
+/* Technical prose and links may contain long slash-separated tokens.
+ * Wrap them within the document; code blocks retain their own scroll area. */
+.docs-content { overflow-wrap: anywhere; }

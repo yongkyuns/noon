@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { qualifyPreviewShell } from "./project-site-preview-shell.mjs";
+import { assertDocumentWidth, qualifyLongProse } from "./project-site-layout.mjs";
 
 const pages = JSON.parse(await readFile(new URL("./site/navigation.json", import.meta.url), "utf8")).map(page => page.slug);
 
@@ -53,8 +54,8 @@ export async function qualifyDocumentation(browser, base, output) {
           await page.waitForFunction(() => { return document.documentElement.dataset.theme && document.querySelector("[data-theme-choice]"); });
           assert.equal(await page.locator("h1").count(), 1, `${id}: one title`);
           assert.equal(await page.locator("iframe").count(), 0, `${id}: no runtime context before activation`);
-          assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true,
-            `${id}: ${colorScheme}/${width} horizontal overflow`);
+          await assertDocumentWidth(page, `${id}-${colorScheme}-${width}`, output);
+          if (id === "architecture") await qualifyLongProse(page, `long-prose-${colorScheme}-${width}`, output);
           if (id !== "search") assert.equal(await page.locator('.docs-sidebar a[aria-current="page"]').getAttribute("href"), `${id === "python-Scene" ? "api" : id}.html`);
           for (const destination of pages) {
             assert.equal(await page.locator(`.docs-sidebar a[href="${destination}.html"]`).count(), 1);
