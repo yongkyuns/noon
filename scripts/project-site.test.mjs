@@ -82,3 +82,37 @@ test("staging preserves the tested playground, runtime paths, build identity and
     assert.equal(await readFile(path.join(staged, "index.html"), "utf8"), "new homepage", "failed admission must not delete a prior staged bundle");
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
+
+test("documentation pages are linked, themed, and embed the canonical WASM playground", async () => {
+  const docs = ["getting-started", "guide", "examples", "api", "architecture"];
+  const home = await read("web/site/index.html");
+  const css = await read("web/site/site.css");
+  const js = await read("web/site/site.js");
+  assert.match(home, /site\/docs\/getting-started\.html/);
+  assert.match(home, /data-theme-toggle/);
+  assert.match(css, /prefers-color-scheme:\s*dark/);
+  assert.match(css, /data-theme="dark"/);
+  assert.match(js, /noon-site-theme/);
+  assert.match(js, /localStorage/);
+  for (const id of docs) {
+    const html = await read("web/site/docs/" + id + ".html");
+    assert.match(html, /<main\b/);
+    assert.match(html, /<h1\b/);
+    assert.match(html, /href="\.\.\/site\.css"/);
+    assert.match(html, /src="\.\.\/site\.js"/);
+    assert.match(html, /data-theme-toggle/);
+    for (const page of docs) assert.ok(html.includes(page + ".html"), id + " missing " + page);
+    assert.doesNotMatch(html, /\bautoplay\b/);
+    for (const [, url] of html.matchAll(/<iframe[^>]+src="([^"]+)"/g)) {
+      assert.match(url, /^\.\.\/\.\.\/playground\.html\?catalog=showcase&amp;example=showcase-[a-z0-9-]+$/);
+      assert.match(html, /loading="lazy"/);
+    }
+  }
+  assert.match(await read("web/site/docs/architecture.html"), /src="\.\/overview\.svg"/);
+  assert.match(await read("web/site/docs/overview.svg"), /<svg/);
+  const examples = await read("web/site/docs/examples.html");
+  for (const id of ["showcase-first-scene", "showcase-wave-interference", "showcase-dynamic-scene", "showcase-editorial-cover"]) {
+    assert.ok(examples.includes("example=" + id), id);
+  }
+  assert.doesNotMatch(examples, /showcase-triangle-light/);
+});

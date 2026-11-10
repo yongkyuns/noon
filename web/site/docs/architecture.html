@@ -11,7 +11,7 @@
 <h1>Architecture</h1>
 <p class="docs-lede">Noon has one semantic model with distinct authoring frontends and platform hosts. The <a href="https://github.com/yongkyuns/noon/blob/master/docs/architecture.md">normative architecture document</a> is the source of truth; this page is an overview.</p>
 <h2 id="layers">Architecture in one picture</h2>
-<img src="https://raw.githubusercontent.com/yongkyuns/noon/master/docs/diagrams/overview.svg" alt="Noon architecture from authoring through semantic scene and execution plan to runtime and renderer" onerror="this.style.display='none'">
+<img src="./overview.svg" alt="Noon architecture from authoring through semantic scene and execution plan to runtime and renderer">
 <p>The engine path is:</p><pre><code class="language-text">Rust/Python authoring → Semantic Scene → Execution Plan → Runtime → Renderer</code></pre>
 <p>The semantic scene retains authored object identity and relationships. Lowering creates execution projections; the runtime evaluates the published state, and the renderer retains resources needed to present that state.</p>
 <h2 id="native">Native Rust</h2><p>Native Rust uses typed in-process boundaries with no Python or serialization between the scene, runtime, and renderer. <code>noon-native</code> provides windowing, surfaces, input, and presentation.</p>
