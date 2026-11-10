@@ -9,8 +9,12 @@ export function playgroundRedirect(locationLike) {
 }
 
 if (typeof window !== "undefined") {
-  const target = playgroundRedirect(window.location);
-  if (target) window.location.replace(target);
+  // The legacy query redirect applies only to the project homepage.
+  // Documentation pages must retain their own search parameters.
+  if (/\/(?:index\.html)?$/.test(window.location.pathname)) {
+    const target = playgroundRedirect(window.location);
+    if (target) window.location.replace(target);
+  }
   // No autoplay: clips start only after an explicit gesture, including when the
   // visitor prefers reduced motion. Native controls work without JavaScript.
   document.addEventListener("visibilitychange", () => {
