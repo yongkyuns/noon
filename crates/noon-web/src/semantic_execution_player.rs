@@ -2559,11 +2559,12 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_z_index(
-        &mut self,
+        &self,
         anchor: &noon::LayoutAnchor,
     ) -> Result<f64, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_z_index(&semantics, self.source.session(), anchor)
+        self.source
+            .scene()
+            .effective_z_index(anchor)
             .map_err(AuthoringFailure::from)
     }
 
@@ -2574,16 +2575,10 @@ impl SemanticExecutionPlayer {
         value: f64,
         family: bool,
     ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_z_index(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            anchor,
-            value,
-            family,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene_mut()
+            .set_z_index(anchor, value, family)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
