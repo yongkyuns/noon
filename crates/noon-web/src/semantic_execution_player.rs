@@ -2616,18 +2616,14 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_boolean_geometry_options(
-        &mut self,
+        &self,
         operation: noon::BooleanOperation,
         operands: &[noon::Mobject],
     ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_boolean_geometry_options(
-            &semantics,
-            self.source.session(),
-            operation,
-            operands,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene()
+            .effective_boolean_geometry_options(operation, operands)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
