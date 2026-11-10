@@ -86,6 +86,17 @@ The shared path is `Rust API -> Semantic Scene -> Execution Plan -> Runtime -> R
 
 A native Rust application can author, lower, execute, and render without Python, JavaScript, WASM, a browser runtime, JSON, serialization/deserialization, or a host-language bridge between engine layers. `noon-native` owns window/event-loop, surface, input, acquire/submit/present, and recovery mechanics at the platform edge.
 
+An explicit finite ordinary Rust source may instead use `noon-export`'s blocking
+host. It runs the source once through the existing `BlockingContinuation` relay,
+starting bounded retention before the first source edit. Engine-owned segment
+endpoints and completion admit retained publications; no display receipt or host
+clock is invented. Required callbacks/input and unsupported replay domains are
+checked before headless advancement. Only the finished original Scene/runtime
+owner may transfer to sealed-history frame sampling and the native file sink.
+Source-operation/boundary budgets and cooperative cancellation bound host calls;
+arbitrary Rust computation between calls is not preemptible. Retiring the source
+capability precedes handoff, failure or unwind; playback never reexecutes source.
+
 #### Browser/WASM host
 
 A Rust application compiled to WASM uses the same semantic, compiler, runtime, and renderer responsibilities in one WASM context. JavaScript may bootstrap the module, supply the canvas, and provide browser lifecycle glue, but it does not receive and re-send scene/runtime state between Rust layers. A browser target by itself is not a transport boundary.
@@ -100,7 +111,10 @@ process. Deterministic source preparation may retain the existing bounded Rust
 history and transfer its exact scene/session pair to the native viewer or GPU
 capture host; playback never reruns Python source. Required Python callbacks use
 the existing transactional sampled driver and cannot be promoted to prepared
-viewer playback without recorded admission. Finite 3D inputs, camera profiles,
+viewer playback without recorded admission. Finite native CPython MP4 export
+consumes that same sealed owner through the shared `ExportFramePolicy`, native
+capture and FFmpeg destination transaction; retained-history audio and unrecorded
+callbacks/input remain rejected. Finite 3D inputs, camera profiles,
 world motion and spatial domains use the same Rust operations as WASM. This native
 profile does not qualify the complete gallery, audio bindings, or physical performance;
 remaining frontend breadth stays with #2015 and #1874's conformance contract.

@@ -152,9 +152,19 @@ impl SceneInstance {
         self.replay_history.is_some()
     }
     pub fn replay_retention_valid(&self) -> bool {
-        self.replay_history
+        self.replay_retention_status().is_ok()
+    }
+    /// Inspect the existing scope without sealing, advancing or changing it.
+    /// The first retention failure remains authoritative after its payloads are released.
+    pub fn replay_retention_status(&self) -> Result<(), ReplayError> {
+        let history = self
+            .replay_history
             .as_ref()
-            .is_some_and(|history| history.failure.is_none())
+            .ok_or(ReplayError::NotRecording)?;
+        match history.failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
     pub fn invalidate_replay_domain(&mut self) {
         self.invalidate_replay(ReplayError::UnsupportedDomain);

@@ -1,10 +1,12 @@
 [package]
 name = "noon-render-wgpu"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-description = "Reusable retained WGPU renderer for Noon runtime state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 readme = "README.md"
+description = "Reusable retained WGPU renderer for Noon runtime state"
 
 [features]
 # Optional authored-source validation; no default parser dependency.
@@ -26,11 +28,11 @@ ci-noop = [
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
-noon-core = { path = "../noon-core" }
-noon-compile = { path = "../noon-compile" }
-noon-geometry = { path = "../noon-geometry" }
-noon-runtime = { path = "../noon-runtime" }
-noon-text = { path = "../noon-text" }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-compile = { version = "0.1.0", path = "../noon-compile" }
+noon-geometry = { version = "0.1.0", path = "../noon-geometry" }
+noon-runtime = { version = "0.1.0", path = "../noon-runtime" }
+noon-text = { version = "0.1.0", path = "../noon-text" }
 swash = "=0.2.10"
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
 

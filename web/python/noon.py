@@ -6,6 +6,8 @@ owns authoring syntax, argument conversion, and wrapper identity.
 
 from __future__ import annotations
 
+__version__ = "0.1.0"
+
 import math
 import operator
 import sys

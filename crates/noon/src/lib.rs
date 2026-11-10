@@ -62,8 +62,19 @@
 //! Membership edits preserve handles and use one atomic publication. Layout
 //! observes authored bounds during setup and effective bounds during execution.
 //! [`ScriptScene::effective_layout`] and [`ScriptScene::effective_family_layout`]
-//! explicitly query the current publication. Fluent animation requests currently
-//! target individual planar objects; family method targets remain unsupported.
+//! explicitly query the current publication. Fluent animation requests support
+//! individual planar objects and one flat vector family alongside independent
+//! objects. Animating that family's members separately in the same play is
+//! rejected atomically. Nested or content-owning groups and effect-bearing
+//! families are outside this method-target profile; see [`Animate`].
+//!
+//! [`ScriptScene`] also constructs images and coordinate families through the
+//! shared Scene operations. With their provider features enabled, `text`, `typst`,
+//! `math_typst`, and `code` construct ordinary retained content through the same
+//! capability. [`BlockingScene`] exposes those short operations as well, so a
+//! synchronous helper can construct a title or equation after a completed play
+//! without borrowing raw scene storage. Constructors leave content detached;
+//! use `add` (or a supported introducer animation) to display it.
 //!
 //! [`Scene`] and [`Mobject`] also support explicit authoring. Scene-owned operations such as
 //! geometry/family creation, membership, paint edits, translation and linear/grid arrangement use
@@ -547,7 +558,8 @@ pub mod prelude {
 pub use family_gradient::color_gradient;
 
 #[cfg(feature = "prepared-prefix")]
-pub use execution_session::{PrefixReader, SourceExecutionRequirement};
+pub use execution_session::PrefixReader;
+pub use execution_session::SourceExecutionRequirement;
 #[cfg(feature = "prepared-prefix")]
 pub use noon_runtime::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher};
 

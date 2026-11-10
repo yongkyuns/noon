@@ -156,6 +156,26 @@ fn ordinary_helpers_loops_updaters_and_post_play_reads_share_one_runtime() {
     assert!(scene.square(0.1).is_err());
 }
 
+#[cfg(all(feature = "native-text", feature = "typst", feature = "bundled-fonts"))]
+#[test]
+fn first_lesson_constructs_text_and_math_with_an_ordinary_blocking_source() {
+    let host = HeadlessHost::new();
+    let scene = host.capability();
+    noon::example_scenes::first_lesson::construct(&scene).unwrap();
+    assert_eq!(&*host.observations.borrow(), &[0.5, 1.0, 1.5, 2.0]);
+    assert_eq!(scene.time().unwrap(), 2.0);
+    host.finish().unwrap();
+    host.program(|program| {
+        assert_eq!(program.status(), LiveProgramStatus::Finished);
+        assert_eq!(program.session().frame().objects.len(), 5);
+    });
+    assert!(matches!(scene.text("retired"), Err(ScriptError::Inactive)));
+    assert!(matches!(
+        scene.math_typst(noon::MathTypst::new("x")),
+        Err(ScriptError::Inactive)
+    ));
+}
+
 #[test]
 fn invalid_boundaries_are_catchable_and_do_not_poison_the_next_call() {
     let host = HeadlessHost::new();
@@ -212,6 +232,10 @@ fn callback_reentrancy_rejects_source_access_without_panicking() {
     scene
         .add_updater(&line, move |target, frame| {
             assert!(matches!(callback_scene.time(), Err(ScriptError::Reentrant)));
+            assert!(matches!(
+                callback_scene.image_rgba8(1, 1, vec![0; 4]),
+                Err(ScriptError::Reentrant)
+            ));
             observed.set(observed.get() + 1);
             target.rotate_about_origin(frame.dt())
         })

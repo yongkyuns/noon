@@ -1,5 +1,5 @@
 //! Experimental source-owner admission; presentation remains independent.
-use super::ExecutionSession;
+use super::{ExecutionSession, SourceExecutionRequirement};
 use crate::ExecutionSegment;
 use noon_runtime::{PrefixBatch, PrefixError, PrefixPublisher};
 
@@ -75,22 +75,6 @@ mod camera_prefix_tests;
 #[cfg(all(test, feature = "typst", feature = "bundled-fonts"))]
 mod spatial_prefix_tests;
 
-/// Shared engine reasons why the current source needs observed execution.
-/// These are capability metadata, not permission to speculate callback/input work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SourceExecutionRequirement {
-    /// The host continuation has no contract permitting execution ahead of presentation.
-    HostEffects,
-    HostCallbacks,
-    EffectiveDisplay,
-    NativeInput,
-    Signals,
-    /// The existing retained scope or new sparse suffix cannot supply playback.
-    ReplayUnavailable(noon_runtime::ReplayError),
-    /// The original program must complete its existing rendering-host handshake.
-    ExternalResources,
-}
-
 impl ExecutionSession {
     /// Classify host source effects separately from the scene's replay domain.
     /// A quiet scene cannot prove that an arbitrary continuation is safe to run ahead.
@@ -104,28 +88,6 @@ impl ExecutionSession {
         match effects {
             crate::ContinuationEffects::Opaque => Some(SourceExecutionRequirement::HostEffects),
             crate::ContinuationEffects::SceneOnly => self.source_execution_requirement(),
-        }
-    }
-
-    /// Classify before any headless advance. The original source/continuation
-    /// must keep executing through its ordinary callback/input protocol; a host
-    /// may not reconstruct it or treat an endpoint-only callback sample as history.
-    pub fn source_execution_requirement(&self) -> Option<SourceExecutionRequirement> {
-        if !self.callback_schedule.is_empty() {
-            Some(SourceExecutionRequirement::HostCallbacks)
-        } else if self.derived_display_plan.is_some() {
-            Some(SourceExecutionRequirement::EffectiveDisplay)
-        } else if self.translation_drag.has_targets()
-            || !self.interaction_bindings.is_empty()
-            || self.reactive_projection.has_native_input_routes()
-        {
-            Some(SourceExecutionRequirement::NativeInput)
-        } else if self.runtime.inset_2d_views().next().is_some() {
-            Some(SourceExecutionRequirement::ReplayUnavailable(
-                noon_runtime::ReplayError::UnsupportedDomain,
-            ))
-        } else {
-            None
         }
     }
 

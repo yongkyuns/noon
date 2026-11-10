@@ -2,8 +2,8 @@
 
 `noon-export` is native GPU/output integration over the shared Rust engine and
 retained WGPU renderer. It has no dependency on the window/event-loop host,
-Python, JavaScript, or a browser. Native Python integration remains a separate
-language binding task, not another exporter.
+Python, JavaScript, or a browser. The optional native Python binding calls this
+same exporter for finite prepared scenes.
 
 ## Video and PNG output
 
@@ -11,12 +11,81 @@ A trusted installed FFmpeg build with `libx264`, PNG, MP4 and image2 support is
 required for these file adapters. MP4 soundtrack export also requires its AAC
 encoder and raw `f32le` input support. Capture-only use does not invoke FFmpeg.
 
+### Ordinary Rust source
+
+The first lesson uses the same unchanged synchronous `construct(&BlockingScene)`
+function as `noon_native::run_scene`. Export it without a window:
+
+```sh
+cargo run -p noon-export --example first_lesson -- lesson.mp4
+cargo run -p noon-export --example first_lesson -- --png lesson-images
+```
+
+The packaged [example](examples/first_lesson.rs) renders two seconds at 320×180
+and 30 FPS: 60 frames with a title, equation, two shapes moving together, and a
+caption introduced at 1.5 seconds. Change `CaptureOptions` for a larger output.
+In an application, keep your ordinary source function and pass it to the public
+entry point:
+
+```rust
+use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
+use noon_export::{output::{export_blocking_scene, OutputOptions}, CaptureOptions};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    export_blocking_scene(
+        noon::example_scenes::first_lesson::construct,
+        ExportFrameOptions {
+            frame_rate: FrameRate::new(30, 1)?,
+            start_frame: 0,
+            stop: ExportStop::SourceEnd,
+            max_frames: 3_000,
+            max_transitions_per_sample: 64,
+            final_hold_seconds: 0.0,
+        },
+        CaptureOptions::new(320, 180),
+        OutputOptions::mp4("lesson.mp4"),
+    )?;
+    Ok(())
+}
+```
+
+Source runs once on its original Scene/runtime owner. Every `play` or `wait`
+completes through the shared engine boundary; bounded history retains the
+coherent publication. The completed owner is sealed and handed to the existing
+frame policy, renderer and file sink. Playback and cropping do not rerun source.
+Preparation admits retention, without claiming that a frame was displayed.
+It is live from time zero. Apply mutations through the supplied `BlockingScene`
+(`scene.set_fill`, `scene.shift`, and the other scoped operations), including the
+initial setup. Direct mutable-handle writes that bypass Scene publication cannot
+be admitted to the retained owner.
+
+`export_blocking_scene_with_limits` configures `BlockingSourceLimits`: defaults
+are 100,000 host operations, 10,000 boundaries, and the runtime's 100,000 retained
+revision / 1,000,000 immutable payload budget. Initial construction at time zero
+also uses these budgets. These limits are separate from the output frame cap;
+zero-duration waits cannot bypass the source boundary cap. A static source with
+no elapsed interval needs a positive `final_hold_seconds` to emit frames.
+
+This finite visual profile rejects required callbacks, unrecorded native input,
+unsupported effective display/history and retained-history audio. Use the native
+viewer for sources requiring its observed callback/input protocol. An ordinary
+transactional constructor error may be caught when it leaves the scene valid;
+a retention, cancellation or source-budget failure terminally retires the run.
+Source or host-call panics retire the capability before unwinding, including a
+host-call panic caught by application code. Retained `BlockingScene` clones cannot
+write after completion or failure. Cancellation is cooperative between host
+operations and output samples; arbitrary Rust code between host calls cannot be
+preempted. Source/preparation failure does not create or replace output, and the
+existing file transaction handles capture/encoder failure cleanup.
+
+### Explicit live-program integration
+
 ```sh
 cargo run --release -p noon-export --example render_video -- scene.mp4
 cargo run --release -p noon-export --example render_video -- scene-images --png
 ```
 
-The example exports the existing Rust `FollowingGraphCamera` program at 1280x720,
+This example exports the existing Rust `FollowingGraphCamera` program at 1280x720,
 30 FPS. The library entry point `output::export_file` accepts a normal fresh
 `LiveProgram`, callback table, `ExportFrameOptions`, `CaptureOptions` and
 `OutputOptions`. Use `OutputOptions::mp4(path)` or `::png_sequence(path)`.
@@ -30,6 +99,23 @@ MP4 uses H.264, YUV420p, `veryfast`, CRF 18 by default and no B-frames. CRF is
 configurable from 0 through 51. Even dimensions are required; odd dimensions are
 rejected instead of being resized. PNG preserves every captured RGBA byte and
 supports odd dimensions. The file adapters currently accept opaque input only.
+
+## Sealed source history
+
+`output::export_scene_file` accepts an existing `SceneExecution` with a finite
+immutable plan or completed, sealed deterministic history. It seeks and samples
+that owner through the same frame policy, capture and output sink. Source code
+is not executed again, and inspecting a later frame before export does not change
+the zero-origin sampling/crop contract. Unsealed history, unrecorded callbacks
+or input, and retained-history audio are rejected explicitly.
+
+`output::export_scene_file_with_interrupt` additionally checks a cooperative host
+interrupt between samples and immediately before output publication, including
+after encoder finalization. Native Python uses this entry point for
+`PreparedScene.export_mp4`; it transfers and retires the prepared owner on either
+success or runtime failure. Rendering and encoder waits keep their configured
+finite deadlines. An abandoned export cleans its private staging files and
+preserves an existing destination.
 
 ## Finite scenes with a soundtrack
 
@@ -112,7 +198,7 @@ An interval shorter than one audio sample can contain no presented audio frames.
 PNG sequences are explicitly visual-only and omit authored audio. The existing
 `export_file` live-program MP4 path still rejects audio until live execution is
 qualified. Finite Python scenes can use the browser capture and native media
-import described below. In-process native CPython bindings, live/history audio
+import described below. In-process native CPython audio bindings, live/history audio
 export and narration remain separate work tracked by #1874 and #2263.
 
 ## Finite Python scenes and prepared media import
@@ -152,8 +238,8 @@ explicitly instead of silently shortening the movie; a general completed
 authoring horizon remains outside this finite profile. The script compares the
 canonical authoring duration with the shared runtime's admitted endpoint without
 overriding either. Scene playback controls cannot mutate an active export.
-The browser is the pixel producer; this path makes no claim that native WGPU
-rendered Python's frames or that a native CPython binding exists.
+The browser is the pixel producer; this path does not use the native CPython
+binding or native WGPU rendering.
 
 Omit `--mp4` to retain only the prepared capture, or supply `--encoder PATH` to use
 an already built `encode_prepared_capture` executable. Without that option, the
@@ -404,3 +490,9 @@ This typed API remains a prerequisite for in-process native language-binding
 integration. The finite Pyodide path described above captures through the normal
 browser renderer and imports finished media into the native sink; it does not
 use `SessionCapture` or replace a native CPython binding.
+
+## Release candidates
+
+Registry names are still being selected in [#2433](https://github.com/yongkyuns/noon/issues/2433).
+The current 0.1.0 artifacts are local candidates; the existing crates.io/PyPI
+`noon` projects are unrelated. Rust builds require version 1.98.1 or newer.

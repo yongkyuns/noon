@@ -12,6 +12,8 @@ mod composition;
 mod context;
 mod coordinates;
 mod effects;
+#[cfg(feature = "capture")]
+mod export;
 mod family;
 mod geometry;
 mod image;
@@ -63,6 +65,11 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
+    #[cfg(feature = "capture")]
+    {
+        m.add_class::<export::ExportCancellation>()?;
+        m.add_class::<export::ExportSummary>()?;
+    }
     m.add_class::<callback_values::CallbackLineTarget>()?;
     m.add_class::<image::ImageOptions>()?;
     m.add_class::<svg::SvgDefaults>()?;
