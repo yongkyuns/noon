@@ -51,7 +51,6 @@ pub use crate::scene_script::{
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.
 pub const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 
-pub use crate::boolean_authoring::effective_boolean_geometry_options;
 pub use crate::compact_value_authoring::semantic_object_state_from_compact;
 pub use crate::execution_segment::{ExecutionSegmentSequence, ExecutionSegmentToken};
 pub use crate::execution_session::{
