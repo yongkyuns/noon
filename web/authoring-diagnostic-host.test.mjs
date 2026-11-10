@@ -32,7 +32,7 @@ constructor.destroy = () => {};
 await run({
   globals: { get: () => constructor },
   runPython(code) {
-    if (code.includes("source_execution_proof(__noon_source)")) {
+    if (code.includes("import source_execution_proof")) {
       return JSON.stringify({ admitted: false, reason: { code: "unknown_name", span: null } });
     }
     scripts.compile = code;
