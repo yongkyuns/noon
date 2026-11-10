@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,5 +31,8 @@ export async function buildProjectSite(root) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.log(await buildProjectSite(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")));
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const output = await buildProjectSite(root);
+  execFileSync("bash", [path.join(root, "scripts/build-project-docs.sh"), root, output], { cwd: root, stdio: "inherit" });
+  console.log(output);
 }
