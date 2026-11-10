@@ -4913,6 +4913,7 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
                 and isinstance(node.args[0], ast.Name) and node.args[0].id == self.receiver
                 and isinstance(node.args[1], ast.Constant) and type(node.args[1].value) is str
                 and node.args[1].value.startswith("_") and not node.args[1].value.startswith("__")
+                and node.args[1].value not in self.helpers and not _reserved_scene_field(node.args[1].value)
                 and isinstance(node.args[2], ast.Constant) and node.args[2].value is None):
             # A literal optional field read can stay synchronous. Binding
             # checks that the original function resolves the builtin getter.
@@ -5212,10 +5213,16 @@ def bind_portable_helpers(method, code_pairs):
     """Resolve the complete same-class method graph without calling descriptors."""
     expected = getattr(code_pairs, "helpers", {}).get(method.__func__.__code__, {})
     scene = method.__self__
+    if expected and (type(scene).__getattribute__ is not object.__getattribute__
+                     or inspect.getattr_static(type(scene), "__getattr__", None) is not None):
+        return None
     methods = {}
     for name, code in expected.items():
         original = inspect.getattr_static(scene, name, None)
         if not isinstance(original, FunctionType) or original.__code__ is not code:
+            return None
+        bound = getattr(scene, name)
+        if not isinstance(bound, MethodType) or bound.__self__ is not scene:
             return None
         methods[original] = _bind_portable_method(original, code_pairs[code], scene)
     if expected:

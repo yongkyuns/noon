@@ -330,6 +330,8 @@ value: MissingName = 2
         self.assertEqual(events, [0.5, "inner"])
         self.assertFalse(hasattr(scene, _manim_scene._PORTABLE_HELPERS))
 
+        scene.inner = type(scene).inner  # A bare instance function is not bound.
+        self.assertIsNone(bind_portable_helpers(scene.construct, pairs))
         scene.inner = lambda: "override"
         self.assertIsNone(bind_portable_helpers(scene.construct, pairs))
         await _manim_scene.execute_construct(scene, portable_constructs=pairs)
