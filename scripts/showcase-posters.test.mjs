@@ -138,7 +138,7 @@ test("CUDA showcase has exact renderer-derived, source-bound supplementary poste
   for (const mutate of [
     (copy) => { copy.capture.rendererBackend = "CPU"; },
     (copy) => { copy.capture.cudaValidated = true; },
-    (copy) => { copy.capture.artifactId = 0; },
+    (copy) => { copy.capture.script = "unqualified"; },
     (copy) => { copy.capture.authoredDurationSeconds = 81.71; },
     (copy) => { copy.capture.runtimeBuildIdentity.buildId = "wrong"; },
     (copy) => { copy.sample.publishedTime += 1; },

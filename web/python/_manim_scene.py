@@ -48,6 +48,7 @@ _ASYNC_CONTINUATION_PENDING = "_noon_async_continuation_pending"
 _SYNCHRONOUS_CONTINUATION_MODE = "_noon_synchronous_continuation_mode"
 _PORTABLE_CONSTRUCT_MODE = "_noon_portable_construct_mode"
 _PORTABLE_BARRIER_CALL = "_noon_portable_barrier_call"
+_PORTABLE_HELPERS = "_noon_portable_helpers"
 _DEFAULT_SYNCHRONOUS_CONTINUATION_CANDIDATE = (
     "_noon_default_synchronous_continuation_candidate"
 )
@@ -974,22 +975,30 @@ async def execute_construct(
             portable_construct = None
             if canonical and portable_constructs:
                 from _manim_source_execution import (
-                    bind_portable_construct, has_portable_scene_methods,
+                    bind_portable_construct, bind_portable_helpers, has_portable_scene_methods,
                 )
 
                 # Inspect the instance after setup(), without executing getters.
                 # Overrides and dynamic lookup retain the original call path.
-                candidate = bind_portable_construct(scene.construct, portable_constructs)
+                construct = scene.construct
+                candidate = bind_portable_construct(construct, portable_constructs)
                 if candidate is not None:
-                    methods = _portable_scene_methods(scene, candidate.__code__.co_names)
-                    if methods is not None and has_portable_scene_methods(scene, **methods):
-                        portable_construct = candidate
+                    helpers = bind_portable_helpers(construct, portable_constructs)
+                    if helpers is not None:
+                        used_names = set(candidate.__code__.co_names)
+                        for helper in helpers.values():
+                            used_names.update(helper.__code__.co_names)
+                        methods = _portable_scene_methods(scene, used_names)
+                        if methods is not None and has_portable_scene_methods(scene, **methods):
+                            portable_construct = candidate
             if portable_construct is not None:
                 _begin_async_continuation_construct(scene)
                 setattr(scene, _PORTABLE_CONSTRUCT_MODE, True)
+                setattr(scene, _PORTABLE_HELPERS, helpers)
                 try:
                     await portable_construct()
                 finally:
+                    delattr(scene, _PORTABLE_HELPERS)
                     setattr(scene, _PORTABLE_CONSTRUCT_MODE, False)
                     setattr(scene, _PORTABLE_BARRIER_CALL, False)
                     _finish_async_continuation_construct(scene)
@@ -1032,6 +1041,11 @@ async def await_source_barrier(method, /, *args, **kwargs):
             or not getattr(scene, _PORTABLE_CONSTRUCT_MODE, False)):
         raise RuntimeError("portable barrier must be a canonical operation on the current Scene")
     function = getattr(method, "__func__", None)
+    helpers = getattr(scene, _PORTABLE_HELPERS, None)
+    if helpers:
+        helper = helpers.get(function)
+        if helper is not None:
+            return await helper(*args, **kwargs)
     if function not in (_base.Scene.play, _base.Scene.wait):
         from _manim_vector_space import LinearTransformationScene, VectorScene
         from _noon_spatial import ThreeDScene

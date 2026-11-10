@@ -6,14 +6,14 @@ wrapper that would turn globals into locals. The deferred callbacks themselves
 stay synchronous and are never rewritten.
 
 The original construct definitions are retained. A second, never-executed module compilation
-supplies coroutine code for ordinary ``construct`` methods with direct scene
-barriers and resource-dependent effect/membership calls,
+supplies coroutine code for ordinary ``construct`` methods and direct calls to
+their same-class helpers, with canonical scene and resource barriers,
 including assigned and chained results. Binding that code reuses the original
 function's globals, defaults and closure; class/decorator/module effects are not
 replayed. All barriers still use the canonical Scene implementation and runtime.
 
-This is deliberately not a general sync-to-async Python compiler. Indirect/helper
-barriers, generators and custom Scene methods keep the original execution path.
+Indirect barriers, generators and overridden methods keep their original
+execution path.
 """
 
 from __future__ import annotations
@@ -4854,8 +4854,10 @@ class _CooperativeSourceCheckpoints(ast.NodeTransformer):
 
 
 class _ConstructBody(_CooperativeSourceCheckpoints):
-    def __init__(self, receiver: str):
+    def __init__(self, receiver: str, helpers=()):
         self.receiver = receiver
+        self.helpers = helpers
+        self.called_helpers = set()
         self.barriers = 0
         self.unsupported = False
         self.allowed_receivers: set[int] = set()
@@ -4891,7 +4893,7 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
             if (node.attr.startswith("__") or
                     (node.attr in _SCENE_CALLS and isinstance(node.ctx, (ast.Store, ast.Del)))):
                 self.unsupported = True
-            if node.attr in CONSTRUCT_SCENE_BARRIERS:
+            if node.attr in CONSTRUCT_SCENE_BARRIERS or node.attr in self.helpers:
                 # Aliasing, storing, passing, or using a barrier's return value
                 # requires the original synchronous/explicit async execution.
                 self.unsupported = True
@@ -4901,6 +4903,20 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
 
     def visit_Call(self, node: ast.Call):
         func = node.func
+        if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                and func.value.id == self.receiver and func.attr in self.helpers):
+            self.allowed_receivers.add(id(func.value))
+            self.called_helpers.add(func.attr)
+            return self._await_scene_call(node)
+        if (self.helpers and isinstance(func, ast.Name) and func.id == "getattr"
+                and not node.keywords and len(node.args) == 3
+                and isinstance(node.args[0], ast.Name) and node.args[0].id == self.receiver
+                and isinstance(node.args[1], ast.Constant) and type(node.args[1].value) is str
+                and node.args[1].value.startswith("_") and not node.args[1].value.startswith("__")
+                and isinstance(node.args[2], ast.Constant) and node.args[2].value is None):
+            # A literal optional field read can stay synchronous. Binding
+            # checks that the original function resolves the builtin getter.
+            self.allowed_receivers.add(id(node.args[0]))
         if isinstance(func, ast.Attribute) and func.attr in RESOURCE_BARRIER_METHODS:
             self.allowed_receivers.add(id(func.value))
             if func.attr == "add_effect" and isinstance(func.value, ast.Name) and func.value.id == self.receiver:
@@ -4917,6 +4933,14 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
                 and func.value.id == self.receiver and func.attr not in _SCENE_CALLS):
             self.unsupported = True
         return self.generic_visit(node)
+
+    def _await_scene_call(self, call):
+        wrapped = ast.Call(
+            func=ast.Name(id=BARRIER_GLOBAL, ctx=ast.Load()),
+            args=[call.func, *[self.visit(arg) for arg in call.args]],
+            keywords=[self.visit(keyword) for keyword in call.keywords],
+        )
+        return ast.copy_location(ast.Await(value=wrapped), call)
 
     def visit_Name(self, node: ast.Name):
         # Passing/rebinding the scene can hide a synchronous barrier in a helper.
@@ -4967,20 +4991,63 @@ class _ConstructBody(_CooperativeSourceCheckpoints):
 class _ConstructCompiler(ast.NodeTransformer):
     def __init__(self):
         self.locations: set[tuple[str, int]] = set()
+        self.helpers: dict[tuple[str, int], dict[str, int]] = {}
+
+    @staticmethod
+    def rewrite(node, helpers=()):
+        arguments = [*node.args.posonlyargs, *node.args.args]
+        if not arguments or node.decorator_list:
+            return None, None
+        body = _ConstructBody(arguments[0].arg, helpers)
+        candidate = copy.deepcopy(node)
+        candidate.body = body.generic_visit(ast.Module(body=candidate.body, type_ignores=[])).body
+        if body.unsupported:
+            return None, body
+        return ast.copy_location(ast.AsyncFunctionDef(**vars(candidate)), node), body
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        methods = [method for method in node.body
+                   if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        by_name = {method.name: method for method in methods}
+        construct = by_name.get("construct")
+        if not isinstance(construct, ast.FunctionDef) or len(methods) != len(by_name):
+            return self.generic_visit(node)
+        names = {name for name, method in by_name.items()
+                 if isinstance(method, ast.FunctionDef) and name not in _SCENE_CALLS
+                 and name not in {"construct", "setup", "tear_down"} and not name.startswith("__")}
+        rewritten, body = self.rewrite(construct, names)
+        if rewritten is None or not body.called_helpers:
+            return self.generic_visit(node)
+        pending = body.called_helpers.copy()
+        replacements = {"construct": rewritten}
+        barriers = body.barriers
+        while pending:
+            name = pending.pop()
+            replacement, body = self.rewrite(by_name[name], names)
+            if replacement is None:
+                return self.generic_visit(node)
+            replacements[name] = replacement
+            pending.update(body.called_helpers - replacements.keys())
+            barriers += body.barriers
+        if not barriers:
+            return self.generic_visit(node)
+        self.helpers[("construct", construct.lineno)] = {
+            name: by_name[name].lineno for name in replacements if name != "construct"
+        }
+        self.locations.update((name, by_name[name].lineno) for name in replacements)
+        node.body = [replacements.get(member.name, member)
+                     if isinstance(member, ast.FunctionDef) else self.visit(member)
+                     for member in node.body]
+        return node
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         if node.name != "construct":
             return self.generic_visit(node)
-        arguments = [*node.args.posonlyargs, *node.args.args]
-        if not arguments or node.decorator_list:
-            return node
-        body = _ConstructBody(arguments[0].arg)
-        candidate = copy.deepcopy(node)
-        candidate.body = body.generic_visit(ast.Module(body=candidate.body, type_ignores=[])).body
-        if body.unsupported or not body.barriers:
+        candidate, body = self.rewrite(node)
+        if candidate is None or not body.barriers:
             return node
         self.locations.add((node.name, node.lineno))
-        return ast.copy_location(ast.AsyncFunctionDef(**vars(candidate)), node)
+        return candidate
 
     def visit_AsyncFunctionDef(self, node):
         # Explicitly async source is already correct. Never double-await it.
@@ -4992,6 +5059,12 @@ def _function_codes(code: CodeType):
         if isinstance(value, CodeType):
             yield value
             yield from _function_codes(value)
+
+
+class _PortableCodePairs(dict):
+    def __init__(self):
+        super().__init__()
+        self.helpers: dict[CodeType, dict[str, CodeType]] = {}
 
 
 class _ModuleBarriers(_CooperativeSourceCheckpoints):
@@ -5052,11 +5125,10 @@ def compile_authoring_source(
             COOPERATIVE_CHECKPOINT_GLOBAL)):
         return original, {}
     originals = list(_function_codes(original))
-    has_construct = any(
-        code.co_name == "construct"
-        and not code.co_flags & (inspect.CO_COROUTINE | inspect.CO_GENERATOR)
-        and (CONSTRUCT_SCENE_BARRIERS | {"add_effect"}).intersection(code.co_names)
-        for code in originals
+    ordinary = [code for code in originals if not code.co_flags & (inspect.CO_COROUTINE | inspect.CO_GENERATOR)]
+    has_construct = any(code.co_name == "construct" for code in ordinary) and any(
+        (CONSTRUCT_SCENE_BARRIERS | {"add_effect"}).intersection(code.co_names)
+        for code in ordinary
     )
     has_module_barrier = bool({"play", "wait", "add_effect"}.intersection(original.co_names))
     # Static, explicit-async and export-only source retains the fast path.
@@ -5087,13 +5159,21 @@ def compile_authoring_source(
         for code in _function_codes(portable_code)
         if code.co_flags & inspect.CO_COROUTINE
     }
-    pairs = {}
+    pairs = _PortableCodePairs()
+    original_codes = {(code.co_name, code.co_firstlineno): code for code in originals}
     for code in originals:
         if (code.co_name, code.co_firstlineno) not in compiler.locations:
             continue
         replacement = portable_codes.get((code.co_qualname, code.co_firstlineno))
         if replacement is not None and replacement.co_freevars == code.co_freevars:
             pairs[code] = replacement
+    for location, dependencies in compiler.helpers.items():
+        construct = original_codes[location]
+        helpers = {name: original_codes[(name, line)] for name, line in dependencies.items()}
+        if all(code in pairs for code in helpers.values()):
+            pairs.helpers[construct] = helpers
+        else:
+            pairs.pop(construct, None)
     return module_code, pairs
 
 
@@ -5116,12 +5196,37 @@ def bind_portable_construct(
     code = code_pairs.get(original.__code__)
     if code is None:
         return None
+    return _bind_portable_method(original, code, method.__self__)
+
+
+def _bind_portable_method(original, code, scene):
     portable = FunctionType(
         code, original.__globals__, original.__name__, original.__defaults__, original.__closure__
     )
     original.__globals__.setdefault(COOPERATIVE_CHECKPOINT_GLOBAL, await_source_checkpoint)
     portable.__kwdefaults__ = original.__kwdefaults__
-    return MethodType(portable, method.__self__)
+    return MethodType(portable, scene)
+
+
+def bind_portable_helpers(method, code_pairs):
+    """Resolve the complete same-class method graph without calling descriptors."""
+    expected = getattr(code_pairs, "helpers", {}).get(method.__func__.__code__, {})
+    scene = method.__self__
+    methods = {}
+    for name, code in expected.items():
+        original = inspect.getattr_static(scene, name, None)
+        if not isinstance(original, FunctionType) or original.__code__ is not code:
+            return None
+        methods[original] = _bind_portable_method(original, code_pairs[code], scene)
+    if expected:
+        for function in (method.__func__, *methods):
+            code = function.__code__
+            if ("getattr" in (*code.co_varnames, *code.co_cellvars, *code.co_freevars)
+                    or "getattr" in code.co_names
+                    and function.__globals__.get("getattr", function.__builtins__.get("getattr"))
+                    is not builtins.getattr):
+                return None
+    return methods
 
 
 def has_portable_scene_methods(scene: object, **methods: FunctionType | None) -> bool:

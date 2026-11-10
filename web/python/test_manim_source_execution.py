@@ -10,7 +10,7 @@ from unittest.mock import patch
 import unittest
 
 from _manim_source_execution import (
-    BARRIER_GLOBAL, bind_portable_construct, compile_authoring_source,
+    BARRIER_GLOBAL, bind_portable_construct, bind_portable_helpers, compile_authoring_source,
     has_portable_scene_methods,
     authoring_source_scope, cooperative_source_yield_scope, current_source_invocation,
 )
@@ -288,6 +288,52 @@ value: MissingName = 2
         release.set()
         await task
         self.assertEqual(events[-5:], ["completed", "after play", ("wait", 0.5), "completed", "after wait"])
+
+    async def test_same_class_helpers_suspend_in_order_without_replacing_methods(self):
+        import noon
+        with patch.dict(sys.modules, {"js": SimpleNamespace(noonResolveAnimationOptions=lambda *args: None)}):
+            import _manim_scene
+
+        events = []
+        release = asyncio.Event()
+
+        def wait(scene, duration):
+            async def pending():
+                events.append(duration)
+                await release.wait()
+            return pending()
+
+        source = textwrap.dedent('''
+            class Example(Scene):
+                def inner(self, duration=0.5):
+                    self.wait(duration)
+                    return "inner"
+                def outer(self):
+                    return self.inner()
+                def construct(self):
+                    events.append(self.outer())
+        ''')
+        code, pairs = compile_authoring_source(source)
+        namespace = {"Scene": noon.Scene, "events": events, BARRIER_GLOBAL: _manim_scene.await_source_barrier}
+        exec(code, namespace)
+        scene = namespace["Example"]()
+        scene._canonical_authoring_context = object()
+        original = scene.outer.__func__
+        with patch.object(noon.Scene, "wait", wait):
+            task = asyncio.create_task(_manim_scene.execute_construct(scene, portable_constructs=pairs))
+            await asyncio.sleep(0)
+            self.assertEqual(events, [0.5])
+            self.assertIs(scene.outer.__func__, original)
+            self.assertFalse(inspect.iscoroutinefunction(scene.inner))
+            release.set()
+            await task
+        self.assertEqual(events, [0.5, "inner"])
+        self.assertFalse(hasattr(scene, _manim_scene._PORTABLE_HELPERS))
+
+        scene.inner = lambda: "override"
+        self.assertIsNone(bind_portable_helpers(scene.construct, pairs))
+        await _manim_scene.execute_construct(scene, portable_constructs=pairs)
+        self.assertEqual(events[-1], "override")
 
     async def test_effect_preparation_suspends_before_later_source_calls(self):
         events, release = [], asyncio.Event()
