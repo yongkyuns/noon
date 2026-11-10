@@ -13,6 +13,7 @@ import {browserArgs} from './manim-raster-support.mjs';
 import {checkSample, checkHighlight, checkTextRegions} from './cuda-transpose-pixels.mjs';
 import {stringifyEvidence} from './cuda-transpose-report.mjs';
 import {createPyodideResourceCache} from './pyodide-resource-cache.mjs';
+import {disableAuthoringJspi} from './playground-browser-support.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const artifactDir = path.resolve(process.env.NOON_CUDA_ARTIFACTS ?? path.join(root, 'cuda-transpose-qualification'));
@@ -52,16 +53,17 @@ if (process.env.NOON_CUDA_CAPTURE) {
 const mutations = {
   none: '',
   wrong_bank: `_original_bank_point = bank_point\ndef bank_point(bank):\n    return _original_bank_point((bank + 1) % 32)\n`,
-  wrong_highlight: `_original_focus = CudaTransposeBanks.focus\nasync def _bad_focus(self, step):\n    return await _original_focus(self, 'store' if step == 'read' else step)\nCudaTransposeBanks.focus = _bad_focus\n`,
   detached_label: `_original_packet_motion = packet_motion\ndef packet_motion(parts, destination, scale=1.0):\n    return _original_packet_motion(parts[:1], destination, scale)\n`,
   invisible_packet: `_original_packet = packet\ndef packet(lane, point, scale=1.0):\n    parts = _original_packet(lane, point, scale)\n    if lane == 9:\n        parts[0].set_fill(opacity=0.0)\n    return parts\n`,
-  early_store: `async def _early_store(self, trace, requests):
-    await self.move_step('store', *(a for i, parts in enumerate(requests)
-        for a in packet_motion(parts, output_point(i, COLUMN), scale=0.20)),
-        seconds=0.5, proof={'kind':'store', 'trace':trace, 'packets':requests})
-CudaTransposeBanks.bank_replay = _early_store
-`,
   dim_highlight: 'CODE_HIGHLIGHT_FILL = 0.01\n',
+};
+const methodMutations = {
+  wrong_highlight: ['        keys = SOURCE_STEPS[step]', `        if step == 'read':
+            step = 'store'`],
+  early_store: ['        stride, reads = trace["stride"], trace["reads"]', `        self.move_step('store', *(a for i, parts in enumerate(requests)
+            for a in packet_motion(parts, output_point(i, COLUMN), scale=0.20)),
+            seconds=0.5, proof={'kind':'store', 'trace':trace, 'packets':requests})
+        return`],
 };
 const expectedFailure = {wrong_bank: /CUDA_FIDELITY\[position\]|CUDA_PIXELS\[packet\]/,
   wrong_highlight: /CUDA_FIDELITY\[highlight\]/,
@@ -76,14 +78,19 @@ const cases = [
   ...Object.keys(expectedFailure).map(fault => ({column:3, speed:1, fault})),
 ];
 function assembled(config) {
-  return `${source}\n${probe}\nimport json as _cuda_json\nfrom js import console as _cuda_console\n` +
+  let sceneSource = source;
+  if (Object.hasOwn(methodMutations, config.fault)) {
+    const [anchor, fault] = methodMutations[config.fault];
+    assert.equal(source.split(anchor).length, 2, 'mutation must target exactly one source statement');
+    sceneSource = source.replace(anchor, `${fault}\n${anchor}`);
+  }
+  return `${sceneSource}\n${probe}\nimport json as _cuda_json\nfrom js import console as _cuda_console\n` +
     `_cuda_config = _cuda_json.loads(${JSON.stringify(JSON.stringify(config))})\n` +
     `SPEED = _cuda_config['speed']\nCOLUMN = _cuda_config['column']\n` +
-    mutations[config.fault] +
+    (mutations[config.fault] ?? '') +
     `_cuda_probe = CudaVisualProbe(_cuda_config, lambda message: _cuda_console.log('NOON_CUDA_AUDIT ' + _cuda_json.dumps(message, allow_nan=False)))\n` +
-    `_original_cuda_construct = CudaTransposeBanks.construct\n` +
-    `async def _qualified_cuda_construct(self):\n    self._cuda_probe = _cuda_probe\n    await _original_cuda_construct(self)\n    _cuda_probe.finish(self)\n` +
-    `CudaTransposeBanks.construct = _qualified_cuda_construct\n`;
+    `def _qualified_cuda_setup(self):\n    self._cuda_probe = _cuda_probe\n    _cuda_probe.scene = self\n` +
+    `CudaTransposeBanks.setup = _qualified_cuda_setup\n`;
 }
 function eventQueue() {
   const events = []; let pending = null;
@@ -98,6 +105,9 @@ function eventQueue() {
 let browser, server;
 try {
   server = await serveRepository(root, Number(process.env.NOON_CUDA_PORT ?? 4228), {crossOriginIsolated:true});
+  const identity = await fetch(`${server.baseUrl}/web/runtime-build-identity.json`);
+  assert.ok(identity.ok, 'CUDA qualification requires a served runtime build identity');
+  report.runtimeBuildIdentity = await identity.json();
   browser = await playwright.chromium.launch({channel:'chromium', headless:true, args:browserArgs('webgpu')});
   for (const config of cases) {
     const name = `column-${config.column}-speed-${config.speed}-${config.fault}`;
@@ -106,6 +116,7 @@ try {
     const queue = eventQueue(); const observations = [];
     const page = await browser.newPage({viewport:{width:1280,height:720}, deviceScaleFactor:1});
     await resourceCache.install(page.context());
+    await disableAuthoringJspi(page.context());
     let failure = null;
     page.on('console', message => {
       const text = message.text();
@@ -144,6 +155,9 @@ try {
           sample: time => Promise.race([execution.sampleToAuthoredTime(time), failure])};
         await Promise.race([attached, failure]);
       }, assembled(config));
+      assert.equal(await page.evaluate(() => window.__noonNoJspiWorkerWrapped), true);
+      evidence.rendererBackend = await page.evaluate(() => window.cudaQualification.execution.rendererBackend);
+      assert.equal(evidence.rendererBackend, 'WebGPU');
       let completed = false;
       let midpointChecks = 0;
       while (!completed) {

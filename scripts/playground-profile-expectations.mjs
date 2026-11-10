@@ -38,7 +38,7 @@ const rows = [
   ['showcase-pointer-selection','showcase_pointer_selection.py','98b599c22c9871165bcae52e2cbbbed192eb61dd86b30c2de660058e7ff2a15c','incremental','ordinary',['native-input'], 'looped'],
   ['showcase-translation-drag','showcase_translation_drag.py','263b7762e09151e244f377bfd345302141c91ff65235dbc308487f75acde8817','incremental','input-handoff',['native-input'], 'input-handoff'],
   ['showcase-triangle-light','showcase_triangle_light.py','242698c9d9e6063dfc920be09af25b1112c615e3528507b920c3b1e1e062eaa7','incremental','ordinary',[], 'looped'],
-  ['showcase-cuda-transpose','cuda_transpose_banks.py','a23e6193d0609ce1c3f9528e8d8e6d8cf28d97fb443f7deba015c3d1cdd4d73a','incremental','ordinary',[], 'looped'],
+  ['showcase-cuda-transpose','cuda_transpose_banks.py','5e6d349cd193bc158d335789e290ff5a2b0df16628b745467aa9d65623f80b5e','incremental','ordinary',[], 'looped'],
   ['showcase-shader-material','showcase_shader_material.py','cfe0de84b5e1ae00e010ec40155267ad14cdf6066d4209f82149978910348689','incremental','ordinary',[], 'looped'],
   ['showcase-glass-lens','showcase_glass_lens.py','33103a1db643b62d5c14384046a5ea5f4e33e75052048b2c783c85a70ca10d52','incremental','ordinary',[], 'looped'],
   ['showcase-wave-interference','showcase_wave_interference.py','90222ca44bc6c821bdae34453bca323b532090aca125637c0fabea455f4fa128','incremental','ordinary',['sections'], 'looped'],

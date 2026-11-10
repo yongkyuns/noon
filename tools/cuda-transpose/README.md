@@ -10,8 +10,8 @@ This example is **reproduced with Noon for demonstration purposes**, based on
 - [Original unpadded shared-memory kernel](https://github.com/ourarash/cuda-algorithm-lab/blob/main/matrix_transpose/02_shared_memory/02_transpose_shared_memory.cu)
 
 The animation adapts the explanation into a non-interactive, Manim-style Noon
-scene. Explicit async construction awaits the normal play/wait continuations on
-browsers with or without JavaScript Promise Integration. The full third-party copyright and MIT permission notice is retained in
+scene. Ordinary Python helpers use the same playback barriers as `construct`
+in browsers with or without JavaScript Promise Integration. The full third-party copyright and MIT permission notice is retained in
 [`cuda_transpose_banks.LICENSE`](../../web/python/examples/cuda_transpose_banks.LICENSE),
 separate from the scene's short attribution header. Keep that notice with
 redistributed copies of the scene or instrumented CUDA kernel.
@@ -87,7 +87,5 @@ The real browser qualification keeps all three original positive configurations
 and six required negative controls. The existing CI and nightly/manual oracle
 retain the same fifteen-minute budget. A successful browser run is functional
 renderer evidence, not physical iPhone performance or CUDA hardware execution.
-The previous async playback implementation was qualified in Chromium and
-JSPI-disabled desktop WebKit; changes require fresh qualification rather than
-inheriting that result. Gallery registration and its renderer-generated thumbnail
-remain separate work. Tracking: #2125; original demo PR: #2126.
+The browser qualification disables JSPI in the authoring worker and runs the
+same playback path as the gallery. Tracking: #2125; original demo PR: #2126.

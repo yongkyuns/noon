@@ -159,7 +159,11 @@ class CudaVisualProbe:
         self.checks = 0
         self.identities = None
 
-    def checkpoint(self, scene, event, **values):
+    def checkpoint(self, event, **values):
+        scene = self.scene
+        if event == "finished":
+            self.finish(scene)
+            return
         if event == "launch":
             trace = values["trace"]
             validate_trace(trace, self.column)
@@ -226,7 +230,8 @@ class CudaVisualProbe:
             receipt["text_regions"] = [observe_leaf(obj, False) for obj in values["banks"][2::2]]
         self.emit(receipt)
 
-    def before(self, scene, duration, proof):
+    def before(self, duration, proof):
+        scene = self.scene
         require(self.current is None, "ordering", "nested source interval")
         require(math.isfinite(duration) and duration > 0, "time", "invalid authored duration")
         self.sequence += 1
@@ -291,7 +296,8 @@ class CudaVisualProbe:
         self.current = event
         self.emit(event)
 
-    def after(self, scene, proof):
+    def after(self, proof):
+        scene = self.scene
         event = self.current
         require(event is not None, "ordering", "source endpoint without an interval")
         close([float(scene.time)], [event["end"]], "time", 0.000002)

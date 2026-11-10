@@ -45,21 +45,18 @@ class ShowcaseSourceContract(unittest.TestCase):
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
                 is_cuda = entry["id"] == "showcase-cuda-transpose"
                 if is_cuda:
-                    # This lesson uses awaited play_for() calls to preserve source-owned
-                    # Python continuation. Admit those calls only if the one helper
-                    # awaits the real Scene.play; a no-op wrapper must not pass.
+                    # Count play_for calls toward progression when the helper
+                    # delegates to Scene.play.
                     self.assertEqual(entry["path"], "python/examples/cuda_transpose_banks.py")
                     helpers = [method for method in scenes[0].body
-                               if isinstance(method, ast.AsyncFunctionDef) and method.name == "play_for"]
-                    self.assertEqual(len(helpers), 1, "CUDA lesson must have one async play helper")
+                               if isinstance(method, ast.FunctionDef) and method.name == "play_for"]
+                    self.assertEqual(len(helpers), 1, "CUDA lesson must have one ordinary play helper")
                     delegates = [node for node in ast.walk(helpers[0])
-                                 if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
-                                 and isinstance(node.value.func, ast.Attribute)
-                                 and isinstance(node.value.func.value, ast.Name)
-                                 and node.value.func.value.id == "self" and node.value.func.attr == "play"]
-                    self.assertEqual(len(delegates), 1, "CUDA helper must await the real Scene.play")
-                    parents = {child: parent for parent in ast.walk(scenes[0])
-                               for child in ast.iter_child_nodes(parent)}
+                                 if isinstance(node, ast.Call)
+                                 and isinstance(node.func, ast.Attribute)
+                                 and isinstance(node.func.value, ast.Name)
+                                 and node.func.value.id == "self" and node.func.attr == "play"]
+                    self.assertEqual(len(delegates), 1, "CUDA helper must call Scene.play")
                     progression = {"play_for"}
                 else:
                     progression = {"play", "move_camera"} if is_surface or is_axes else {"apply_matrix"} if is_linear else {"play"}
@@ -67,9 +64,6 @@ class ShowcaseSourceContract(unittest.TestCase):
                          and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
                          and node.func.attr in progression]
                 self.assertGreaterEqual(len(plays), 2, "a lesson needs a progression, not just a static API probe")
-                if is_cuda:
-                    self.assertTrue(all(isinstance(parents[call], ast.Await) for call in plays),
-                                    "CUDA play_for calls must all be awaited")
                 if is_surface:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and isinstance(node.func.value, ast.Name)
