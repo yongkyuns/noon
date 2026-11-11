@@ -656,12 +656,23 @@ try {
           page.evaluate(() => window.__noonWasmMemorySamples ?? null),
           new Promise(resolve => setTimeout(() => resolve(null), 1000)),
         ]).catch(() => null);
-        if (!Array.isArray(result.wasmAllocationProbe) || !result.wasmAllocationProbe.some(
-          sample => sample.allocator && Number.isSafeInteger(sample.allocator.reallocs)
-        )) {
+        const probes = Array.isArray(result.wasmAllocationProbe) ? result.wasmAllocationProbe : [];
+        const observedModes = [...new Set(probes.map(sample => sample.activeJspi))];
+        const modeIsCorrect = observedModes.length === 1 &&
+          observedModes[0] === !noJspi &&
+          probes.every(sample => sample.jspiInitiallyAvailable === true);
+        const hasRustSnapshot = probes.some(sample =>
+          sample.allocator && Number.isSafeInteger(sample.allocator.reallocs));
+        const hasMemory = probes.some(sample => sample.memories?.some(memory =>
+          Number.isSafeInteger(memory.pages) && memory.pages > 0));
+        result.wasmAllocationProbeChecks = {
+          hasRustSnapshot, hasMemory, modeIsCorrect, observedModes,
+          initialAvailability: [...new Set(probes.map(sample => sample.jspiInitiallyAvailable))],
+        };
+        if (!hasRustSnapshot || !hasMemory || !modeIsCorrect) {
           result.outcome = 'fail';
-          result.failure = [result.failure, 'opt-in allocator probe did not report a Rust snapshot']
-            .filter(Boolean).join('; ');
+          result.failure = [result.failure, 'opt-in WASM allocator diagnostic violated a precondition: ' +
+            JSON.stringify(result.wasmAllocationProbeChecks)].filter(Boolean).join('; ');
         }
       }
       if (profilePreparation) {

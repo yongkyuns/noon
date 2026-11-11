@@ -28,14 +28,17 @@ export async function installWasmAllocationObserver(context, {noJspi = false} = 
       "Cross-Origin-Resource-Policy": "same-origin",
     }, body,
   }));
-  await context.addInitScript(() => {
+  await context.addInitScript((NO_JSPI_MODE) => {
     window.__noonWasmMemorySamples = [];
     window.Worker = new Proxy(window.Worker, {
       construct(target, args, newTarget) {
         const workerArgs = [...args];
         const original = new URL(workerArgs[0], location.href);
-        if (original.pathname.endsWith("/python-worker.js"))
+        if (original.pathname.endsWith("/python-worker.js")) {
           workerArgs[0] = new URL("./python-worker-alloc-probe.js", original);
+          // Preserve the existing gallery harness' precondition assertion.
+          if (NO_JSPI_MODE) window.__noonNoJspiWorkerWrapped = true;
+        }
         const worker = Reflect.construct(target, workerArgs, newTarget);
         if (original.pathname.endsWith("/python-worker.js")) {
           worker.addEventListener("message", event => {
@@ -50,5 +53,5 @@ export async function installWasmAllocationObserver(context, {noJspi = false} = 
         return worker;
       },
     });
-  });
+  }, noJspi);
 }
