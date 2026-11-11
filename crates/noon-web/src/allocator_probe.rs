@@ -16,8 +16,10 @@ struct Request {
 impl Request {
     const fn empty() -> Self {
         Self {
-            sequence: AtomicU32::new(0), old: AtomicU32::new(0),
-            new: AtomicU32::new(0), align: AtomicU32::new(0),
+            sequence: AtomicU32::new(0),
+            old: AtomicU32::new(0),
+            new: AtomicU32::new(0),
+            align: AtomicU32::new(0),
         }
     }
 }
@@ -32,17 +34,23 @@ unsafe impl GlobalAlloc for TracingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         let ptr = unsafe { System.alloc(layout) };
-        if ptr.is_null() { FAILED.fetch_add(1, Ordering::Relaxed); }
+        if ptr.is_null() {
+            FAILED.fetch_add(1, Ordering::Relaxed);
+        }
         ptr
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         let ptr = unsafe { System.alloc_zeroed(layout) };
-        if ptr.is_null() { FAILED.fetch_add(1, Ordering::Relaxed); }
+        if ptr.is_null() {
+            FAILED.fetch_add(1, Ordering::Relaxed);
+        }
         ptr
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout); }
+        unsafe {
+            System.dealloc(ptr, layout);
+        }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         // No allocation, JS interop or locks inside this logging path.
@@ -55,7 +63,9 @@ unsafe impl GlobalAlloc for TracingAllocator {
         entry.sequence.store(sequence, Ordering::Release);
         BIGGEST_REQUEST.fetch_max(new_size as u32, Ordering::Relaxed);
         let next = unsafe { System.realloc(ptr, layout, new_size) };
-        if next.is_null() { FAILED.fetch_add(1, Ordering::Relaxed); }
+        if next.is_null() {
+            FAILED.fetch_add(1, Ordering::Relaxed);
+        }
         next
     }
 }
@@ -69,14 +79,18 @@ pub fn snapshot() -> String {
     let mut records = [(0u32, 0u32, 0u32, 0u32); 32];
     let mut n = 0usize;
     for offset in (0..32u32).rev() {
-        if last <= offset { continue; }
+        if last <= offset {
+            continue;
+        }
         let sequence = last - offset;
         let entry = &REQUESTS[sequence as usize % CAPACITY];
         if entry.sequence.load(Ordering::Acquire) == sequence {
-            records[n] = (sequence,
+            records[n] = (
+                sequence,
                 entry.old.load(Ordering::Relaxed),
                 entry.new.load(Ordering::Relaxed),
-                entry.align.load(Ordering::Relaxed));
+                entry.align.load(Ordering::Relaxed),
+            );
             n += 1;
         }
     }
@@ -84,7 +98,9 @@ pub fn snapshot() -> String {
         "{{\"reallocs\":{last},\"allocs\":{allocs},\"null_results\":{failed},\"largest_realloc_bytes\":{biggest},\"recent\":["
     );
     for (index, &(sequence, old, new, align)) in records[..n].iter().enumerate() {
-        if index > 0 { out.push(','); }
+        if index > 0 {
+            out.push(',');
+        }
         let _ = write!(out, "[{sequence},{old},{new},{align}]");
     }
     out.push_str("]}");
