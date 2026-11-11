@@ -1,4 +1,17 @@
-#![forbid(unsafe_code)]
+// Production code still forbids unsafe. Only the isolated, opt-in allocator
+// diagnostic implements GlobalAlloc's necessarily-unsafe system calls.
+#![cfg_attr(not(all(target_arch = "wasm32", feature = "allocator-probe")), forbid(unsafe_code))]
+
+#[cfg(all(target_arch = "wasm32", feature = "allocator-probe"))]
+mod allocator_probe;
+#[cfg(all(target_arch = "wasm32", feature = "allocator-probe"))]
+#[global_allocator]
+static WEBKIT_ALLOCATOR_PROBE: allocator_probe::TracingAllocator = allocator_probe::TracingAllocator;
+#[cfg(all(target_arch = "wasm32", feature = "allocator-probe"))]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn noon_allocator_probe_snapshot() -> String {
+    allocator_probe::snapshot()
+}
 
 // Preserve the Rust cause in browser diagnostics before a WASM trap obscures it.
 #[cfg(target_arch = "wasm32")]
