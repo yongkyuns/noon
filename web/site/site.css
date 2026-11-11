@@ -142,6 +142,9 @@ nav a {
   margin-top:1.2rem;
   margin-bottom:0}
 .featured {
+  /* The live surface's aspect ratio and minimum height must not impose
+     a min-content width on the hero grid at narrow viewports. */
+  min-width:0;
   margin:0;
   border:1px solid var(--rule);
   padding:.6rem;
