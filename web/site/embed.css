@@ -33,3 +33,6 @@ html[data-noon-embed] #draft-status{display:none}
 /* Retain the gallery editor's tested syntax theme, including its textarea
    fallback; the View/Code controls follow the website theme. */
 @media(pointer:coarse){html[data-noon-embed] .embed-tabs button{min-height:44px}}
+/* The gallery appends its showcase stylesheet at runtime. Its scoped important
+   rule must not resurrect the summary strip inside an embedded canvas. */
+html[data-noon-embed="true"][data-noon-catalog] .selected-example{display:none!important}

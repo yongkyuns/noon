@@ -18,6 +18,7 @@ on:
       - 'web/live-authoring-bootstrap.js'
       - 'web/playground-run-request-router.js'
       - 'web/playground-playback-controls.js'
+      - 'web/showcase-presentation.js'
       - 'web/project-site*.mjs'
       - 'scripts/site/**'
       - 'scripts/build-project-docs.sh'
@@ -44,10 +45,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check site source contracts
         run: |
-          node --test scripts/project-site.test.mjs web/project-site-editorial.test.mjs web/project-site-controls.test.mjs
+          node --test scripts/project-site.test.mjs web/project-site-editorial.test.mjs web/project-site-controls.test.mjs web/project-site-design.test.mjs
           node --check scripts/capture-project-media.mjs
           node --check scripts/project-site-smoke.mjs
           node --check scripts/project-site-embed-smoke.mjs
+          node --check scripts/project-site-design-smoke.mjs
       - name: Build the exact-source browser runtime
         uses: ./.github/actions/dev-wasm-build
       - name: Install pinned capture tools
@@ -62,6 +64,7 @@ jobs:
           printf '{"commit":"%s"}\n' "$GITHUB_SHA" > web/build-info.json
           node scripts/build-project-site.mjs
           node scripts/project-site-smoke.mjs
+          node scripts/project-site-design-smoke.mjs
       - name: Qualify real embedded runtime in all browser engines
         run: xvfb-run -a node scripts/project-site-embed-smoke.mjs
       - name: Retain website and visual review evidence

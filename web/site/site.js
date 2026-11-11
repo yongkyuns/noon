@@ -1,5 +1,6 @@
 import { installTheme } from "./theme.js";
 import { installPreviews } from "./preview.js";
+import { installDocumentationUI } from "./documentation-ui.js";
 // Existing shared links used the playground at the project root. A query means
 // "open the playground"; section anchors without a query remain on the website.
 export function playgroundRedirect(locationLike) {
@@ -20,4 +21,4 @@ if (typeof window !== "undefined") {
 
 }
 
-if (typeof document !== "undefined") { installTheme(); installPreviews(); }
+if (typeof document !== "undefined") { installTheme(); installPreviews(); installDocumentationUI(); }
