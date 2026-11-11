@@ -2784,20 +2784,15 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_extremum_along_dim(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_extremum_along_dim(
-            &semantics,
-            self.source.session(),
-            target,
-            dim,
-            key,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene()
+            .effective_extremum_along_dim(target, dim, key)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2815,12 +2810,13 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_length_over_dim(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
         dim: usize,
     ) -> Result<f64, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_length_over_dim(&semantics, self.source.session(), target, dim)
+        self.source
+            .scene()
+            .effective_length_over_dim(target, dim)
             .map_err(AuthoringFailure::from)
     }
 
@@ -2837,30 +2833,26 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_center_of_mass(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_center_of_mass(&semantics, self.source.session(), target)
+        self.source
+            .scene()
+            .effective_center_of_mass(target)
             .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_boundary_point(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_boundary_point(
-            &semantics,
-            self.source.session(),
-            target,
-            direction_x,
-            direction_y,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene()
+            .effective_boundary_point(target, direction_x, direction_y)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
