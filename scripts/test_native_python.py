@@ -86,7 +86,12 @@ class Demo(Scene):
 
     def test_live_plane_queries_observe_detached_and_animating_axes(self):
         source = """from noon import *
-from numpy.testing import assert_allclose
+from math import isclose
+
+def assert_point(actual, expected):
+    assert len(actual) == len(expected), (actual, expected)
+    assert all(isclose(a, b, rel_tol=0, abs_tol=1e-6)
+               for a, b in zip(actual, expected)), (actual, expected)
 
 class Demo(Scene):
     def construct(self):
@@ -98,22 +103,22 @@ class Demo(Scene):
         live = self.live_execution()
         end = live.play(animation)
         live.advance_to(0.5)
-        assert_allclose(plane.polar_to_point(1, 0), [1.5, 0], atol=1e-6)
-        assert_allclose(plane.point_to_polar([1.5, 0]), [1, 0], atol=1e-6)
+        assert_point(plane.polar_to_point(1, 0), [1.5, 0])
+        assert_point(plane.point_to_polar([1.5, 0]), [1, 0])
         context = self._canonical_authoring_context
         family = plane._semantic_family_handle
         cartesian = context.queryNumberPlaneFrame(family)
-        assert_allclose(cartesian.coordsToPoint(1, 0.5), [1.5, 0.5], atol=1e-6)
-        assert_allclose(cartesian.pointToCoords(1.5, 0.5), [1, 0.5], atol=1e-6)
+        assert_point(cartesian.coordsToPoint(1, 0.5), [1.5, 0.5])
+        assert_point(cartesian.pointToCoords(1.5, 0.5), [1, 0.5])
         live.advance_to(end)
         live.complete()
         self.remove(plane)
         polar = context.queryPolarPlaneFrame(family)
-        assert_allclose(polar.polarToPoint(1, 0), [2, 0], atol=1e-6)
-        assert_allclose(polar.pointToPolar(2, 0), [1, 0], atol=1e-6)
+        assert_point(polar.polarToPoint(1, 0), [2, 0])
+        assert_point(polar.pointToPolar(2, 0), [1, 0])
         cartesian = context.queryNumberPlaneFrame(family)
-        assert_allclose(cartesian.coordsToPoint(1, 0.5), [2, 0.5], atol=1e-6)
-        assert_allclose(cartesian.pointToCoords(2, 0.5), [1, 0.5], atol=1e-6)
+        assert_point(cartesian.coordsToPoint(1, 0.5), [2, 0.5])
+        assert_point(cartesian.pointToCoords(2, 0.5), [1, 0.5])
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)
