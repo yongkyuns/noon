@@ -132,7 +132,7 @@ impl Scene {
     }
 }
 
-pub(crate) fn prepare_polar_plane(
+fn prepare_polar_plane(
     options: &ManimPolarPlaneOptions,
 ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
     if !options.radius_max.is_finite()

@@ -561,18 +561,6 @@ impl Scene {
 }
 
 impl crate::LiveSession<'_> {
-    pub fn three_d_axes(
-        &mut self,
-        options: &ManimThreeDAxesOptions,
-    ) -> Result<ManimThreeDAxes, CoordinateAuthoringError> {
-        let prepared = prepare_three_d_axes(options)?;
-        let root = self.with_semantic_publication(|store, publish| {
-            publish_prepared_three_d_axes(prepared.axes, prepared.tip_paths, store, publish)
-        })?;
-        let family = MobjectFamily::from_node(Rc::clone(self.integration_store()), root)?;
-        ManimThreeDAxes::from_family(family)
-    }
-
     pub fn effective_three_d_axes_frame(
         &self,
         axes: &ManimThreeDAxes,

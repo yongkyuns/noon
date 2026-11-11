@@ -373,7 +373,10 @@ pub use paint_options::{
 };
 
 mod plot_error;
-pub use plot_error::{coordinate_failure, coordinate_math_failure, plot_failure, sampling_failure};
+pub use plot_error::{
+    coordinate_failure, coordinate_math_failure, live_coordinate_creation_failure,
+    live_polar_plane_creation_failure, plot_failure, sampling_failure,
+};
 mod plot_input;
 pub use plot_input::{data_points as plot_data_points, PlotSamplingInput};
 

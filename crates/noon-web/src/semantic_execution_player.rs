@@ -2139,6 +2139,11 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn scene_mut(&mut self) -> &mut noon::Scene {
+        self.source.scene_mut()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn with_live_session<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::LiveSession<'_>) -> Result<T, noon::LiveSessionError>,

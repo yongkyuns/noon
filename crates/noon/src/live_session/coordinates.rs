@@ -1,16 +1,14 @@
 //! Coordinate construction through the ordinary running publication transaction.
 use super::*;
 use crate::coordinate_authoring::{
-    coordinate_path_query, prepare_axes, prepare_number_line, prepare_number_plane,
-    prepare_polar_plane, publish_prepared_axes, publish_prepared_number_line,
-    publish_prepared_number_plane, resolve_family,
+    coordinate_path_query, prepare_axes, prepare_number_line, publish_prepared_axes,
+    publish_prepared_number_line,
 };
 #[cfg(all(feature = "native-text", feature = "latex"))]
 use crate::AuthoringError;
 use crate::{
     AxesFrame, CoordinateAuthoringError, ManimAxes, ManimAxesOptions, ManimBarChart,
-    ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
-    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, NumberLineFrame,
+    ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, NumberLineFrame,
 };
 
 impl LiveSession<'_> {
@@ -49,30 +47,6 @@ impl LiveSession<'_> {
             publish_prepared_number_line(prepared, store, publish)
         })?;
         ManimNumberLine::from_family(MobjectFamily::from_node(Rc::clone(self.store), root)?)
-    }
-
-    /// Construct a detached retained NumberPlane through this execution's
-    /// ordinary publication transaction.
-    pub fn number_plane(
-        &mut self,
-        options: &ManimNumberPlaneOptions,
-    ) -> Result<ManimNumberPlane, CoordinateAuthoringError> {
-        let prepared = prepare_number_plane(options)?;
-        let root = self.with_semantic_publication(|store, publish| {
-            publish_prepared_number_plane(prepared, store, publish)
-        })?;
-        ManimNumberPlane::from_family(MobjectFamily::from_node(Rc::clone(self.store), root)?)
-    }
-
-    /// Construct a detached retained PolarPlane through this execution's
-    /// ordinary publication transaction.
-    pub fn polar_plane(
-        &mut self,
-        options: &ManimPolarPlaneOptions,
-    ) -> Result<ManimPolarPlane, CoordinateAuthoringError> {
-        let (transaction, root) = prepare_polar_plane(options)?;
-        let result = self.apply(transaction)?;
-        ManimPolarPlane::from_family(resolve_family(Rc::clone(self.store), &result, root)?)
     }
 
     /// Observe both shafts through one coherent publication. Reachable shafts
