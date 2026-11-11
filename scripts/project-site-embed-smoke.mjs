@@ -53,6 +53,45 @@ async function ready(frame, afterGeneration = 0) {
       !document.querySelector('.playback-scrubber')?.disabled;
   },afterGeneration);
 }
+// Read-only failure evidence: do not start/retry a Run or query the execution
+// transport while diagnosing a stalled one. A wedged/detached frame must not
+// prevent the original assertion and the other frames' evidence being retained.
+async function captureFrameState(frame) {
+  let timer;
+  try {
+    return await Promise.race([
+      frame.evaluate(() => {
+        const gallery = window.__noonExampleGallery;
+        const read = selector => {
+          const node = document.querySelector(selector);
+          return node ? {data:{...node.dataset},value:node.value ?? node.textContent,
+            disabled:node.disabled,checked:node.checked} : null;
+        };
+        const source = document.querySelector('#python-scene-source');
+        const canvas = document.querySelector('#scene');
+        return {
+          url:location.href,visibility:document.visibilityState,focused:document.hasFocus(),
+          activeElement:document.activeElement?.className,embed:{...document.documentElement.dataset},
+          automaticStart:window.__noonSitePlayingObserved,
+          gallery:gallery ? {selectedExampleId:gallery.selectedExampleId,runInFlight:gallery.runInFlight,
+            generations:gallery.generationDiagnostics,runPhaseMetrics:gallery.runPhaseMetrics,
+            executionDiagnostics:gallery.executionDiagnostics} : null,
+          status:read('#status'),draft:read('#draft-status'),patch:read('#patch-status'),
+          autoRun:read('#auto-run'),run:read('#replace-scene'),scrubber:read('.playback-scrubber'),
+          time:read('#metric-time'),traceback:read('#python-traceback'),
+          source:source ? {value:source.value,
+            nativeValue:Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').get.call(source),
+            editorValue:source.editorView?.state.doc.toString()} : null,
+          canvas:canvas ? {rect:canvas.getBoundingClientRect().toJSON(),width:canvas.width,height:canvas.height,
+            visibility:getComputedStyle(canvas).visibility} : null,
+        };
+      }),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('frame diagnostics timed out')),5000);}),
+    ]);
+  } catch (error) {
+    return {url:frame.url(),captureError:String(error)};
+  } finally { clearTimeout(timer); }
+}
 async function sample(frame, prefix, time, minimumBuckets = 8) {
   // The regular playback controls remain the authority even though the embed
   // hides their toolbar. Use the same input events, not an alternative renderer.
@@ -77,6 +116,12 @@ async function edit(frame, page, source) {
   await editor.click();
   await editor.press('ControlOrMeta+A');
   await page.keyboard.insertText(source);
+  // Verify the real editor committed the requested text before waiting for its
+  // ordinary auto-run. This is observation, not a synthetic input/Run fallback.
+  await frame.waitForFunction(expected => {
+    const textarea = document.querySelector('#python-scene-source');
+    return textarea?.value === expected && textarea.editorView?.state.doc.toString() === expected;
+  },source);
 }
 try {
   for (const [name, engine] of Object.entries({chromium,firefox,webkit})) {
@@ -100,11 +145,24 @@ try {
       });
       const page = await context.newPage();
       page.setDefaultTimeout(120000);
-      const errors=[], workers=new Set();
+      const errors=[], workers=new Set(), consoleMessages=[], requestFailures=[];
+      const retain = (items,item) => { items.push(item); if(items.length>40) items.shift(); };
+      page.on('console',message=>{
+        if(['warning','error'].includes(message.type())) retain(consoleMessages,
+          {type:message.type(),text:message.text(),location:message.location()});
+      });
+      context.on('requestfailed',request=>retain(requestFailures,
+        {url:request.url(),failure:request.failure()}));
       page.on('pageerror',error=>errors.push(String(error)));
       page.on('worker',worker=>{workers.add(worker);worker.on('close',()=>workers.delete(worker));});
       for (const [surface, route] of [['home','index.html'],['docs','site/docs/examples.html']]) {
         const start = report.length;
+        consoleMessages.length=0; requestFailures.length=0;
+        let checkpoint={browser:name,surface,stage:'navigation'};
+        const mark = (stage,id=null) => {
+          checkpoint={browser:name,surface,id,stage};
+          console.log(`Live site checkpoint: ${JSON.stringify(checkpoint)}`);
+        };
         try {
           await page.goto(`${server.baseUrl}/_site/${route}`);
           await page.waitForFunction(count=>document.querySelectorAll('iframe[data-shell-ready=true]').length===count,selection.length);
@@ -113,12 +171,14 @@ try {
             return {id,element,frame:await element.contentFrame()};
           }));
           // No Run, open-preview or Play gesture: every scene must start itself.
+          mark('automatic-start');
           await Promise.all(frames.map(({frame})=>ready(frame)));
           assert.ok(workers.size>=selection.length,'all live contexts created runtime workers');
           assert.equal(await page.locator('video, .demo-poster, [data-demo-open]').count(),0);
           for (const [index,{id,element,frame}] of frames.entries()) {
             await page.setViewportSize({width:index%2 ? 390 : 1280,height:1000});
             const prefix = `${name}-${surface}-${id}`;
+            mark('authored-frames',id);
             const initialGeneration = await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             assert.equal(initialGeneration,1,'exactly one canonical automatic initial Run');
             assert.equal(await frame.evaluate(()=>window.__noonSitePlayingObserved),true,'the initial scene actually played without a gesture');
@@ -131,6 +191,7 @@ try {
             assert.ok(new Set(samples.map(item=>item.sha256)).size>=2,'authored times show different real frames');
             const geometry=await frame.locator('#scene').boundingBox(),bounds=await element.boundingBox();
             assert.ok(geometry && bounds && geometry.y>=bounds.y && geometry.y+geometry.height<=bounds.y+bounds.height+1,'canvas visible without nested scrolling');
+            mark('keyboard-and-tabs',id);
             // Keyboard pause/play/restart use the canonical controller without a toolbar.
             await frame.locator('.preview-pane').focus();
             await frame.locator('.preview-pane').press('Space');
@@ -142,7 +203,9 @@ try {
             await frame.getByRole('tab',{name:'Code',exact:true}).click();
             await frame.getByRole('tab',{name:'View',exact:true}).click();
             assert.equal(await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration),initialGeneration,'flipping View/Code is not source execution');
+            mark('hot-edit-input',id);
             await edit(frame,page,editSource('BLUE'));
+            mark('hot-edit-ready',id);
             await ready(frame,initialGeneration);
             const editedGeneration=await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             await frame.getByRole('tab',{name:'View',exact:true}).click();
@@ -150,11 +213,14 @@ try {
             assert.ok(samples.every(item=>item.sha256!==edited.sha256),'editing changed actual canvas output');
             let recovery=null;
             if (index===0) {
+              mark('syntax-error',id);
               await edit(frame,page,'from noon import *\nclass Broken(:\n');
               await frame.waitForFunction(previous=>window.__noonExampleGallery.generationDiagnostics.runGeneration>previous && document.querySelector('#patch-status').dataset.state==='error',editedGeneration);
               assert.equal(await frame.locator('.editor-footer').isVisible(),true,'error remains visible in Code');
               const failedGeneration=await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
+              mark('recovery-input',id);
               await edit(frame,page,editSource('PINK'));
+              mark('recovery-ready',id);
               await ready(frame,failedGeneration);
               await frame.getByRole('tab',{name:'View',exact:true}).click();
               recovery=await sample(frame,`${prefix}-recovered`,1,1);
@@ -165,12 +231,18 @@ try {
             report.push({browser:name,surface,id,duration,automaticStart:true,initialGeneration,samples,edited,recovery,workerRetirement:false});
             assert.deepEqual(errors,[],`${prefix}: no uncaught page errors`);
           }
+          mark('navigation-teardown');
           await page.goto('about:blank');
           await workersRetired(workers);
           for (const row of report.slice(start)) row.workerRetirement=true;
         } catch (error) {
-          await page.screenshot({path:path.join(output,`${name}-${surface}-failure.png`)}).catch(()=>{});
-          await writeFile(path.join(output,`${name}-${surface}-failure.json`),JSON.stringify({error:String(error.stack??error),errors,report},null,2));
+          const frames=await Promise.all(page.frames().map(captureFrameState));
+          const failure={error:String(error.stack??error),checkpoint,errors,consoleMessages,requestFailures,
+            workers:[...workers].map(worker=>worker.url()),frames,report};
+          // Persist state before attempting a screenshot, which may also fail.
+          await writeFile(path.join(output,`${name}-${surface}-failure.json`),JSON.stringify(failure,null,2));
+          console.error(`Live site failure: ${JSON.stringify(failure)}`);
+          await page.screenshot({path:path.join(output,`${name}-${surface}-failure.png`),timeout:5000}).catch(()=>{});
           throw error;
         }
       }
