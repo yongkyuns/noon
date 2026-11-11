@@ -1245,7 +1245,7 @@ pub fn effective_point_reduction_tree(
 /// Observe current effective points for all object occurrences below a target.
 /// Membership is snapshotted once; each immutable path query reads the same
 /// execution session and preserves Manim's recursive alias multiplicity.
-pub fn effective_all_points(
+pub(crate) fn effective_all_points(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -1716,9 +1716,9 @@ fn effective_geometry_path(
 
 /// Observe one object's exact current path from an existing coherent execution.
 ///
-/// This is explicit low-level integration over the existing Semantic Scene and Runtime
-/// authorities. It owns no scene/session state and performs no publication.
-pub fn effective_path_query(
+/// Shared implementation for Scene observations and internal execution algorithms.
+/// It owns no scene/session state and performs no publication.
+pub(crate) fn effective_path_query(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     object: &Mobject,
@@ -1776,8 +1776,68 @@ impl Mobject {
 }
 
 #[cfg(test)]
-mod point_equality_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn empty_family_point_observations_validate_the_execution_publication() {
+        use crate::{MobjectFamily, Scene};
+
+        fn snapshots(
+            scene: &Scene,
+            execution: &crate::ExecutionSession,
+            family: &MobjectFamily,
+        ) -> [Result<(), crate::AuthoringError>; 3] {
+            let store = scene.integration_store();
+            [
+                effective_all_points(store, execution, family.into()).map(|_| ()),
+                effective_vector_boundary_points(store, execution, family.into()).map(|_| ()),
+                effective_point_reduction_tree(store, execution, family.into()).map(|_| ()),
+            ]
+        }
+
+        let mut scene = Scene::new();
+        let empty = scene.family(&[]).unwrap();
+        let left = scene.family(&[(&empty).into()]).unwrap();
+        let right = scene.family(&[(&empty).into()]).unwrap();
+        let aliased = scene.family(&[(&left).into(), (&right).into()]).unwrap();
+        let mut circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let execution = scene.execution_session().unwrap();
+        let publication = execution.publication_context();
+        let revision = scene.revision();
+        for family in [&empty, &aliased] {
+            assert!(snapshots(&scene, &execution, family)
+                .into_iter()
+                .all(|r| r.is_ok()));
+        }
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(execution.publication_context(), publication);
+
+        circle.set_object_opacity(0.5).unwrap();
+        for family in [&empty, &aliased] {
+            for result in snapshots(&scene, &execution, family) {
+                assert!(matches!(
+                    result,
+                    Err(crate::AuthoringError::ExecutionPublication(
+                        crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+                    ))
+                ));
+            }
+        }
+        assert_eq!(execution.publication_context(), publication);
+
+        let other = Scene::new();
+        let foreign_execution = other.execution_session().unwrap();
+        for result in snapshots(&scene, &foreign_execution, &empty) {
+            assert!(matches!(
+                result,
+                Err(crate::AuthoringError::ExecutionPublication(
+                    crate::ExecutionSessionPublicationError::ForeignSemanticStore
+                ))
+            ));
+        }
+    }
 
     #[test]
     fn point_equality_matches_manim_absolute_relative_and_nonfinite_rules() {

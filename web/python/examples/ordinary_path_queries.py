@@ -82,6 +82,10 @@ class OrdinaryPathQueries(Scene):
         finish = live.play(animation)
         live.advance_to(0.5)
         check_boundary()
+        assert np.array_equal(
+            family.get_all_points(),
+            np.concatenate([shape.get_all_points() for shape in (rectangle, ellipse, rectangle)]),
+        )
         family_y = [float(point[1]) for point in family.get_all_points()]
         bottom, top = min(family_y), max(family_y)
         assert abs(family.get_center_of_mass()[1] - sum(family_y) / len(family_y)) < 2e-6

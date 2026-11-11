@@ -69,12 +69,14 @@ fn refinement_preserves_shape_discontinuities_identity_and_live_publication() {
         let revision = scene.revision();
         object.insert_n_curves(0).unwrap();
         assert_eq!(scene.revision(), revision);
-        let mut session = scene.execution_session().unwrap();
+        let semantics = std::rc::Rc::clone(scene.integration_store());
+        let scene_root = scene.root();
+        let mut running = scene.into_execution().unwrap();
         if live_mode {
             noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
+                &semantics,
+                scene_root,
+                running.session_mut(),
                 noon::integration::BorrowedPathEdit::Subdivide {
                     object: &object,
                     additional: 3,
@@ -96,13 +98,11 @@ fn refinement_preserves_shape_discontinuities_identity_and_live_publication() {
         assert_eq!(copy.state().unwrap().transform, old.transform);
         if live_mode {
             assert_eq!(
-                noon::integration::effective_path_query(
-                    scene.integration_store(),
-                    &session,
-                    &object
-                )
-                .unwrap()
-                .curve_count(),
+                running
+                    .scene()
+                    .effective_path_query(&object)
+                    .unwrap()
+                    .curve_count(),
                 5
             );
         }

@@ -107,12 +107,7 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
     assert_eq!((bounds.min_x, bounds.max_x), (-1., 3.));
     assert_eq!(a.layout_bounds().unwrap().unwrap().max_x, 5.);
     scene.add(&result).unwrap();
-    assert!(noon::integration::effective_path_query(
-        execution.scene().integration_store(),
-        execution.session(),
-        &result,
-    )
-    .is_ok());
+    assert!(execution.scene().effective_path_query(&result).is_ok());
 }
 
 #[test]
