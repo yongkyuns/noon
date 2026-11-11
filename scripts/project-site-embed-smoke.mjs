@@ -154,7 +154,33 @@ try {
       context.on('requestfailed',request=>retain(requestFailures,
         {url:request.url(),failure:request.failure()}));
       page.on('pageerror',error=>errors.push(String(error)));
-      page.on('worker',worker=>{workers.add(worker);worker.on('close',()=>workers.delete(worker));});
+      page.on('worker',worker=>{
+        workers.add(worker);
+        worker.on('close',()=>workers.delete(worker));
+        // Passive test-only diagnostics: distinguish renderer restart requests
+        // from replies when the original unchanged readiness assertion stalls.
+        if (worker.url().includes('render-worker.js')) {
+          void worker.evaluate(() => {
+            const stages = new Set(['init','prepare','start_engine','rebuild_engine',
+              'switch_engine','attach_engine','ready','prepared','engine_started',
+              'renderer_rebuilt','error','render_error','stop']);
+            const events = [];
+            self.__noonRenderTransitionTrace = events;
+            const record = (direction, message) => {
+              if (!stages.has(message?.type)) return;
+              events.push({direction,type:message.type,requestId:message.requestId ?? null,
+                atMs:performance.now()});
+              if (events.length > 64) events.shift();
+            };
+            self.addEventListener('message',event=>record('received',event.data));
+            const original = self.postMessage;
+            self.postMessage = function (...args) {
+              record('sent',args[0]);
+              return original.apply(this,args);
+            };
+          }).catch(()=>{}); // A closing worker must not change test behavior.
+        }
+      });
       for (const [surface, route] of [['home','index.html'],['docs','site/docs/examples.html']]) {
         const start = report.length;
         consoleMessages.length=0; requestFailures.length=0;
@@ -237,8 +263,22 @@ try {
           for (const row of report.slice(start)) row.workerRetirement=true;
         } catch (error) {
           const frames=await Promise.all(page.frames().map(captureFrameState));
+          // Query only existing workers. An unresponsive worker gets a bounded
+          // diagnostic timeout; neither readiness nor the original error changes.
+          const workerTransitionTraces=await Promise.all([...workers].map(async worker=>{
+            let timeout;
+            try {
+              const trace=await Promise.race([
+                worker.evaluate(()=>self.__noonRenderTransitionTrace ?? null),
+                new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('worker trace timed out')),2000);}),
+              ]);
+              return {url:worker.url(),trace};
+            } catch (error) {
+              return {url:worker.url(),traceError:String(error)};
+            } finally {clearTimeout(timeout);}
+          }));
           const failure={error:String(error.stack??error),checkpoint,errors,consoleMessages,requestFailures,
-            workers:[...workers].map(worker=>worker.url()),frames,report};
+            workers:[...workers].map(worker=>worker.url()),workerTransitionTraces,frames,report};
           // Persist state before attempting a screenshot, which may also fail.
           await writeFile(path.join(output,`${name}-${surface}-failure.json`),JSON.stringify(failure,null,2));
           console.error(`Live site failure: ${JSON.stringify(failure)}`);
