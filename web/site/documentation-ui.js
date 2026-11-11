@@ -42,9 +42,27 @@ export function installDocumentationUI(doc = document, win = window) {
         await win.navigator.clipboard.writeText(code.textContent);
         status.textContent = 'Code copied.'; button.textContent = 'Copied';
       } catch {
+        const source = code.textContent;
         const range = doc.createRange(); range.selectNodeContents(code);
         const selection = win.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-        status.textContent = 'Clipboard unavailable. Code selected; use your copy shortcut.';
+        // Chromium omits a terminal newline when a selection ends inside <pre>.
+        // Extend only a clipped selection to a nonselected boundary after <pre>.
+        if (selection.toString() !== source && source.endsWith('\\n')) {
+          let boundary = block.querySelector('[data-copy-selection-end]');
+          if (!boundary) {
+            boundary = doc.createElement('span');
+            boundary.dataset.copySelectionEnd = '';
+            boundary.setAttribute('aria-hidden', 'true');
+            boundary.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)';
+            boundary.textContent = '.';
+            block.querySelector('pre').after(boundary);
+          }
+          range.setEndBefore(boundary);
+          selection.removeAllRanges(); selection.addRange(range);
+        }
+        status.textContent = selection.toString() === source
+          ? 'Clipboard unavailable. Code selected; use your copy shortcut.'
+          : 'Clipboard unavailable. Select the code manually to copy.';
         button.textContent = 'Select to copy';
       }
     });
