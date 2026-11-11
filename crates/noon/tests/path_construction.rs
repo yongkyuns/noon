@@ -121,7 +121,9 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
                 expected.extend([control1, control2, anchor]);
 
                 if live {
-                    let mut session = scene.execution_session().unwrap();
+                    let semantics = std::rc::Rc::clone(scene.integration_store());
+                    let scene_root = scene.root();
+                    let mut running = scene.into_execution().unwrap();
                     let operation = match edit {
                         Edit::Line => noon::integration::BorrowedPathEdit::Line {
                             object: &object,
@@ -152,20 +154,18 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
                         }
                     };
                     noon::integration::publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut session,
+                        &semantics,
+                        scene_root,
+                        running.session_mut(),
                         operation,
                     )
                     .unwrap();
-                    let actual = noon::integration::effective_path_query(
-                        scene.integration_store(),
-                        &session,
-                        &object,
-                    )
-                    .unwrap()
-                    .points()
-                    .unwrap();
+                    let actual = running
+                        .scene()
+                        .effective_path_query(&object)
+                        .unwrap()
+                        .points()
+                        .unwrap();
                     assert_raw_points_match(&actual, &expected);
                 } else {
                     match edit {
@@ -264,7 +264,9 @@ fn scalar_curve_appends_classify_pending_anchors_using_mutable_stride() {
                 expected.extend([control1, control2, anchor]);
 
                 if live {
-                    let mut session = scene.execution_session().unwrap();
+                    let semantics = std::rc::Rc::clone(scene.integration_store());
+                    let scene_root = scene.root();
+                    let mut running = scene.into_execution().unwrap();
                     let operation = match edit {
                         Edit::Line => noon::integration::BorrowedPathEdit::LineWithStride {
                             object: &object,
@@ -304,20 +306,18 @@ fn scalar_curve_appends_classify_pending_anchors_using_mutable_stride() {
                         }
                     };
                     noon::integration::publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut session,
+                        &semantics,
+                        scene_root,
+                        running.session_mut(),
                         operation,
                     )
                     .unwrap();
-                    let actual = noon::integration::effective_path_query(
-                        scene.integration_store(),
-                        &session,
-                        &object,
-                    )
-                    .unwrap()
-                    .points()
-                    .unwrap();
+                    let actual = running
+                        .scene()
+                        .effective_path_query(&object)
+                        .unwrap()
+                        .points()
+                        .unwrap();
                     assert_raw_points_match(&actual, &expected);
                 } else {
                     match edit {
@@ -386,11 +386,13 @@ fn add_points_as_corners_preserves_mutable_stride_samples_in_authored_and_live_p
             object.set_points(&initial).unwrap();
             if live {
                 scene.add(&object).unwrap();
-                let mut session = scene.execution_session().unwrap();
+                let semantics = std::rc::Rc::clone(scene.integration_store());
+                let scene_root = scene.root();
+                let mut running = scene.into_execution().unwrap();
                 noon::integration::publish_borrowed_path_edit(
-                    scene.integration_store(),
-                    scene.root(),
-                    &mut session,
+                    &semantics,
+                    scene_root,
+                    running.session_mut(),
                     noon::integration::BorrowedPathEdit::AppendCornersWithStride {
                         object: &object,
                         points: &corners,
@@ -399,14 +401,12 @@ fn add_points_as_corners_preserves_mutable_stride_samples_in_authored_and_live_p
                     },
                 )
                 .unwrap();
-                let actual = noon::integration::effective_path_query(
-                    scene.integration_store(),
-                    &session,
-                    &object,
-                )
-                .unwrap()
-                .points()
-                .unwrap();
+                let actual = running
+                    .scene()
+                    .effective_path_query(&object)
+                    .unwrap()
+                    .points()
+                    .unwrap();
                 assert_raw_points_match(&actual, &expected);
             } else {
                 object
@@ -436,11 +436,13 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     object.shift(3., 1.).unwrap();
     scene.add(&object).unwrap();
     let before = object.path_query().unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let semantics = std::rc::Rc::clone(scene.integration_store());
+    let scene_root = scene.root();
+    let mut running = scene.into_execution().unwrap();
     noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
+        &semantics,
+        scene_root,
+        running.session_mut(),
         noon::integration::BorrowedPathEdit::Line {
             object: &object,
             point: Vec2::new(4., 3.),
@@ -448,9 +450,9 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     )
     .unwrap();
     noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
+        &semantics,
+        scene_root,
+        running.session_mut(),
         noon::integration::BorrowedPathEdit::Quadratic {
             object: &object,
             control: Vec2::new(5., 4.),
@@ -459,9 +461,9 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     )
     .unwrap();
     noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
+        &semantics,
+        scene_root,
+        running.session_mut(),
         noon::integration::BorrowedPathEdit::Cubic {
             object: &object,
             control1: Vec2::new(7., 3.),
@@ -471,15 +473,13 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     )
     .unwrap();
     noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
+        &semantics,
+        scene_root,
+        running.session_mut(),
         noon::integration::BorrowedPathEdit::Close { object: &object },
     )
     .unwrap();
-    let query =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    let query = running.scene().effective_path_query(&object).unwrap();
     let start = before.start().unwrap();
     assert!((query.start().unwrap().0 - start.0).abs() < 1e-6);
     assert!((query.start().unwrap().1 - start.1).abs() < 1e-6);
@@ -491,9 +491,9 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         .geometry_resources()
         .stats();
     assert!(noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
+        &semantics,
+        scene_root,
+        running.session_mut(),
         noon::integration::BorrowedPathEdit::Line {
             object: &object,
             point: Vec2::new(f32::INFINITY, 0.),
@@ -510,9 +510,9 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         resources
     );
     noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
+        &semantics,
+        scene_root,
+        running.session_mut(),
         noon::integration::BorrowedPathEdit::Start {
             object: &object,
             point: Vec2::new(-2., -1.),
@@ -520,9 +520,9 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     )
     .unwrap();
     noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
+        &semantics,
+        scene_root,
+        running.session_mut(),
         noon::integration::BorrowedPathEdit::Line {
             object: &object,
             point: Vec2::new(-1., 0.),
@@ -530,7 +530,9 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     )
     .unwrap();
     assert_eq!(
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+        running
+            .scene()
+            .effective_path_query(&object)
             .unwrap()
             .end()
             .unwrap(),

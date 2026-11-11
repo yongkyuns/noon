@@ -1006,11 +1006,9 @@ impl CanonicalAuthoringScene {
         &mut self,
         handle: &noon::Mobject,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            noon::Mobject::path_query,
-            crate::SemanticExecutionPlayer::effective_path_query,
-        )
+        self.mobject_observation(handle, noon::Mobject::path_query, |player, handle| {
+            player.effective_path_query(handle)
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1245,7 +1243,7 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.all_points(),
-            crate::SemanticExecutionPlayer::live_effective_all_points,
+            |player, target| player.live_effective_all_points(target),
         )
     }
 
