@@ -735,7 +735,11 @@ export function createAuthoringRenderController(host) {
       pendingPresentationPublication = publication;
       pendingPublicationStageSample = null;
       needsPresent = true;
-      while (!tryPresent()) {
+      // resize() may present this snapshot while the retry awaits a browser
+      // frame. In that case needsPresent is already clear; tryPresent() returns
+      // false for "nothing to draw", not a failed presentation. Do not wait for
+      // a second frame that the retained renderer correctly considers clean.
+      while (needsPresent && !tryPresent()) {
         if (
           stopped ||
           bootstrapGeneration !== frameLoopGeneration ||

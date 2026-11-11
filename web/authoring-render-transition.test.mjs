@@ -73,7 +73,7 @@ test("renderer transitions suspend ticks until delayed bootstrap publishes ready
 
   const bootstrap = functionSlice("bootstrapRenderer", "tryPresent");
   const create = bootstrap.indexOf("await RetainedExecutionCanvasRenderer.create");
-  const retryPresent = bootstrap.indexOf("while (!tryPresent())");
+  const retryPresent = bootstrap.indexOf("while (needsPresent && !tryPresent())");
   const ready = bootstrap.indexOf("const ready = {");
   const schedule = bootstrap.indexOf("scheduleFrame(bootstrapGeneration);");
   assert.ok(create >= 0 && retryPresent > create && ready > retryPresent && schedule > ready);
@@ -97,7 +97,7 @@ test("transition state is observable without changing the presented mode", () =>
 
 test("retained readiness publishes preload telemetry before playback ticks begin", () => {
   const bootstrap = functionSlice("bootstrapRenderer", "tryPresent");
-  const initialPresent = bootstrap.indexOf("while (!tryPresent())");
+  const initialPresent = bootstrap.indexOf("while (needsPresent && !tryPresent())");
   const ready = bootstrap.indexOf("const ready = {");
   const publish = bootstrap.indexOf("postMain({ type: \"ready\", ...ready });");
   const schedule = bootstrap.indexOf("scheduleFrame(bootstrapGeneration);");
