@@ -172,14 +172,21 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 .run_time(1.)
                 .rate_func(crate::RateFunction::Linear),
         )?;
-        let mut session = scene.execution_session()?;
-        let segment = scene.live(&mut session).play_animation(&animation)?;
-        scene.live(&mut session).advance_segment_to(segment, 0.5)?;
-        let captured = crate::integration::effective_path_query(
-            scene.integration_store(),
-            &session,
-            &rectangle,
-        )?;
+        let mut running = scene.into_execution()?;
+        let segment = running.live().play_animation(&animation)?;
+        running.live().advance_segment_to(segment, 0.5)?;
+        let captured = running.scene().effective_path_query(&rectangle)?;
+        assert_eq!(
+            running
+                .scene()
+                .effective_all_points((&vector_family).into())?,
+            captured
+                .points()?
+                .into_iter()
+                .chain(ellipse.path_query()?.points()?)
+                .chain(captured.points()?)
+                .collect::<Vec<_>>()
+        );
         let expected_boundary = ellipse
             .path_query()?
             .anchors()?
@@ -188,8 +195,8 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .collect::<Vec<_>>();
         assert_eq!(
             crate::integration::effective_vector_boundary_points(
-                scene.integration_store(),
-                &session,
+                running.scene().integration_store(),
+                running.session(),
                 (&vector_family).into(),
             )?,
             expected_boundary
@@ -197,53 +204,36 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let midpoint = captured.start()?;
         assert!((midpoint.0 - (start.0 + end.0) * 0.5).abs() < 2e-6);
         assert!((midpoint.1 - (start.1 + end.1) * 0.5).abs() < 2e-6);
-        scene
-            .live(&mut session)
+        running
+            .live()
             .advance_segment_to(segment, segment.end_time())?;
-        scene.live(&mut session).complete_segment(segment)?;
+        running.live().complete_segment(segment)?;
         assert_eq!(captured.start()?, midpoint);
-        let before = crate::integration::effective_path_query(
-            scene.integration_store(),
-            &session,
-            &rectangle,
-        )?
-        .start()?;
-        let wait = scene.live(&mut session).wait_segment(0.2)?;
-        scene
-            .live(&mut session)
-            .advance_segment_to(wait, wait.end_time())?;
-        scene.live(&mut session).complete_segment(wait)?;
+        let before = running.scene().effective_path_query(&rectangle)?.start()?;
+        let wait = running.live().wait_segment(0.2)?;
+        running.live().advance_segment_to(wait, wait.end_time())?;
+        running.live().complete_segment(wait)?;
         assert_eq!(
-            crate::integration::effective_path_query(
-                scene.integration_store(),
-                &session,
-                &rectangle
-            )?
-            .start()?,
+            running.scene().effective_path_query(&rectangle)?.start()?,
             before
         );
-        scene.live(&mut session).remove(&ellipse)?;
-        let reveal = scene.live(&mut session).declare_and_activate_create(
+        running.live().remove(&ellipse)?;
+        let reveal = running.live().declare_and_activate_create(
             &ellipse,
             crate::AnimationOptions::new()
                 .run_time(1.)
                 .rate_func(crate::RateFunction::Linear),
         )?;
-        scene
-            .live(&mut session)
+        running
+            .live()
             .advance_segment_to(reveal, reveal.end_time() - 0.5)?;
-        let endpoint = crate::integration::effective_path_query(
-            scene.integration_store(),
-            &session,
-            &ellipse,
-        )?
-        .end()?;
+        let endpoint = running.scene().effective_path_query(&ellipse)?.end()?;
         assert!((endpoint.0 - 1.3).abs() < 2e-6 && endpoint.1.abs() < 2e-6);
-        scene
-            .live(&mut session)
+        running
+            .live()
             .advance_segment_to(reveal, reveal.end_time())?;
-        scene.live(&mut session).complete_segment(reveal)?;
-        Ok(scene.into_execution_with_session(session)?)
+        running.live().complete_segment(reveal)?;
+        Ok(running)
     };
     build().map_err(|error| error.to_string())
 }

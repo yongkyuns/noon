@@ -318,31 +318,55 @@ fn exact_transform_track_preserves_constant_endpoints_that_differ_from_base() {
 }
 
 #[test]
-fn effective_path_query_is_scene_owned_and_requires_running_execution() {
+fn effective_path_snapshots_require_the_scene_owned_publication() {
     let mut scene = Scene::new();
-    let line = scene.line((1.0, 2.0), (4.0, 6.0)).unwrap();
+    let mut line = scene.line((1.0, 2.0), (4.0, 6.0)).unwrap();
     scene.add(&line).unwrap();
 
-    let error = scene.effective_path_query(&line).unwrap_err();
-    assert!(matches!(
-        error,
-        crate::AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
-        )
-    ));
+    for result in [
+        scene.effective_path_query(&line).map(|_| ()),
+        scene.effective_all_points((&line).into()).map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
+            ))
+        ));
+    }
 
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
     let query = scene.effective_path_query(&line).unwrap();
     assert_eq!(query.start().unwrap(), (1.0, 2.0));
     assert_eq!(query.end().unwrap(), (4.0, 6.0));
+    assert_eq!(
+        scene.effective_all_points((&line).into()).unwrap(),
+        query.points().unwrap()
+    );
+    let publication = scene.owned_execution().publication_context();
 
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
-    assert!(matches!(
-        scene.effective_path_query(&foreign),
-        Err(crate::AuthoringError::ForeignStore)
-    ));
+    for result in [
+        scene.effective_path_query(&foreign).map(|_| ()),
+        scene.effective_all_points((&foreign).into()).map(|_| ()),
+    ] {
+        assert!(matches!(result, Err(crate::AuthoringError::ForeignStore)));
+    }
+    line.shift(0.0, 1.0).unwrap();
+    for result in [
+        scene.effective_path_query(&line).map(|_| ()),
+        scene.effective_all_points((&line).into()).map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(crate::AuthoringError::ExecutionPublication(
+                crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            ))
+        ));
+    }
+    assert_eq!(scene.owned_execution().publication_context(), publication);
 }
 
 #[test]

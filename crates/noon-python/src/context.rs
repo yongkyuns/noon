@@ -2411,13 +2411,10 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let query = match scene_execution::session(&self.scene) {
-            Some(execution) => noon::integration::effective_path_query(
-                self.scene.integration_store(),
-                execution,
-                &target.handle,
-            ),
-            None => target.handle.path_query(),
+        let query = if self.has_execution() {
+            self.scene.effective_path_query(&target.handle)
+        } else {
+            target.handle.path_query()
         };
         query
             .map(crate::path_query::PathQuery::new)

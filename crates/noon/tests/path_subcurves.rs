@@ -11,16 +11,15 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         source.set_stroke_color(1., 0., 0., 0.5).unwrap();
         scene.add(&source).unwrap();
         let before = source.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut running = scene.into_execution().unwrap();
         let selected = if live_mode {
-            let copy = scene
-                .live(&mut session)
-                .subcurve(&source, 0.25, 0.75)
-                .unwrap();
-            assert!(!scene.live(&mut session).contains(&copy).unwrap());
-            scene.live(&mut session).add(&copy).unwrap();
+            let copy = running.live().subcurve(&source, 0.25, 0.75).unwrap();
+            assert!(!running.live().contains(&copy).unwrap());
+            running.live().add(&copy).unwrap();
             assert_eq!(
-                noon::integration::effective_path_query(scene.integration_store(), &session, &copy)
+                running
+                    .scene()
+                    .effective_path_query(&copy)
                     .unwrap()
                     .start()
                     .unwrap(),
@@ -39,7 +38,7 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         );
         assert_eq!(source.state().unwrap(), before);
         let full = if live_mode {
-            scene.live(&mut session).subcurve(&source, 0., 1.).unwrap()
+            running.live().subcurve(&source, 0., 1.).unwrap()
         } else {
             source.subcurve(0., 1.).unwrap()
         };

@@ -139,10 +139,12 @@ class Demo(Scene):
     def construct(self):
         c = Circle(0.4, fill=RED, fill_opacity=1, stroke=None).shift(LEFT)
         self.add(c)
+        start_x = c.get_start()[0]
         animation = self.declare_live_transform_to(c, c.copy().shift(2*RIGHT), run_time=1, rate_func=linear)
         live = self.live_execution(duration=2)
         end = live.play(animation)
         assert not live.advance_to(0.5)
+        assert abs(c.get_start()[0] - start_x - 1) < 1e-6
         for invalid in (live.complete, lambda: live.wait(1), lambda: live.evaluate(3),
                         lambda: self.live_execution(duration=0.25)):
             try:

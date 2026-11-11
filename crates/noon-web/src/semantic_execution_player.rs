@@ -2648,21 +2648,23 @@ impl SemanticExecutionPlayer {
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn effective_path_query(
-        &mut self,
+        &self,
         mobject: &noon::Mobject,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_path_query(&semantics, self.source.session(), mobject)
+        self.source
+            .scene()
+            .effective_path_query(mobject)
             .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_all_points(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_all_points(&semantics, self.source.session(), target)
+        self.source
+            .scene()
+            .effective_all_points(target)
             .map_err(AuthoringFailure::from)
     }
 

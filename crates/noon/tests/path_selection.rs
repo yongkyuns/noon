@@ -27,12 +27,14 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
         scene
             .add_many(&[(&source).into(), (&destination).into()])
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let semantics = std::rc::Rc::clone(scene.integration_store());
+        let scene_root = scene.root();
+        let mut running = scene.into_execution().unwrap();
         if live_mode {
             noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
+                &semantics,
+                scene_root,
+                running.session_mut(),
                 noon::integration::BorrowedPathEdit::Partial {
                     object: &destination,
                     source: &source,
@@ -59,23 +61,21 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
         assert_eq!(source.state().unwrap(), source_before);
         if live_mode {
             noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
+                &semantics,
+                scene_root,
+                running.session_mut(),
                 noon::integration::BorrowedPathEdit::Reverse {
                     object: &destination,
                 },
             )
             .unwrap();
             assert_eq!(
-                noon::integration::effective_path_query(
-                    scene.integration_store(),
-                    &session,
-                    &destination
-                )
-                .unwrap()
-                .start()
-                .unwrap(),
+                running
+                    .scene()
+                    .effective_path_query(&destination)
+                    .unwrap()
+                    .start()
+                    .unwrap(),
                 (14., 2.)
             );
         } else {
