@@ -10041,30 +10041,40 @@ mod wasm {
             candidate: crate::WasmCoordinateOptions,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             use crate::authoring_coordinates::CoordinateRequest;
+            use noon::integration::{
+                live_coordinate_creation_failure, live_polar_plane_creation_failure,
+            };
+            let scene = self
+                .inner
+                .active_live_player()
+                .map_err(AuthoringFailure::from)
+                .map_err(typed_js_error)?
+                .scene_mut();
+            let failure = if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
+                live_polar_plane_creation_failure
+            } else {
+                live_coordinate_creation_failure
+            };
             let family = match candidate.request {
-                CoordinateRequest::NumberLine(options) => self
-                    .inner
-                    .live_create_number_line(&options)
+                CoordinateRequest::NumberLine(options) => scene
+                    .number_line(&options)
                     .map(|line| line.family().clone()),
-                CoordinateRequest::Axes(options) => self
-                    .inner
-                    .live_create_axes(&options)
-                    .map(|axes| axes.family().clone()),
-                CoordinateRequest::NumberPlane(options) => self
-                    .inner
-                    .live_create_number_plane(&options)
+                CoordinateRequest::Axes(options) => {
+                    scene.axes(&options).map(|axes| axes.family().clone())
+                }
+                CoordinateRequest::NumberPlane(options) => scene
+                    .number_plane(&options)
                     .map(|plane| plane.family().clone()),
-                CoordinateRequest::PolarPlane(options) => self
-                    .inner
-                    .live_create_polar_plane(&options)
+                CoordinateRequest::PolarPlane(options) => scene
+                    .polar_plane(&options)
                     .map(|plane| plane.family().clone()),
-                CoordinateRequest::ThreeDAxes(options) => self
-                    .inner
-                    .live_create_three_d_axes(&options)
+                CoordinateRequest::ThreeDAxes(options) => scene
+                    .three_d_axes(&options)
                     .map(|axes| axes.family().clone()),
             };
             family
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
+                .map_err(failure)
                 .map_err(typed_js_error)
         }
 

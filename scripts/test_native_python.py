@@ -84,6 +84,36 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_live_coordinate_construction_stays_detached_until_add(self):
+        source = """from noon import *
+
+class Demo(ThreeDScene):
+    def construct(self):
+        marker = Dot(4 * LEFT)
+        self.add(marker)
+        self.wait(0.1)
+        try:
+            NumberPlane(y_length=float("nan"))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid live plane was admitted")
+        coordinates = (
+            NumberLine((-1, 1, 1)),
+            Axes((-1, 1, 1), (-1, 1, 1), tips=False),
+            NumberPlane((-1, 1, 1), (-1, 1, 1)),
+            PolarPlane(radius_max=1, size=2, azimuth_step=4),
+            ThreeDAxes((-1, 1, 1), (-1, 1, 1), (-1, 1, 1)),
+        )
+        assert self.mobjects == [marker]
+        self.add(*coordinates[:-1])
+        self.add_world_mobjects(coordinates[-1])
+        assert self.mobjects == [marker, *coordinates]
+        self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_live_plane_queries_observe_detached_and_animating_axes(self):
         source = """from noon import *
 from math import isclose

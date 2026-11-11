@@ -7,7 +7,7 @@
 
 mod number_plane;
 mod three_d_axes;
-pub(crate) use number_plane::{prepare_number_plane, publish_prepared_number_plane};
+pub(crate) use number_plane::prepare_number_plane;
 pub use number_plane::{ManimNumberPlane, ManimNumberPlaneOptions};
 pub use three_d_axes::{
     ManimThreeDAxes, ManimThreeDAxesFrame, ManimThreeDAxesOptions, ManimThreeDAxisOverrides,
@@ -78,7 +78,6 @@ pub(crate) mod bar_chart;
 #[cfg(all(feature = "native-text", feature = "latex"))]
 pub use bar_chart::labels::BarLabelOptions;
 pub use bar_chart::{ManimBarChart, ManimBarChartOptions};
-pub(crate) use polar_plane::prepare_polar_plane;
 pub use polar_plane::{ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection};
 
 #[cfg(test)]

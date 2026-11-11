@@ -955,32 +955,36 @@ pub(crate) fn create(
         .map_err(coordinate_failure)
         .map_err(engine_error)
 }
-pub(crate) fn live(
-    context: &mut crate::context::Context,
+pub(crate) fn create_on_scene(
+    scene: &mut noon::Scene,
     candidate: &CoordinateOptions,
+    running: bool,
 ) -> PyResult<FamilyHandle> {
-    context.available()?;
-    let Some(mut live) = context.live_session() else {
-        return create(context.scene.integration_store(), candidate);
-    };
     let family = match &candidate.request {
         CoordinateRequest::NumberLine(options) => {
-            live.number_line(options).map(|v| v.family().clone())
+            scene.number_line(options).map(|v| v.family().clone())
         }
-        CoordinateRequest::Axes(options) => live.axes(options).map(|v| v.family().clone()),
+        CoordinateRequest::Axes(options) => scene.axes(options).map(|v| v.family().clone()),
         CoordinateRequest::NumberPlane(options) => {
-            live.number_plane(options).map(|v| v.family().clone())
+            scene.number_plane(options).map(|v| v.family().clone())
         }
         CoordinateRequest::PolarPlane(options) => {
-            live.polar_plane(options).map(|v| v.family().clone())
+            scene.polar_plane(options).map(|v| v.family().clone())
         }
         CoordinateRequest::ThreeDAxes(options) => {
-            live.three_d_axes(options).map(|v| v.family().clone())
+            scene.three_d_axes(options).map(|v| v.family().clone())
         }
+    };
+    let failure = if !running {
+        coordinate_failure
+    } else if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
+        noon::integration::live_polar_plane_creation_failure
+    } else {
+        noon::integration::live_coordinate_creation_failure
     };
     family
         .map(|family| FamilyHandle { family })
-        .map_err(coordinate_failure)
+        .map_err(failure)
         .map_err(engine_error)
 }
 #[pyclass(unsendable, module = "_noon_native")]
