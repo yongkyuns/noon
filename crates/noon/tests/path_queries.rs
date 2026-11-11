@@ -953,116 +953,71 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.)
-        .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let mut live = execution.live();
+    let segment = live.play_animation(&animation).unwrap();
+    live.advance_segment_to(segment, 1.).unwrap();
 
-    let points = noon::integration::effective_all_points(
-        scene.integration_store(),
-        &session,
-        MobjectTarget::from(&family),
-    )
-    .unwrap();
-    let expected =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap()
-            .points()
-            .unwrap();
-    assert_eq!(points, expected);
-    let effective_path =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    let scene = execution.scene();
+    let family_target = MobjectTarget::from(&family);
+    let object_target = MobjectTarget::from(&object);
+    let points = scene.effective_all_points(family_target).unwrap();
+    let effective_path = scene.effective_path_query(&object).unwrap();
+    assert_eq!(points, effective_path.points().unwrap());
     assert_eq!(
-        noon::integration::effective_path_boundary_points(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&object),
-        )
-        .unwrap(),
+        scene.effective_path_boundary_points(object_target).unwrap(),
         effective_path.anchors().unwrap()
     );
-    assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
+    assert_eq!(
+        scene.effective_path_boundary_points(family_target).unwrap(),
+        points
+    );
+    assert_eq!(
+        scene
+            .effective_path_boundary_extremum_along_dim(object_target, 1, 1.)
+            .unwrap(),
+        1.5
+    );
+    let boundary = scene
+        .effective_path_boundary_point(object_target, 0., 1.)
+        .unwrap();
+    assert_eq!(boundary.1, 1.5);
+    assert_ne!(points, family_target.all_points().unwrap());
     let expected_center = (
         points.iter().map(|point| point.0).sum::<f64>() / points.len() as f64,
         points.iter().map(|point| point.1).sum::<f64>() / points.len() as f64,
     );
     assert_eq!(
-        noon::integration::effective_center_of_mass(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-        )
-        .unwrap(),
+        scene.effective_center_of_mass(family_target).unwrap(),
         expected_center
     );
-    let effective_top = noon::integration::effective_boundary_point(
-        scene.integration_store(),
-        &session,
-        MobjectTarget::from(&family),
-        0.,
-        1.,
-    )
-    .unwrap();
+    let effective_top = scene
+        .effective_boundary_point(family_target, 0., 1.)
+        .unwrap();
     assert_eq!(effective_top.1, 1.5);
     assert_eq!(
-        noon::integration::effective_length_over_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            0,
-        )
-        .unwrap(),
+        scene.effective_length_over_dim(family_target, 0).unwrap(),
         2.
     );
     assert_eq!(
-        noon::integration::effective_length_over_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            1,
-        )
-        .unwrap(),
+        scene.effective_length_over_dim(family_target, 1).unwrap(),
         1.
     );
     assert_eq!(
-        noon::integration::effective_length_over_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            2,
-        )
-        .unwrap(),
+        scene.effective_length_over_dim(family_target, 2).unwrap(),
         0.
     );
+    assert_eq!(family_target.extremum_along_dim(1, 1.).unwrap(), 0.5);
     assert_eq!(
-        MobjectTarget::from(&family)
-            .extremum_along_dim(1, 1.)
+        scene
+            .effective_extremum_along_dim(family_target, 1, 1.)
             .unwrap(),
-        0.5
-    );
-    assert_eq!(
-        noon::integration::effective_extremum_along_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            1,
-            1.,
-        )
-        .unwrap(),
         1.5
     );
     assert_eq!(
-        noon::integration::effective_extremum_along_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            2,
-            1.,
-        )
-        .unwrap(),
+        scene
+            .effective_extremum_along_dim(family_target, 2, 1.)
+            .unwrap(),
         0.
     );
 }
