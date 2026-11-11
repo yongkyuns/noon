@@ -1,7 +1,28 @@
 //! Coherent effective-state capture shared by Scene-owned live operations.
-use crate::{AuthoringError, ExecutionSession, Mobject, UnsupportedAuthoringOperation};
+use crate::{
+    AuthoringError, ExecutionSession, ExecutionSessionCallbackError, LiveSessionError, Mobject,
+    UnsupportedAuthoringOperation,
+};
 use noon_core::{Color, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, Style};
 use std::{cell::RefCell, rc::Rc};
+
+pub(crate) fn require_target_capture(
+    execution: &ExecutionSession,
+    store: &SemanticStore,
+) -> Result<(), LiveSessionError> {
+    execution.require_published_store(store)?;
+    if let Some(token) = execution.pending_callback_token() {
+        return Err(LiveSessionError::Callback(
+            ExecutionSessionCallbackError::Pending(token),
+        ));
+    }
+    if let Some(termination) = execution.callback_termination() {
+        return Err(LiveSessionError::Callback(
+            ExecutionSessionCallbackError::Terminated(termination),
+        ));
+    }
+    Ok(())
+}
 
 /// Capture one object's coherent effective state when it is reachable in
 /// the supplied execution, otherwise preserve its authored detached state.

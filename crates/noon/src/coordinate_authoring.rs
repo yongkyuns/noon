@@ -857,6 +857,20 @@ impl Scene {
     }
 }
 
+pub(crate) fn coordinate_path_query(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    shaft: &Mobject,
+) -> Result<PathQuery, AuthoringError> {
+    if execution.semantic_object_is_reachable(shaft.node_id()) {
+        crate::path_queries::effective_path_query(store, execution, shaft)
+    } else {
+        // A detached shaft can use its authored path after capture validation.
+        crate::effective_capture::capture_mobject_state(store, execution, shaft)?;
+        shaft.path_query()
+    }
+}
+
 impl ManimGeometryOptions {
     /// Prepare an ordinary closed graph-area path from one captured coordinate
     /// frame. This retains no callback and owns no scene identity.

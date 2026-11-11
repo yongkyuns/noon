@@ -126,15 +126,9 @@ impl Scene {
         &self,
         plane: &ManimPolarPlane,
     ) -> Result<PolarFrame, CoordinateAuthoringError> {
-        let axes = AxesFrame::new(
-            plane
-                .x_axis()?
-                .snapshot_with(&mut |shaft| self.effective_path_query(shaft))?,
-            plane
-                .y_axis()?
-                .snapshot_with(&mut |shaft| self.effective_path_query(shaft))?,
-        );
-        Ok(PolarFrame::new(axes))
+        Ok(PolarFrame::new(
+            self.effective_number_plane_frame(&plane.grid)?,
+        ))
     }
 }
 
