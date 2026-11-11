@@ -84,6 +84,40 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_live_plane_queries_observe_detached_and_animating_axes(self):
+        source = """from noon import *
+from numpy.testing import assert_allclose
+
+class Demo(Scene):
+    def construct(self):
+        plane = PolarPlane(radius_max=2, size=4, azimuth_step=4)
+        self.add(plane)
+        shaft = plane.x_axis.shaft
+        target = shaft.copy().stretch(2, 0, about_point=ORIGIN)
+        animation = self.declare_live_transform_to(shaft, target, run_time=1, rate_func=linear)
+        live = self.live_execution()
+        end = live.play(animation)
+        live.advance_to(0.5)
+        assert_allclose(plane.polar_to_point(1, 0), [1.5, 0], atol=1e-6)
+        assert_allclose(plane.point_to_polar([1.5, 0]), [1, 0], atol=1e-6)
+        context = self._canonical_authoring_context
+        family = plane._semantic_family_handle
+        cartesian = context.queryNumberPlaneFrame(family)
+        assert_allclose(cartesian.coordsToPoint(1, 0.5), [1.5, 0.5], atol=1e-6)
+        assert_allclose(cartesian.pointToCoords(1.5, 0.5), [1, 0.5], atol=1e-6)
+        live.advance_to(end)
+        live.complete()
+        self.remove(plane)
+        polar = context.queryPolarPlaneFrame(family)
+        assert_allclose(polar.polarToPoint(1, 0), [2, 0], atol=1e-6)
+        assert_allclose(polar.pointToPolar(2, 0), [1, 0], atol=1e-6)
+        cartesian = context.queryNumberPlaneFrame(family)
+        assert_allclose(cartesian.coordsToPoint(1, 0.5), [2, 0.5], atol=1e-6)
+        assert_allclose(cartesian.pointToCoords(2, 0.5), [1, 0.5], atol=1e-6)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_callback_line_targets_reject_invalid_coordinates_and_foreign_owners(self):
         first, second = _noon_native.Store(), _noon_native.Store()
         context, other = first.context(), second.context()

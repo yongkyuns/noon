@@ -1,15 +1,16 @@
 //! Coordinate construction through the ordinary running publication transaction.
 use super::*;
 use crate::coordinate_authoring::{
-    prepare_axes, prepare_number_line, prepare_number_plane, prepare_polar_plane,
-    publish_prepared_axes, publish_prepared_number_line, publish_prepared_number_plane,
-    resolve_family,
+    coordinate_path_query, prepare_axes, prepare_number_line, prepare_number_plane,
+    prepare_polar_plane, publish_prepared_axes, publish_prepared_number_line,
+    publish_prepared_number_plane, resolve_family,
 };
+#[cfg(all(feature = "native-text", feature = "latex"))]
 use crate::AuthoringError;
 use crate::{
     AxesFrame, CoordinateAuthoringError, ManimAxes, ManimAxesOptions, ManimBarChart,
     ManimBarChartOptions, ManimNumberLine, ManimNumberLineOptions, ManimNumberPlane,
-    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, NumberLineFrame, PolarFrame,
+    ManimNumberPlaneOptions, ManimPolarPlane, ManimPolarPlaneOptions, NumberLineFrame,
 };
 
 impl LiveSession<'_> {
@@ -84,39 +85,7 @@ impl LiveSession<'_> {
     ) -> Result<AxesFrame, CoordinateAuthoringError> {
         self.require_family(axes.family())?;
         self.require_target_capture()?;
-        axes.snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))
-    }
-
-    pub fn effective_number_plane_frame(
-        &self,
-        plane: &ManimNumberPlane,
-    ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        self.require_family(plane.family())?;
-        self.require_target_capture()?;
-        Ok(AxesFrame::new(
-            plane
-                .x_axis()?
-                .snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))?,
-            plane
-                .y_axis()?
-                .snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))?,
-        ))
-    }
-
-    pub fn effective_polar_plane_frame(
-        &self,
-        plane: &ManimPolarPlane,
-    ) -> Result<PolarFrame, CoordinateAuthoringError> {
-        self.require_family(plane.family())?;
-        self.require_target_capture()?;
-        Ok(PolarFrame::new(AxesFrame::new(
-            plane
-                .x_axis()?
-                .snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))?,
-            plane
-                .y_axis()?
-                .snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))?,
-        )))
+        axes.snapshot_with(&mut |shaft| coordinate_path_query(self.store, self.session, shaft))
     }
 
     pub fn effective_number_line_frame(
@@ -125,18 +94,7 @@ impl LiveSession<'_> {
     ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
         self.require_family(line.family())?;
         self.require_target_capture()?;
-        line.snapshot_with(&mut |shaft| self.coordinate_path_query(shaft))
-    }
-
-    fn coordinate_path_query(&self, shaft: &Mobject) -> Result<crate::PathQuery, AuthoringError> {
-        if self.session.semantic_object_is_reachable(shaft.node_id()) {
-            crate::path_queries::effective_path_query(self.store, self.session, shaft)
-        } else {
-            // Preserve the ordinary detached-capture restrictions, including
-            // uncompiled reactive bindings. Do not select this branch on error.
-            crate::effective_capture::capture_mobject_state(self.store, self.session, shaft)?;
-            shaft.path_query()
-        }
+        line.snapshot_with(&mut |shaft| coordinate_path_query(self.store, self.session, shaft))
     }
 }
 

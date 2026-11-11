@@ -943,19 +943,7 @@ impl<'a> LiveSession<'a> {
     }
 
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
-        self.session.require_published_store(&self.store.borrow())?;
-        if let Some(token) = self.session.pending_callback_token() {
-            return Err(LiveSessionError::Callback(
-                crate::ExecutionSessionCallbackError::Pending(token),
-            ));
-        }
-        if let Some(termination) = self.session.callback_termination() {
-            return Err(LiveSessionError::Callback(
-                crate::ExecutionSessionCallbackError::Terminated(termination),
-            ));
-        }
-
-        Ok(())
+        crate::effective_capture::require_target_capture(self.session, &self.store.borrow())
     }
 
     /// Copy a complete family from this coherent runtime in one publication.
