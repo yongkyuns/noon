@@ -63,20 +63,21 @@ async function waitForPreloadedRuntime(page) {
   return state;
 }
 
-async function waitForLongSourcePlayback(page, expectedGeneration, previousObjectCount) {
+async function waitForLongSourcePlayback(page, expectedGeneration, expectedObjectCount) {
   await page.waitForFunction(
-    ({ generation, previousCount }) => {
+    ({ generation, objectCount }) => {
       const patch = document.querySelector("#patch-status");
       const run = document.querySelector("#replace-scene");
       return (
         window.__noonExampleGallery?.runInFlight === true &&
         window.__noonExampleGallery?.generationDiagnostics.runGeneration === generation &&
         patch?.dataset.state === "running" &&
+        patch.dataset.runGeneration === String(generation) &&
         run?.disabled === false &&
-        document.querySelector("#metric-objects")?.value !== previousCount
+        document.querySelector("#metric-objects")?.value === objectCount
       );
     },
-    { generation: expectedGeneration, previousCount: previousObjectCount },
+    { generation: expectedGeneration, objectCount: expectedObjectCount },
     { timeout: 120_000 },
   );
   const state = await snapshot(page);
@@ -84,7 +85,7 @@ async function waitForLongSourcePlayback(page, expectedGeneration, previousObjec
   assert.equal(state.runGeneration, expectedGeneration);
   assert.equal(state.runDisabled, false, "Run must stay available during the long source continuation");
   assert.equal(state.patchState, "running");
-  assert.notEqual(state.objectCount, previousObjectCount, "the explicit source replacement must publish its row count");
+  assert.equal(state.objectCount, expectedObjectCount, "the explicit source replacement must publish its row count");
   assert.equal(state.patchRunGeneration, String(expectedGeneration));
   return state;
 }
@@ -242,18 +243,26 @@ try {
     () => document.querySelector("#python-scene-source")?.value ?? "",
   );
   assert.match(source, /rows = 20/);
-  // Preserve the stress source and put the long ownership interval after its
-  // first play. Draft changes must leave that 600-second continuation running.
+  // Hold the published five-row grid while testing draft-only changes.
   const firstStressPlayBoundary = "            run_time=0.35,\n        )\n";
+  const gridCreation = "        self.play(*[Create(shape) for shape in shapes], run_time=0.55)\n";
   assert.ok(
     source.includes(firstStressPlayBoundary),
-    "stress source must retain the canonical first play before the ownership wait",
+    "stress source must retain the title and label introduction",
+  );
+  assert.ok(
+    source.includes(gridCreation),
+    "stress source must create the grid before the ownership wait",
   );
   const rows5Source = source
     .replace(/rows = \d+/, "rows = 5")
     .replace(
       firstStressPlayBoundary,
-      `${firstStressPlayBoundary.replace("0.35", "2.0")}        self.wait(${SOURCE_OWNED_DURATION_SECONDS}.0)\n`,
+      firstStressPlayBoundary.replace("0.35", "2.0"),
+    )
+    .replace(
+      gridCreation,
+      `${gridCreation}        self.wait(${SOURCE_OWNED_DURATION_SECONDS}.0)\n`,
     );
   assert.match(rows5Source, /self\.wait\(600\.0\)/);
   const rows7Source = source.replace(/rows = \d+/, "rows = 7");
@@ -273,13 +282,14 @@ try {
   };
   await page.evaluate(generation => { window.__stressSourceOwnershipGeneration = generation; }, rows5Generation);
   await page.locator("#replace-scene").click();
+  const rows5ObjectCount = String(5 * 30 + 26); // Grid cells, title, subtitle and text streams.
   diagnostics.snapshots.rows5Playing = await waitForLongSourcePlayback(
-    page, rows5Generation, diagnostics.snapshots.baseline.objectCount,
+    page, rows5Generation, rows5ObjectCount,
   );
   await page.evaluate(() => { window.__stressSourceOwnershipGeneration = null; });
   const sourceOwnedGeneration = diagnostics.snapshots.rows5Playing.runGeneration;
 
-  await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > 2.05);
+  await page.waitForFunction(() => Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) > 2.6);
   const activeRows5 = await snapshot(page);
 
   // Reset and typing only change the draft. The original long continuation
