@@ -1388,24 +1388,11 @@ impl CanonicalAuthoringScene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        let target = noon::MobjectTarget::from(family);
-        let root = target
-            .require_store(self.scene.integration_store())
-            .map_err(AuthoringFailure::from)?;
-        if !self.identities.contains_key(&root) {
-            return Err("family is not bound to this canonical Scene".into());
-        }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_effective_extremum_along_dim(target, dim, key);
-            }
-        }
-        target
-            .extremum_along_dim(dim, key)
-            .map_err(AuthoringFailure::from)
+        self.family_observation(
+            family,
+            |target| target.extremum_along_dim(dim, key),
+            |player, target| player.live_effective_extremum_along_dim(target, dim, key),
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1414,22 +1401,11 @@ impl CanonicalAuthoringScene {
         family: &noon::MobjectFamily,
         dim: usize,
     ) -> Result<f64, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        let target = noon::MobjectTarget::from(family);
-        target
-            .require_store(self.scene.integration_store())
-            .map_err(AuthoringFailure::from)?;
-        // A valid family can group live leaves without having a separate
-        // canonical wrapper binding. The shared effective query validates each
-        // leaf against this session, as the ordinary family layout query does.
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_effective_length_over_dim(target, dim);
-            }
-        }
-        target.length_over_dim(dim).map_err(AuthoringFailure::from)
+        self.family_observation(
+            family,
+            |target| target.length_over_dim(dim),
+            |player, target| player.live_effective_length_over_dim(target, dim),
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1437,22 +1413,11 @@ impl CanonicalAuthoringScene {
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        let target = noon::MobjectTarget::from(family);
-        let root = target
-            .require_store(self.scene.integration_store())
-            .map_err(AuthoringFailure::from)?;
-        if !self.identities.contains_key(&root) {
-            return Err("family is not bound to this canonical Scene".into());
-        }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_effective_center_of_mass(target);
-            }
-        }
-        target.center_of_mass().map_err(AuthoringFailure::from)
+        self.family_observation(
+            family,
+            |target| target.center_of_mass(),
+            |player, target| player.live_effective_center_of_mass(target),
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1462,24 +1427,11 @@ impl CanonicalAuthoringScene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        let target = noon::MobjectTarget::from(family);
-        let root = target
-            .require_store(self.scene.integration_store())
-            .map_err(AuthoringFailure::from)?;
-        if !self.identities.contains_key(&root) {
-            return Err("family is not bound to this canonical Scene".into());
-        }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_effective_boundary_point(target, direction_x, direction_y);
-            }
-        }
-        target
-            .boundary_point(direction_x, direction_y)
-            .map_err(AuthoringFailure::from)
+        self.family_observation(
+            family,
+            |target| target.boundary_point(direction_x, direction_y),
+            |player, target| player.live_effective_boundary_point(target, direction_x, direction_y),
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

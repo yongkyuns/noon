@@ -82,6 +82,11 @@ class OrdinaryPathQueries(Scene):
         finish = live.play(animation)
         live.advance_to(0.5)
         check_boundary()
+        family_y = [float(point[1]) for point in family.get_all_points()]
+        bottom, top = min(family_y), max(family_y)
+        assert abs(family.get_center_of_mass()[1] - sum(family_y) / len(family_y)) < 2e-6
+        assert abs(family.get_boundary_point(UP)[1] - top) < 2e-6
+        assert abs(family.length_over_dim(1) - (top - bottom)) < 2e-6
         midpoint = rectangle.get_start()
         assert abs(midpoint[0] - (start[0] + end[0]) * 0.5) < 2e-6
         assert abs(midpoint[1] - (start[1] + end[1]) * 0.5) < 2e-6
