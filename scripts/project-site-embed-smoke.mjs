@@ -73,6 +73,7 @@ async function captureFrameState(frame) {
           url:location.href,visibility:document.visibilityState,focused:document.hasFocus(),
           activeElement:document.activeElement?.className,embed:{...document.documentElement.dataset},
           automaticStart:window.__noonSitePlayingObserved,
+          workerHostTraces:window.__noonSiteWorkerHostTraces ?? [],
           gallery:gallery ? {selectedExampleId:gallery.selectedExampleId,runInFlight:gallery.runInFlight,
             generations:gallery.generationDiagnostics,runPhaseMetrics:gallery.runPhaseMetrics,
             executionDiagnostics:gallery.executionDiagnostics} : null,
@@ -130,6 +131,37 @@ try {
       const context = await browser.newContext({viewport:{width:1280,height:1000},colorScheme:'dark'});
       const cache = createPyodideResourceCache(await readFile(path.join(root,'_site/python-worker.js'),'utf8'));
       await cache.install(context);
+      // Record transition messages at the iframe host, independent of worker
+      // responsiveness. Passive only: preserve native Worker construction,
+      // postMessage arguments/transfer list and runtime readiness gates.
+      await context.addInitScript(() => {
+        const NativeWorker = globalThis.Worker;
+        if (!NativeWorker?.prototype?.postMessage) return;
+        const original = NativeWorker.prototype.postMessage;
+        const known = new WeakMap();
+        const traces = [];
+        const stages = new Set(['init','prepare','start_engine','rebuild_engine','switch_engine',
+          'attach_engine','ready','prepared','engine_started','renderer_rebuilt','mode_switched',
+          'error','render_error','stop']);
+        globalThis.__noonSiteWorkerHostTraces = traces;
+        function record(trace, direction, message) {
+          if (!stages.has(message?.type)) return;
+          trace.events.push({direction,type:message.type,requestId:message.requestId ?? null,
+            atMs:performance.now()});
+          if (trace.events.length>64) trace.events.shift();
+        }
+        NativeWorker.prototype.postMessage = function (...args) {
+          let trace = known.get(this);
+          if (!trace) {
+            trace = {id:traces.length+1,events:[]};
+            known.set(this,trace);
+            traces.push(trace);
+            this.addEventListener('message',event=>record(trace,'received',event.data));
+          }
+          record(trace,'sent',args[0]);
+          return original.apply(this,args);
+        };
+      });
       // Passive observation starts before any frame scripts, so a short scene
       // finishing while its siblings load still proves that autoplay occurred.
       await context.addInitScript(() => {
