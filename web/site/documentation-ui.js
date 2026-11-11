@@ -47,7 +47,7 @@ export function installDocumentationUI(doc = document, win = window) {
         const selection = win.getSelection(); selection.removeAllRanges(); selection.addRange(range);
         // Chromium omits a terminal newline when a selection ends inside <pre>.
         // Extend only a clipped selection to a nonselected boundary after <pre>.
-        if (selection.toString() !== source && source.endsWith('\\n')) {
+        if (selection.toString() !== source && source.endsWith('\n')) {
           let boundary = block.querySelector('[data-copy-selection-end]');
           if (!boundary) {
             boundary = doc.createElement('span');
