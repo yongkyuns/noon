@@ -1411,7 +1411,7 @@ impl Context {
 
     #[pyo3(name = "queryNumberPlaneFrame")]
     fn effective_number_plane_frame(
-        &mut self,
+        &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::coordinates::AxesObservation> {
         self.require_active()?;
@@ -1419,8 +1419,8 @@ impl Context {
         let plane = noon::ManimNumberPlane::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(live) = self.live_session() {
-            live.effective_number_plane_frame(&plane)
+        let value = if self.has_execution() {
+            self.scene.effective_number_plane_frame(&plane)
         } else {
             plane.authored_frame()
         };
@@ -1431,7 +1431,7 @@ impl Context {
     }
     #[pyo3(name = "queryPolarPlaneFrame")]
     fn effective_polar_plane_frame(
-        &mut self,
+        &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::coordinates::PolarObservation> {
         self.require_active()?;
@@ -1439,8 +1439,8 @@ impl Context {
         let plane = noon::ManimPolarPlane::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(live) = self.live_session() {
-            live.effective_polar_plane_frame(&plane)
+        let value = if self.has_execution() {
+            self.scene.effective_polar_plane_frame(&plane)
         } else {
             plane.authored_polar_frame()
         };

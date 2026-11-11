@@ -36,6 +36,94 @@ fn resources(scene: &Scene) -> usize {
 }
 
 #[test]
+fn scene_plane_frames_observe_detached_and_animating_axes() {
+    let mut scene = Scene::new();
+    let plane = scene.polar_plane(&polar_options()).unwrap();
+    let shaft = plane.x_axis().unwrap().shaft().unwrap();
+    let mut target = shaft.target_editor().unwrap();
+    target.set_scale(2.0, 1.0).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &shaft,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let detached = running.scene().effective_polar_plane_frame(&plane).unwrap();
+    near(detached.polar_to_point(1.0, 0.0).unwrap(), [1.0, 0.0]);
+    near(detached.point_to_polar([1.0, 0.0]).unwrap(), [1.0, 0.0]);
+
+    running
+        .scene_mut()
+        .add_many(&[plane.family().into()])
+        .unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 0.5).unwrap();
+    let publication = running.session().publication_context();
+    let frame = running
+        .scene()
+        .effective_number_plane_frame(&plane)
+        .unwrap();
+    near(frame.coords_to_point(1.0, 0.5).unwrap(), [1.5, 0.5]);
+    near(frame.point_to_coords([1.5, 0.5]).unwrap(), [1.0, 0.5]);
+    assert_eq!(
+        running
+            .scene()
+            .effective_polar_plane_frame(&plane)
+            .unwrap()
+            .axes(),
+        frame
+    );
+    assert_eq!(running.session().publication_context(), publication);
+}
+
+#[test]
+fn scene_plane_frames_reject_unavailable_publications_for_detached_axes() {
+    use crate::{
+        ExecutionSessionCallbackError, ExecutionSessionPublicationError, LiveSessionError,
+    };
+    use noon_core::HostCallbackId;
+
+    let mut scene = Scene::new();
+    let plane = scene.polar_plane(&polar_options()).unwrap();
+    let mut marker = scene.circle(0.2).unwrap();
+    scene.add(&marker).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(marker.node_id(), HostCallbackId::new(9), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    assert!(matches!(
+        running
+            .session_mut()
+            .advance_to_callback_barrier(0.0)
+            .unwrap(),
+        crate::execution_session::CallbackAdvance::HostRequired { .. }
+    ));
+    let publication = running.session().publication_context();
+    assert!(matches!(
+        running.scene().effective_number_plane_frame(&plane),
+        Err(CoordinateAuthoringError::Live(LiveSessionError::Callback(
+            ExecutionSessionCallbackError::Pending(_)
+        )))
+    ));
+    marker.shift(0.0, 1.0).unwrap();
+    assert!(matches!(
+        running.scene().effective_polar_plane_frame(&plane),
+        Err(CoordinateAuthoringError::Live(
+            LiveSessionError::Publication(
+                ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            )
+        ))
+    ));
+    assert_eq!(running.session().publication_context(), publication);
+}
+
+#[test]
 fn number_plane_grid_aliases_keep_authored_membership_without_geometry_inference() {
     // Complete pinned Manim observations include arange rounding at ratio three.
     for (ratio, x_indices, y_indices) in [
