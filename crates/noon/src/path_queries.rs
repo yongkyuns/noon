@@ -1328,7 +1328,7 @@ fn family_point_path_query(
 
 /// Observe effective vector-path boundary anchors for an object. Family targets
 /// keep Mobject's base behavior and return their recursive point arrays.
-pub fn effective_path_boundary_points(
+pub(crate) fn effective_path_boundary_points(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -1340,7 +1340,7 @@ pub fn effective_path_boundary_points(
 }
 
 /// Observe one dimension's vector-path anchor extremum in the current execution.
-pub fn effective_path_boundary_extremum_along_dim(
+pub(crate) fn effective_path_boundary_extremum_along_dim(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -1355,7 +1355,7 @@ pub fn effective_path_boundary_extremum_along_dim(
 }
 
 /// Observe the effective vector-path boundary anchor farthest along a direction.
-pub fn effective_path_boundary_point(
+pub(crate) fn effective_path_boundary_point(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,

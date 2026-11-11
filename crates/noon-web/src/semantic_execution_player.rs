@@ -2773,11 +2773,12 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_path_boundary_points(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_path_boundary_points(&semantics, self.source.session(), target)
+        self.source
+            .scene()
+            .effective_path_boundary_points(target)
             .map_err(AuthoringFailure::from)
     }
 
@@ -2801,20 +2802,15 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_path_boundary_extremum_along_dim(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_path_boundary_extremum_along_dim(
-            &semantics,
-            self.source.session(),
-            target,
-            dim,
-            key,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene()
+            .effective_path_boundary_extremum_along_dim(target, dim, key)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2869,20 +2865,15 @@ impl SemanticExecutionPlayer {
 
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_path_boundary_point(
-        &mut self,
+        &self,
         target: noon::MobjectTarget<'_>,
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_path_boundary_point(
-            &semantics,
-            self.source.session(),
-            target,
-            direction_x,
-            direction_y,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene()
+            .effective_path_boundary_point(target, direction_x, direction_y)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
