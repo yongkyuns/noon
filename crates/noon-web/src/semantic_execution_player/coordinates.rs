@@ -1,4 +1,4 @@
-//! Coordinate adapters borrow the existing live facade; no second session.
+//! Coordinate adapters for the player that owns the running Scene.
 use super::*;
 
 impl SemanticExecutionPlayer {
@@ -17,34 +17,6 @@ impl SemanticExecutionPlayer {
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
         self.with_live_session(|live| Ok(live.create_path_family(paths)))?
             .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_polar_plane(
-        &mut self,
-        options: &noon::ManimPolarPlaneOptions,
-    ) -> Result<noon::ManimPolarPlane, AuthoringFailure> {
-        self.with_live_session(|live| Ok(live.polar_plane(options)))?
-            .map_err(crate::plot_error::coordinate_failure)
-    }
-
-    pub(crate) fn live_create_axes(
-        &mut self,
-        options: &noon::ManimAxesOptions,
-    ) -> Result<noon::ManimAxes, AuthoringFailure> {
-        // The outer result is session acquisition, the inner one preserves the
-        // typed coordinate preparation/publication error until host projection.
-        self.with_live_session(|live| Ok(live.axes(options)))?
-            .map_err(crate::plot_error::coordinate_failure)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_three_d_axes(
-        &mut self,
-        options: &noon::ManimThreeDAxesOptions,
-    ) -> Result<noon::ManimThreeDAxes, AuthoringFailure> {
-        self.with_live_session(|live| Ok(live.three_d_axes(options)))?
-            .map_err(crate::plot_error::coordinate_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -95,21 +67,5 @@ impl SemanticExecutionPlayer {
             .map_err(|error| {
                 AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
             })
-    }
-
-    pub(crate) fn live_create_number_line(
-        &mut self,
-        options: &noon::ManimNumberLineOptions,
-    ) -> Result<noon::ManimNumberLine, AuthoringFailure> {
-        self.with_live_session(|live| Ok(live.number_line(options)))?
-            .map_err(crate::plot_error::coordinate_failure)
-    }
-
-    pub(crate) fn live_create_number_plane(
-        &mut self,
-        options: &noon::ManimNumberPlaneOptions,
-    ) -> Result<noon::ManimNumberPlane, AuthoringFailure> {
-        self.with_live_session(|live| Ok(live.number_plane(options)))?
-            .map_err(crate::plot_error::coordinate_failure)
     }
 }

@@ -1516,7 +1516,9 @@ impl Context {
         &mut self,
         options: &crate::coordinates::CoordinateOptions,
     ) -> PyResult<crate::family::FamilyHandle> {
-        crate::coordinates::live(self, options)
+        self.available()?;
+        let running = self.has_execution();
+        crate::coordinates::create_on_scene(&mut self.scene, options, running)
     }
 
     #[pyo3(name = "associatePublishedMobjects")]

@@ -281,7 +281,7 @@ pub(crate) struct PreparedNumberPlane {
     axes: [PreparedNumberLine; 2],
 }
 
-pub(crate) fn publish_prepared_number_plane(
+fn publish_prepared_number_plane(
     prepared: PreparedNumberPlane,
     store: &mut SemanticStore,
     mut publish: impl FnMut(
