@@ -16,7 +16,12 @@ impl CanonicalAuthoringScene {
                 line.authored_frame()
                     .map_err(crate::plot_error::coordinate_failure)
             },
-            |player, _| player.live_effective_number_line_frame(line),
+            |player, _| {
+                player
+                    .scene_mut()
+                    .effective_number_line_frame(line)
+                    .map_err(crate::plot_error::coordinate_failure)
+            },
         )
     }
 

@@ -754,20 +754,39 @@ impl Scene {
         )?)
     }
 
-    /// Current coordinate snapshot from this Scene's owned execution. Cold
-    /// Scenes fail explicitly, just like Scene::effective_path_query.
+    /// Read the current shaft, or its validated authored path while detached.
     pub fn effective_number_line_frame(
         &self,
         line: &ManimNumberLine,
     ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
-        line.snapshot_with(&mut |shaft| self.effective_path_query(shaft))
+        let execution = self.coordinate_query_execution(line.family())?;
+        line.snapshot_with(&mut |shaft| {
+            coordinate_path_query(self.integration_store(), execution, shaft)
+        })
     }
 
+    /// Read both shafts from the same current publication.
     pub fn effective_axes_frame(
         &self,
         axes: &ManimAxes,
     ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        axes.snapshot_with(&mut |shaft| self.effective_path_query(shaft))
+        let execution = self.coordinate_query_execution(axes.family())?;
+        axes.snapshot_with(&mut |shaft| {
+            coordinate_path_query(self.integration_store(), execution, shaft)
+        })
+    }
+
+    fn coordinate_query_execution(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<&ExecutionSession, CoordinateAuthoringError> {
+        let store = self.integration_store();
+        crate::MobjectTarget::from(family).require_store(store)?;
+        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::effective_capture::require_target_capture(execution, &store.borrow())?;
+        Ok(execution)
     }
 
     /// Materialize an area from one currently published effective observation.

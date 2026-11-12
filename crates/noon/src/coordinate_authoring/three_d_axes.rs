@@ -547,25 +547,7 @@ impl Scene {
         &self,
         axes: &ManimThreeDAxes,
     ) -> Result<ManimThreeDAxesFrame, CoordinateAuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store()) {
-            return Err(AuthoringError::ForeignStore.into());
-        }
-        let shafts = axes.axis_shafts()?;
-        let worlds = [
-            self.effective_world_transform(&shafts[0])?,
-            self.effective_world_transform(&shafts[1])?,
-            self.effective_world_transform(&shafts[2])?,
-        ];
-        axes.frame_with_world_transforms(worlds)
-    }
-}
-
-impl crate::LiveSession<'_> {
-    pub fn effective_three_d_axes_frame(
-        &self,
-        axes: &ManimThreeDAxes,
-    ) -> Result<ManimThreeDAxesFrame, CoordinateAuthoringError> {
-        self.require_family(axes.family())?;
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
         let shafts = axes.axis_shafts()?;
         let worlds = [
             self.effective_world_transform(&shafts[0])?,

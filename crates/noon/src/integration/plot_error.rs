@@ -41,10 +41,8 @@ pub fn coordinate_failure(error: crate::CoordinateAuthoringError) -> AuthoringFa
     }
 }
 
-/// Keep the diagnostics of live coordinate resource publication at the host boundary.
-pub fn live_coordinate_creation_failure(
-    error: crate::CoordinateAuthoringError,
-) -> AuthoringFailure {
+/// Keep the diagnostics of live coordinate authoring at the host boundary.
+pub fn live_coordinate_failure(error: crate::CoordinateAuthoringError) -> AuthoringFailure {
     match error {
         crate::CoordinateAuthoringError::Authoring(error) => {
             crate::LiveSessionError::from(error).into()
