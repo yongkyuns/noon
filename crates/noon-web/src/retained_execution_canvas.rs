@@ -475,25 +475,46 @@ mod wasm {
                 InstalledRetainedExecutionMirror::from_bundle_bytes(&resource_bundle_bytes)
                     .map_err(js_error)?;
             let next_camera = next_mirror.camera();
-            let RetainedGpuState {
-                preparer,
-                renderer,
-                text_gpu,
-                preloaded_geometry_count,
-                preload_bytes_uploaded,
-            } = build_retained_gpu_state(
-                &next_mirror,
-                &self.device,
-                &self.queue,
-                self.config.format,
-            )?;
+            // Source replacement needs a fresh immutable resource projection,
+            // not another set of heavyweight shader pipelines. Preload validates
+            // geometry and device limits before changing resident GPU buffers.
+            let mut preparer = RetainedFramePreparer::new();
+            preparer.set_scene_path_mesh_cache_budget(
+                next_mirror
+                    .resources()
+                    .render_geometries()
+                    .len()
+                    .max(next_mirror.resources().render_geometry_preparation_count()),
+                next_mirror.resources().geometry_count(),
+            );
+            let geometries = next_mirror.resources().render_geometries();
+            let requests = next_mirror
+                .resources()
+                .render_geometry_preparations()
+                .map(|preparation| PathMeshPreload {
+                    geometry: geometries[preparation.resource as usize]
+                        .geometry
+                        .as_ref()
+                        .expect("prepared render geometry is live")
+                        .as_ref(),
+                    style: preparation.style,
+                    transform: preparation.transform,
+                })
+                .collect::<Vec<_>>();
+            let preload = preparer
+                .preload_path_meshes(&self.device, &self.queue, &mut self.renderer, &requests)
+                .map_err(js_error)?;
+            if preload.upload.bytes_uploaded != 0 {
+                self.queue.submit([]);
+            }
+            self.renderer.reset_retained_source_state(&self.device);
+            self.text_gpu
+                .reset_retained_source_state(&self.device, &self.queue);
 
             self.effect_program_task.cancel();
             self.effect_program_task = EffectProgramTask::default();
             self.mirror = next_mirror;
             self.preparer = preparer;
-            self.renderer = renderer;
-            self.text_gpu = text_gpu;
             self.selection_overlay_gpu = OverlayGpuState::default();
             self.selection_overlay = None;
             self.pointer_view = None;
@@ -503,8 +524,8 @@ mod wasm {
             self.camera_height = next_camera.height;
             self.pending_frame = false;
             self.pending_changes = FrameChanges::default();
-            self.preloaded_geometry_count = preloaded_geometry_count;
-            self.preload_bytes_uploaded = preload_bytes_uploaded;
+            self.preloaded_geometry_count = preload.geometry.geometry_cache_misses;
+            self.preload_bytes_uploaded = preload.upload.bytes_uploaded;
             self.last_draw_calls = 0;
             self.last_instances_drawn = 0;
             self.last_bytes_uploaded = 0;
