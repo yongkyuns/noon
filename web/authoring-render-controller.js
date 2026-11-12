@@ -689,10 +689,13 @@ export function createAuthoringRenderController(host) {
     transitionResourceBytes = null;
     transitionFrameLoopWasRunning = false;
 
-    // The replacement engine has already queued a complete bootstrap payload.
-    // Retire the currently presenting renderer only once that payload reaches
-    // this host; renderer/device construction is the only remaining blank-window seam.
-    disposeRenderer();
+    // Replacing a source requires new retained resources, not a new GPU device.
+    // Reclaiming an OffscreenCanvas WebGL2 context while other embeds present
+    // can stall adapter/device creation for more than the hot-edit timeout.
+    const reuseRenderer = renderer !== null && nextMode === mode &&
+      typeof renderer.replaceResourceBundle === "function" &&
+      !webglContextLost && webglRecoveryPromise === null;
+    if (!reuseRenderer) disposeRenderer();
     resourceBytes = nextResourceBytes;
     reconnectResourceBundlePending = false;
     needsPresent = false;
@@ -703,22 +706,30 @@ export function createAuthoringRenderController(host) {
     lastPointerReceipt = null;
     pendingRendererObservationPublication = null;
     mode = nextMode;
-    bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
+    bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication, reuseRenderer);
     return true;
   }
 
-  async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null) {
+  async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null,
+    reuseRenderer = false) {
     const bootstrapGeneration = frameLoopGeneration;
     rendererStartupPending = true;
     surfaceCreationError = null;
     try {
-      const createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      let createdRenderer;
+      if (reuseRenderer) {
+        // Validate and replace only scene-owned retained caches on the same
+        // surface/device. The first new snapshot still must actually present.
+        renderer.replaceResourceBundle(resourceBytes);
+        createdRenderer = renderer;
+      } else {
+        createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      }
       if (renderSubstageProfiling) createdRenderer.setRenderSubstageProfiling(true);
       if (gpuCompletionProfiling) createdRenderer.setGpuCompletionProfiling(true);
-      // create() resolves after GPU setup; keep this separate from first render.
       rendererReadyAtMs ??= performance.now();
       if (stopped) {
-        createdRenderer.free?.();
+        if (!reuseRenderer) createdRenderer.free?.();
         return;
       }
       renderer = createdRenderer;

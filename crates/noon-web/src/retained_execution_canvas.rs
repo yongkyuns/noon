@@ -453,6 +453,72 @@ mod wasm {
             Ok(result)
         }
 
+        /// Replace the retained source's immutable resources without recreating
+        /// the browser GPU device or claiming the OffscreenCanvas again. The old
+        /// render loop is suspended by the host and a full snapshot must follow.
+        #[wasm_bindgen(js_name = replaceResourceBundle)]
+        pub fn replace_resource_bundle(
+            &mut self,
+            resource_bundle_bytes: Vec<u8>,
+        ) -> Result<(), JsValue> {
+            self.require_webgpu_device()?;
+            if self.webgl_context_lifecycle.is_lost()
+                || self.webgl_context_lifecycle.recovery_pending()
+            {
+                return Err(js_message(
+                    "cannot replace retained resources while the WebGL2 context is unavailable",
+                ));
+            }
+            // Validate/preload before swapping authoritative state, so an
+            // invalid bundle cannot destroy the live renderer.
+            let next_mirror =
+                InstalledRetainedExecutionMirror::from_bundle_bytes(&resource_bundle_bytes)
+                    .map_err(js_error)?;
+            let next_camera = next_mirror.camera();
+            let RetainedGpuState {
+                preparer,
+                renderer,
+                text_gpu,
+                preloaded_geometry_count,
+                preload_bytes_uploaded,
+            } = build_retained_gpu_state(
+                &next_mirror,
+                &self.device,
+                &self.queue,
+                self.config.format,
+            )?;
+
+            self.effect_program_task.cancel();
+            self.effect_program_task = EffectProgramTask::default();
+            self.mirror = next_mirror;
+            self.preparer = preparer;
+            self.renderer = renderer;
+            self.text_gpu = text_gpu;
+            self.selection_overlay_gpu = OverlayGpuState::default();
+            self.selection_overlay = None;
+            self.pointer_view = None;
+            self.glow_transport_seen = false;
+            self.working_profile = noon_core::ViewColorProfile::Compatibility;
+            self.camera_center = next_camera.center;
+            self.camera_height = next_camera.height;
+            self.pending_frame = false;
+            self.pending_changes = FrameChanges::default();
+            self.preloaded_geometry_count = preloaded_geometry_count;
+            self.preload_bytes_uploaded = preload_bytes_uploaded;
+            self.last_draw_calls = 0;
+            self.last_instances_drawn = 0;
+            self.last_bytes_uploaded = 0;
+            self.last_geometry_cache_misses = 0;
+            self.last_outline_cache_misses = 0;
+            self.resident_path_maintenance_retry_deferred = false;
+            self.pending_renderer_observation = None;
+            self.last_renderer_observation = None;
+            self.presentation_sequence = 0;
+            self.render_substage_samples.clear();
+            self.gpu_completion_samples.restart();
+            self.update_camera()
+        }
+
         #[wasm_bindgen(js_name = applyDeltaJson)]
         pub fn apply_delta_json(&mut self, json: &str) -> Result<bool, JsValue> {
             self.ensure_delta_available()?;

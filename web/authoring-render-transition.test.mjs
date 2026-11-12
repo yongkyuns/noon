@@ -29,20 +29,18 @@ test("renderer transition keeps the active renderer until replacement bootstrap 
   );
 
   const commit = functionSlice("commitRendererTransition", "bootstrapRenderer");
-  const disposeIndex = commit.indexOf("disposeRenderer();");
+  const reuseIndex = commit.indexOf("const reuseRenderer = renderer !== null");
+  const disposeIndex = commit.indexOf("if (!reuseRenderer) disposeRenderer();");
   const publishModeIndex = commit.indexOf("mode = nextMode;");
   const bootstrapIndex = commit.indexOf(
-    "bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);",
+    "bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication, reuseRenderer);",
   );
-  assert.ok(disposeIndex >= 0, "transition commit must retire the previous renderer");
-  assert.ok(
-    publishModeIndex > disposeIndex,
-    "next mode must not publish before the previous renderer is retired",
-  );
-  assert.ok(
-    bootstrapIndex > publishModeIndex,
-    "replacement renderer bootstrap must start only after commit state is published",
-  );
+  assert.ok(reuseIndex >= 0 && disposeIndex > reuseIndex,
+    "same-GPU rebuild must preserve the renderer, but non-reusable paths must retire it");
+  assert.ok(publishModeIndex > disposeIndex,
+    "next mode must not publish before replacement resource ownership is settled");
+  assert.ok(bootstrapIndex > publishModeIndex,
+    "replacement bootstrap must start only after commit state is published");
 });
 
 test("retained transition resources stage separately from the active renderer", () => {
@@ -69,7 +67,7 @@ test("renderer transitions suspend ticks until delayed bootstrap publishes ready
 
   const commit = functionSlice("commitRendererTransition", "bootstrapRenderer");
   assert.match(commit, /const resumeFrameLoop = transitionFrameLoopWasRunning;/);
-  assert.match(commit, /bootstrapRenderer\(initial, resumeFrameLoop, publication\)/);
+  assert.match(commit, /bootstrapRenderer\(initial, resumeFrameLoop, publication, reuseRenderer\)/);
 
   const bootstrap = functionSlice("bootstrapRenderer", "tryPresent");
   const create = bootstrap.indexOf("await RetainedExecutionCanvasRenderer.create");
@@ -82,11 +80,10 @@ test("renderer transitions suspend ticks until delayed bootstrap publishes ready
     /await nextRenderOpportunity\(\);[\s\S]*?bootstrapGeneration !== frameLoopGeneration/,
   );
   assert.match(bootstrap, /if \(resumeFrameLoop\) \{\s*running = true;\s*scheduleFrame\(bootstrapGeneration\);\s*\} else \{\s*running = false;/s);
-  assert.equal(
-    (bootstrap.match(/if \(stopped\) \{\s*createdRenderer\.free\?\.\(\);\s*return;/gs) ?? []).length,
-    1,
-    "stopping delayed renderer creation must dispose the unpublished renderer",
-  );
+  assert.match(bootstrap, /if \(stopped\) \{\s*if \(!reuseRenderer\) createdRenderer\.free\?\.\(\);\s*return;/s,
+    "stopping delayed GPU creation frees only a newly constructed renderer");
+  assert.match(bootstrap, /renderer\.replaceResourceBundle\(resourceBytes\)/,
+    "an ordinary retained edit must use the in-place GPU reset API");
 });
 
 test("transition state is observable without changing the presented mode", () => {
