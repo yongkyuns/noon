@@ -1,8 +1,8 @@
 //! Resource-backed DecimalNumber and Integer over shared MathTex semantics.
 
 use crate::{
-    format_decimal, DecimalFormat, LatexBackend, MathTex, Mobject, NumericFormatError,
-    TextAuthoringError, ValueTracker,
+    format_decimal, AuthoringError, DecimalFormat, LatexBackend, MathTex, Mobject,
+    NumericFormatError, Scene, TextAuthoringError, ValueTracker,
 };
 use noon_core::{
     compose_numeric_text_resource as compose_numeric_resource, numeric_text_layout,
@@ -78,6 +78,69 @@ pub(crate) fn numeric_live_error(error: NumericAuthoringError) -> crate::LiveSes
         NumericAuthoringError::Text(error) => crate::LiveSessionError::Text(error),
         NumericAuthoringError::Semantic(error) => crate::LiveSessionError::from(error),
         other => crate::LiveSessionError::Mobject(other.to_string()),
+    }
+}
+
+impl Scene {
+    /// Construct a detached numeric label through this Scene's publication owner.
+    pub fn decimal_number(
+        &mut self,
+        backend: &mut impl LatexBackend,
+        value: f64,
+        format: DecimalFormat,
+        font_size: f32,
+    ) -> Result<DecimalNumber, NumericAuthoringError> {
+        let store = Rc::clone(self.integration_store());
+        let root = self.root();
+        let Some(execution) = self.running_execution_mut() else {
+            return DecimalNumber::with_font_size(store, backend, value, format, font_size);
+        };
+        execution
+            .require_resource_creation_at_root(&store.borrow(), root)
+            .map_err(AuthoringError::from)
+            .map_err(TextAuthoringError::Semantic)?;
+        DecimalNumber::construct_with(
+            store,
+            backend,
+            value,
+            format,
+            font_size,
+            |store, transaction| {
+                execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from)
+                    .map_err(TextAuthoringError::Semantic)
+            },
+        )
+    }
+
+    /// Read the current tracker value, or the base value for an unbound number.
+    pub fn effective_decimal_value(
+        &self,
+        number: &DecimalNumber,
+    ) -> Result<f64, NumericAuthoringError> {
+        self.require_object(number.mobject())?;
+        match self.running_execution() {
+            Some(execution) => number.current_value(execution),
+            None => number.value(),
+        }
+    }
+
+    /// Read numeric font size using this Scene's current text presentation.
+    pub fn effective_decimal_font_size(
+        &self,
+        number: &DecimalNumber,
+    ) -> Result<f64, NumericAuthoringError> {
+        self.require_object(number.mobject())?;
+        let Some(execution) = self.running_execution() else {
+            return number.font_size();
+        };
+        let state = crate::effective_capture::capture_mobject_state(
+            self.integration_store(),
+            execution,
+            number.mobject(),
+        )?;
+        number.font_size_at(&state)
     }
 }
 
@@ -157,7 +220,7 @@ impl DecimalNumber {
         )
     }
 
-    pub(crate) fn construct_with(
+    fn construct_with(
         store: Rc<RefCell<SemanticStore>>,
         backend: &mut impl LatexBackend,
         value: f64,
@@ -1179,21 +1242,22 @@ mod tests {
         number.bind_to_tracker(&mut backend, &tracker).unwrap();
         scene.add(number.mobject()).unwrap();
 
-        let mut execution = scene.execution_session().unwrap();
+        let mut execution = scene.into_execution().unwrap();
         assert_eq!(
-            scene.live(&mut execution).decimal_value(&number).unwrap(),
+            execution.scene().effective_decimal_value(&number).unwrap(),
             1.25
         );
 
         execution
+            .session_mut()
             .set_reactive_input(tracker.node_id(), 7.5)
             .unwrap();
         assert_eq!(
-            scene.live(&mut execution).decimal_value(&number).unwrap(),
+            execution.scene().effective_decimal_value(&number).unwrap(),
             7.5
         );
         assert_eq!(
-            integer_value(scene.live(&mut execution).decimal_value(&number).unwrap()).unwrap(),
+            integer_value(execution.scene().effective_decimal_value(&number).unwrap()).unwrap(),
             8
         );
         assert_eq!(number.value().unwrap(), 1.25);

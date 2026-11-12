@@ -44,7 +44,10 @@ impl CanonicalAuthoringScene {
                 .bar_chart(options)
                 .map_err(crate::plot_error::coordinate_failure);
         }
-        self.active_live_player()?.live_create_bar_chart(options)
+        self.active_live_player()?
+            .scene_mut()
+            .bar_chart(options)
+            .map_err(noon::integration::live_coordinate_publication_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -54,8 +57,13 @@ impl CanonicalAuthoringScene {
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.active_live_player()?
-            .live_change_bar_values(chart, values, update_colors)
+        chart
+            .change_bar_values(
+                self.active_live_player()?.scene_mut(),
+                values,
+                update_colors,
+            )
+            .map_err(crate::plot_error::coordinate_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -72,7 +80,11 @@ impl CanonicalAuthoringScene {
                 .map_err(|error| AuthoringFailure::unclassified("bar_chart.create", &error));
         }
         self.active_live_player()?
-            .live_create_labeled_bar_chart(options, labels, compiler)
+            .scene_mut()
+            .bar_chart_with_axis_labels(options, labels, compiler)
+            .map_err(|error| {
+                AuthoringFailure::new("invalid_input", "plot.bar_chart", error.to_string())
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -88,7 +100,11 @@ impl CanonicalAuthoringScene {
                 .map_err(|error| AuthoringFailure::unclassified("bar_chart.labels", &error));
         }
         self.active_live_player()?
-            .live_bar_labels(chart, compiler, options)
+            .scene_mut()
+            .bar_labels(chart, compiler, options)
+            .map_err(|error| {
+                AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
+            })
     }
 }
 

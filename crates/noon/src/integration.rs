@@ -330,6 +330,12 @@ pub fn publish_family_align_to(
 
 mod vector_path;
 pub use crate::binding_error::AuthoringFailure;
+
+/// Preserve the language host's live numeric errors when Scene owns publication.
+#[cfg(feature = "latex")]
+pub fn live_numeric_failure(error: crate::NumericAuthoringError) -> AuthoringFailure {
+    crate::numeric_authoring::numeric_live_error(error).into()
+}
 pub use crate::binding_options::*;
 pub use vector_path::{authoring_path_point, AuthoringVectorPath};
 
@@ -375,7 +381,7 @@ pub use paint_options::{
 mod plot_error;
 pub use plot_error::{
     coordinate_failure, coordinate_math_failure, live_coordinate_failure,
-    live_polar_plane_creation_failure, plot_failure, sampling_failure,
+    live_coordinate_publication_failure, plot_failure, sampling_failure,
 };
 mod plot_input;
 pub use plot_input::{data_points as plot_data_points, PlotSamplingInput};

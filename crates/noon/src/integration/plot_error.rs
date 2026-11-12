@@ -51,8 +51,8 @@ pub fn live_coordinate_failure(error: crate::CoordinateAuthoringError) -> Author
     }
 }
 
-/// PolarPlane publishes its prepared transaction directly.
-pub fn live_polar_plane_creation_failure(
+/// Project failure from a coordinate constructor's prepared transaction.
+pub fn live_coordinate_publication_failure(
     error: crate::CoordinateAuthoringError,
 ) -> AuthoringFailure {
     match error {
