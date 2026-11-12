@@ -43,3 +43,17 @@ test('a failing observer never changes the native operation', () => {
   const restore = observeRendererCalls(Renderer, () => { throw new Error('observer'); });
   assert.equal(new Renderer().render(), true); restore();
 });
+
+test('replay records retained bundle replacement without altering native behavior', () => {
+  const events = [], bundle = new Uint8Array([1, 2, 3]), result = {};
+  class Renderer { replaceResourceBundle(bytes) { assert.equal(this, instance); assert.equal(bytes, bundle); return result; } }
+  const instance = new Renderer(), original = Renderer.prototype.replaceResourceBundle;
+  const restore = observeRendererCalls(Renderer, event => events.push(event), () => false);
+  assert.equal(instance.replaceResourceBundle(bundle), result);
+  assert.deepEqual(events, [
+    {name:'replaceResourceBundle',phase:'enter'},
+    {name:'replaceResourceBundle',phase:'return'},
+  ]);
+  restore();
+  assert.equal(Renderer.prototype.replaceResourceBundle, original);
+});

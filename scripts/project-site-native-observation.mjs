@@ -3,13 +3,15 @@
 export function observeRendererCalls(Renderer, emit, isTransition = () => true) {
   const restorers = [];
   for (const [owner, name] of [[Renderer, 'create'], ...[
-    'free', 'flushGpuDiagnostics', 'resize', 'applyDeltaTransportJson', 'render',
+    'free', 'flushGpuDiagnostics', 'resize', 'replaceResourceBundle',
+    'applyDeltaTransportJson', 'render',
     'waitForSubmittedWork',
   ].map(name => [Renderer.prototype, name])]) {
     const original = owner[name];
     if (typeof original !== 'function') continue;
     function wrapped(...args) {
-      const observed = ['create', 'free', 'flushGpuDiagnostics', 'resize'].includes(name) || isTransition();
+      const observed = ['create', 'free', 'flushGpuDiagnostics', 'resize',
+        'replaceResourceBundle'].includes(name) || isTransition();
       const record = phase => { if (observed) { try { emit({name, phase}); } catch {} } };
       record('enter');
       try {
