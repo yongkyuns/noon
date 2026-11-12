@@ -10041,9 +10041,7 @@ mod wasm {
             candidate: crate::WasmCoordinateOptions,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             use crate::authoring_coordinates::CoordinateRequest;
-            use noon::integration::{
-                live_coordinate_creation_failure, live_polar_plane_creation_failure,
-            };
+            use noon::integration::{live_coordinate_failure, live_polar_plane_creation_failure};
             let scene = self
                 .inner
                 .active_live_player()
@@ -10053,7 +10051,7 @@ mod wasm {
             let failure = if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
                 live_polar_plane_creation_failure
             } else {
-                live_coordinate_creation_failure
+                live_coordinate_failure
             };
             let family = match candidate.request {
                 CoordinateRequest::NumberLine(options) => scene

@@ -109,12 +109,18 @@ class Demo(ThreeDScene):
         self.add(*coordinates[:-1])
         self.add_world_mobjects(coordinates[-1])
         assert self.mobjects == [marker, *coordinates]
+        axes = coordinates[-1]
+        origin = axes.c2p(0, 0, 0)
+        delta = (1, -2, 0.5)
+        self.shift_world(axes, delta)
+        assert all(abs(actual - expected - shift) < 1e-6
+                   for actual, expected, shift in zip(axes.c2p(0, 0, 0), origin, delta))
         self.wait(0.1)
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
-    def test_live_plane_queries_observe_detached_and_animating_axes(self):
+    def test_live_planar_coordinate_queries_observe_detached_and_animating_axes(self):
         source = """from noon import *
 from math import isclose
 
@@ -126,10 +132,14 @@ def assert_point(actual, expected):
 class Demo(Scene):
     def construct(self):
         plane = PolarPlane(radius_max=2, size=4, azimuth_step=4)
-        self.add(plane)
+        axes = Axes((-2, 2, 1), (-2, 2, 1), x_length=4, y_length=4, tips=False)
+        self.add(plane, axes)
         shaft = plane.x_axis.shaft
         target = shaft.copy().stretch(2, 0, about_point=ORIGIN)
         animation = self.declare_live_transform_to(shaft, target, run_time=1, rate_func=linear)
+        axis_shaft = axes.x_axis.shaft
+        axis_target = axis_shaft.copy().stretch(2, 0, about_point=ORIGIN)
+        axis_animation = self.declare_live_transform_to(axis_shaft, axis_target, run_time=1, rate_func=linear)
         live = self.live_execution()
         end = live.play(animation)
         live.advance_to(0.5)
@@ -149,6 +159,16 @@ class Demo(Scene):
         cartesian = context.queryNumberPlaneFrame(family)
         assert_point(cartesian.coordsToPoint(1, 0.5), [2, 0.5])
         assert_point(cartesian.pointToCoords(2, 0.5), [1, 0.5])
+
+        end = live.play(axis_animation)
+        live.advance_to(end - 0.5)
+        assert_point(axes.c2p(1, 0.5), [1.5, 0.5])
+        assert_point(axes.x_axis.n2p(1), [1.5, 0])
+        live.advance_to(end)
+        live.complete()
+        self.remove(axes)
+        assert_point(context.queryAxesFrame(axes._semantic_family_handle).coordsToPoint(1, 0.5), [2, 0.5])
+        assert_point(context.queryNumberLineFrame(axes.x_axis._semantic_family_handle).numberToPoint(1), [2, 0])
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)

@@ -1460,8 +1460,8 @@ impl Context {
         let coordinates = noon::ManimNumberLine::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(live) = self.live_session() {
-            live.effective_number_line_frame(&coordinates)
+        let value = if self.has_execution() {
+            self.scene.effective_number_line_frame(&coordinates)
         } else {
             coordinates.authored_frame()
         };
@@ -1480,8 +1480,8 @@ impl Context {
         let coordinates = noon::ManimAxes::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(live) = self.live_session() {
-            live.effective_axes_frame(&coordinates)
+        let value = if self.has_execution() {
+            self.scene.effective_axes_frame(&coordinates)
         } else {
             coordinates.authored_frame()
         };
@@ -1500,14 +1500,17 @@ impl Context {
         let coordinates = noon::ManimThreeDAxes::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if let Some(live) = self.live_session() {
-            live.effective_three_d_axes_frame(&coordinates)
+        let value = if self.has_execution() {
+            self.scene
+                .effective_three_d_axes_frame(&coordinates)
+                .map_err(noon::integration::live_coordinate_failure)
         } else {
-            coordinates.authored_frame()
+            coordinates
+                .authored_frame()
+                .map_err(noon::integration::coordinate_failure)
         };
         value
             .map(|frame| crate::coordinates::ThreeDAxesObservation { frame })
-            .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)
     }
 

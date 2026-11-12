@@ -241,11 +241,7 @@ impl Scene {
         plane: &ManimNumberPlane,
     ) -> Result<AxesFrame, CoordinateAuthoringError> {
         let store = self.integration_store();
-        crate::MobjectTarget::from(plane.family()).require_store(store)?;
-        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
-        crate::effective_capture::require_target_capture(execution, &store.borrow())?;
+        let execution = self.coordinate_query_execution(plane.family())?;
         let mut query = |shaft: &Mobject| coordinate_path_query(store, execution, shaft);
         Ok(AxesFrame::new(
             plane.x_axis()?.snapshot_with(&mut query)?,
