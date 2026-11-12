@@ -152,45 +152,6 @@ impl Scene {
 }
 
 impl crate::LiveSession<'_> {
-    /// Publish an immediate profile orientation/lens update through this session.
-    pub fn set_camera_profile(
-        &mut self,
-        camera: &Mobject,
-        profile: ManimCamera3DProfile,
-    ) -> Result<(), crate::LiveSessionError> {
-        self.require_mobject(camera)?;
-        let (near, far) = perspective_clips(camera)?;
-        if profile.camera(near, far).is_none() {
-            return Err(AuthoringError::NonFiniteObjectState.into());
-        }
-        if camera
-            .state()?
-            .camera_motions()
-            .last()
-            .is_some_and(|motion| motion.end().is_none())
-        {
-            return Err(AuthoringError::CameraMotionAlreadyActive.into());
-        }
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_camera_profile(camera.node_id(), profile, near, far);
-        self.apply(transaction).map(|_| ())
-    }
-
-    pub fn set_camera_orientation(
-        &mut self,
-        camera: &Mobject,
-        phi: f64,
-        theta: f64,
-        gamma: f64,
-    ) -> Result<(), crate::LiveSessionError> {
-        self.require_mobject(camera)?;
-        let mut profile = self.effective_camera_profile(camera)?.0;
-        profile.phi = phi;
-        profile.theta = theta;
-        profile.gamma = gamma;
-        self.set_camera_profile(camera, profile)
-    }
-
     /// Atomically declare and activate a profile endpoint with the ordinary composition scheduler.
     pub fn move_camera_profile(
         &mut self,
@@ -293,30 +254,41 @@ mod tests {
         target.frame_height = 6.0;
         target.frame_center = SemanticVec3::new(-1.0, 0.4, 2.0);
 
-        let mut execution = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut execution);
-        let segment = live
+        let mut execution = scene.into_execution().unwrap();
+        let segment = execution
+            .live()
             .move_camera_profile(&camera, target, AnimationOptions::new().run_time(2.0))
             .unwrap();
-        live.advance_segment_to(segment, segment.start_time() + 1.0)
+        execution
+            .live()
+            .advance_segment_to(segment, segment.start_time() + 1.0)
             .unwrap();
-        let before = live.effective_camera_profile(&camera).unwrap();
+        let before = execution.scene().effective_camera_profile(&camera).unwrap();
         assert_eq!(before.0.zoom, (profile().zoom + target.zoom) * 0.5);
         assert!(matches!(
-            live.set_camera_orientation(&camera, 1.2, -0.7, 0.3),
-            Err(crate::LiveSessionError::Publication(
+            execution
+                .scene_mut()
+                .set_camera_orientation(&camera, 1.2, -0.7, 0.3),
+            Err(AuthoringError::ExecutionPublication(
                 crate::ExecutionSessionPublicationError::SegmentCompletionPending
             ))
         ));
-        assert_eq!(live.effective_camera_profile(&camera).unwrap(), before);
-        live.advance_segment_to(segment, segment.end_time())
+        assert_eq!(
+            execution.scene().effective_camera_profile(&camera).unwrap(),
+            before
+        );
+        execution
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
-        let before = live.effective_camera_profile(&camera).unwrap();
+        execution.live().complete_segment(segment).unwrap();
+        let before = execution.scene().effective_camera_profile(&camera).unwrap();
         assert_eq!(before.0, target);
-        live.set_camera_orientation(&camera, 1.2, -0.7, 0.3)
+        execution
+            .scene_mut()
+            .set_camera_orientation(&camera, 1.2, -0.7, 0.3)
             .unwrap();
-        let after = live.effective_camera_profile(&camera).unwrap();
+        let after = execution.scene().effective_camera_profile(&camera).unwrap();
 
         assert_eq!(after.0.zoom, before.0.zoom);
         assert_eq!(after.0.focal_distance, before.0.focal_distance);

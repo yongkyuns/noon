@@ -9,6 +9,24 @@ pub(crate) fn view_color_profile(
 }
 
 impl CanonicalAuthoringScene {
+    fn camera_scene_mut(
+        &mut self,
+        camera: &noon::Mobject,
+        transferred_message: &'static str,
+    ) -> Result<(&mut noon::Scene, bool), crate::AuthoringFailure> {
+        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), camera.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        camera.validate()?;
+        match &mut self.player_ownership {
+            PlayerOwnership::Unstarted => Ok((&mut self.scene, false)),
+            PlayerOwnership::Active(player) | PlayerOwnership::Returned(player) => {
+                Ok((player.scene_mut(), true))
+            }
+            PlayerOwnership::Transferred(_) => Err(transferred_message.into()),
+        }
+    }
+
     pub(crate) fn set_view_color_profile(
         &mut self,
         camera: &noon::Mobject,
@@ -37,22 +55,17 @@ impl CanonicalAuthoringScene {
         object: &noon::Mobject,
     ) -> Result<(noon_core::ManimCamera3DProfile, f64, f64), crate::authoring_error::AuthoringFailure>
     {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        object.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .effective_camera_profile(object)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_effective_camera_profile(object),
-            PlayerOwnership::Transferred(_) => {
-                Err("effective camera profile is owned by the transferred execution session".into())
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "effective camera profile is owned by the transferred execution session",
+        )?;
+        scene.effective_camera_profile(object).map_err(|error| {
+            if running {
+                noon::LiveSessionError::from(error).into()
+            } else {
+                error.into()
             }
-        }
+        })
     }
 
     pub(crate) fn set_camera_profile(
@@ -60,22 +73,13 @@ impl CanonicalAuthoringScene {
         object: &noon::Mobject,
         profile: noon_core::ManimCamera3DProfile,
     ) -> Result<(), crate::authoring_error::AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        object.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .set_camera_profile(object, profile)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_set_camera_profile(object, profile),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
+            .set_camera_profile(object, profile)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn begin_ambient_camera_rotation(
@@ -84,44 +88,26 @@ impl CanonicalAuthoringScene {
         axis: noon_core::CameraRotationAxis,
         rate: f64,
     ) -> Result<(), crate::authoring_error::AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        object.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .begin_ambient_camera_rotation(object, axis, rate)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_begin_ambient_camera_rotation(object, axis, rate),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
+            .begin_ambient_camera_rotation(object, axis, rate)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn stop_ambient_camera_rotation(
         &mut self,
         object: &noon::Mobject,
     ) -> Result<(), crate::authoring_error::AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        object.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .stop_ambient_camera_rotation(object)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_stop_ambient_camera_rotation(object),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
+            .stop_ambient_camera_rotation(object)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn begin_3dillusion_camera_rotation(
@@ -131,44 +117,26 @@ impl CanonicalAuthoringScene {
         origin_phi: Option<f64>,
         origin_theta: Option<f64>,
     ) -> Result<(), crate::authoring_error::AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        object.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .begin_3dillusion_camera_rotation(object, rate, origin_phi, origin_theta)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_begin_3dillusion_camera_rotation(object, rate, origin_phi, origin_theta),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
+            .begin_3dillusion_camera_rotation(object, rate, origin_phi, origin_theta)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn stop_3dillusion_camera_rotation(
         &mut self,
         object: &noon::Mobject,
     ) -> Result<(), crate::authoring_error::AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        object.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .stop_3dillusion_camera_rotation(object)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_stop_3dillusion_camera_rotation(object),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
+            .stop_3dillusion_camera_rotation(object)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn create_camera_profile(
@@ -198,22 +166,13 @@ impl CanonicalAuthoringScene {
         theta: f64,
         gamma: f64,
     ) -> Result<(), crate::authoring_error::AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        object.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .set_camera_orientation(object, phi, theta, gamma)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_set_camera_orientation(object, phi, theta, gamma),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
+            .set_camera_orientation(object, phi, theta, gamma)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

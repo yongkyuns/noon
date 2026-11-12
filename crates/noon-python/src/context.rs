@@ -750,13 +750,17 @@ impl Context {
     fn effective_camera_profile(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if self.has_execution() {
-            self.with_live(|live| live.effective_camera_profile(&target.handle))
-        } else {
-            self.scene
-                .effective_camera_profile(&target.handle)
-                .map_err(engine_error)
-        }?;
+        let running = self.has_execution();
+        let value = self
+            .scene
+            .effective_camera_profile(&target.handle)
+            .map_err(|error| {
+                if running {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
+            })?;
         Ok(noon::integration::spatial_input::camera_profile_values(
             value.0,
         ))
@@ -767,13 +771,10 @@ impl Context {
         self.same_store(target)?;
         let profile =
             noon::integration::spatial_input::camera_profile(&values).map_err(engine_error)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_camera_profile(&target.handle, profile))
-        } else {
-            self.scene
-                .set_camera_profile(&target.handle, profile)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_camera_profile(&target.handle, profile)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "setSurfaceCheckerboard")]
     fn set_surface_checkerboard(
@@ -905,25 +906,19 @@ impl Context {
             "gamma" => noon_core::CameraRotationAxis::Gamma,
             _ => return Err(engine_error("unknown ambient camera rotation axis")),
         };
-        if self.has_execution() {
-            self.with_live(|live| live.begin_ambient_camera_rotation(&target.handle, axis, rate))
-        } else {
-            self.scene
-                .begin_ambient_camera_rotation(&target.handle, axis, rate)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .begin_ambient_camera_rotation(&target.handle, axis, rate)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "stopAmbientCameraRotation")]
     fn stop_ambient_camera_rotation(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.with_live(|live| live.stop_ambient_camera_rotation(&target.handle))
-        } else {
-            self.scene
-                .stop_ambient_camera_rotation(&target.handle)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .stop_ambient_camera_rotation(&target.handle)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "begin3DIllusionCameraRotation")]
     #[pyo3(signature=(target,rate,origin_phi,origin_theta))]
@@ -936,32 +931,19 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.with_live(|live| {
-                live.begin_3dillusion_camera_rotation(
-                    &target.handle,
-                    rate,
-                    origin_phi,
-                    origin_theta,
-                )
-            })
-        } else {
-            self.scene
-                .begin_3dillusion_camera_rotation(&target.handle, rate, origin_phi, origin_theta)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .begin_3dillusion_camera_rotation(&target.handle, rate, origin_phi, origin_theta)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "stop3DIllusionCameraRotation")]
     fn stop_3dillusion_camera_rotation(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.with_live(|live| live.stop_3dillusion_camera_rotation(&target.handle))
-        } else {
-            self.scene
-                .stop_3dillusion_camera_rotation(&target.handle)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .stop_3dillusion_camera_rotation(&target.handle)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "createValueTracker")]
     fn create_tracker(&mut self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
