@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check site source contracts
         run: |
-          node --test scripts/project-site.test.mjs web/project-site-editorial.test.mjs web/project-site-controls.test.mjs web/project-site-design.test.mjs
+          node --test scripts/project-site.test.mjs web/project-site-editorial.test.mjs web/project-site-controls.test.mjs web/project-site-design.test.mjs scripts/noon-site-worker-stack.test.mjs
           node --check scripts/capture-project-media.mjs
           node --check scripts/project-site-smoke.mjs
           node --check scripts/project-site-embed-smoke.mjs

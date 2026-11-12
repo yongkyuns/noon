@@ -8,6 +8,7 @@ import pngjs from 'pngjs';
 import { serveRepository } from './browser-test-server.mjs';
 import { playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
+import { captureStalledRenderStacks } from './noon-site-worker-stack.mjs';
 
 // Real composed-host qualification. No stubbed main, editor, workers or canvas.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -309,8 +310,10 @@ try {
               return {url:worker.url(),traceError:String(error)};
             } finally {clearTimeout(timeout);}
           }));
+          const workerDebuggerStacks = name === 'chromium'
+            ? await captureStalledRenderStacks(page) : [];
           const failure={error:String(error.stack??error),checkpoint,errors,consoleMessages,requestFailures,
-            workers:[...workers].map(worker=>worker.url()),workerTransitionTraces,frames,report};
+            workers:[...workers].map(worker=>worker.url()),workerTransitionTraces,workerDebuggerStacks,frames,report};
           // Persist state before attempting a screenshot, which may also fail.
           await writeFile(path.join(output,`${name}-${surface}-failure.json`),JSON.stringify(failure,null,2));
           console.error(`Live site failure: ${JSON.stringify(failure)}`);
