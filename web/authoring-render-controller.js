@@ -716,6 +716,10 @@ export function createAuthoringRenderController(host) {
     rendererStartupPending = true;
     surfaceCreationError = null;
     try {
+      // The reused WebGL renderer can finish bootstrap synchronously. Defer its
+      // body once so the caller owns bootstrapPromise before finally clears it;
+      // otherwise a resolved Promise remains installed and rejects later edits.
+      await Promise.resolve();
       let createdRenderer;
       if (reuseRenderer) {
         // Validate and replace only scene-owned retained caches on the same

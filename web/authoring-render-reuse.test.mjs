@@ -112,3 +112,20 @@ test("failed bundle validation never acknowledges a replacement or creates anoth
   assert.ok(h.messages.some(m=>m.type==="error"&&m.requestId===17&&/invalid scene bundle/.test(m.message)));
   h.stop();assert.equal(h.freeCount(),1);
 });
+
+test("WebGL immediate-present rebuild releases bootstrap ownership before another source edit",async()=>{
+  const h=harness();
+  await h.setup();
+  try {
+    await h.rebuild(h.port2,[4,5],21,2);
+    assert.equal(h.messages.filter(m=>m.type==="renderer_rebuilt"&&m.requestId===21).length,1);
+    // Both replacements present on their very first synchronous render(). The
+    // previous bug completed bootstrapRenderer() before the caller assigned
+    // bootstrapPromise, leaving a resolved Promise that blocked future edits.
+    await h.rebuild(h.port3,[7],22,3);
+    assert.equal(h.messages.filter(m=>m.type==="renderer_rebuilt"&&m.requestId===22).length,1);
+    assert.equal(h.messages.filter(m=>m.type==="error").length,0);
+    assert.equal(h.createCount(),1);
+    assert.deepEqual(h.bundles,[[4,5],[7]]);
+  } finally { h.stop(); }
+});
