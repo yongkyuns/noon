@@ -519,7 +519,9 @@ mod wasm {
             self.selection_overlay = None;
             self.pointer_view = None;
             self.glow_transport_seen = false;
-            self.working_profile = noon_core::ViewColorProfile::Compatibility;
+            // The existing renderer still has the previous output format.
+            // The first new publication must choose whether to keep it or
+            // rebuild for a different color profile before presenting.
             self.camera_center = next_camera.center;
             self.camera_height = next_camera.height;
             self.pending_frame = false;
