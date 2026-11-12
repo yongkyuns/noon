@@ -9,7 +9,7 @@ export function observeRendererCalls(Renderer, emit, isTransition = () => true) 
     const original = owner[name];
     if (typeof original !== 'function') continue;
     function wrapped(...args) {
-      const observed = ['create', 'free', 'flushGpuDiagnostics'].includes(name) || isTransition();
+      const observed = ['create', 'free', 'flushGpuDiagnostics', 'resize'].includes(name) || isTransition();
       const record = phase => { if (observed) { try { emit({name, phase}); } catch {} } };
       record('enter');
       try {
