@@ -980,7 +980,7 @@ pub(crate) fn create_on_scene(
     } else if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
         noon::integration::live_polar_plane_creation_failure
     } else {
-        noon::integration::live_coordinate_creation_failure
+        noon::integration::live_coordinate_failure
     };
     family
         .map(|family| FamilyHandle { family })
