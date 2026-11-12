@@ -328,11 +328,11 @@ fn malformed_surface_cell_rolls_back_mixed_family_resources_and_nodes() {
 fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
     let scene = Scene::new();
     let store = std::rc::Rc::clone(scene.integration_store());
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     let before_resources = store.borrow().geometry_resources().len();
     let before_nodes = store.borrow().len();
-    let before_frame = execution.frame().clone();
-    let before_context = execution.publication_context();
+    let before_frame = execution.session().frame().clone();
+    let before_context = execution.session().publication_context();
     let invalid_cap = SpatialPathOptions {
         path: noon_core::VectorPath::new().move_to(noon_core::Vec2::new(f32::NAN, 0.0)),
         transform: SemanticWorldTransform3D::IDENTITY,
@@ -341,14 +341,14 @@ fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
         cairo_appearance: None,
     };
 
-    let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
-    assert!(live
-        .create_mesh_family_with_paths(vec![cube()], vec![invalid_cap])
+    assert!(execution
+        .scene_mut()
+        .mesh_family_with_paths(vec![cube()], vec![invalid_cap])
         .is_err());
     assert_eq!(store.borrow().geometry_resources().len(), before_resources);
     assert_eq!(store.borrow().len(), before_nodes);
-    assert_eq!(execution.frame(), &before_frame);
-    assert_eq!(execution.publication_context(), before_context);
+    assert_eq!(execution.session().frame(), &before_frame);
+    assert_eq!(execution.session().publication_context(), before_context);
 }
 
 #[test]

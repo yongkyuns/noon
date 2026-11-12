@@ -1,9 +1,6 @@
 //! Typed spatial operations exposed by the existing execution player wrapper.
 
 use crate::authoring_error::AuthoringFailure;
-#[cfg(any(target_arch = "wasm32", test))]
-use noon::MobjectFamily;
-use noon::{MeshOptions, Mobject, SemanticWorldTransform3D, WorldAffineEdit};
 
 impl super::SemanticExecutionPlayer {
     pub(crate) fn live_set_surface_checkerboard(
@@ -16,32 +13,6 @@ impl super::SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    pub(crate) fn live_add_spatial_membership(
-        &mut self,
-        targets: &[noon::MobjectTarget<'_>],
-        policy: crate::canonical_authoring_scene::SpatialMembershipPolicy,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(match policy {
-                crate::canonical_authoring_scene::SpatialMembershipPolicy::Assign(domain) => {
-                    live.add_all_in_spatial_composition_domain(targets, domain)
-                }
-                crate::canonical_authoring_scene::SpatialMembershipPolicy::DefaultWorld => {
-                    live.add_all_world_mobjects(targets)
-                }
-            })
-        })?
-        .map(|_| ())
-        .map_err(AuthoringFailure::from)
-    }
-
-    pub(crate) fn live_create_mesh(
-        &mut self,
-        options: MeshOptions,
-    ) -> Result<Mobject, AuthoringFailure> {
-        self.with_live_session(|live| live.create_mesh(options))
-    }
-
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_create_manim_arrow(
         &mut self,
@@ -50,64 +21,15 @@ impl super::SemanticExecutionPlayer {
         self.with_live_session(|live| live.create_manim_arrow(options))
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_mesh_family_with_paths(
-        &mut self,
-        meshes: Vec<MeshOptions>,
-        paths: Vec<noon::SpatialPathOptions>,
-    ) -> Result<MobjectFamily, AuthoringFailure> {
-        self.with_live_session(|live| live.create_mesh_family_with_paths(meshes, paths))
-    }
-
-    pub(crate) fn live_effective_world_transform(
-        &mut self,
-        object: &Mobject,
-    ) -> Result<SemanticWorldTransform3D, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_world_transform(object))
-    }
-
-    pub(crate) fn live_effective_world_center(
-        &mut self,
-        object: &Mobject,
-    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_world_center(object))
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_world_family_center(
+    pub(crate) fn world_affine(
         &mut self,
-        family: &MobjectFamily,
-    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_world_family_center(family))
-    }
-
-    pub(crate) fn live_set_world_transform(
-        &mut self,
-        object: &Mobject,
-        transform: SemanticWorldTransform3D,
+        target: noon::MobjectTarget<'_>,
+        edit: noon::WorldAffineEdit,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_world_transform(object, transform))
-            .map(|_| ())
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_world_affine_object(
-        &mut self,
-        object: &Mobject,
-        edit: WorldAffineEdit,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.world_affine(object.into(), edit))
-            .map(|_| ())
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_world_affine_family(
-        &mut self,
-        family: &MobjectFamily,
-        edit: WorldAffineEdit,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.world_affine(family.into(), edit))
-            .map(|_| ())
+        self.scene_mut()
+            .world_affine(target, edit)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 }
 
@@ -117,6 +39,7 @@ mod wasm {
     use super::*;
     use crate::authoring_error::js_error;
     use crate::authoring_spatial::about as parse_about;
+    use noon::WorldAffineEdit;
     use wasm_bindgen::prelude::*;
 
     #[wasm_bindgen]
@@ -126,8 +49,10 @@ mod wasm {
             &mut self,
             candidate: crate::WasmMeshOptions,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-            self.live_create_mesh(candidate.value.into_options())
+            self.scene_mut()
+                .mesh(candidate.value.into_options())
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(js_error)
         }
 
@@ -139,7 +64,9 @@ mod wasm {
             let surface = candidate.has_surface_roles();
             let (meshes, paths) = candidate.into_parts()?;
             let family = self
-                .live_create_mesh_family_with_paths(meshes, paths)
+                .scene_mut()
+                .mesh_family_with_paths(meshes, paths)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(js_error)?;
             if surface {
                 noon::SurfaceFamily::from_family(family)
@@ -157,8 +84,10 @@ mod wasm {
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<Vec<f64>, JsValue> {
-            self.live_effective_world_transform(object.semantic_mobject())
+            self.scene_mut()
+                .effective_world_transform(object.semantic_mobject())
                 .map(crate::authoring_spatial::transform_values)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(js_error)
         }
 
@@ -167,8 +96,10 @@ mod wasm {
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<Vec<f64>, JsValue> {
-            self.live_effective_world_center(object.semantic_mobject())
+            self.scene_mut()
+                .effective_world_center(object.semantic_mobject())
                 .map(|center| vec![center.x, center.y, center.z])
+                .map_err(noon::LiveSessionError::from)
                 .map_err(js_error)
         }
 
@@ -179,8 +110,9 @@ mod wasm {
             values: &[f64],
         ) -> Result<(), JsValue> {
             let transform = crate::authoring_spatial::world_transform_from_values(values)?;
-            self.live_set_world_transform(object.semantic_mobject(), transform)
-                .map_err(js_error)
+            self.scene_mut()
+                .set_world_transform(object.semantic_mobject(), transform)
+                .map_err(|error| js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = shiftWorld)]
@@ -191,8 +123,8 @@ mod wasm {
             y: f64,
             z: f64,
         ) -> Result<(), JsValue> {
-            self.live_world_affine_object(
-                object.semantic_mobject(),
+            self.world_affine(
+                object.semantic_mobject().into(),
                 WorldAffineEdit::Shift(noon_core::SemanticVec3::new(x, y, z)),
             )
             .map_err(js_error)
@@ -203,8 +135,10 @@ mod wasm {
             &mut self,
             family: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<Vec<f64>, JsValue> {
-            self.live_effective_world_family_center(family.semantic_family_ref())
+            self.scene_mut()
+                .effective_world_family_center(family.semantic_family_ref())
                 .map(|center| vec![center.x, center.y, center.z])
+                .map_err(noon::LiveSessionError::from)
                 .map_err(js_error)
         }
 
@@ -219,8 +153,8 @@ mod wasm {
             about: &[f64],
         ) -> Result<(), JsValue> {
             let about = parse_about(about)?;
-            self.live_world_affine_object(
-                object.semantic_mobject(),
+            self.world_affine(
+                object.semantic_mobject().into(),
                 WorldAffineEdit::Rotate {
                     axis: noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
                     radians,
@@ -237,8 +171,8 @@ mod wasm {
             factor: f64,
             about: &[f64],
         ) -> Result<(), JsValue> {
-            self.live_world_affine_object(
-                object.semantic_mobject(),
+            self.world_affine(
+                object.semantic_mobject().into(),
                 WorldAffineEdit::Scale {
                     factor,
                     about: parse_about(about)?,
@@ -256,8 +190,8 @@ mod wasm {
             z: f64,
         ) -> Result<(), JsValue> {
             let family = family.semantic_family()?;
-            self.live_world_affine_family(
-                &family,
+            self.world_affine(
+                (&family).into(),
                 WorldAffineEdit::Shift(noon_core::SemanticVec3::new(x, y, z)),
             )
             .map_err(js_error)
@@ -274,8 +208,8 @@ mod wasm {
             about: &[f64],
         ) -> Result<(), JsValue> {
             let family = family.semantic_family()?;
-            self.live_world_affine_family(
-                &family,
+            self.world_affine(
+                (&family).into(),
                 WorldAffineEdit::Rotate {
                     axis: noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
                     radians,
@@ -293,8 +227,8 @@ mod wasm {
             about: &[f64],
         ) -> Result<(), JsValue> {
             let family = family.semantic_family()?;
-            self.live_world_affine_family(
-                &family,
+            self.world_affine(
+                (&family).into(),
                 WorldAffineEdit::Scale {
                     factor,
                     about: crate::authoring_spatial::about(about)?,

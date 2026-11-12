@@ -9,7 +9,7 @@ use crate::{
     mobject::{pivot, LayoutAnchor, LayoutObservation, MobjectHandle},
 };
 use noon::integration::{
-    scene_execution, HostCallbackId, SemanticMutationTransaction, SemanticStore,
+    scene_execution, AuthoringFailure, HostCallbackId, SemanticMutationTransaction, SemanticStore,
 };
 use noon::{
     ExecutionSegment, ExecutionSession, Mobject, MobjectTarget, Scene, SceneMembershipRequest,
@@ -693,20 +693,20 @@ impl Context {
         self.same_store(target)?;
         let transform = noon::integration::spatial_input::world_transform_from_values(&values)
             .map_err(engine_error)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_world_transform(&target.handle, transform))
-        } else {
-            self.scene
-                .set_world_transform(&target.handle, transform)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_world_transform(&target.handle, transform)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "effectiveWorldTransform")]
     fn world_transform(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
         let value = if self.has_execution() {
-            self.with_live(|live| live.effective_world_transform(&target.handle))
+            self.scene
+                .effective_world_transform(&target.handle)
+                .map_err(noon::LiveSessionError::from)
+                .map_err(engine_error)
         } else {
             target.handle.world_transform().map_err(engine_error)
         }?;
@@ -716,22 +716,34 @@ impl Context {
     fn world_center(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if self.has_execution() {
-            self.with_live(|live| live.effective_world_center(&target.handle))
-        } else {
-            target.handle.world_center().map_err(engine_error)
-        }?;
+        let running = self.has_execution();
+        let value = self
+            .scene
+            .effective_world_center(&target.handle)
+            .map_err(|error| {
+                engine_error(if running {
+                    AuthoringFailure::from(noon::LiveSessionError::from(error))
+                } else {
+                    error.into()
+                })
+            })?;
         Ok(vec![value.x, value.y, value.z])
     }
     #[pyo3(name = "effectiveWorldFamilyCenter")]
     fn world_family_center(&mut self, target: &crate::family::FamilyHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if self.has_execution() {
-            self.with_live(|live| live.effective_world_family_center(&target.family))
-        } else {
-            target.family.world_center().map_err(engine_error)
-        }?;
+        let running = self.has_execution();
+        let value = self
+            .scene
+            .effective_world_family_center(&target.family)
+            .map_err(|error| {
+                engine_error(if running {
+                    AuthoringFailure::from(noon::LiveSessionError::from(error))
+                } else {
+                    error.into()
+                })
+            })?;
         Ok(vec![value.x, value.y, value.z])
     }
     #[pyo3(name = "effectiveCameraProfile")]
@@ -2318,15 +2330,9 @@ impl Context {
                     "spatial composition requires an add membership batch",
                 ));
             }
-            if let Some(mut live) = self.live_session() {
-                domain
-                    .apply_live(&mut live, &targets)
-                    .map_err(engine_error)?;
-            } else {
-                domain
-                    .apply_scene(&mut self.scene, &targets)
-                    .map_err(engine_error)?;
-            }
+            domain
+                .apply_scene(&mut self.scene, &targets)
+                .map_err(engine_error)?;
         } else if let Some(mut live) = self.live_session() {
             match live.edit_membership(request) {
                 Ok(_) => {}
