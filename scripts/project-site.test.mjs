@@ -10,6 +10,21 @@ import { buildProjectSite } from "./build-project-site.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = name => readFile(path.join(root, name), "utf8");
 
+test("website qualification uses the actual optimized Pages runtime without relaxing live browser coverage", async () => {
+  const workflow = await read(".github/workflows/playground-project-site.yml");
+  const pages = await read(".github/workflows/pages.yml");
+  for (const source of [workflow, pages]) {
+    assert.match(source, /NOON_WASM_PROFILE:\s*["']?release/);
+    assert.match(source, /NOON_WASM_SKIP_OPT:\s*["']?0/);
+    assert.match(source, /install-wasm-opt/);
+    assert.match(source, /bash scripts\/build-web-demo\.sh/);
+  }
+  assert.doesNotMatch(workflow, /uses:\s*\.\/\.github\/actions\/dev-wasm-build/);
+  assert.match(workflow, /xvfb-run -a node scripts\/project-site-embed-smoke\.mjs/);
+  assert.match(workflow, /node scripts\/project-site-design-smoke\.mjs/);
+  assert.match(workflow, /node scripts\/build-project-site\.mjs/);
+});
+
 test("legacy query URLs preserve every parameter and fragment under a project prefix", () => {
   for (const base of ["https://example.test/", "https://example.test/noon/", "https://example.test/noon/index.html"]) {
     const url = new URL(`${base}?example=showcase-first-scene&catalog=showcase&backend=webgl&x=1&x=2#editor`);

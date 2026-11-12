@@ -51,8 +51,51 @@ jobs:
           node --check scripts/project-site-embed-smoke.mjs
           node --check scripts/project-site-design-smoke.mjs
           node --check scripts/project-site-native-replay.mjs
-      - name: Build the exact-source browser runtime
-        uses: ./.github/actions/dev-wasm-build
+      # The public Pages site ships release + wasm-opt, not the development
+      # package. Four concurrent Python+render WASM contexts exceed Firefox's
+      # executable-code memory budget when built at dev -O0 (~221 MiB).
+      # Qualify the same optimized executable configuration users will receive.
+      - name: Use repository-pinned Rust and WASM target
+        run: |
+          rustup install
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Cargo sources
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-site-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-site-cargo-
+      - name: Use pinned sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Install pinned wasm-pack
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Install pinned wasm-opt
+        uses: ./.github/actions/install-wasm-opt
+      - name: Build the exact-source production browser runtime
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
+          SCCACHE_GHA_RW_MODE: "READ_ONLY"
+          NOON_SKIP_WEB_PREFLIGHT: "1"
+          NOON_WASM_PROFILE: "release"
+          NOON_WASM_SKIP_OPT: "0"
+          NOON_RENDERER_SMOKE: "0"
+        run: |
+          bash scripts/build-web-demo.sh
+          # Fail if the release binary inadvertently becomes a dev-sized
+          # module again; otherwise Firefox cannot instantiate four embeds.
+          node -e "const fs=require('fs'); const n=fs.statSync('web/pkg/noon_web_bg.wasm').size; console.log('Optimized website WASM:',n,'bytes'); if(!n || n >= 100*1024*1024) process.exit(1)"
+          git diff --quiet HEAD --
       - name: Install pinned capture tools
         run: |
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
