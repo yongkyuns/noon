@@ -3604,11 +3604,7 @@ impl RetainedTextGpuState {
     /// Each new source may restart glyph generations and change atlas pages.
     /// Retain the text pipelines and buffers, but force a complete upload and
     /// new bindings when the next publication is presented.
-    pub fn reset_retained_source_state(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) {
+    pub fn reset_retained_source_state(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.last_uploaded_generation = None;
         self.glyphs.reset_atlas_bindings();
         self.glyphs.set_inset_cameras(device, queue, &[]);
