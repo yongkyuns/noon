@@ -3898,6 +3898,52 @@ mod tests {
     }
 
     #[test]
+    fn late_three_d_axes_publish_a_valid_retained_delta() {
+        let mut scene = noon::Scene::new();
+        let marker = scene.circle(0.2).unwrap();
+        scene.add(&marker).unwrap();
+        let mut source = scene.into_execution().unwrap();
+        let mut encoder = RetainedExecutionDeltaEncoder::new(1);
+        let camera = Camera2DState::default();
+        let session = source.session_mut();
+        session.advance_to(0.1).unwrap();
+        let before = encoder
+            .encode_snapshot_with_context(session.frame(), camera, session.publication_context())
+            .unwrap();
+        assert_eq!(before.objects.len(), 1);
+        session.take_frame_changes();
+
+        let scene = source.scene_mut();
+        let axes = scene
+            .three_d_axes(&noon::ManimThreeDAxesOptions::default())
+            .unwrap();
+        scene
+            .add_in_spatial_composition_domain(
+                noon::MobjectTarget::Family(axes.family()),
+                noon_core::SemanticSpatialCompositionDomain::World,
+            )
+            .unwrap();
+        let session = source.session_mut();
+        let changes = session.take_frame_changes();
+        assert_eq!(changes.object_indices(), changes.added_indices());
+        let after = encoder
+            .encode_incremental_with_painter_order_and_context(
+                session.frame(),
+                &changes,
+                camera,
+                session.publication_context(),
+                session.painter_order(),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(after.objects.iter().any(|row| {
+            row.spatial
+                .as_ref()
+                .is_some_and(|spatial| spatial.material == TransportSpatialMaterial::CairoPath)
+        }));
+    }
+
+    #[test]
     fn worker_transport_round_trips_effective_spatial_pose_camera_and_material() {
         let mut frame = mixed_frame();
         let rotation = noon_core::SemanticRotation3D::from_axis_angle(

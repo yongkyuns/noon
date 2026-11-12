@@ -597,47 +597,7 @@ impl SceneInstance {
         self.refresh_time_effect_row(object_index);
         self.changes.insert(object_index);
         self.spatial_changes.insert(object_index);
-        if let Ok(index) = u32::try_from(object_index) {
-            let contributes_spatial_geometry = self
-                .frame
-                .objects
-                .get(object_index)
-                .and_then(|object| object.spatial.as_deref())
-                .is_none_or(|spatial| spatial.camera_projection.is_none() && !spatial.point_light);
-            if contributes_spatial_geometry {
-                let groups = self.compiled.spatial_anchor_groups_for_row(index);
-                if !groups.is_empty() {
-                    self.pending_spatial_anchor_groups
-                        .extend(groups.iter().copied());
-                }
-            }
-            // Bounds dependencies do not imply ownership of this row's center.
-            // A surviving row whose anchor was removed still derives its own
-            // center even while it contributes to another retained group.
-            if self.compiled.spatial_anchor_group_for_row(index).is_none()
-                && self.frame.objects.get(object_index).is_some_and(|object| {
-                    object.spatial.as_deref().is_some_and(|spatial| {
-                        spatial.composition_domain
-                            == noon_core::SemanticSpatialCompositionDomain::FixedOrientation
-                    })
-                })
-            {
-                self.pending_spatial_anchor_rows.insert(object_index);
-            }
-            if self.compiled.spatial_anchor_group_for_row(index).is_none()
-                && self.frame.objects.get(object_index).is_some_and(|object| {
-                    object.spatial.as_deref().is_some_and(|spatial| {
-                        spatial.material == noon_core::SemanticSpatialMaterial::CairoPath
-                            && spatial
-                                .cairo_path_appearance
-                                .as_deref()
-                                .is_some_and(|a| a.gradient_direction.is_some())
-                    })
-                })
-            {
-                self.pending_spatial_anchor_rows.insert(object_index);
-            }
-        }
+        self.queue_spatial_anchor_changes(object_index);
         self.refresh_graph_dependencies_for_changed_row(object_index);
     }
 
@@ -1054,12 +1014,12 @@ impl SceneInstance {
                     let time = self.frame.time;
                     reset_object_frame(&self.compiled, &mut self.frame, object_index, time);
                     self.clear_family_animation_runtime_state(object_index);
-                    self.mark_added(object_index);
                 } else {
                     debug_assert_eq!(object_index, self.frame.objects.len());
                     append_object_frame(&self.compiled, &mut self.frame, object_index);
-                    self.mark_added(object_index);
                 }
+                self.mark_added(object_index);
+                self.queue_spatial_anchor_changes(object_index);
                 self.painter_ranks.resize(self.frame.objects.len(), None);
                 self.painter_ranks[object_index] = Some(self.painter_order.len() as u32);
                 self.painter_order.push(object_index as u32);

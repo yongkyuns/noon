@@ -3,6 +3,41 @@
 use crate::SceneInstance;
 
 impl SceneInstance {
+    pub(super) fn queue_spatial_anchor_changes(&mut self, object_index: usize) {
+        use noon_core::{SemanticSpatialCompositionDomain, SemanticSpatialMaterial};
+
+        let Ok(index) = u32::try_from(object_index) else {
+            return;
+        };
+        let spatial = self
+            .frame
+            .objects
+            .get(object_index)
+            .and_then(|object| object.spatial.as_deref());
+        if spatial.is_none_or(|spatial| spatial.camera_projection.is_none() && !spatial.point_light)
+        {
+            self.pending_spatial_anchor_groups.extend(
+                self.compiled
+                    .spatial_anchor_groups_for_row(index)
+                    .iter()
+                    .copied(),
+            );
+        }
+        // A row can contribute to a group and still derive its own anchor.
+        if self.compiled.spatial_anchor_group_for_row(index).is_none()
+            && spatial.is_some_and(|spatial| {
+                spatial.composition_domain == SemanticSpatialCompositionDomain::FixedOrientation
+                    || (spatial.material == SemanticSpatialMaterial::CairoPath
+                        && spatial
+                            .cairo_path_appearance
+                            .as_deref()
+                            .is_some_and(|appearance| appearance.gradient_direction.is_some()))
+            })
+        {
+            self.pending_spatial_anchor_rows.insert(object_index);
+        }
+    }
+
     pub(super) fn flush_spatial_anchor_changes(&mut self) {
         let groups = std::mem::take(&mut self.pending_spatial_anchor_groups);
         for group in groups {
