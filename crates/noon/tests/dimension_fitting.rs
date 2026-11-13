@@ -106,8 +106,8 @@ fn live_fit_reads_effective_target_bounds_and_rejects_active_source_drivers() {
     let mut session = scene.into_execution().unwrap();
     let segment = session.live().play_animation(&animation).unwrap();
     session.live().advance_segment_to(segment, 1.0).unwrap();
-    let before_source = session.live().effective(&source).unwrap();
-    let before_target = session.live().effective(&target).unwrap();
+    let before_source = session.scene().effective(&source).unwrap();
+    let before_target = session.scene().effective(&target).unwrap();
     session
         .scene_mut()
         .rescale_to_fit(&(&target).into(), f64::NAN, Depth, true)
@@ -116,8 +116,8 @@ fn live_fit_reads_effective_target_bounds_and_rejects_active_source_drivers() {
         .scene_mut()
         .match_dim_size(&(&source).into(), &(&target).into(), Depth, false)
         .unwrap();
-    assert_eq!(session.live().effective(&source).unwrap(), before_source);
-    assert_eq!(session.live().effective(&target).unwrap(), before_target);
+    assert_eq!(session.scene().effective(&source).unwrap(), before_source);
+    assert_eq!(session.scene().effective(&target).unwrap(), before_target);
     assert!(session
         .scene_mut()
         .match_dim_size(&(&source).into(), &(&target).into(), Width, false)
@@ -126,8 +126,8 @@ fn live_fit_reads_effective_target_bounds_and_rejects_active_source_drivers() {
         .scene_mut()
         .rescale_to_fit(&(&target).into(), 5.0, Width, false)
         .is_err());
-    assert_eq!(session.live().effective(&source).unwrap(), before_source);
-    assert_eq!(session.live().effective(&target).unwrap(), before_target);
+    assert_eq!(session.scene().effective(&source).unwrap(), before_source);
+    assert_eq!(session.scene().effective(&target).unwrap(), before_target);
     session
         .live()
         .advance_segment_to(segment, segment.end_time())
@@ -208,7 +208,7 @@ fn live_family_fitting_preserves_unrelated_state() {
         .add_many(&[(&family).into(), (&other).into()])
         .unwrap();
     let mut session = scene.into_execution().unwrap();
-    let before = session.live().effective(&other).unwrap();
+    let before = session.scene().effective(&other).unwrap();
     session
         .scene_mut()
         .rescale_to_fit(&(&family).into(), 3.0, Height, true)
@@ -222,7 +222,7 @@ fn live_family_fitting_preserves_unrelated_state() {
         3.0
     );
     assert_eq!(
-        session.live().effective(&other).unwrap().transform,
+        session.scene().effective(&other).unwrap().transform,
         before.transform
     );
     let foreign = Scene::new().square(1.0).unwrap();

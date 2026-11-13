@@ -56,7 +56,7 @@ impl LiveContinuation for Script {
             2 => {
                 if self.animate {
                     assert_eq!(
-                        scene.live().effective(&self.target)?.transform.translation,
+                        scene.effective(&self.target)?.transform.translation,
                         Vec2::new(2.0, 0.0)
                     );
                 }

@@ -20,30 +20,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .rate_func(RateFunction::Linear),
     )?;
 
-    let mut session = scene.execution_session()?;
-    let mut live = scene.live(&mut session);
-    let segment = live.play_animation(&animation)?;
-    live.advance_segment_to(segment, 1.0)?;
+    let mut execution = scene.into_execution()?;
+    let segment = execution.live().play_animation(&animation)?;
+    execution.live().advance_segment_to(segment, 1.0)?;
     assert_eq!(
-        live.effective(&circle)?.transform.translation,
+        execution.scene().effective(&circle)?.transform.translation,
         Vec2::new(2.0, -1.0)
     );
-    assert!(!live.segment_state(segment).is_complete());
+    assert!(!execution.live().segment_state(segment).is_complete());
 
-    live.advance_segment_to(segment, segment.end_time())?;
-    assert!(!live.segment_state(segment).is_complete());
-    live.complete_segment(segment)?;
-    assert!(live.segment_state(segment).is_complete());
+    execution
+        .live()
+        .advance_segment_to(segment, segment.end_time())?;
+    assert!(!execution.live().segment_state(segment).is_complete());
+    execution.live().complete_segment(segment)?;
+    assert!(execution.live().segment_state(segment).is_complete());
     assert_eq!(
-        live.effective(&circle)?.transform.translation,
+        execution.scene().effective(&circle)?.transform.translation,
         Vec2::new(4.0, -2.0)
     );
 
     // Wait uses the same runtime continuation boundary and allocates no track.
-    let wait = live.wait_segment(0.25)?;
-    live.advance_segment_to(wait, wait.end_time())?;
-    live.complete_segment(wait)?;
-    assert!(live.segment_state(wait).is_complete());
-    noon_native::run(scene.into_execution_with_session(session)?)?;
+    let wait = execution.live().wait_segment(0.25)?;
+    execution.live().advance_segment_to(wait, wait.end_time())?;
+    execution.live().complete_segment(wait)?;
+    assert!(execution.live().segment_state(wait).is_complete());
+    noon_native::run(execution)?;
     Ok(())
 }

@@ -424,6 +424,16 @@ impl Context {
         operation(&mut live).map_err(engine_error)
     }
 
+    fn observe_effective(&self, target: &MobjectHandle) -> PyResult<noon::EffectiveMobjectState> {
+        self.require_active()?;
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .effective(&target.handle)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+    }
+
     fn place<T>(
         &mut self,
         operation: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
@@ -1067,29 +1077,14 @@ impl Context {
     #[pyo3(name = "valueTrackerValue")]
     fn tracker_value(&self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<f64> {
         self.require_active()?;
-        if !tracker.value.is_in_store(self.scene.integration_store()) {
-            return Err(engine_error(noon::AuthoringError::ForeignStore));
-        }
         self.scene
-            .integration_store()
-            .borrow()
-            .semantic_signal_state(tracker.value.node_id())
-            .map_err(noon::AuthoringError::from)
-            .map_err(engine_error)?;
-        if let Some(execution) = scene_execution::session(&self.scene) {
-            match execution
-                .effective_signal_value(tracker.value.node_id())
-                .ok_or_else(|| {
-                    engine_error("ValueTracker is not lowered into this execution session")
-                })? {
-                noon_core::ReactiveValue::Scalar(value) => Ok(f64::from(*value)),
-                _ => Err(engine_error("ValueTracker runtime signal is not scalar")),
-            }
-        } else {
-            self.scene
-                .value_tracker_value(&tracker.value)
-                .map_err(engine_error)
-        }
+            .value_tracker_value(&tracker.value)
+            .map_err(|error| {
+                engine_error(AuthoringFailure::from_scene_mutation(
+                    error,
+                    self.has_execution(),
+                ))
+            })
     }
     #[pyo3(name = "setValueTracker")]
     fn set_tracker(
@@ -3795,7 +3790,7 @@ impl Context {
     #[pyo3(name = "liveEffectiveMobject")]
     fn effective_mobject(&mut self, target: &MobjectHandle) -> PyResult<CallbackTransform> {
         self.same_store(target)?;
-        self.with_live(|live| live.effective(&target.handle))
+        self.observe_effective(target)
             .map(|value| CallbackTransform {
                 transform: value.transform,
             })
@@ -4221,8 +4216,7 @@ impl Context {
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective(&target.handle))
-                .map(|v| v.fill_opacity())
+            self.observe_effective(target).map(|v| v.fill_opacity())
         } else {
             target.handle.fill_opacity().map_err(engine_error)
         }
@@ -4231,8 +4225,7 @@ impl Context {
     fn query_stroke_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective(&target.handle))
-                .map(|v| v.stroke_opacity())
+            self.observe_effective(target).map(|v| v.stroke_opacity())
         } else {
             target.handle.stroke_opacity().map_err(engine_error)
         }

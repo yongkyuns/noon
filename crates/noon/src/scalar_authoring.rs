@@ -8,9 +8,9 @@ use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    RateFunction, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
-    SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue, SemanticStore, SemanticVec3,
-    TrackTiming,
+    RateFunction, ReactiveValue, SemanticMutationTransaction, SemanticNodeId,
+    SemanticObjectProperty, SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue,
+    SemanticStore, SemanticVec3, TrackTiming,
 };
 
 use crate::{Mobject, Scene};
@@ -261,15 +261,26 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
-    /// Read the scalar track value at this Scene's shared authored cursor.
-    ///
-    /// The semantic store selects and eases its own declarations. This facade
-    /// does not retain a value, evaluate an expression, or interpolate in a
-    /// language wrapper.
+    /// Read the scalar tracker at the Scene's current state.
+    /// Running Scenes read the current execution value. Cold Scenes evaluate
+    /// the authored scalar track at the Scene's cursor.
     pub fn value_tracker_value(&self, tracker: &ValueTracker) -> Result<f64, AuthoringError> {
         tracker.require_store(self.integration_store())?;
-        self.integration_store()
-            .borrow()
+        let store = self.integration_store().borrow();
+        if let Some(execution) = self.running_execution() {
+            execution.require_published_store(&store)?;
+            return match execution.effective_signal_value(tracker.node) {
+                Some(ReactiveValue::Scalar(value)) => Ok(f64::from(*value)),
+                Some(_) => Err(noon_core::SemanticScalarSignalQueryError::NonScalarSignal(
+                    tracker.node,
+                )
+                .into()),
+                None => Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::EffectiveTrackerUnavailable,
+                )),
+            };
+        }
+        store
             .semantic_input_scalar_value_at(tracker.node, self.time())
             .map_err(AuthoringError::from)
     }
@@ -406,7 +417,7 @@ mod tests {
 
     #[test]
     fn detached_tracker_play_scopes_and_enrolls_with_its_activation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let detached = scene
             .integration_store()
             .borrow_mut()
@@ -414,30 +425,39 @@ mod tests {
             .unwrap();
         let tracker =
             ValueTracker::from_semantic_node(Rc::clone(scene.integration_store()), detached);
-        let mut session = scene.execution_session().unwrap();
-        assert!(session.effective_signal_value(detached).is_none());
-        let before = session.publication_context().scene_revision();
+        let session = scene.execution_session().unwrap();
+        scene.install_execution(session);
+        assert!(matches!(
+            scene.value_tracker_value(&tracker),
+            Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveTrackerUnavailable
+            ))
+        ));
+        let before = scene
+            .owned_execution()
+            .publication_context()
+            .scene_revision();
         let segment = scene
-            .live(&mut session)
+            .owned_live()
             .declare_and_activate_value_tracker(&tracker, 5.0, 1.0, noon_core::RateFunction::Linear)
             .unwrap();
         assert_eq!(
-            session.publication_context().scene_revision(),
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
             before.checked_next().unwrap()
         );
         assert!(scene
             .integration_store()
             .borrow()
             .is_semantic_signal_scoped(scene.root(), tracker.node_id()));
-        assert_eq!(
-            session.effective_signal_value(detached),
-            Some(&noon_core::ReactiveValue::Scalar(4.0))
-        );
+        assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 4.0);
         scene
-            .live(&mut session)
+            .owned_live()
             .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene.owned_live().complete_segment(segment).unwrap();
     }
 
     #[test]

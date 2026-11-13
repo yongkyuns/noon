@@ -29,6 +29,8 @@ pub enum UnsupportedAuthoringOperation {
     EffectivePathRenderOverride,
     /// Effective observations require Scene-owned execution to be running.
     EffectiveStateUnavailable,
+    /// The tracker has no value in the current execution projection.
+    EffectiveTrackerUnavailable,
     /// Text and external content do not expose a vector path.
     PathQueryContent,
     /// effective layout queries currently support affine and style drivers only.
@@ -97,6 +99,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ManimStyleInterpolation => "Manim style interpolation requires matching solid-paint channels and compatible sheen directions",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
+            Self::EffectiveTrackerUnavailable => "ValueTracker is not lowered into this execution session",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
             Self::SpatialMeshBounds2D => "2D bounds queries do not support spatial mesh geometry",

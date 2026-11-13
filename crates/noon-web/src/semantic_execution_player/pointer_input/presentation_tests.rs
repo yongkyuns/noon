@@ -780,8 +780,8 @@ fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
         noon_core::SemanticVec3::ZERO
     );
     assert_eq!(
-        scene
-            .live(p.source.session_mut())
+        p.source
+            .scene()
             .effective(&circle)
             .unwrap()
             .transform

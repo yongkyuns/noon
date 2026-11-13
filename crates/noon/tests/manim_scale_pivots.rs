@@ -83,12 +83,12 @@ fn rejected_explicit_scale_pivot_is_atomic() {
     let before = session.scene().revision();
 
     {
-        let state = session.live().effective(&line).unwrap();
+        let state = session.scene().effective(&line).unwrap();
         assert!(session
             .scene_mut()
             .manim_scale_about_point(&line, 2.0, 1.0, f64::NAN, 0.0)
             .is_err());
-        assert_eq!(session.live().effective(&line).unwrap(), state);
+        assert_eq!(session.scene().effective(&line).unwrap(), state);
     }
 
     assert_eq!(session.scene().revision(), before);

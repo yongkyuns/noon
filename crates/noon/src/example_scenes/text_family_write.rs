@@ -92,7 +92,6 @@ impl LiveContinuation for TextFamilyWrite {
                     .contains_direct(&self.moving)
                     .map_err(|error| error.to_string())?
                     || (scene
-                        .live()
                         .effective(&self.moving)
                         .map_err(|error| error.to_string())?
                         .transform

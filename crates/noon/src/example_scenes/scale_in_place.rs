@@ -13,10 +13,7 @@ impl LiveContinuation for ScaleInPlace {
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         if self.stage == 2 {
-            let state = scene
-                .live()
-                .effective(&self.square)
-                .map_err(|e| e.to_string())?;
+            let state = scene.effective(&self.square).map_err(|e| e.to_string())?;
             if state.transform.translation != noon_core::Vec2::new(1.0, 0.0)
                 || state.transform.scale != noon_core::Vec2::new(2.0, 2.0)
             {

@@ -55,14 +55,8 @@ impl LiveContinuation for MixedScalarComposition {
                 Ok(ContinuationStep::Await(segment))
             }
             1 => {
-                let circle = scene
-                    .live()
-                    .effective(&self.circle)
-                    .map_err(|e| e.to_string())?;
-                let square = scene
-                    .live()
-                    .effective(&self.square)
-                    .map_err(|e| e.to_string())?;
+                let circle = scene.effective(&self.circle).map_err(|e| e.to_string())?;
+                let square = scene.effective(&self.square).map_err(|e| e.to_string())?;
                 if (circle.transform.translation.x - 2.0).abs() > 1e-6
                     || (square.transform.rotation - PI as f32).abs() > 1e-6
                 {
@@ -87,10 +81,7 @@ impl LiveContinuation for MixedScalarComposition {
                     .map_err(|e| e.to_string())
             }
             3 => {
-                let circle = scene
-                    .live()
-                    .effective(&self.circle)
-                    .map_err(|e| e.to_string())?;
+                let circle = scene.effective(&self.circle).map_err(|e| e.to_string())?;
                 if (circle.transform.translation.x - 1.0).abs() > 1e-6 {
                     return Err("mixed completion did not release the scalar driver".into());
                 }

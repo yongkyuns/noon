@@ -236,7 +236,7 @@ mod tests {
             Vec2::new(2.0, -1.0)
         );
         assert_eq!(
-            live.authored(&circle).unwrap().transform.translation,
+            circle.state().unwrap().transform.translation,
             SemanticVec3::new(0.0, 0.0, 0.0)
         );
         live.advance_segment_to(segment, segment.end_time())

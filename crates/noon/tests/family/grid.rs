@@ -94,7 +94,7 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
         session.scene().effective_layout(&b).unwrap().center,
         (-0.375, 0.0)
     );
-    let before = session.live().effective(&a).unwrap();
+    let before = session.scene().effective(&a).unwrap();
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.family(&[]).unwrap();
     assert!(session
@@ -107,7 +107,7 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
             }
         )
         .is_err());
-    assert_eq!(session.live().effective(&a).unwrap(), before);
+    assert_eq!(session.scene().effective(&a).unwrap(), before);
 }
 
 #[test]

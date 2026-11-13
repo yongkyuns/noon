@@ -37,14 +37,7 @@ impl LiveContinuation for Segments {
                 scene.live().wait_segment(FIRST_END)?,
             )),
             1 => {
-                let y = f64::from(
-                    scene
-                        .live()
-                        .effective(&self.marker)?
-                        .transform
-                        .translation
-                        .y,
-                );
+                let y = f64::from(scene.effective(&self.marker)?.transform.translation.y);
                 scene.set_translation(&self.marker, 2.0, y)?;
                 Ok(ContinuationStep::Await(
                     scene.live().wait_segment(SECOND_DURATION)?,
@@ -52,14 +45,7 @@ impl LiveContinuation for Segments {
             }
             2 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.0)?)),
             3 => {
-                let y = f64::from(
-                    scene
-                        .live()
-                        .effective(&self.marker)?
-                        .transform
-                        .translation
-                        .y,
-                );
+                let y = f64::from(scene.effective(&self.marker)?.transform.translation.y);
                 scene.set_translation(&self.marker, 9.0, y)?;
                 Ok(ContinuationStep::Finished)
             }

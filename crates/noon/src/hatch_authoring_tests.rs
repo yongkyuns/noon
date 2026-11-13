@@ -61,7 +61,7 @@ fn hatch_target_uses_shared_fill_identity_opacity_and_exact_completion() {
         .advance_segment_to(segment, 1.0)
         .unwrap();
     scene.live(&mut session).complete_segment(segment).unwrap();
-    let authored = scene.live(&mut session).authored(&source).unwrap();
+    let authored = scene.authored(&source).unwrap();
     assert_eq!(
         authored.style.fill,
         Some(SemanticPaint::Hatch(endpoint.clone()))
@@ -100,7 +100,7 @@ fn animated_cross_topology_rejects_atomically_but_immediate_edit_is_valid() {
         .set_fill_hatch(&source, paint(0.25, [0.0; 2], true), None)
         .unwrap();
     assert!(running
-        .live()
+        .scene()
         .authored(&source)
         .unwrap()
         .style
@@ -122,7 +122,7 @@ fn invalid_local_hatch_profile_preserves_authored_and_effective_publications() {
     let mut running = scene.into_execution().unwrap();
     let before = running.session().frame().clone();
     let publication = running.session().publication_context();
-    let authored = running.live().authored(&source).unwrap();
+    let authored = running.scene().authored(&source).unwrap();
     for spacing in [1e-60, 1e60, 1e-10] {
         assert!(running
             .scene_mut()
@@ -130,14 +130,19 @@ fn invalid_local_hatch_profile_preserves_authored_and_effective_publications() {
             .is_err());
         assert_eq!(running.session().frame(), &before);
         assert_eq!(running.session().publication_context(), publication);
-        assert_eq!(running.live().authored(&source).unwrap(), authored);
+        assert_eq!(running.scene().authored(&source).unwrap(), authored);
     }
     running
         .scene_mut()
         .set_fill_hatch(&source, paint(0.75, [4.25, -8.5], true), None)
         .unwrap();
     assert_eq!(
-        running.live().authored(&source).unwrap().style.fill_opacity,
+        running
+            .scene()
+            .authored(&source)
+            .unwrap()
+            .style
+            .fill_opacity,
         0.25
     );
 }

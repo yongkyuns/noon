@@ -1835,7 +1835,7 @@ mod tests {
         let family = scene.family(&[(&leaf).into()]).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
         let mut session = scene.into_execution().unwrap();
-        let leaf_before = session.live().effective(&leaf).unwrap();
+        let leaf_before = session.scene().effective(&leaf).unwrap();
 
         let result = session
             .scene_mut()
@@ -1865,7 +1865,7 @@ mod tests {
         assert_eq!(family.own_background_stroke_width().unwrap(), 0.06);
         assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.55);
         assert_eq!(
-            session.live().effective(&leaf).unwrap().style,
+            session.scene().effective(&leaf).unwrap().style,
             leaf_before.style
         );
 
@@ -1878,7 +1878,7 @@ mod tests {
             noon_core::StrokeCap::Square
         );
         assert_eq!(
-            session.live().effective(&leaf).unwrap().style,
+            session.scene().effective(&leaf).unwrap().style,
             leaf_before.style
         );
         session.scene_mut().set_stroke_cap(&leaf, "butt").unwrap();
@@ -1962,14 +1962,14 @@ mod tests {
         scene.add(&direct).unwrap();
         let mut running = scene.into_execution().unwrap();
         running.scene_mut().fade_to(&direct, target, 0.5).unwrap();
-        let Some(live_fill) = running.live().effective(&direct).unwrap().style.fill else {
+        let Some(live_fill) = running.scene().effective(&direct).unwrap().style.fill else {
             panic!("live fade_to should preserve solid fill paint");
         };
         assert!((live_fill.red - 0.25).abs() < 1e-6);
         assert!((live_fill.blue - 0.75).abs() < 1e-6);
         assert_eq!(live_fill.alpha, 1.0);
         assert_eq!(
-            running.live().effective(&direct).unwrap().fill_opacity(),
+            running.scene().effective(&direct).unwrap().fill_opacity(),
             1.0
         );
 

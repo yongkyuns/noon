@@ -79,8 +79,8 @@ fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomical
         2
     );
     assert_eq!(family.own_style().unwrap().fill_opacity, 0.5);
-    assert_eq!(session.live().effective(&a).unwrap().fill_opacity(), 0.5);
-    assert_eq!(session.live().effective(&b).unwrap().fill_opacity(), 0.5);
+    assert_eq!(session.scene().effective(&a).unwrap().fill_opacity(), 0.5);
+    assert_eq!(session.scene().effective(&b).unwrap().fill_opacity(), 0.5);
     session
         .scene_mut()
         .set_family_stroke(
@@ -91,8 +91,8 @@ fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomical
         )
         .unwrap();
     let before = [
-        session.live().effective(&a).unwrap(),
-        session.live().effective(&b).unwrap(),
+        session.scene().effective(&a).unwrap(),
+        session.scene().effective(&b).unwrap(),
     ];
     assert!(session
         .scene_mut()
@@ -111,8 +111,8 @@ fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomical
         .is_err());
     assert_eq!(
         [
-            session.live().effective(&a).unwrap(),
-            session.live().effective(&b).unwrap()
+            session.scene().effective(&a).unwrap(),
+            session.scene().effective(&b).unwrap()
         ],
         before
     );
@@ -124,8 +124,8 @@ fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomical
         .scene_mut()
         .set_family_opacity(&family, 0.5)
         .unwrap();
-    assert_eq!(session.live().effective(&a).unwrap().fill_opacity(), 0.5);
-    assert_eq!(session.live().effective(&a).unwrap().stroke_opacity(), 0.5);
+    assert_eq!(session.scene().effective(&a).unwrap().fill_opacity(), 0.5);
+    assert_eq!(session.scene().effective(&a).unwrap().stroke_opacity(), 0.5);
 }
 
 #[test]
@@ -149,8 +149,8 @@ fn live_recursive_alias_fade_publishes_one_atomic_style_only_update() {
         session.scene().revision(),
         before_revision.checked_next().unwrap()
     );
-    let faded_a = session.live().effective(&a).unwrap();
-    let faded_b = session.live().effective(&b).unwrap();
+    let faded_a = session.scene().effective(&a).unwrap();
+    let faded_b = session.scene().effective(&b).unwrap();
     // Pinned Manim recursively visits a through both nested and direct paths:
     // its paint is multiplied by 0.75 twice, while b is visited once.
     assert!((faded_a.fill_opacity() - 0.45).abs() < 1e-7);
@@ -166,8 +166,8 @@ fn live_recursive_alias_fade_publishes_one_atomic_style_only_update() {
     assert_eq!(session.scene().revision(), revision);
     assert_eq!(
         [
-            session.live().effective(&a).unwrap(),
-            session.live().effective(&b).unwrap()
+            session.scene().effective(&a).unwrap(),
+            session.scene().effective(&b).unwrap()
         ],
         before_invalid
     );
@@ -417,7 +417,7 @@ fn live_empty_family_style_matching_updates_receiver_subtree_atomically() {
     assert_eq!(receiver.own_style().unwrap(), donor.own_style().unwrap());
     assert_eq!(nested.own_style().unwrap(), donor.own_style().unwrap());
     for member in [&a, &b] {
-        let effective = session.live().effective(member).unwrap();
+        let effective = session.scene().effective(member).unwrap();
         assert_eq!(
             effective.style.fill,
             Some(Color::rgba(

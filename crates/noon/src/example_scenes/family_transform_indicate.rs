@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationOptions, Color, ContinuationStep, IndicateOptions, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, MobjectFamily, RateFunction, Scene,
+    Mobject, MobjectFamily, RateFunction, Scene,
 };
 
 pub struct FamilyTransformIndicate {
@@ -40,7 +40,7 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             1 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(&scene.live(), -1.0, 1.0)?;
+                self.require_positions(scene, -1.0, 1.0)?;
                 let segment = scene
                     .live()
                     .declare_and_activate_family_indicate(
@@ -57,7 +57,7 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             2 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(&scene.live(), -1.0, 1.0)?;
+                self.require_positions(scene, -1.0, 1.0)?;
                 self.stage = 3;
                 scene
                     .live()
@@ -100,7 +100,7 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             4 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(&scene.live(), 0.0, 1.0)?;
+                self.require_positions(scene, 0.0, 1.0)?;
                 self.stage = 5;
                 Ok(ContinuationStep::Finished)
             }
@@ -124,16 +124,11 @@ impl FamilyTransformIndicate {
         Ok(())
     }
 
-    fn require_positions(
-        &self,
-        live: &LiveSession<'_>,
-        left_x: f32,
-        right_x: f32,
-    ) -> Result<(), String> {
-        let left = live
+    fn require_positions(&self, scene: &Scene, left_x: f32, right_x: f32) -> Result<(), String> {
+        let left = scene
             .effective(&self.left)
             .map_err(|error| error.to_string())?;
-        let right = live
+        let right = scene
             .effective(&self.right)
             .map_err(|error| error.to_string())?;
         if (left.transform.translation.x - left_x).abs() > 1e-6

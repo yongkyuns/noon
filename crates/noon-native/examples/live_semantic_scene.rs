@@ -15,12 +15,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         session.scene_mut().remove(&toggled)?;
-        assert!(session.live().effective(&toggled).is_err());
+        assert!(session.scene().effective(&toggled).is_err());
         session.scene_mut().add(&toggled)?;
         session.scene_mut().add(&appended)?;
         session.scene_mut().set_translation(&appended, 2.0, -1.0)?;
         assert_eq!(
-            session.live().effective(&appended)?.transform.translation.x,
+            session
+                .scene()
+                .effective(&appended)?
+                .transform
+                .translation
+                .x,
             2.0
         );
     }

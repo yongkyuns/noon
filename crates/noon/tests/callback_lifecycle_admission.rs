@@ -160,7 +160,7 @@ fn qualify_unrelated_callback(lifecycle: Lifecycle) {
             callbacks
                 .advance_segment_to(execution.session_mut(), segment, time)
                 .unwrap();
-            let moving_state = execution.live().effective(&moving).unwrap();
+            let moving_state = execution.scene().effective(&moving).unwrap();
             assert_eq!(moving_state.transform.translation.x, time as f32);
             assert_eq!(execution.session().frame().time, time);
             assert_eq!(execution.session().runtime_identity(), identity);
@@ -194,7 +194,7 @@ fn qualify_unrelated_callback(lifecycle: Lifecycle) {
         execution.live().complete_segment(hold).unwrap();
         assert_eq!(
             execution
-                .live()
+                .scene()
                 .effective(&moving)
                 .unwrap()
                 .transform
@@ -246,7 +246,7 @@ fn removed_callback_history_does_not_block_a_later_fade() {
     removal.remove_updater(moving.node_id(), MOVE, 1.0);
     execution.live().apply(removal).unwrap();
     let call_count = times.borrow().len();
-    let frozen = execution.live().effective(&moving).unwrap();
+    let frozen = execution.scene().effective(&moving).unwrap();
     let segment = execution
         .live()
         .declare_and_activate_composition(
@@ -260,7 +260,7 @@ fn removed_callback_history_does_not_block_a_later_fade() {
             .unwrap();
         assert_eq!(times.borrow().len(), call_count);
         assert_eq!(
-            execution.live().effective(&moving).unwrap().transform,
+            execution.scene().effective(&moving).unwrap().transform,
             frozen.transform
         );
     }
@@ -309,7 +309,7 @@ fn rejected_composition_preserves_membership_and_callback_execution() {
     assert_eq!(times.borrow().last().copied(), Some(0.5));
     assert_eq!(
         execution
-            .live()
+            .scene()
             .effective(&moving)
             .unwrap()
             .transform
@@ -628,7 +628,7 @@ fn a_target_with_completed_updater_history_can_fade_out_without_restarting_it() 
     tx.remove_updater(target.node_id(), MOVE, 1.0);
     execution.live().apply(tx).unwrap();
     let calls = times.borrow().clone();
-    let frozen = execution.live().effective(&target).unwrap().transform;
+    let frozen = execution.scene().effective(&target).unwrap().transform;
     let segment = execution
         .live()
         .declare_and_activate_composition(
