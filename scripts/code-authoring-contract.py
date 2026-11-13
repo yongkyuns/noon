@@ -1,5 +1,6 @@
 """Actual Python/WASM contract; no mocked semantics or Python code layout."""
 from pathlib import Path as FilePath
+from numpy.linalg import norm
 from noon import *
 
 
@@ -30,7 +31,7 @@ class CodeAuthoringContract(Scene):
         assert clone.code_lines[2].text == line.text
         assert clone.code_lines[2].annotation == line.annotation
         assert clone.code_lines[2].font == face.family
-        assert (line.get_center() - center).length() < 1e-6
+        assert norm(line.get_center() - center) < 1e-6
         self.add(clone)
 
         # File IO is performed in the authoring host; the Rust API receives UTF-8
