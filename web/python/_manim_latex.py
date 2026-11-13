@@ -6,7 +6,7 @@ import _manim_compat as _compat
 from _noon_errors import engine_call, engine_await
 from _manim_typst import (
     _RetainedTextMobject, _validated_font_size, _validated_opacity,
-    _as_color, _copy_text_parts, _live_text_context, TextSourcePart,
+    _as_color, _copy_text_parts, TextSourcePart,
 )
 
 try:
@@ -20,7 +20,7 @@ except ImportError:
 
 
 async def prepare_latex():
-    """Prepare the optional pinned real TeX compiler once in this authoring worker."""
+    """Prepare the host TeX compiler for this authoring run."""
     if _prepare is None:
         raise RuntimeError("LaTeX requires Noon's shared Rust authoring runtime")
     await engine_await(_prepare(), operation="prepare_latex")
@@ -139,7 +139,8 @@ class _TexBase(_compat.VGroup):
         font_size = _validated_font_size(font_size)
         opacity = _validated_opacity(opacity)
         color = _as_color(color)
-        context = _live_text_context()
+        from _manim_semantic_handles import _live_constructor_context
+        context = _live_constructor_context("LaTeX", allow_unstarted=True)
         create = _create if len(sources) == 1 else _create_strings
         if create is None:
             raise RuntimeError("LaTeX requires Noon's shared Rust authoring runtime")

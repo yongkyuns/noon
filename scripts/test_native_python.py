@@ -1,5 +1,6 @@
 """Real CPython extension and native GPU proof; run with PYTHONPATH=build/python."""
 import asyncio
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -99,6 +100,43 @@ class Demo(Scene):
             self.assertEqual(source, view.capture(time=2.0, width=320, height=180))
         finally:
             view.close()
+
+    @unittest.skipUnless(
+        os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
+        "requires an explicit native TeX compiler and BaKoMa font profile",
+    )
+    def test_latex_gallery_and_retained_part_edits(self):
+        for name, time in (("showcase_latex_create", 0.5), ("showcase_linear_algebra", 2.5)):
+            with self.subTest(example=name):
+                path = ROOT / "web/python/examples" / (name + ".py")
+                scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+                view = prepare_view(scene)
+                try:
+                    first = view.capture(time=0.0, width=320, height=180)
+                    self.assertNotEqual(first, view.capture(time=time, width=320, height=180))
+                    self.assertEqual(first, view.capture(time=0.0, width=320, height=180))
+                finally:
+                    view.close()
+
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        equation = MathTex("x", "+", "1", font_size=40)
+        equation.set_color_by_tex("x", BLUE)
+        assert abs(equation.font_size - 40) < 1e-6
+        self.add(equation)
+        self.wait(0.125)
+        equation.scale(1.5)
+        assert abs(equation.font_size - 60) < 1e-5
+        clone = equation.copy()
+        clone.set_color_by_tex("1", YELLOW)
+        assert [part.tex_string for part in clone] == ["x", "+", "1"]
+        assert clone[0] is not equation[0]
+        self.add(clone.shift(RIGHT))
+        self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
 
     def test_native_pointer_selection_gallery_prepares_retained_preview(self):
         path = ROOT / "web/python/examples/showcase_pointer_selection.py"

@@ -122,6 +122,36 @@ if hasattr(_native, "CodeOptions"):
     def noonCreateAuthoringCodeHandle(source, options, context):
         return _native.create_code(_arena(), source, options, context)
 
+if hasattr(_native, "prepare_latex"):
+    async def noonPrepareLatex():
+        _native.prepare_latex(_arena())
+
+    def noonCreateAuthoringLatexStringsHandle(strings, math, size, red, green, blue, alpha,
+                                               opacity, isolates, context):
+        return _native.create_latex(_arena(), strings, math, size, (red, green, blue, alpha),
+                                    opacity, isolates, context)
+
+    def noonCreateAuthoringLatexHandle(source, *arguments):
+        return noonCreateAuthoringLatexStringsHandle([source], *arguments)
+
+    def noonCreateAuthoringDecimalNumberHandle(*arguments):
+        return _native.create_decimal(_arena(), *arguments)
+
+    def noonNumericFromMobject(mobject):
+        return _native.decimal_from_mobject(_arena(), mobject)
+
+    def noonNumberLineDecimalNumberLabelFamily(*arguments):
+        return _native.line_decimal_labels(_arena(), *arguments)
+
+    def noonNumberPlaneDecimalCoordinateLabelFamilies(*arguments):
+        return _native.decimal_coordinates(_arena(), *arguments, True)
+
+    def noonAxesDecimalCoordinateLabelFamilies(*arguments):
+        return _native.decimal_coordinates(_arena(), *arguments, False)
+
+    def noonDecimalNumberLabelMembers(family):
+        return _native.decimal_label_members(_arena(), family)
+
 if hasattr(_native.Store, "typst"):
     def noonCreateAuthoringTypstHandle(*args):
         return _arena().typst(*args)

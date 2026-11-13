@@ -890,6 +890,16 @@ impl Scene {
         parts.font_size_for_height(layout.height)
     }
 
+    /// Observe the retained LaTeX size through this Scene during setup or playback.
+    #[cfg(feature = "latex")]
+    pub fn latex_font_size(&self, parts: &crate::LatexParts) -> Result<f64, AuthoringError> {
+        crate::MobjectTarget::from(parts.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            return self.effective_latex_font_size(parts);
+        }
+        parts.current_font_size()
+    }
+
     /// Move an object's layout center to a point.
     pub fn move_to_point(
         &mut self,

@@ -49,8 +49,8 @@ class ManimNumberWrapperTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_numbers as numbers
+            import _manim_reactive as reactive
             import noon
-            numbers._live_text_context = lambda: None
             decimal = noon.DecimalNumber(1.25, num_decimal_places=2, include_sign=True, unit="m")
             assert calls[0][0] == "create"
             assert calls[0][1][:7] == (1.25, 2, True, True, False, "m", 48.0)
@@ -79,7 +79,8 @@ class ManimNumberWrapperTests(unittest.TestCase):
                     calls.append(("live-integer-value", semantic)); return 8
 
             context = Context()
-            numbers._live_text_context = lambda: context
+            scene = types.SimpleNamespace(_canonical_authoring_context=context)
+            reactive._current_authoring_scene = lambda: scene
             live = noon.Integer(2.5)
             assert live._canonical_live_target_context is context
             assert calls[-3][0] == "create"
@@ -103,9 +104,13 @@ class ManimNumberWrapperTests(unittest.TestCase):
                 def requiresLiveMutationRouting(self):
                     return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 
-                def liveExecutionOwnership(self): return "unstarted"
+                def liveExecutionOwnership(self): return "none"
 
             cold_context = ColdContext()
+            scene._canonical_authoring_context = cold_context
+            authored = noon.DecimalNumber(4)
+            assert authored._canonical_live_target_context is cold_context
+            assert [entry for entry in calls if entry[0] == "create"][-1][1][-1] is cold_context
             wrapped = numbers.DecimalNumber._from_numeric_handle(Number(4), cold_context)
             assert wrapped._canonical_live_target_context is cold_context
             assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is None

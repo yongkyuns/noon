@@ -21,6 +21,8 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc};
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct Store {
     pub(crate) semantics: Rc<RefCell<SemanticStore>>,
+    #[cfg(feature = "latex")]
+    pub(crate) latex: crate::latex::LatexCompiler,
 }
 #[pymethods]
 impl Store {
@@ -54,6 +56,8 @@ impl Store {
     fn new() -> Self {
         Self {
             semantics: Rc::new(RefCell::new(SemanticStore::new())),
+            #[cfg(feature = "latex")]
+            latex: Default::default(),
         }
     }
     fn context(&self) -> Context {
@@ -1148,6 +1152,29 @@ impl Context {
             .run_time(duration)
             .map(|_| ())
             .map_err(engine_error)
+    }
+
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "liveSetLatexMemberColors")]
+    fn set_latex_member_colors(
+        &mut self,
+        handle: &crate::latex::LatexHandle,
+        rgba: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let colors = noon::integration::latex_member_colors(&rgba).map_err(engine_error)?;
+        let running = self.has_execution();
+        self.scene
+            .set_family_member_colors(handle.0.family(), &colors)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "liveLatexFontSize")]
+    fn latex_font_size(&self, handle: &crate::latex::LatexHandle) -> PyResult<f64> {
+        self.require_active()?;
+        self.scene.latex_font_size(&handle.0).map_err(engine_error)
     }
 
     #[pyo3(name = "createValueTracker")]

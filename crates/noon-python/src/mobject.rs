@@ -2,6 +2,27 @@
 use crate::{context::MembershipBatch, engine_error};
 use pyo3::prelude::*;
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
+type TextPart = (u32, u32, u32, u32, u32, u32, Option<String>);
+
+#[cfg(any(feature = "native-text", feature = "typst"))]
+fn project_text_parts(parts: Vec<noon::TextPart>) -> Vec<TextPart> {
+    parts
+        .into_iter()
+        .map(|part| {
+            (
+                part.source_span.start,
+                part.source_span.end,
+                part.first_cluster,
+                part.cluster_count,
+                part.first_vector,
+                part.vector_count,
+                part.semantic_key.as_deref().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct LineEndpoints {
     pub(crate) value: noon::ManimLineEndpoints,
@@ -39,6 +60,33 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[pyo3(name = "textSource")]
+    fn text_source(&self) -> PyResult<String> {
+        self.handle
+            .text_source()
+            .map(|source| source.to_string())
+            .map_err(engine_error)
+    }
+
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[pyo3(name = "textParts")]
+    fn text_parts(&self) -> PyResult<Vec<TextPart>> {
+        self.handle
+            .text_parts()
+            .map(project_text_parts)
+            .map_err(engine_error)
+    }
+
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[pyo3(name = "textSourcePartsFor")]
+    fn text_source_parts_for(&self, needle: &str) -> PyResult<Vec<TextPart>> {
+        self.handle
+            .text_source_parts_for(needle)
+            .map(project_text_parts)
+            .map_err(engine_error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="setStyle",signature=(fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     pub fn set_style(
