@@ -1195,17 +1195,8 @@ def _set_color(self: _base.Mobject, color: _base.Color) -> _base.Mobject:
         raise RuntimeError("Mobject edits require a current shared Rust semantic handle")
     if not isinstance(color, _base.Color):
         raise TypeError("color must be a Color")
-    live_context = _live_mutation_context(self)
-    if live_context is not None:
-        try:
-            engine_call(live_context.liveSetColor,
-                handle, color.red, color.green, color.blue, color.alpha
-            )
-        except Exception as error:
-            raise_engine_error(error)
-        return self
-
-    engine_call(handle.setColor, color.red, color.green, color.blue, color.alpha)
+    _paint_call(handle, _path_authoring_context(self), "setColor",
+                color.red, color.green, color.blue, color.alpha)
     return self
 
 
@@ -1582,7 +1573,7 @@ def _set_color_by_gradient(self, *colors):
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("per-member gradients in host callbacks require staged paint publication")
     parsed = [_compat._as_color("gradient color", color) for color in colors]
-    target, context, suffix = _gradient_target(self)
+    target, context, suffix = _paint_authoring_target(self)
     if target is None:
         raise RuntimeError("gradients require the shared Rust authoring host")
     arguments = _gradient_components(parsed)
@@ -1619,7 +1610,7 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
             raise TypeError("expected a two- or three-component numeric vector") from error
         if dimensions == 2:
             center = (*center, 0.0)
-    target, context, suffix = _gradient_target(self)
+    target, context, suffix = _paint_authoring_target(self)
     if target is None:
         raise RuntimeError("radial gradients require the shared Rust authoring host")
     arguments = _gradient_components((inner, outer))
@@ -1641,9 +1632,16 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
     return self
 
 
-def _gradient_target(value):
+def _paint_call(handle, context, method, *arguments):
+    if context is None:
+        return engine_call(getattr(handle, method), *arguments)
+    return engine_call(getattr(context, method), handle, *arguments)
+
+
+def _paint_authoring_target(value):
     if _is_shared_family(value):
-        return value._semantic_family_handle, _group_target_context(value, include_setup=True), "Family"
+        context = _object_authoring_context(value) or _group_target_context(value, include_setup=True)
+        return value._semantic_family_handle, context, "Family"
     return _handle_for(value), _path_authoring_context(value), ""
 
 
@@ -1892,7 +1890,8 @@ def _set_style(
         if background_stroke_opacity is None
         else _compat._opacity("background stroke opacity", background_stroke_opacity),
     )
-    handle, context, suffix = _style_target(self)
+    resolve = _style_target if own_family_style else _paint_authoring_target
+    handle, context, suffix = resolve(self)
     if handle is None:
         raise RuntimeError("style updates require the shared Rust authoring host")
     if root_background_stroke is not None and context is None:
@@ -1912,23 +1911,15 @@ def _set_style(
             root_background_stroke[1],
             root_background_stroke[2],
         )
+    elif own_family_style:
+        if context is None:
+            engine_call(handle.setOwnStyle, *arguments)
+        else:
+            engine_call(context.liveSetFamilyOwnStyle, handle, *arguments)
     elif context is None:
-        method_name = "setOwnStyle" if own_family_style else "setStyle"
-        if own_family_style:
-            engine_call(getattr(handle, method_name), *arguments)
-        else:
-            engine_call(getattr(handle, method_name), *arguments, *background_arguments)
+        engine_call(handle.setStyle, *arguments, *background_arguments)
     else:
-        method_suffix = f"{suffix}Own" if own_family_style else suffix
-        if own_family_style:
-            engine_call(getattr(context, f"liveSet{method_suffix}Style"), handle, *arguments)
-        else:
-            engine_call(
-                getattr(context, f"liveSet{method_suffix}Style"),
-                handle,
-                *arguments,
-                *background_arguments,
-            )
+        engine_call(getattr(context, f"set{suffix}Style"), handle, *arguments, *background_arguments)
     return self
 
 
@@ -2231,44 +2222,16 @@ def _set_fill(
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject paint requires the shared Rust authoring host")
-    live_context = _live_mutation_context(self)
-    if live_context is not None:
-        try:
-            if color is not None and opacity is not None:
-                parsed = _compat._as_color("fill color", color)
-                engine_call(live_context.liveSetFill,
-                    handle,
-                    parsed.red,
-                    parsed.green,
-                    parsed.blue,
-                    _compat._opacity("fill opacity", opacity),
-                )
-            elif color is not None:
-                parsed = _compat._as_color("fill color", color)
-                engine_call(live_context.liveSetFillColor,
-                    handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
-                )
-            if opacity is not None and color is None:
-                engine_call(live_context.liveSetFillOpacity,
-                    handle, _compat._opacity("fill opacity", opacity)
-                )
-        except Exception as error:
-            raise_engine_error(error)
-        return self
-    if color is not None and opacity is not None:
-        parsed = _compat._as_color("fill color", color)
-        engine_call(handle.setFill,
-            parsed.red,
-            parsed.green,
-            parsed.blue,
-            _compat._opacity("fill opacity", opacity),
-        )
-        return self
+    context = _path_authoring_context(self)
     if color is not None:
         parsed = _compat._as_color("fill color", color)
-        engine_call(handle.setFillColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    if opacity is not None:
-        engine_call(handle.setFillOpacity, _compat._opacity("fill opacity", opacity))
+        rgb = (parsed.red, parsed.green, parsed.blue)
+        if opacity is None:
+            _paint_call(handle, context, "setFillColor", *rgb, parsed.alpha)
+        else:
+            _paint_call(handle, context, "setFill", *rgb, _compat._opacity("fill opacity", opacity))
+    elif opacity is not None:
+        _paint_call(handle, context, "setFillOpacity", _compat._opacity("fill opacity", opacity))
     return self
 
 
@@ -2282,40 +2245,16 @@ def _set_stroke(
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject paint requires the shared Rust authoring host")
-    live_context = _live_mutation_context(self)
-    if live_context is not None:
-        if width is not None:
-            return _set_style(self, stroke_color=color, stroke_width=width,
-                              stroke_opacity=opacity, family=family)
-        try:
-            if color is not None and opacity is not None:
-                parsed = _compat._as_color("stroke color", color)
-                engine_call(live_context.liveSetStroke,
-                    handle,
-                    parsed.red,
-                    parsed.green,
-                    parsed.blue,
-                    _compat._opacity("stroke opacity", opacity),
-                )
-            elif color is not None:
-                parsed = _compat._as_color("stroke color", color)
-                engine_call(live_context.liveSetStrokeColor,
-                    handle, parsed.red, parsed.green, parsed.blue, parsed.alpha
-                )
-            elif opacity is not None:
-                engine_call(live_context.liveSetStrokeOpacity,
-                    handle, _compat._opacity("stroke opacity", opacity)
-                )
-        except Exception as error:
-            raise_engine_error(error)
-        return self
+    if width is not None or (color is not None and opacity is not None):
+        return _set_style(self, stroke_color=color, stroke_width=width,
+                          stroke_opacity=opacity, family=family)
+    context = _path_authoring_context(self)
     if color is not None:
         parsed = _compat._as_color("stroke color", color)
-        engine_call(handle.setStrokeColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
-    if width is not None:
-        engine_call(handle.setStrokeWidth, _compat._manim_stroke_width(width))
-    if opacity is not None:
-        engine_call(handle.setStrokeOpacity, _compat._opacity("stroke opacity", opacity))
+        _paint_call(handle, context, "setStrokeColor", parsed.red, parsed.green,
+                    parsed.blue, parsed.alpha)
+    elif opacity is not None:
+        _paint_call(handle, context, "setStrokeOpacity", _compat._opacity("stroke opacity", opacity))
     return self
 
 
@@ -2327,14 +2266,8 @@ def _set_opacity(
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject paint requires the shared Rust authoring host")
-    live_context = _live_mutation_context(self)
-    if live_context is not None:
-        try:
-            engine_call(live_context.liveSetOpacity, handle, _compat._opacity("opacity", opacity))
-        except Exception as error:
-            raise_engine_error(error)
-        return self
-    engine_call(handle.setOpacity, _compat._opacity("opacity", opacity))
+    _paint_call(handle, _path_authoring_context(self), "setOpacity",
+                _compat._opacity("opacity", opacity))
     return self
 
 
@@ -2344,22 +2277,16 @@ def _set_emission(self: _base.Mobject, strength: float) -> _base.Mobject:
     if canonical_callback_phase_active():
         raise NotImplementedError("callback emission on family or provisional targets requires staged publication")
     strength = _ir._finite_number("emission", strength)
-    is_family = _is_shared_family(self)
-    handle = self._semantic_family_handle if is_family else _handle_for(self)
+    family = _is_shared_family(self)
+    handle = self._semantic_family_handle if family else _handle_for(self)
+    suffix = "Family" if family else ""
+    context = _path_authoring_context(self)
     if handle is None:
         raise RuntimeError("set_emission requires the shared Rust authoring handle")
-    context = _live_mutation_context(self)
-    if is_family and context is None:
-        context = _live_constructor_context("family emission")
-    try:
-        if context is None:
-            engine_call(handle.setEmission, strength)
-        elif is_family:
-            engine_call(context.liveSetFamilyEmission, handle, strength)
-        else:
-            engine_call(context.liveSetEmission, handle, strength)
-    except Exception as error:
-        raise_engine_error(error)
+    if context is None:
+        engine_call(handle.setEmission, strength)
+    else:
+        engine_call(getattr(context, f"set{suffix}Emission"), handle, strength)
     return self
 
 
@@ -2368,33 +2295,17 @@ def _set_object_opacity(
     opacity: float,
 ) -> _base.Mobject:
     """Set the object-composite multiplier, distinct from Manim paint opacity."""
-
-    if _is_shared_family(self):
-        family = self._semantic_family_handle
-        alpha = _compat._opacity("object opacity", opacity)
-        context = _live_mutation_context(self)
-        if context is None:
-            context = _live_constructor_context("family object opacity")
-        try:
-            if context is None:
-                engine_call(family.setObjectOpacity, alpha)
-            else:
-                engine_call(context.liveSetFamilyObjectOpacity, family, alpha)
-        except Exception as error:
-            raise_engine_error(error)
-        return self
-    handle = _handle_for(self)
+    alpha = _compat._opacity("object opacity", opacity)
+    family = _is_shared_family(self)
+    handle = self._semantic_family_handle if family else _handle_for(self)
+    suffix = "Family" if family else ""
+    context = _path_authoring_context(self)
     if handle is None:
         raise NotImplementedError("set_object_opacity requires the shared semantic authoring handle")
-    alpha = _compat._opacity("object opacity", opacity)
-    live_context = _live_mutation_context(self)
-    try:
-        if live_context is not None:
-            engine_call(live_context.liveSetObjectOpacity, handle, alpha)
-        else:
-            engine_call(handle.setObjectOpacity, alpha)
-    except Exception as error:
-        raise_engine_error(error)
+    if context is None:
+        engine_call(handle.setObjectOpacity, alpha)
+    else:
+        engine_call(getattr(context, f"set{suffix}ObjectOpacity"), handle, alpha)
     return self
 
 
@@ -2466,12 +2377,15 @@ def _group_paint(self, operation, arguments):
             raise NotImplementedError("callback root-only Group paint requires staged family style writes")
         phase.paint_family(handle, operation, arguments)
         return self
-    context = _group_target_context(self)
+    root_only_channels = operation in {"OwnFill", "OwnStroke", "OwnOpacity"}
+    context = (_group_target_context(self) if root_only_channels
+               else _paint_authoring_target(self)[1])
+    prefix = "liveSetFamily" if root_only_channels else "setFamily"
     try:
         if context is None:
             engine_call(getattr(handle, f"set{operation}"), *arguments)
         else:
-            engine_call(getattr(context, f"liveSetFamily{operation}"), handle, *arguments)
+            engine_call(getattr(context, f"{prefix}{operation}"), handle, *arguments)
     except Exception as error:
         raise_engine_error(error)
     return self

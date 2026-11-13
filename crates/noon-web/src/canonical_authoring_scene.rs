@@ -10832,8 +10832,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFill)]
-        pub fn live_set_fill(
+        #[wasm_bindgen(js_name = setFill)]
+        pub fn set_fill(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10841,20 +10841,16 @@ mod wasm {
             blue: f64,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_rgb(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.set_fill_rgb(handle.semantic_mobject(), red, green, blue, opacity)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillColor)]
-        pub fn live_set_fill_color(
+        #[wasm_bindgen(js_name = setFillColor)]
+        pub fn set_fill_color(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10862,51 +10858,24 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveDisableFill)]
-        pub fn live_disable_fill(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .disable_fill(handle.semantic_mobject())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
-        }
-
-        #[wasm_bindgen(js_name = liveSetFillOpacity)]
-        pub fn live_set_fill_opacity(
+        #[wasm_bindgen(js_name = setFillOpacity)]
+        pub fn set_fill_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_fill_opacity(handle.semantic_mobject(), opacity))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetImageSampling)]
@@ -10925,8 +10894,8 @@ mod wasm {
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
-        #[wasm_bindgen(js_name = liveSetColor)]
-        pub fn live_set_color(
+        #[wasm_bindgen(js_name = setColor)]
+        pub fn set_color(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10934,16 +10903,12 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_color_rgba(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.set_color_rgba(handle.semantic_mobject(), red, green, blue, alpha)
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetUpdatingSuspended)]
@@ -10963,29 +10928,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetStroke)]
-        pub fn live_set_stroke(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            red: f64,
-            green: f64,
-            blue: f64,
-            opacity: f64,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
-        }
-
-        #[wasm_bindgen(js_name = liveSetStrokeColor)]
-        pub fn live_set_stroke_color(
+        #[wasm_bindgen(js_name = setStrokeColor)]
+        pub fn set_stroke_color(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10993,51 +10937,24 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveDisableStroke)]
-        pub fn live_disable_stroke(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .disable_stroke(handle.semantic_mobject())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
-        }
-
-        #[wasm_bindgen(js_name = liveSetStrokeOpacity)]
-        pub fn live_set_stroke_opacity(
+        #[wasm_bindgen(js_name = setStrokeOpacity)]
+        pub fn set_stroke_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_stroke_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_stroke_opacity(handle.semantic_mobject(), opacity))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeCap)]
@@ -11058,22 +10975,16 @@ mod wasm {
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
-        #[wasm_bindgen(js_name = liveSetOpacity)]
-        pub fn live_set_opacity(
+        #[wasm_bindgen(js_name = setOpacity)]
+        pub fn set_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_opacity(handle.semantic_mobject(), opacity))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveFade)]
@@ -11120,40 +11031,28 @@ mod wasm {
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
-        #[wasm_bindgen(js_name = liveSetEmission)]
-        pub fn live_set_emission(
+        #[wasm_bindgen(js_name = setEmission)]
+        pub fn set_emission(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             strength: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_emission(handle.semantic_mobject(), strength)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_emission(handle.semantic_mobject(), strength))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetObjectOpacity)]
-        pub fn live_set_object_opacity(
+        #[wasm_bindgen(js_name = setObjectOpacity)]
+        pub fn set_object_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_object_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_object_opacity(handle.semantic_mobject(), opacity))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveRemove)]
@@ -11518,9 +11417,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetStyle)]
+        #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_style(
+        pub fn set_style(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             fill_enabled: bool,
@@ -11574,11 +11473,8 @@ mod wasm {
             )
             .map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_style(&source.semantic_mobject(), update)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_style(&source.semantic_mobject(), update))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveInterpolateMobjectStyle)]
@@ -11696,9 +11592,9 @@ mod wasm {
                 .map(|_| ())
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
-        #[wasm_bindgen(js_name = liveSetFamilyStyle)]
+        #[wasm_bindgen(js_name = setFamilyStyle)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_style(
+        pub fn set_family_style(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             fill_enabled: bool,
@@ -11751,13 +11647,10 @@ mod wasm {
                 background_stroke_opacity,
             )
             .map_err(typed_js_error)?;
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_style(&source.semantic_family()?, update)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_family_style(&family, update))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetFamilySheenDirection)]
@@ -12073,8 +11966,8 @@ mod wasm {
                 .map(|_| ())
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
-        #[wasm_bindgen(js_name = liveSetFamilyEmission)]
-        pub fn live_set_family_emission(
+        #[wasm_bindgen(js_name = setFamilyEmission)]
+        pub fn set_family_emission(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             strength: f64,
@@ -12082,35 +11975,32 @@ mod wasm {
             let emission = noon_core::Emission::new(strength)
                 .map_err(noon::AuthoringError::Emission)
                 .map_err(typed_js_error)?;
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_style(
-                    &source.semantic_family()?,
-                    noon::StyleUpdate {
-                        emission: Some(emission),
-                        ..noon::StyleUpdate::default()
-                    },
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.set_family_style(
+                        &family,
+                        noon::StyleUpdate {
+                            emission: Some(emission),
+                            ..noon::StyleUpdate::default()
+                        },
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyObjectOpacity)]
-        pub fn live_set_family_object_opacity(
+        #[wasm_bindgen(js_name = setFamilyObjectOpacity)]
+        pub fn set_family_object_opacity(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_object_opacity(&source.semantic_family()?, opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_family_object_opacity(&family, opacity))
+                .map_err(typed_js_error)
         }
+
         #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
         pub fn live_match_family_style(
             &mut self,
@@ -12125,8 +12015,8 @@ mod wasm {
                 .map(|_| ())
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
-        #[wasm_bindgen(js_name = liveSetFamilyOwnColor)]
-        pub fn live_set_family_own_color(
+        #[wasm_bindgen(js_name = setFamilyOwnColor)]
+        pub fn set_family_own_color(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             red: f64,
@@ -12136,12 +12026,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_own_color(&family, red, green, blue, alpha)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_family_own_color(&family, red, green, blue, alpha))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetFamilyUpdatingSuspended)]
@@ -12164,9 +12050,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyColor)]
+        #[wasm_bindgen(js_name = setFamilyColor)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_color(
+        pub fn set_family_color(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             red: f64,
@@ -12177,17 +12063,13 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_color(&family, red, green, blue, alpha)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_family_color(&family, red, green, blue, alpha))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyFill)]
+        #[wasm_bindgen(js_name = setFamilyFill)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_fill(
+        pub fn set_family_fill(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             has_color: bool,
@@ -12201,17 +12083,13 @@ mod wasm {
             let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
                 .map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_fill(&family, color, opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_family_fill(&family, color, opacity))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyStroke)]
+        #[wasm_bindgen(js_name = setFamilyStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_stroke(
+        pub fn set_family_stroke(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             has_color: bool,
@@ -12226,17 +12104,13 @@ mod wasm {
             let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
                 .map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_stroke(&family, color, width, opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_family_stroke(&family, color, width, opacity))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyOpacity)]
+        #[wasm_bindgen(js_name = setFamilyOpacity)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_opacity(
+        pub fn set_family_opacity(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             opacity: f64,
@@ -12244,12 +12118,8 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_opacity(&family, opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_family_opacity(&family, opacity))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetFamilyFade)]

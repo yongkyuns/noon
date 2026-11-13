@@ -104,7 +104,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
         handle = object()
         context = SimpleNamespace(setFamilyColorGradient=Mock())
         argument = object()
-        with patch.object(handles, '_gradient_target', return_value=(handle, context, 'Family')), \
+        with patch.object(handles, '_paint_authoring_target', return_value=(handle, context, 'Family')), \
              patch.object(handles, '_gradient_components', return_value=argument) as components:
             self.assertIs(group.set_color_by_gradient('#FF0000', '#0000FF'), group)
         context.setFamilyColorGradient.assert_called_once_with(handle, argument)
@@ -118,7 +118,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
         argument = object()
         for context in (None, SimpleNamespace(setFamilyColorRadialGradient=Mock())):
             with self.subTest(scene_owned=context is not None), \
-                 patch.object(handles, '_gradient_target', return_value=(handle, context, 'Family')), \
+                 patch.object(handles, '_paint_authoring_target', return_value=(handle, context, 'Family')), \
                  patch.object(handles, '_gradient_components', return_value=argument) as components:
                 self.assertIs(
                     family.set_colors_by_radial_gradient(
@@ -143,7 +143,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
         family.get_center = Mock(return_value=(1., -2., 7.125))
         handle = Mock()
         argument = object()
-        with patch.object(handles, '_gradient_target', return_value=(handle, None, 'Family')), \
+        with patch.object(handles, '_paint_authoring_target', return_value=(handle, None, 'Family')), \
              patch.object(handles, '_gradient_components', return_value=argument):
             self.assertIs(family.set_colors_by_radial_gradient(), family)
         handle.setRadialColorGradient.assert_called_once_with(1., -2., 7.125, 1., argument)

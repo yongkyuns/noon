@@ -18,12 +18,11 @@ class EmissionAuthoringTests(unittest.TestCase):
                     obj._semantic_family_handle = handle
                 context = Mock() if live else None
                 with patch.object(handles, "_handle_for", return_value=handle), \
-                     patch.object(handles, "_live_mutation_context", return_value=context), \
-                     patch.object(handles, "_live_constructor_context", return_value=None):
+                     patch.object(handles, "_path_authoring_context", return_value=context):
                     strength = 7.000000000000001
                     self.assertIs(obj.set_emission(strength), obj)
                 if live:
-                    method = context.liveSetFamilyEmission if family else context.liveSetEmission
+                    method = context.setFamilyEmission if family else context.setEmission
                     method.assert_called_once_with(handle, strength)
                     handle.setEmission.assert_not_called()
                 else:

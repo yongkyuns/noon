@@ -646,7 +646,7 @@ impl Context {
             .map_err(engine_error)
     }
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(name="liveSetStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    #[pyo3(name="setStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     fn set_style(
         &mut self,
         source: &MobjectHandle,
@@ -702,10 +702,10 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.edit_running_scene(|scene| scene.set_style(&source.handle, update))
+        self.edit_scene(|scene| scene.set_style(&source.handle, update))
     }
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(name="liveSetFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    #[pyo3(name="setFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     fn set_family_style(
         &mut self,
         source: &crate::family::FamilyHandle,
@@ -761,7 +761,7 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.edit_running_scene(|scene| scene.set_family_style(&source.family, update).map(|_| ()))
+        self.edit_scene(|scene| scene.set_family_style(&source.family, update).map(|_| ()))
     }
     #[pyo3(name = "createMesh")]
     fn create_mesh(
@@ -1561,7 +1561,7 @@ impl Context {
         self.place(|scene| scene.align_family_on_frame(&target.family, (x, y), buff))
     }
 
-    #[pyo3(name = "liveSetFamilyObjectOpacity")]
+    #[pyo3(name = "setFamilyObjectOpacity")]
     fn family_object_opacity(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1569,7 +1569,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| {
+        self.edit_scene(|scene| {
             scene
                 .set_family_object_opacity(&target.family, value)
                 .map(|_| ())
@@ -1596,13 +1596,13 @@ impl Context {
             .set_view_color_profile(&target.handle, value)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
-    #[pyo3(name = "liveSetEmission")]
+    #[pyo3(name = "setEmission")]
     fn emission(&mut self, target: &MobjectHandle, value: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.set_emission(&target.handle, value))
+        self.edit_scene(|scene| scene.set_emission(&target.handle, value))
     }
-    #[pyo3(name = "liveSetFamilyEmission")]
+    #[pyo3(name = "setFamilyEmission")]
     fn family_emission(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1613,7 +1613,7 @@ impl Context {
         let emission = noon_core::Emission::new(value)
             .map_err(noon::AuthoringError::Emission)
             .map_err(engine_error)?;
-        self.edit_running_scene(|scene| {
+        self.edit_scene(|scene| {
             scene
                 .set_family_style(
                     &target.family,
@@ -3097,7 +3097,7 @@ impl Context {
         self.same_family_store(target)?;
         self.place(|scene| scene.scale_family(&target.family, x, y))
     }
-    #[pyo3(name = "liveSetFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
+    #[pyo3(name = "setFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
     #[allow(clippy::too_many_arguments)]
     fn family_fill(
         &mut self,
@@ -3113,13 +3113,9 @@ impl Context {
         self.same_family_store(target)?;
         let color = noon::integration::family_color(has_color, red, green, blue, alpha)
             .map_err(engine_error)?;
-        self.edit_running_scene(|scene| {
-            scene
-                .set_family_fill(&target.family, color, opacity)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_fill(&target.family, color, opacity))
     }
-    #[pyo3(name = "liveSetFamilyStroke", signature = (target, has_color, red, green, blue, alpha, width=None, opacity=None))]
+    #[pyo3(name = "setFamilyStroke", signature = (target, has_color, red, green, blue, alpha, width=None, opacity=None))]
     #[allow(clippy::too_many_arguments)]
     fn family_stroke(
         &mut self,
@@ -3136,13 +3132,9 @@ impl Context {
         self.same_family_store(target)?;
         let color = noon::integration::family_color(has_color, red, green, blue, alpha)
             .map_err(engine_error)?;
-        self.edit_running_scene(|scene| {
-            scene
-                .set_family_stroke(&target.family, color, width, opacity)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_stroke(&target.family, color, width, opacity))
     }
-    #[pyo3(name = "liveSetFamilyOpacity")]
+    #[pyo3(name = "setFamilyOpacity")]
     fn family_opacity(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3150,13 +3142,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| {
-            scene
-                .set_family_opacity(&target.family, opacity)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_opacity(&target.family, opacity))
     }
-    #[pyo3(name = "liveSetFamilyColor")]
+    #[pyo3(name = "setFamilyColor")]
     fn family_color(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3167,13 +3155,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| {
-            scene
-                .set_family_color(&target.family, r, g, b, a)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_color(&target.family, r, g, b, a))
     }
-    #[pyo3(name = "liveSetFamilyOwnColor")]
+    #[pyo3(name = "setFamilyOwnColor")]
     fn family_own_color(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3184,11 +3168,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| {
-            scene
-                .set_family_own_color(&target.family, r, g, b, a)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_own_color(&target.family, r, g, b, a))
     }
     #[pyo3(name = "queryMobjectCenter")]
     fn center(&mut self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
@@ -3770,12 +3750,12 @@ impl Context {
         self.same_store(target)?;
         self.place(|scene| scene.manim_scale(&target.handle, x, y))
     }
-    #[pyo3(name = "liveSetFill")]
+    #[pyo3(name = "setFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
     }
-    #[pyo3(name = "liveSetFillColor")]
+    #[pyo3(name = "setFillColor")]
     fn fill_color(
         &mut self,
         target: &MobjectHandle,
@@ -3785,17 +3765,17 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
     }
-    #[pyo3(name = "liveSetFillOpacity")]
+    #[pyo3(name = "setFillOpacity")]
     fn fill_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_fill_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_fill_opacity(&target.handle, a))
     }
-    #[pyo3(name = "liveSetColor")]
+    #[pyo3(name = "setColor")]
     fn color(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "setColorGradient")]
     fn set_color_gradient(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
@@ -3863,15 +3843,15 @@ impl Context {
         })
     }
 
-    #[pyo3(name = "liveSetOpacity")]
+    #[pyo3(name = "setOpacity")]
     fn opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_opacity(&target.handle, a))
     }
-    #[pyo3(name = "liveSetObjectOpacity")]
+    #[pyo3(name = "setObjectOpacity")]
     fn object_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_object_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_object_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveZIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
@@ -4800,19 +4780,7 @@ impl Context {
         self.require_active()?;
         Ok(scene_execution::session(&self.scene).map(|s| s.runtime_identity().get()))
     }
-    #[pyo3(name = "liveSetStroke")]
-    fn set_stroke(
-        &mut self,
-        target: &MobjectHandle,
-        r: f64,
-        g: f64,
-        b: f64,
-        a: f64,
-    ) -> PyResult<()> {
-        self.available()?;
-        self.edit_running_scene(|scene| scene.set_stroke(&target.handle, r, g, b, a))
-    }
-    #[pyo3(name = "liveSetStrokeColor")]
+    #[pyo3(name = "setStrokeColor")]
     fn set_stroke_color(
         &mut self,
         target: &MobjectHandle,
@@ -4822,12 +4790,12 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
     }
-    #[pyo3(name = "liveSetStrokeOpacity")]
+    #[pyo3(name = "setStrokeOpacity")]
     fn set_stroke_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_running_scene(|scene| scene.set_stroke_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_stroke_opacity(&target.handle, a))
     }
     fn metrics(&self) -> (u64, u64, u64) {
         (self.frames, self.segments, self.callback_regions)

@@ -67,8 +67,8 @@ class ManimNumberWrapperTests(unittest.TestCase):
                     return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 
                 def liveExecutionOwnership(self): return "returned"
-                def liveSetColor(self, *args): calls.append(("live-color", args))
-                def liveSetObjectOpacity(self, *args): calls.append(("live-opacity", args))
+                def setColor(self, *args): calls.append(("live-color", args))
+                def setObjectOpacity(self, *args): calls.append(("live-opacity", args))
                 def liveSetDecimalValue(self, semantic, value):
                     calls.append(("live-set", semantic, value))
                 def liveIncrementDecimalValue(self, semantic, value):
@@ -100,7 +100,7 @@ class ManimNumberWrapperTests(unittest.TestCase):
                 "live-set", "live-increment",
             ]
 
-            class ColdContext:
+            class ColdContext(Context):
                 def requiresLiveMutationRouting(self):
                     return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 

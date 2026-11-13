@@ -15,8 +15,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
             group = identity_only_wrapper(compat.VGroup, submobjects=[])
             family = group._semantic_family_handle = Mock()
             context = Mock() if live else None
-            with patch.object(handles, "_live_mutation_context", return_value=context), \
-                 patch.object(handles, "_live_constructor_context", return_value=None):
+            with patch.object(handles, "_path_authoring_context", return_value=context):
                 self.assertIs(group.set_object_opacity(0.25), group)
                 calls = list(family.method_calls)
                 context_calls = list(context.method_calls) if live else []
@@ -25,7 +24,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                         group.set_object_opacity(invalid)
                 self.assertEqual(family.method_calls, calls)
                 if live:
-                    context.liveSetFamilyObjectOpacity.assert_called_once_with(family, 0.25)
+                    context.setFamilyObjectOpacity.assert_called_once_with(family, 0.25)
                     self.assertEqual(context.method_calls, context_calls)
                     family.setObjectOpacity.assert_not_called()
                 else:
@@ -603,7 +602,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
         phase.paint_family.assert_called_once_with(family._semantic_family_handle, "Fade", (0.25,))
         family._semantic_family_handle.fade.assert_not_called()
 
-    def test_authored_and_live_calls_forward_one_family_handle(self):
+    def test_detached_and_scene_owned_edits_forward_one_family_handle(self):
         for live in (False, True):
             with self.subTest(live=live):
                 family = identity_only_wrapper(compat.VGroup, submobjects=[])
@@ -618,7 +617,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 owner = context if live else family._semantic_family_handle
                 prefix = (family._semantic_family_handle,) if live else ()
                 def method(name):
-                    return getattr(owner, f"liveSetFamily{name}" if live else f"set{name}")
+                    return getattr(owner, f"setFamily{name}" if live else f"set{name}")
                 color = compat._base.RED
                 method("Color").assert_called_once_with(*prefix, color.red, color.green, color.blue, color.alpha)
                 color = compat._base.BLUE
