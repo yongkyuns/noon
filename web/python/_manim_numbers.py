@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from _noon_errors import engine_call
-from _manim_typst import _RetainedTextMobject, _live_text_context
+from _manim_typst import _RetainedTextMobject
 import _manim_semantic_handles as _semantic
 import _manim_compat as _compat
 import noon as _base
@@ -44,7 +44,7 @@ class DecimalNumber(_RetainedTextMobject):
         if not math.isfinite(value): raise ValueError("DecimalNumber value must be finite")
         if isinstance(num_decimal_places, bool) or not isinstance(num_decimal_places, int) or not 0 <= num_decimal_places <= 12: raise ValueError("num_decimal_places must be an integer from 0 through 12")
         if unit is not None and not isinstance(unit, str): raise TypeError("unit must be a string or None")
-        context = _live_text_context()
+        context = _semantic._live_constructor_context("DecimalNumber", allow_unstarted=True)
         handle = engine_call(_create_decimal, value, num_decimal_places, bool(include_sign), bool(group_with_commas), bool(show_ellipsis), unit, float(font_size), context)
         if context is not None:
             self._canonical_live_target_context = context

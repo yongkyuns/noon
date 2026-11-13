@@ -61,10 +61,10 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmDecimalNumberHandle, JsValue> {
         let font_size = crate::authoring_mobject::text_authoring_f32("font size", font_size)
             .map_err(js_error)?;
+        let running = !self.inner.player_ownership.is_unstarted();
         self.inner
-            .active_live_player()
+            .local_authoring_scene()
             .map_err(js_error)?
-            .scene_mut()
             .decimal_number(
                 compiler,
                 value,
@@ -78,7 +78,13 @@ impl CanonicalAuthoringSceneContext {
                 font_size,
             )
             .map(WasmDecimalNumberHandle::from_number)
-            .map_err(noon::integration::live_numeric_failure)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_numeric_failure(error)
+                } else {
+                    error.into()
+                }
+            })
             .map_err(js_error)
     }
 }

@@ -53,6 +53,16 @@ dimensions. Fully predeclared scenes can export their authored soundtrack as
 window playback with audio, build with `python scripts/build-native-python.py
 --audio`. This enables the same device backend as the Rust window.
 
+### Native LaTeX
+
+`Tex`, `MathTex`, and DecimalNumber labels use the system `latex` and
+`kpsewhich` executables. Set `NOON_LATEX_FONT_DIR` to the BaKoMa TTF directory
+and `NOON_LATEX_RESOURCE_IDENTITY` to a stable identifier for that compiler
+and font installation. The optional `NOON_LATEX_EXECUTABLE` and
+`NOON_KPSEWHICH_EXECUTABLE` variables override executable discovery. The
+compiler is initialized on first use, including an explicit
+`await prepare_latex()`.
+
 ### Output controls
 
 - `--fps 30` or `--fps 30000/1001` selects the exact rational output frame grid.

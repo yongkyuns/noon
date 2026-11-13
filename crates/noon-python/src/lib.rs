@@ -21,7 +21,11 @@ mod export;
 mod family;
 mod geometry;
 mod image;
+#[cfg(feature = "latex")]
+mod latex;
 mod mobject;
+#[cfg(feature = "latex")]
+mod numbers;
 mod options;
 mod paints;
 mod path_input;
@@ -71,6 +75,11 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
     arrow::register(m)?;
     audio::register(m)?;
+    #[cfg(feature = "latex")]
+    {
+        latex::register(m)?;
+        numbers::register(m)?;
+    }
     #[cfg(feature = "capture")]
     {
         m.add_class::<export::ExportCancellation>()?;

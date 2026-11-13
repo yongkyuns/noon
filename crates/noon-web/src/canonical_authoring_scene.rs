@@ -10392,22 +10392,21 @@ mod wasm {
             options: crate::WasmLatexOptions,
             compiler: &mut crate::WasmLatexCompiler,
         ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
-            let scene = self
-                .inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut();
-            let parts = match options.text {
-                crate::authoring_latex::AuthoredLatex::Text(text) => {
-                    scene.tex_parts(text, compiler)
-                }
-                crate::authoring_latex::AuthoredLatex::Math(text) => {
-                    scene.math_tex_parts(text, compiler)
-                }
-            };
-            parts
+            let running = !self.inner.player_ownership.is_unstarted();
+            options
+                .text
+                .publish(
+                    self.inner.local_authoring_scene().map_err(typed_js_error)?,
+                    compiler,
+                )
                 .map(crate::WasmLatexPartsHandle::new)
-                .map_err(noon::integration::live_text_failure)
+                .map_err(|error| {
+                    if running {
+                        noon::integration::live_text_failure(error)
+                    } else {
+                        error.into()
+                    }
+                })
                 .map_err(typed_js_error)
         }
 
@@ -10417,14 +10416,16 @@ mod wasm {
             handle: &crate::WasmLatexPartsHandle,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let colors = crate::authoring_latex::member_colors(values)?;
+            let colors = noon::integration::latex_member_colors(values).map_err(typed_js_error)?;
+            let running = !self.inner.player_ownership.is_unstarted();
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_family_member_colors(handle.semantic_parts().family(), &colors)
                 .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .map_err(|error| {
+                    typed_js_error(AuthoringFailure::from_scene_mutation(error, running))
+                })
         }
 
         #[wasm_bindgen(js_name = liveLatexFontSize)]
@@ -10432,13 +10433,18 @@ mod wasm {
             &mut self,
             handle: &crate::WasmLatexPartsHandle,
         ) -> Result<f64, JsValue> {
+            let running = !self.inner.player_ownership.is_unstarted();
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene()
-                .effective_latex_font_size(handle.semantic_parts())
-                .map_err(running_placement_error)
-                .map_err(typed_js_error)
+                .latex_font_size(handle.semantic_parts())
+                .map_err(|error| {
+                    if running {
+                        typed_js_error(running_placement_error(error))
+                    } else {
+                        js_error(error)
+                    }
+                })
         }
 
         #[wasm_bindgen(js_name = liveCreateManimTypst)]

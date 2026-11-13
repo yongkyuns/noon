@@ -24,6 +24,10 @@ pub mod code_input;
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
+#[cfg(feature = "latex")]
+mod latex_input;
+#[cfg(feature = "latex")]
+pub use latex_input::{latex_member_colors, LatexInput};
 mod pixel_readback;
 pub mod spatial_input;
 

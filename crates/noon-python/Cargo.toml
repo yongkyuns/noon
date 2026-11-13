@@ -11,10 +11,11 @@ readme = "README.md"
 description = "Native CPython binding to the shared Noon authoring and execution API"
 
 [features]
-default = ["window", "capture", "native-text", "bundled-fonts", "image-decode", "typst", "wgsl-effects", "code"]
+default = ["window", "capture", "native-text", "bundled-fonts", "image-decode", "typst", "wgsl-effects", "code", "latex"]
 native-text = ["noon/native-text"]
 code = ["native-text", "noon/code"]
 typst = ["noon/typst"]
+latex = ["native-text", "dep:noon-native", "noon-native/latex"]
 wgsl-effects = ["noon/wgsl-effects"]
 bundled-fonts = ["native-text", "noon/bundled-fonts"]
 image-decode = ["noon/image-decode"]

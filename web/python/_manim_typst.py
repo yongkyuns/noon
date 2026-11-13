@@ -188,6 +188,8 @@ class TextSourcePart:
 def _copy_text_parts(raw_parts: object) -> tuple[TextSourcePart, ...]:
     """Copy Rust-owned source-part observations before releasing WASM wrappers."""
 
+    if isinstance(raw_parts, list):
+        return tuple(TextSourcePart(*part) for part in raw_parts)
     try:
         parts: list[TextSourcePart] = []
         for index in range(int(raw_parts.length)):
