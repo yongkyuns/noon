@@ -44,12 +44,29 @@ impl Mobject {
 }
 
 impl crate::Scene {
-    /// Count the addressed object's own points in the current publication.
-    pub fn effective_mobject_point_count(&self, object: &Mobject) -> Result<usize, AuthoringError> {
-        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
-        effective_mobject_point_count(self.integration_store(), execution, object)
+    /// Count only the addressed root's own points. Running scenes observe the
+    /// current publication, with authored counts for detached family roots.
+    pub fn own_point_count(&self, target: MobjectTarget<'_>) -> Result<usize, AuthoringError> {
+        let store = self.integration_store();
+        target.require_store(store)?;
+        let Some(execution) = self.running_execution() else {
+            return target.get_num_points();
+        };
+        match target {
+            MobjectTarget::Object(object) => {
+                effective_mobject_point_count(store, execution, object)
+            }
+            MobjectTarget::Family(family) => {
+                execution.require_published_store(&store.borrow())?;
+                match family.own_object()? {
+                    Some(object) if execution.semantic_object_is_reachable(object.node_id()) => {
+                        effective_mobject_point_count(store, execution, &object)
+                    }
+                    Some(object) => object.get_num_points(),
+                    None => Ok(0),
+                }
+            }
+        }
     }
 }
 

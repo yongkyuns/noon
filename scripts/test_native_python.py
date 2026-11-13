@@ -79,6 +79,10 @@ class Demo(Scene):
         family = VGroup(VMobject().set_points_as_corners([(0, 0, 0), (0, 1, 0)]))
         self.add(path, target, family)
         for _ in range(2):
+            assert family.get_num_points() == 0
+            family.set_points([(0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0)])
+            assert family.get_num_points() == 4
+            family.clear_points()
             path.match_points(target)
             assert list(path.get_start()) == [1, 2]
             assert list(path.get_subcurve(0.25, 0.75).get_start()) == [1.5, 2]

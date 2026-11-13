@@ -169,17 +169,8 @@ impl Scene {
         self.require_effective_capture()?;
         left.require_store(self.integration_store())?;
         right.require_store(self.integration_store())?;
-        if self.running_execution().is_none() {
-            return left.align_own_points_with_references(right, left_references, right_references);
-        }
-        let count = |target| match target {
-            MobjectTarget::Object(object) => self.effective_mobject_point_count(object),
-            MobjectTarget::Family(family) => match family.own_object()? {
-                Some(object) => self.effective_mobject_point_count(&object),
-                None => Ok(0),
-            },
-        };
-        let Some(side) = alignment_side(count(left)?, count(right)?) else {
+        let Some(side) = alignment_side(self.own_point_count(left)?, self.own_point_count(right)?)
+        else {
             return Ok(None);
         };
         let copied = match side {

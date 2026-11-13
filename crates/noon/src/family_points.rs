@@ -415,14 +415,18 @@ mod reference_tests;
 
 #[cfg(test)]
 mod effective_query_tests {
-    use crate::Scene;
+    use crate::{AnimationOptions, Color, RateFunction, Scene};
 
     #[test]
     fn own_root_query_validates_empty_publications_and_observes_live_content_only() {
         let mut scene = Scene::new();
         let child = scene.square(0.5).unwrap();
         let family = scene.family(&[(&child).into()]).unwrap();
+        let detached = scene.family(&[]).unwrap();
+        let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.)];
+        detached.set_points_f64(&points).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
+        assert_eq!(scene.own_point_count((&family).into()).unwrap(), 0);
         let execution = scene.execution_session().unwrap();
         assert!(family
             .effective_own_path_query(&execution)
@@ -433,8 +437,10 @@ mod effective_query_tests {
         let foreign = Scene::new().execution_session().unwrap();
         assert!(family.effective_own_path_query(&foreign).is_err());
         scene.install_execution(execution);
-        let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.)];
+        assert_eq!(scene.own_point_count((&family).into()).unwrap(), 0);
+        assert_eq!(scene.own_point_count((&detached).into()).unwrap(), 4);
         scene.set_family_points_f64(&family, &points).unwrap();
+        assert_eq!(scene.own_point_count((&family).into()).unwrap(), 4);
         assert_eq!(
             family
                 .effective_own_path_query(scene.owned_execution())
@@ -444,8 +450,47 @@ mod effective_query_tests {
             points
         );
         family.clear_points().unwrap();
+        assert!(scene.own_point_count((&family).into()).is_err());
+        assert!(scene.own_point_count((&detached).into()).is_err());
         assert!(family
             .effective_own_path_query(scene.owned_execution())
             .is_err());
+    }
+
+    #[test]
+    fn own_point_count_follows_family_root_reveal() {
+        let mut scene = Scene::new();
+        let family = scene
+            .family_with_presentation(&[], 0.0, Color::WHITE, true)
+            .unwrap();
+        family
+            .set_points_f64(&[
+                (0., 0.),
+                (1., 0.),
+                (2., 0.),
+                (3., 0.),
+                (3., 0.),
+                (4., 0.),
+                (5., 0.),
+                (6., 0.),
+            ])
+            .unwrap();
+        let object = family.own_object().unwrap().unwrap();
+        let mut execution = scene.into_execution().unwrap();
+        let segment = execution
+            .live()
+            .declare_and_activate_create(
+                &object,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        execution.live().advance_segment_to(segment, 0.25).unwrap();
+        assert_eq!(family.get_num_points().unwrap(), 8);
+        assert_eq!(
+            execution.scene().own_point_count((&family).into()).unwrap(),
+            4
+        );
     }
 }

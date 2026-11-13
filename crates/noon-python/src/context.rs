@@ -1808,17 +1808,26 @@ impl Context {
     }
 
     #[pyo3(name = "queryMobjectPointCount")]
-    fn point_count(&mut self, target: &MobjectHandle) -> PyResult<usize> {
+    fn point_count(&self, target: &MobjectHandle) -> PyResult<usize> {
         self.require_active()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.scene
-                .effective_mobject_point_count(&target.handle)
-                .map_err(noon::LiveSessionError::from)
-                .map_err(engine_error)
-        } else {
-            target.handle.get_num_points().map_err(engine_error)
-        }
+        self.scene
+            .own_point_count((&target.handle).into())
+            .map_err(|error| {
+                if self.has_execution() {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
+            })
+    }
+
+    #[pyo3(name = "queryFamilyPointCount")]
+    fn family_point_count(&self, target: &crate::family::FamilyHandle) -> PyResult<usize> {
+        self.require_active()?;
+        self.scene
+            .own_point_count((&target.family).into())
+            .map_err(engine_error)
     }
 
     #[pyo3(name = "queryMobjectPointArray")]
