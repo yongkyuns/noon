@@ -11514,7 +11514,7 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .scene_mut()
-                .prepend_family_members((&family).into(), &members)
+                .prepend_family_members(&family, &members)
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
@@ -11548,7 +11548,7 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .scene_mut()
-                .insert_family_member((&family).into(), index, *member)
+                .insert_family_member(&family, index, *member)
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
@@ -11581,7 +11581,7 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .scene_mut()
-                .prepend_family_members(handle.semantic_mobject().into(), &members)
+                .prepend_family_members(handle.semantic_mobject(), &members)
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
         #[wasm_bindgen(js_name = liveInsertObjectMember)]
@@ -11599,7 +11599,7 @@ mod wasm {
                 .active_live_player()
                 .map_err(typed_js_error)?
                 .scene_mut()
-                .insert_family_member(handle.semantic_mobject().into(), index, *member)
+                .insert_family_member(handle.semantic_mobject(), index, *member)
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
         #[wasm_bindgen(js_name = liveReplaceObjectMembers)]
