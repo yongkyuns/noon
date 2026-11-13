@@ -3630,21 +3630,15 @@ impl CanonicalAuthoringScene {
             .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn live_create_manim_arrow(
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn create_manim_arrow(
         &mut self,
         options: noon::ManimArrowOptions,
     ) -> Result<noon::ManimArrow, AuthoringFailure> {
         let running = !self.player_ownership.is_unstarted();
         self.local_authoring_scene()?
             .manim_arrow(options)
-            .map_err(|error| {
-                if running {
-                    noon::LiveSessionError::from(error).into()
-                } else {
-                    error.into()
-                }
-            })
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -4065,7 +4059,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_scale_arrow(
+    fn scale_arrow(
         &mut self,
         arrow: &noon::ManimArrow,
         factor: f64,
@@ -10144,14 +10138,14 @@ mod wasm {
         }
 
         /// Publish one retained Arrow family through the current live session.
-        #[wasm_bindgen(js_name = liveCreateManimArrow)]
-        pub fn live_create_manim_arrow(
+        #[wasm_bindgen(js_name = createManimArrow)]
+        pub fn create_manim_arrow(
             &mut self,
             candidate: crate::WasmManimArrowOptions,
         ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
             let options = candidate.into_live_arrow_options()?;
             self.inner
-                .live_create_manim_arrow(options)
+                .create_manim_arrow(options)
                 .map(crate::WasmAuthoringArrowHandle::from_manim_arrow)
                 .map_err(typed_js_error)
         }
@@ -11867,8 +11861,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleArrow)]
-        pub fn live_scale_arrow(
+        #[wasm_bindgen(js_name = scaleArrow)]
+        pub fn scale_arrow(
             &mut self,
             handle: &crate::WasmAuthoringArrowHandle,
             factor: f64,
@@ -11876,7 +11870,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let arrow = handle.arrow()?;
             self.inner
-                .live_scale_arrow(arrow, factor, scale_tips)
+                .scale_arrow(arrow, factor, scale_tips)
                 .map_err(typed_js_error)
         }
 
@@ -13885,7 +13879,7 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let mut options = noon::ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
         options.set_buff(0.0).unwrap();
-        let arrow = context.scene.manim_arrow(options).unwrap();
+        let arrow = context.create_manim_arrow(options.clone()).unwrap();
         context.scene.add_many(&[arrow.family().into()]).unwrap();
         context.live_player(1.0).unwrap();
         let player = context.take_execution_player(1.0, 17).unwrap();
@@ -13893,7 +13887,8 @@ mod tests {
         let before_shaft = arrow.shaft().state().unwrap();
         let before_tip = arrow.end_tip().state().unwrap();
 
-        assert!(context.live_scale_arrow(&arrow, 0.5, false).is_err());
+        assert!(context.scale_arrow(&arrow, 0.5, false).is_err());
+        assert!(context.create_manim_arrow(options.clone()).is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
@@ -13902,8 +13897,10 @@ mod tests {
         assert_eq!(arrow.end_tip().state().unwrap(), before_tip);
 
         context.return_execution_player(player).unwrap();
-        context.live_scale_arrow(&arrow, 0.5, false).unwrap();
+        context.scale_arrow(&arrow, 0.5, false).unwrap();
         assert!((arrow.manim_length().unwrap() - 1.0).abs() < 1e-5);
+        let detached = context.create_manim_arrow(options).unwrap();
+        assert!((detached.manim_length().unwrap() - 2.0).abs() < 1e-5);
     }
 
     #[test]

@@ -211,23 +211,23 @@ class ManimArrowFacadeTests(unittest.TestCase):
             live_context = types.SimpleNamespace(
                 liveExecutionOwnership=lambda: "active",
                 requiresLiveMutationRouting=lambda: True,
-                liveCreateManimArrow=lambda options: (
+                createManimArrow=lambda options: (
                     calls.append(("live_publish", options.kind))
                     or FakeCreatedArrow(options.kind == "double")
                 ),
-                liveScaleArrow=lambda handle, factor, scale_tips: calls.append(
+                scaleArrow=lambda handle, factor, scale_tips: calls.append(
                     ("live_arrow_scale", handle, float(factor), bool(scale_tips))
                 ),
             )
-            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: (
-                live_context if kind == "Arrow" else None
+            arrows._shared._path_authoring_context = lambda *values: (
+                live_context if not values else getattr(values[0], "_canonical_live_target_context", None)
             )
             live_arrow = arrows.Arrow((0.0, 0.0), (2.0, 0.0))
             assert ("live_publish", "arrow") in calls
             assert sum(call[0] == "publish" for call in calls) == static_publishes
             assert live_arrow._canonical_live_target_context is live_context
             assert len(live_arrow.submobjects) == 2
-            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: None
+            arrows._shared._path_authoring_context = lambda *values: None
 
             # Python passes opaque Mobject handles into the Rust boundary constructor;
             # it never queries centers, anchors, or boundary coordinates itself.
@@ -287,9 +287,8 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert ("arrow_scale", 2.0, False) in calls
             assert ("arrow_scale", 0.5, True) in calls
 
-            # Live scaling uses its owning context once and cannot fall back to
-            # an authored write when that context lacks the live operation.
-            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: live_context
+            # Scene scaling uses its owning context once in either phase.
+            # A missing host method cannot fall back to a direct handle edit.
             static_scales = sum(call[0] == "arrow_scale" for call in calls)
             assert live_arrow.scale(2.0) is live_arrow
             live_context.liveExecutionOwnership = lambda: "returned"
@@ -297,7 +296,7 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert ("live_arrow_scale", live_arrow._semantic_arrow_handle, 2.0, False) in calls
             assert ("live_arrow_scale", live_arrow._semantic_arrow_handle, 0.5, True) in calls
             assert sum(call[0] == "arrow_scale" for call in calls) == static_scales
-            del live_context.liveScaleArrow
+            del live_context.scaleArrow
             before_missing_live_host = list(calls)
             try:
                 live_arrow.scale(2.0)

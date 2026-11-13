@@ -2051,7 +2051,7 @@ impl Context {
         })
     }
 
-    #[pyo3(name = "liveCreateManimArrow")]
+    #[pyo3(name = "createManimArrow")]
     fn create_arrow(
         &mut self,
         options: &crate::arrow::ArrowOptions,
@@ -2064,7 +2064,7 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 
-    #[pyo3(name = "liveScaleArrow")]
+    #[pyo3(name = "scaleArrow")]
     fn scale_arrow(
         &mut self,
         arrow: &crate::arrow::ArrowHandle,

@@ -283,7 +283,6 @@ const expectedJavascriptSurface = [
   "scale3d(",
   "stretch(",
   "liveArrangeFamily(",
-  "liveCreateManimArrow(",
   "liveMoveToPoint(",
   "liveScale(",
   "liveRotateLayout(",
@@ -565,7 +564,6 @@ const expectedTypeSurface = [
   "stretch(factor: number, dimension: number, x: number, y: number, z: number, about_point: boolean): void",
   "shift(x: number, y: number, z?: number | null): void",
   "liveArrangeFamily(handle: WasmAuthoringFamilyHandle, options: WasmFamilyArrangeOptions): void",
-  "liveCreateManimArrow(",
   "liveMoveToPoint(",
   "liveScale(",
   "liveRotateLayout(",
@@ -1039,6 +1037,7 @@ for (const retired of [
   "liveCreateManimGeometry(", "liveCreateImage(", "liveSetImageSampling(",
   "liveCreateManimText(", "liveCreateManimMarkupText(", "liveCreateManimTypst(",
   "liveCreateLatex(", "liveSetLatexMemberColors(", "liveLatexFontSize(",
+  "liveCreateManimArrow(", "liveScaleArrow(",
   "liveCreateFamily(", "liveCreateFamilyWithColor(",
   "liveEditFamilyMembership(", "liveEditObjectMembership(",
   "livePrependFamilyMembers(", "livePrependObjectMembers(",
@@ -1078,6 +1077,7 @@ const sceneEnd = declarations.indexOf("export class ", sceneStart + 1);
 const sceneSurface = declarations.slice(sceneStart, sceneEnd < 0 ? undefined : sceneEnd);
 for (const method of [
   "createManimText(", "createManimMarkupText(", "createManimTypst(", "createLatex(",
+  "createManimArrow(", "scaleArrow(",
   "createFamily(", "editFamilyMembership(", "editObjectMembership(",
   "prependFamilyMembers(", "prependObjectMembers(", "insertFamilyMember(", "insertObjectMember(",
   "replaceFamilyMembers(", "replaceObjectMembers(", "invertFamilyMembers(",
