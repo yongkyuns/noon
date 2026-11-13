@@ -32,7 +32,7 @@ impl LiveContinuation for Source {
 
     fn resume(
         &mut self,
-        scene: &mut crate::ContinuationScene,
+        scene: &mut noon::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
         let live = &mut scene.live();
         if self.waits_left > 0 {

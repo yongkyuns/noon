@@ -78,7 +78,7 @@ struct TransformPathArc {
 impl LiveContinuation for TransformPathArc {
     type Error = String;
 
-    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, String> {
         let live = &mut scene.live();
         match self.stage {
             0 => {

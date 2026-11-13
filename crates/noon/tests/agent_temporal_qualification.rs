@@ -151,7 +151,7 @@ fn qualify_export_sampling_pixels() {
 
         fn resume(
             &mut self,
-            scene: &mut crate::ContinuationScene,
+            scene: &mut noon::ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
             let live = &mut scene.live();
             let stage = self.stage;
