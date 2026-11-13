@@ -62,8 +62,10 @@ pub(crate) fn colors(values: Vec<f64>) -> PyResult<Vec<Color>> {
         ));
     }
     values
-        .chunks_exact(4)
-        .map(|rgba| color(rgba[0], rgba[1], rgba[2], rgba[3]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&[r, g, b, a]| color(r, g, b, a))
         .collect()
 }
 

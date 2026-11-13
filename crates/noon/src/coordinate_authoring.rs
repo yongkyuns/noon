@@ -639,24 +639,24 @@ impl ManimAxes {
         x_range: Option<[f64; 2]>,
         bounded_graph: Option<&Mobject>,
     ) -> Result<Mobject, CoordinateAuthoringError> {
-        self.require_graph_store(graph)?;
-        if let Some(bound) = bounded_graph {
-            self.require_graph_store(bound)?;
-        }
-        let frame = self.authored_frame()?;
-        let graph_path = graph.path_query()?;
-        let bounded_path = bounded_graph.map(Mobject::path_query).transpose()?;
-        let options = ManimGeometryOptions::axes_area(
-            frame,
-            graph,
-            &graph_path,
-            x_range,
-            bounded_graph.zip(bounded_path.as_ref()),
-        )?;
+        let options = self.area_options(graph, x_range, bounded_graph)?;
         Ok(Mobject::from_manim_geometry(
             Rc::clone(self.family.integration_store()),
             options,
         )?)
+    }
+
+    fn area_options(
+        &self,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
+        self.require_graph_store(graph)?;
+        if let Some(bound) = bounded_graph {
+            self.require_graph_store(bound)?;
+        }
+        ManimGeometryOptions::axes_area(self.authored_frame()?, graph, x_range, bounded_graph)
     }
 
     /// Create a family of ordinary closed rectangle paths.  Partitioning is
@@ -747,6 +747,29 @@ impl Scene {
         )?)
     }
 
+    /// Observe a Scene-owned number line in setup or playback.
+    pub fn number_line_frame(
+        &self,
+        line: &ManimNumberLine,
+    ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(line.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_number_line_frame(line)
+        } else {
+            line.authored_frame()
+        }
+    }
+
+    /// Observe a Scene-owned pair of coordinate shafts in setup or playback.
+    pub fn axes_frame(&self, axes: &ManimAxes) -> Result<AxesFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_axes_frame(axes)
+        } else {
+            axes.authored_frame()
+        }
+    }
+
     /// Read the current shaft, or its validated authored path while detached.
     pub fn effective_number_line_frame(
         &self,
@@ -792,27 +815,50 @@ impl Scene {
         x_range: Option<[f64; 2]>,
         bounded_graph: Option<&Mobject>,
     ) -> Result<Mobject, CoordinateAuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
-            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
-            || bounded_graph.is_some_and(|bound| {
-                !Rc::ptr_eq(self.integration_store(), bound.integration_store())
-            })
-        {
-            return Err(AuthoringError::ForeignStore.into());
+        let options = self.effective_axes_area_options(axes, graph, x_range, bounded_graph)?;
+        Ok(self.geometry(options)?)
+    }
+
+    /// Capture a closed graph area without publishing it. Hosts can customize
+    /// the returned geometry options before creating the object through Scene.
+    pub fn axes_area_options(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_axes_area_options(axes, graph, x_range, bounded_graph);
         }
-        let frame = self.effective_axes_frame(axes)?;
-        let graph_path = self.effective_path_query(graph)?;
-        let bounded_path = bounded_graph
-            .map(|bound| self.effective_path_query(bound))
-            .transpose()?;
-        let options = ManimGeometryOptions::axes_area(
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
+        axes.area_options(graph, x_range, bounded_graph)
+    }
+
+    fn effective_axes_area_options(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
+        let store = self.integration_store();
+        crate::MobjectTarget::from(graph).require_store(store)?;
+        if let Some(bound) = bounded_graph {
+            crate::MobjectTarget::from(bound).require_store(store)?;
+        }
+        let execution = self.coordinate_query_execution(axes.family())?;
+        let mut query = |object: &Mobject| coordinate_path_query(store, execution, object);
+        let frame = axes.snapshot_with(&mut query)?;
+        let graph_path = query(graph)?;
+        let bounded_path = bounded_graph.map(query).transpose()?;
+        area::axes_area(
             frame,
             graph,
             &graph_path,
             x_range,
             bounded_graph.zip(bounded_path.as_ref()),
-        )?;
-        Ok(self.geometry(options)?)
+        )
     }
 
     /// Prepare one Riemann snapshot from authored or currently published paths.
@@ -896,16 +942,25 @@ pub(crate) fn coordinate_path_query(
 }
 
 impl ManimGeometryOptions {
-    /// Prepare an ordinary closed graph-area path from one captured coordinate
-    /// frame. This retains no callback and owns no scene identity.
+    /// Prepare a closed area path from a captured authored frame.
     pub fn axes_area(
         frame: AxesFrame,
         graph: &Mobject,
-        graph_path: &PathQuery,
         x_range: Option<[f64; 2]>,
-        bounded: Option<(&Mobject, &PathQuery)>,
+        bounded_graph: Option<&Mobject>,
     ) -> Result<Self, CoordinateAuthoringError> {
-        area::axes_area(frame, graph, graph_path, x_range, bounded)
+        if let Some(bound) = bounded_graph {
+            graph.require_same_store(bound)?;
+        }
+        let graph_path = graph.path_query()?;
+        let bounded_path = bounded_graph.map(Mobject::path_query).transpose()?;
+        area::axes_area(
+            frame,
+            graph,
+            &graph_path,
+            x_range,
+            bounded_graph.zip(bounded_path.as_ref()),
+        )
     }
 
     /// Prepare y=f(x) in a captured coordinate frame. Capture once before calling

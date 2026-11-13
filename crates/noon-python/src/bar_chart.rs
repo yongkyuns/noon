@@ -50,9 +50,11 @@ impl BarChartOptions {
             return Err(engine_error("bar colors require one or more RGBA values"));
         }
         self.0.bar_colors = rgba
-            .chunks_exact(4)
-            .map(|c| {
-                family_color(true, c[0], c[1], c[2], c[3])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&[r, g, b, a]| {
+                family_color(true, r, g, b, a)
                     .map(|color| color.expect("enabled bar color"))
                     .map_err(engine_error)
             })

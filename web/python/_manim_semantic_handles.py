@@ -414,7 +414,7 @@ def _vector_path_options(path: dict[str, Any]):
 
 
 def _attach_geometry_options(
-    self: _base.Mobject, options: object, kind: str = "geometry"
+    self: _base.Mobject, options: object, kind: str = "geometry", *, context=None
 ) -> None:
     reactive = sys.modules.get("_manim_reactive")
     scene = None if reactive is None else reactive._current_authoring_scene()
@@ -430,7 +430,8 @@ def _attach_geometry_options(
             self._callback_provisional_handle = callback.stage_provisional_geometry(options)
             self._callback_provisional_context = callback
             return
-    context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None:
+        context = getattr(scene, "_canonical_authoring_context", None)
     if context is None and scene is not None:
         from _manim_scene import _context
         context = _context(scene)

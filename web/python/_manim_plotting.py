@@ -1077,29 +1077,24 @@ class Axes(_compat.Group):
     def get_area(self, graph, x_range=None, color=None, opacity=0.3,
                  bounded_graph=None, **kwargs):
         """Create one static closed path prepared by the shared Rust query."""
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
-        if context is not None:
-            options = engine_call(
-                context.effectiveAxesAreaOptions, self._semantic_family_handle,
-                graph._semantic_handle, _array(() if x_range is None else x_range),
-                graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
-                bounded_graph is not None,
-            )
-        else:
+        _outside_callback()
+        context = _shared._path_authoring_context(self, graph, bounded_graph)
+        graph_handle = graph._semantic_handle
+        bounded_handle = graph_handle if bounded_graph is None else bounded_graph._semantic_handle
+        args = (graph_handle, _array(() if x_range is None else x_range),
+                bounded_handle, bounded_graph is not None)
+        if context is None:
             with _owned(self._coordinate_frame()) as frame:
-                options = engine_call(
-                    frame.area, graph._semantic_handle,
-                    _array(() if x_range is None else x_range),
-                    graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
-                    bounded_graph is not None,
-                )
+                options = engine_call(frame.area, *args)
+        else:
+            options = engine_call(context.prepareAxesArea, self._semantic_family_handle, *args)
         kwargs.setdefault("fill_opacity", float(opacity))
         kwargs.setdefault("stroke_opacity", float(opacity))
         colors = (_base.BLUE, _base.GREEN) if color is None else color
         if isinstance(colors, (list, tuple)):
-            result = _curve(object.__new__(_compat.VMobject), options, None, kwargs)
+            result = _curve(object.__new__(_compat.VMobject), options, None, kwargs, context=context)
             return result.set_color_by_gradient(*colors)
-        return _curve(object.__new__(_compat.VMobject), options, colors, kwargs)
+        return _curve(object.__new__(_compat.VMobject), options, colors, kwargs, context=context)
 
     def get_riemann_rectangles(self, graph, x_range=None, dx=0.1,
                                input_sample_type="left", stroke_width=1,
@@ -1637,14 +1632,14 @@ def _evaluate(plan, function, use_smoothing, *, parametric):
         return engine_call(plan.functionSamples, values, bool(use_smoothing))
 
 
-def _curve(wrapper, options, color, kwargs):
+def _curve(wrapper, options, color, kwargs, *, context=None):
     try:
         _shared._apply_shared_constructor_options(options, kwargs)
         _shared._apply_constructor_color(options, color)
     except BaseException:
         options.free()
         raise
-    _shared._attach_geometry_options(wrapper, options, "static plot")
+    _shared._attach_geometry_options(wrapper, options, "static plot", context=context)
     return wrapper
 
 

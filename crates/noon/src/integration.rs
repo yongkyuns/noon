@@ -181,9 +181,11 @@ pub fn gradient_colors(values: &[f64]) -> Result<Vec<crate::Color>, AuthoringFai
         ));
     }
     values
-        .chunks_exact(4)
-        .map(|c| {
-            family_color(true, c[0], c[1], c[2], c[3])
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&[r, g, b, a]| {
+            family_color(true, r, g, b, a)
                 .map(|color| color.expect("enabled color"))
                 .map_err(|error| {
                     AuthoringFailure::new("invalid_input", "gradient.invalid_color", error)
@@ -221,7 +223,10 @@ pub use plot_error::{
     live_coordinate_publication_failure, plot_failure, sampling_failure,
 };
 mod plot_input;
-pub use plot_input::{data_points as plot_data_points, PlotSamplingInput, RiemannInput};
+pub use plot_input::{
+    data_points as plot_data_points, optional_range as plot_optional_range, PlotSamplingInput,
+    RiemannInput,
+};
 
 /// Decode the optional frontend spelling of an existing camera working profile.
 pub fn camera_color_profile(value: &str) -> Result<noon_core::ViewColorProfile, AuthoringFailure> {

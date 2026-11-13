@@ -642,34 +642,13 @@ impl WasmAxesFrame {
         bounded_graph: &WasmAuthoringMobjectHandle,
         has_bounded_graph: bool,
     ) -> Result<WasmManimGeometryOptions, JsValue> {
-        let graph = graph.semantic_mobject();
-        let bounded = has_bounded_graph.then(|| bounded_graph.semantic_mobject());
-        let graph_path = graph
-            .path_query()
-            .map_err(AuthoringFailure::from)
+        let range = noon::integration::plot_optional_range(range, "area.range", "area")
             .map_err(js_error)?;
-        let bounded_path = bounded
-            .map(|object| object.path_query())
-            .transpose()
-            .map_err(AuthoringFailure::from)
-            .map_err(js_error)?;
-        let range = match range {
-            [] => None,
-            [start, end] if start.is_finite() && end.is_finite() => Some([*start, *end]),
-            _ => {
-                return Err(js_error(AuthoringFailure::new(
-                    "invalid_input",
-                    "area.range",
-                    "area range requires two finite values",
-                )));
-            }
-        };
-        noon::ManimGeometryOptions::axes_area(
+        ManimGeometryOptions::axes_area(
             self.frame,
-            graph,
-            &graph_path,
+            graph.semantic_mobject(),
             range,
-            bounded.zip(bounded_path.as_ref()),
+            has_bounded_graph.then(|| bounded_graph.semantic_mobject()),
         )
         .map(WasmManimGeometryOptions::from_options)
         .map_err(coordinate_failure)
@@ -838,27 +817,18 @@ impl WasmAuthoringFamilyHandle {
     }
 }
 
-impl CanonicalAuthoringSceneContext {
-    pub(crate) fn coordinate_line_frame(
-        &mut self,
-        line: &ManimNumberLine,
-    ) -> Result<NumberLineFrame, JsValue> {
-        self.inner.number_line_frame(line).map_err(js_error)
-    }
-}
-
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = queryNumberLineFrame)]
     pub fn query_number_line_frame(
-        &mut self,
+        &self,
         handle: &WasmAuthoringFamilyHandle,
     ) -> Result<WasmNumberLineFrame, JsValue> {
         let line = ManimNumberLine::from_family(handle.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
         Ok(WasmNumberLineFrame {
-            frame: self.coordinate_line_frame(&line)?,
+            frame: self.inner.number_line_frame(&line).map_err(js_error)?,
         })
     }
 
@@ -866,120 +836,64 @@ impl CanonicalAuthoringSceneContext {
     /// frame advancement or publication can interleave the X and Y observations.
     #[wasm_bindgen(js_name = queryAxesFrame)]
     pub fn query_axes_frame(
-        &mut self,
+        &self,
         handle: &WasmAuthoringFamilyHandle,
     ) -> Result<WasmAxesFrame, JsValue> {
         let axes = ManimAxes::from_family(handle.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let x = axes
-            .x_axis()
+        self.inner
+            .coordinate_scene()
+            .map_err(js_error)?
+            .axes_frame(&axes)
+            .map(|frame| WasmAxesFrame { frame })
             .map_err(coordinate_failure)
-            .map_err(js_error)?;
-        let y = axes
-            .y_axis()
-            .map_err(coordinate_failure)
-            .map_err(js_error)?;
-        Ok(WasmAxesFrame {
-            frame: AxesFrame::new(
-                self.coordinate_line_frame(&x)?,
-                self.coordinate_line_frame(&y)?,
-            ),
-        })
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = queryThreeDAxesFrame)]
     pub fn query_three_d_axes_frame(
-        &mut self,
+        &self,
         handle: &WasmAuthoringFamilyHandle,
     ) -> Result<WasmThreeDAxesFrame, JsValue> {
         let axes = ManimThreeDAxes::from_family(handle.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let shafts = axes
-            .axis_shafts()
-            .map_err(coordinate_failure)
-            .map_err(js_error)?;
-        let worlds = [
-            self.inner
-                .effective_world_transform(&shafts[0])
-                .map_err(js_error)?,
-            self.inner
-                .effective_world_transform(&shafts[1])
-                .map_err(js_error)?,
-            self.inner
-                .effective_world_transform(&shafts[2])
-                .map_err(js_error)?,
-        ];
-        axes.frame_with_world_transforms(worlds)
+        self.inner
+            .coordinate_scene()
+            .map_err(js_error)?
+            .three_d_axes_frame(&axes)
             .map(|frame| WasmThreeDAxesFrame { frame })
             .map_err(coordinate_failure)
             .map_err(js_error)
     }
 
-    /// Capture the effective axes frame and graph path observations together in
-    /// the active canonical context, then return the shared Rust area request.
-    /// The language wrapper may apply presentation options before consuming it
-    /// through its normal live geometry publication route.
-    #[wasm_bindgen(js_name = effectiveAxesAreaOptions)]
-    pub fn effective_axes_area_options(
-        &mut self,
+    #[wasm_bindgen(js_name = prepareAxesArea)]
+    pub fn prepare_axes_area(
+        &self,
         axes: &WasmAuthoringFamilyHandle,
         graph: &WasmAuthoringMobjectHandle,
         range: &[f64],
         bounded_graph: &WasmAuthoringMobjectHandle,
         has_bounded_graph: bool,
-    ) -> Result<crate::WasmManimGeometryOptions, JsValue> {
+    ) -> Result<WasmManimGeometryOptions, JsValue> {
         let axes = ManimAxes::from_family(axes.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let frame = AxesFrame::new(
-            self.coordinate_line_frame(
-                &axes
-                    .x_axis()
-                    .map_err(coordinate_failure)
-                    .map_err(js_error)?,
-            )?,
-            self.coordinate_line_frame(
-                &axes
-                    .y_axis()
-                    .map_err(coordinate_failure)
-                    .map_err(js_error)?,
-            )?,
-        );
-        let graph_object = graph.semantic_mobject();
-        let graph_path = self.query_mobject_path(graph)?;
-        let bounded = if has_bounded_graph {
-            Some((
-                bounded_graph.semantic_mobject(),
-                self.query_mobject_path(bounded_graph)?,
-            ))
-        } else {
-            None
-        };
-        let range = match range {
-            [] => None,
-            [start, end] if start.is_finite() && end.is_finite() => Some([*start, *end]),
-            _ => {
-                return Err(js_error(AuthoringFailure::new(
-                    "invalid_input",
-                    "area.range",
-                    "area range requires two finite values",
-                )));
-            }
-        };
-        ManimGeometryOptions::axes_area(
-            frame,
-            &graph_object,
-            &graph_path.value,
-            range,
-            bounded
-                .as_ref()
-                .map(|(object, path)| (*object, &path.value)),
-        )
-        .map(crate::WasmManimGeometryOptions::from_options)
-        .map_err(coordinate_failure)
-        .map_err(js_error)
+        let range = noon::integration::plot_optional_range(range, "area.range", "area")
+            .map_err(js_error)?;
+        self.inner
+            .coordinate_scene()
+            .map_err(js_error)?
+            .axes_area_options(
+                &axes,
+                graph.semantic_mobject(),
+                range,
+                has_bounded_graph.then(|| bounded_graph.semantic_mobject()),
+            )
+            .map(WasmManimGeometryOptions::from_options)
+            .map_err(coordinate_failure)
+            .map_err(js_error)
     }
 }
 

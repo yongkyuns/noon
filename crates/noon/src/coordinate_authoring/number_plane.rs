@@ -235,6 +235,19 @@ impl Scene {
         )?)
     }
 
+    /// Observe this coordinate family through the Scene in setup or playback.
+    pub fn number_plane_frame(
+        &self,
+        coordinates: &ManimNumberPlane,
+    ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(coordinates.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_number_plane_frame(coordinates)
+        } else {
+            coordinates.authored_frame()
+        }
+    }
+
     /// Read a coherent plane frame, including validated authored paths for detached shafts.
     pub fn effective_number_plane_frame(
         &self,

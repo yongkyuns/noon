@@ -75,7 +75,7 @@ class NativePythonTests(unittest.TestCase):
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
 
-    def test_riemann_rectangles_follow_effective_axes_and_preserve_sample_order(self):
+    def test_area_and_riemann_rectangles_follow_effective_axes(self):
         source = """from noon import *
 class Demo(Scene):
     def construct(self):
@@ -109,6 +109,11 @@ class Demo(Scene):
         self.play(subject.animate.shift(RIGHT), run_time=0.125)
         after = rectangles()
         assert after[0].get_start().x > before[0].get_start().x
+        area = axes.get_area(graph, [-1, 0], bounded_graph=bound, color=GREEN, opacity=0.4)
+        actual, expected = area.get_start(), axes.c2p(-1, 1)
+        assert abs(actual.x - expected.x) < 1e-5 and abs(actual.y - expected.y) < 1e-5
+        assert abs(area.get_fill_opacity() - 0.4) < 1e-6
+        self.add(area)
         self.add(after)
         self.wait(0.125)
 """

@@ -3,6 +3,18 @@
 use super::*;
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn coordinate_scene(&self) -> Result<&noon::Scene, AuthoringFailure> {
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        if !self.returned_player_is_stale() {
+            if let Some(player) = self.player_ownership.local() {
+                return Ok(player.scene());
+            }
+        }
+        Ok(&self.scene)
+    }
+
     pub(crate) fn number_line_frame(
         &self,
         line: &noon::ManimNumberLine,
@@ -10,18 +22,16 @@ impl CanonicalAuthoringScene {
         let shaft = line
             .shaft()
             .map_err(crate::plot_error::coordinate_failure)?;
-        self.mobject_observation(
-            &shaft,
-            |_| {
-                line.authored_frame()
-                    .map_err(crate::plot_error::coordinate_failure)
-            },
-            |scene, _| {
-                scene
-                    .effective_number_line_frame(line)
-                    .map_err(crate::plot_error::coordinate_failure)
-            },
-        )
+        let scene = self.coordinate_scene()?;
+        if !std::rc::Rc::ptr_eq(scene.integration_store(), shaft.integration_store()) {
+            return Err(noon::AuthoringError::ForeignStore.into());
+        }
+        if !self.identities.contains_key(&shaft.node_id()) {
+            return Err("mobject is not bound to this canonical Scene".into());
+        }
+        scene
+            .number_line_frame(line)
+            .map_err(crate::plot_error::coordinate_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
