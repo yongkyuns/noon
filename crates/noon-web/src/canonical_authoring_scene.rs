@@ -3597,9 +3597,11 @@ impl CanonicalAuthoringScene {
         options: noon::ImageMobjectOptions,
     ) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_image(options)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .image(options)
+                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
             PlayerOwnership::Unstarted => {
                 Err("live image construction requires an active canonical session".into())
             }
@@ -10599,8 +10601,10 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_image(handle.semantic_mobject(), paint.options.clone(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_image(handle.semantic_mobject(), paint.options.clone(), opacity)
+                .map(|_| ())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
         #[wasm_bindgen(js_name = liveSetFillImageMapping)]
         pub fn live_set_fill_image_mapping(
@@ -10616,8 +10620,10 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_image_mapping(handle.semantic_mobject(), mapping.value, opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_image_mapping(handle.semantic_mobject(), mapping.value, opacity)
+                .map(|_| ())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetFillHatch)]
@@ -10780,8 +10786,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_image_sampling(handle.semantic_mobject(), sampling)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_image_sampling(handle.semantic_mobject(), sampling)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetColor)]

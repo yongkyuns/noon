@@ -1,13 +1,12 @@
 use super::*;
 use crate::worker_pointer_presentation::WorkerPointerReceipt;
 use crate::{InstalledRetainedExecutionMirror, RetainedTransportApplyOutcome};
-use noon::{AnimationOptions, ExecutionSession, IndicateOptions, Mobject, PrefixPublisher, Scene};
+use noon::{AnimationOptions, IndicateOptions, Mobject, PrefixPublisher, Scene, SceneExecution};
 use noon_runtime::ReplayLimits;
 
 struct Fixture {
-    scene: Scene,
     target: Mobject,
-    source: ExecutionSession,
+    source: SceneExecution,
     publisher: PrefixPublisher,
     player: PreparedExecutionPlayer,
 }
@@ -26,16 +25,17 @@ impl Fixture {
                 AnimationOptions::new().run_time(0.5),
             )
             .unwrap();
-        let mut source = scene.execution_session().unwrap();
+        let mut source = scene.into_execution().unwrap();
         source
+            .session_mut()
             .begin_replay_retention(ReplayLimits {
                 revisions: 128,
                 payloads: 2048,
             })
             .unwrap();
-        let segment = source.wait_segment(1.0).unwrap();
-        source.advance_to(1.0).unwrap();
-        let (publisher, mut reader) = source.create_prepared_prefix(segment).unwrap();
+        let segment = source.session_mut().wait_segment(1.0).unwrap();
+        source.session_mut().advance_to(1.0).unwrap();
+        let (publisher, mut reader) = source.session().create_prepared_prefix(segment).unwrap();
         reader.seek(0.5).unwrap();
         let mut player = PreparedExecutionPlayer::from_reader(reader, session);
         player.set_prepared_playing(false);
@@ -43,7 +43,6 @@ impl Fixture {
             .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
             .unwrap();
         Self {
-            scene,
             target,
             source,
             publisher,
@@ -52,19 +51,21 @@ impl Fixture {
     }
 
     fn next(&mut self, terminal: bool) -> PrefixBatch {
-        self.scene
-            .live(&mut self.source)
-            .shift(&self.target, 1.0, 0.0)
+        self.source.live().shift(&self.target, 1.0, 0.0).unwrap();
+        let segment = self.source.session_mut().wait_segment(1.0).unwrap();
+        self.source
+            .session_mut()
+            .advance_to(segment.end_time())
             .unwrap();
-        let segment = self.source.wait_segment(1.0).unwrap();
-        self.source.advance_to(segment.end_time()).unwrap();
         if terminal {
-            self.source.seal_replay().unwrap();
+            self.source.session_mut().seal_replay().unwrap();
             self.source
+                .session()
                 .finish_prepared_prefix(segment, &mut self.publisher)
                 .unwrap()
         } else {
             self.source
+                .session()
                 .publish_prepared_prefix(segment, &mut self.publisher)
                 .unwrap()
         }
@@ -491,7 +492,7 @@ fn prepared_worker_terminal_adoption_and_source_drop_do_not_replace_display() {
     assert_eq!(f.player.playback.reader.end_time(), Some(2.0));
     assert!(f.player.drain_delta_json().unwrap().is_none());
     let mut player = f.player;
-    drop((f.scene, f.source, f.target, f.publisher));
+    drop((f.source, f.target, f.publisher));
     assert!(input(&mut player, "press", receipt, 1));
     assert!(input(&mut player, "release", receipt, 1));
     assert!(player.playback.reader.interactions_active());
@@ -785,15 +786,16 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
     let (mut mirror, _) = ready(&mut f.player);
     let baseline = mirror.frame().unwrap().clone();
     let image = f
-        .scene
-        .live(&mut f.source)
-        .create_image(noon::ImageMobjectOptions::rgba8(2, 2, [230, 40, 10, 255].repeat(4)).unwrap())
+        .source
+        .scene_mut()
+        .image(noon::ImageMobjectOptions::rgba8(2, 2, [230, 40, 10, 255].repeat(4)).unwrap())
         .unwrap();
-    f.scene.live(&mut f.source).add(&image).unwrap();
-    let segment = f.source.wait_segment(1.0).unwrap();
-    f.source.advance_to(2.0).unwrap();
+    f.source.live().add(&image).unwrap();
+    let segment = f.source.session_mut().wait_segment(1.0).unwrap();
+    f.source.session_mut().advance_to(2.0).unwrap();
     let batch = f
         .source
+        .session()
         .publish_prepared_prefix(segment, &mut f.publisher)
         .unwrap();
     f.deliver(batch);
@@ -812,15 +814,16 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
     let selected = mirror.frame().unwrap().clone();
     let identity = f.player.playback.reader.runtime_identity();
     let future = f
-        .scene
-        .live(&mut f.source)
-        .create_image(noon::ImageMobjectOptions::rgba8(2, 2, [10, 230, 40, 255].repeat(4)).unwrap())
+        .source
+        .scene_mut()
+        .image(noon::ImageMobjectOptions::rgba8(2, 2, [10, 230, 40, 255].repeat(4)).unwrap())
         .unwrap();
-    f.scene.live(&mut f.source).add(&future).unwrap();
-    let segment = f.source.wait_segment(1.0).unwrap();
-    f.source.advance_to(3.0).unwrap();
+    f.source.live().add(&future).unwrap();
+    let segment = f.source.session_mut().wait_segment(1.0).unwrap();
+    f.source.session_mut().advance_to(3.0).unwrap();
     let batch = f
         .source
+        .session()
         .publish_prepared_prefix(segment, &mut f.publisher)
         .unwrap();
     f.deliver(batch);
@@ -1088,7 +1091,7 @@ fn prepared_worker_static_time_controls_reject_invalid_wall_time_atomically() {
 fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
     let mut f = Fixture::new(87);
     let segment = {
-        let mut live = f.scene.live(&mut f.source);
+        let mut live = f.source.live();
         let target = live.target_editor(&f.target).unwrap();
         live.set_translation(&target, 2.0, 0.0).unwrap();
         let segment = live
@@ -1107,6 +1110,7 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
     };
     let batch = f
         .source
+        .session()
         .publish_prepared_prefix(segment, &mut f.publisher)
         .unwrap();
     f.deliver(batch);
