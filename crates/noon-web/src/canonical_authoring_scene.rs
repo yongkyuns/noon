@@ -2836,7 +2836,7 @@ impl CanonicalAuthoringScene {
         children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         // A continuation cannot restart a pre-authored Rust timeline at zero.
         // This is the common admission guard for every request shape.
         if self.player_ownership.is_unstarted() && self.scene.time() != 0.0 {
@@ -2891,10 +2891,10 @@ impl CanonicalAuthoringScene {
                     options,
                 } => {
                     if !tracker.is_in_store(self.scene.integration_store()) {
-                        return Err(
-                            "ordinary composition ValueTracker belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                            "ordinary composition ValueTracker belongs to another authoring store",
+                        ));
                     }
                     self.scene
                         .integration_store()
@@ -2926,13 +2926,13 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         path.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary MoveAlongPath objects belong to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary MoveAlongPath objects belong to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
-                    path.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
+                    path.validate()?;
                     if !self.identities.contains_key(&target.node_id())
                         || !self.identities.contains_key(&path.node_id())
                     {
@@ -2959,11 +2959,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "callback interval target belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback interval target belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     if !self.identities.contains_key(&target.node_id()) {
                         return Err("callback interval target must belong to this Scene".into());
                     }
@@ -2985,12 +2986,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary subset-display family belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary subset-display family belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let direct_members = self
                         .scene
                         .integration_store()
@@ -3021,12 +3022,9 @@ impl CanonicalAuthoringScene {
                             self.scene.integration_store(),
                             member.integration_store(),
                         ) {
-                            return Err(
-                                "ordinary subset-display member belongs to another authoring store"
-                                    .into(),
-                            );
+                            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore).with_message("ordinary subset-display member belongs to another authoring store"));
                         }
-                        member.validate().map_err(|error| error.to_string())?;
+                        member.validate()?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !register_entering(*id, member.node_id())
@@ -3072,11 +3070,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family animation belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary family animation belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let family_leaves = self
                         .scene
                         .integration_store()
@@ -3135,11 +3134,12 @@ impl CanonicalAuthoringScene {
                             self.scene.integration_store(),
                             member.integration_store(),
                         ) {
-                            return Err(
-                                "ordinary family member belongs to another authoring store".into(),
-                            );
+                            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                                .with_message(
+                                    "ordinary family member belongs to another authoring store",
+                                ));
                         }
-                        member.validate().map_err(|error| error.to_string())?;
+                        member.validate()?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !register_entering(*id, member.node_id())
@@ -3159,12 +3159,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family DrawBorderThenFill belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                            "ordinary family DrawBorderThenFill belongs to another authoring store",
+                        ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let family_leaves = self
                         .scene
                         .integration_store()
@@ -3194,9 +3194,9 @@ impl CanonicalAuthoringScene {
                             self.scene.integration_store(),
                             member.integration_store(),
                         ) {
-                            return Err("ordinary family DrawBorderThenFill member belongs to another authoring store".into());
+                            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore).with_message("ordinary family DrawBorderThenFill member belongs to another authoring store"));
                         }
-                        member.validate().map_err(|error| error.to_string())?;
+                        member.validate()?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !register_entering(*id, member.node_id())
@@ -3229,16 +3229,18 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target_state.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family Transform belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary family Transform belongs to another authoring store",
+                            ));
                     }
-                    source.validate().map_err(|error| error.to_string())?;
-                    target_state.validate().map_err(|error| error.to_string())?;
+                    source.validate()?;
+                    target_state.validate()?;
                     if options.reverse_rate_function == Some(true) {
                         return Err(
                             noon_core::AnimationOptionsError::UnsupportedReverseRateFunction
-                                .to_string(),
+                                .to_string()
+                                .into(),
                         );
                     }
                     noon_core::resolve_transform_animation_options(
@@ -3256,11 +3258,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family Indicate belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary family Indicate belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
@@ -3293,12 +3296,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary camera profile target belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary camera profile target belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let state = target.state().map_err(|error| error.to_string())?;
                     let clips = match state.camera_projection() {
                         Some(noon_core::SemanticProjection3D::Perspective {
@@ -3327,11 +3330,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary composition target belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary composition target belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     if self.identities.contains_key(&target.node_id()) {
                         return Err(
                             "ordinary composition TransformTo target state must be detached".into(),
@@ -3424,11 +3428,12 @@ impl CanonicalAuthoringScene {
                 } => (*entering_id, target, *options),
             };
             if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-                return Err(
-                    "ordinary composition target belongs to another authoring store".into(),
-                );
+                return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                    .with_message(
+                        "ordinary composition target belongs to another authoring store",
+                    ));
             }
-            target.validate().map_err(|error| error.to_string())?;
+            target.validate()?;
             let resolved = if matches!(
                 child,
                 OrdinaryCompositionChild::TransformTo { .. }
@@ -14905,6 +14910,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .unwrap_err()
+            .message
             .contains("reverse_rate_function"));
         assert!(context
             .ordinary_play_mixed_composition(
