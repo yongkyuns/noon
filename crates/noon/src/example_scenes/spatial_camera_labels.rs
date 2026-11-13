@@ -166,19 +166,12 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
 
 pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, movement) = scene()?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 #[cfg(test)]

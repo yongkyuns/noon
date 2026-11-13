@@ -77,19 +77,12 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
 /// Duration-one animated session used by native and renderer-smoke hosts.
 pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, animation) = scene()?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&animation)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            animation.node_id(),
-            crate::AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// Point-lit counterpart used to qualify real worker resource capture and light-only updates.
@@ -123,19 +116,12 @@ pub fn lighting_scene() -> Result<(Scene, crate::Mobject, crate::Mobject, Declar
 /// Duration-one session for point-lit surface qualification.
 pub fn lighting_session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _, animation) = lighting_scene()?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&animation)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            animation.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// Default Cairo-shaded Manim Surface subset, retained as a UV cell family.
@@ -282,19 +268,12 @@ pub fn cairo_sphere_torus_scene() -> Result<
 /// One-second paired default Sphere/Torus execution session.
 pub fn cairo_sphere_torus_session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _, movement) = cairo_sphere_torus_scene()?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// Paired Manim Cone body cells: one default cone and one tilted radial patch.
