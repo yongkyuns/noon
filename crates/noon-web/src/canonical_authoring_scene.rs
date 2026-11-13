@@ -2129,23 +2129,15 @@ impl CanonicalAuthoringScene {
         self.scene.declare_transform_to(source, target, options)
     }
 
-    /// Read the shared session's direct-root membership for one retained wrapper.
-    ///
-    /// This lets Python update only its derived wrapper attachment after a completed
-    /// FadeOut without storing lifecycle state or adding metadata to the player receipt.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_contains_mobject(&mut self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        target.validate().map_err(AuthoringFailure::from)?;
-        if !self.identities.contains_key(&target.node_id()) {
-            return Err("live Mobject is not bound to this canonical Scene".into());
-        }
-        self.active_live_player()?
-            .scene()
+    fn contains_direct_mobject(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<bool, AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
             .contains_direct(target)
-            .map_err(running_scene_error)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -9336,19 +9328,18 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        /// Query shared root membership after an exact fade completion. Python
-        /// uses it only to attach/detach its derived wrapper identity.
-        #[wasm_bindgen(js_name = liveContainsMobject)]
-        pub fn live_contains_mobject(
+        /// Query the direct children of this Scene's root in setup and playback.
+        #[wasm_bindgen(js_name = containsDirectMobject)]
+        pub fn contains_direct_mobject(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<bool, JsValue> {
             target.id_in_store(
                 self.inner.scene.integration_store(),
-                "live execution context",
+                "scene membership query",
             )?;
             self.inner
-                .live_contains_mobject(target.semantic_mobject())
+                .contains_direct_mobject(target.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -13468,6 +13459,20 @@ mod tests {
     }
 
     #[test]
+    fn direct_membership_uses_the_scene_root_before_and_after_bootstrap() {
+        let mut context = CanonicalAuthoringScene::default();
+        let nested = context.scene.circle(0.5).unwrap();
+        let family = context.scene.family(&[(&nested).into()]).unwrap();
+        context.scene.add_many(&[(&family).into()]).unwrap();
+        assert!(context.contains_mobject(&nested).unwrap());
+        assert!(!context.contains_direct_mobject(&nested).unwrap());
+
+        context.live_player(1.0).unwrap();
+        assert!(context.contains_mobject(&nested).unwrap());
+        assert!(!context.contains_direct_mobject(&nested).unwrap());
+    }
+
+    #[test]
     fn live_membership_uses_the_existing_session_and_registers_detached_handles() {
         let mut context = CanonicalAuthoringScene::default();
         let anchor = context.scene.circle(0.5).unwrap();
@@ -14581,7 +14586,7 @@ mod tests {
                 bindings: Vec::new(),
             })
             .unwrap();
-        assert!(!context.live_contains_mobject(&label).unwrap());
+        assert!(!context.contains_direct_mobject(&label).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
         assert_eq!(context.identities.get(&label.node_id()), Some(&id));
 
@@ -14612,7 +14617,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(context.live_contains_mobject(&label).unwrap());
+        assert!(context.contains_direct_mobject(&label).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
         assert_eq!(context.identities.get(&label.node_id()), Some(&id));
         assert_eq!(
@@ -14715,7 +14720,7 @@ mod tests {
                 .unwrap(),
             2.0
         );
-        assert!(!context.live_contains_mobject(&line).unwrap());
+        assert!(!context.contains_direct_mobject(&line).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&line.node_id()));
         assert_eq!(context.identities.get(&line.node_id()), Some(&id));
     }
@@ -14791,7 +14796,7 @@ mod tests {
             2.0
         );
         for target in [&leaf, &left, &right] {
-            assert!(context.live_contains_mobject(target).unwrap());
+            assert!(context.contains_direct_mobject(target).unwrap());
         }
         assert_eq!(context.bindings.len(), 3);
         let publication: crate::RetainedExecutionDeltaEnvelope = serde_json::from_str(
@@ -14837,7 +14842,7 @@ mod tests {
                 .unwrap(),
             1.0
         );
-        assert!(context.live_contains_mobject(&writing).unwrap());
+        assert!(context.contains_direct_mobject(&writing).unwrap());
         assert_eq!(
             context
                 .active_live_player()
@@ -14877,7 +14882,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .unwrap();
-        assert!(!context.live_contains_mobject(&writing).unwrap());
+        assert!(!context.contains_direct_mobject(&writing).unwrap());
 
         let mut rejected = CanonicalAuthoringScene::default();
         let shared = rejected.scene.text(noon::Text::new("ONE")).unwrap();
@@ -15297,8 +15302,8 @@ mod tests {
                 .unwrap(),
             2.0
         );
-        assert!(context.live_contains_mobject(&left).unwrap());
-        assert!(context.live_contains_mobject(&right).unwrap());
+        assert!(context.contains_direct_mobject(&left).unwrap());
+        assert!(context.contains_direct_mobject(&right).unwrap());
         assert_eq!(context.bindings.len(), 2);
     }
 
@@ -15344,8 +15349,8 @@ mod tests {
             2.0
         );
         assert_eq!(context.bindings.len(), 2);
-        assert!(context.live_contains_mobject(&left).unwrap());
-        assert!(context.live_contains_mobject(&right).unwrap());
+        assert!(context.contains_direct_mobject(&left).unwrap());
+        assert!(context.contains_direct_mobject(&right).unwrap());
     }
 
     #[test]
@@ -15415,11 +15420,11 @@ mod tests {
             )
             .unwrap();
         assert!(end > 0.0);
-        assert!(!context.live_contains_mobject(&bound).unwrap());
-        assert!(context.live_contains_mobject(&add_target).unwrap());
-        assert!(context.live_contains_mobject(&create_target).unwrap());
-        assert!(context.live_contains_mobject(&fade_target).unwrap());
-        assert!(context.live_contains_mobject(&lifecycle_target).unwrap());
+        assert!(!context.contains_direct_mobject(&bound).unwrap());
+        assert!(context.contains_direct_mobject(&add_target).unwrap());
+        assert!(context.contains_direct_mobject(&create_target).unwrap());
+        assert!(context.contains_direct_mobject(&fade_target).unwrap());
+        assert!(context.contains_direct_mobject(&lifecycle_target).unwrap());
 
         let revision = context.scene.integration_store().borrow().scene_revision();
         let mut foreign = CanonicalAuthoringScene::default();
@@ -15481,7 +15486,7 @@ mod tests {
                 .unwrap(),
             1.0
         );
-        assert!(context.live_contains_mobject(&shape).unwrap());
+        assert!(context.contains_direct_mobject(&shape).unwrap());
         assert_eq!(context.bindings.len(), 1);
         assert_eq!(context.bindings.get(&id), Some(&shape.node_id()));
         assert_eq!(context.identities.get(&shape.node_id()), Some(&id));
@@ -16446,7 +16451,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .unwrap();
-        assert!(context.live_contains_mobject(&pulse).unwrap());
+        assert!(context.contains_direct_mobject(&pulse).unwrap());
     }
 
     #[test]
@@ -17125,7 +17130,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(end, 1.25);
-        assert!(context.live_contains_mobject(&label).unwrap());
+        assert!(context.contains_direct_mobject(&label).unwrap());
         assert_eq!(
             context.bindings.get(&ObjectId::new(0)),
             Some(&label.node_id())
@@ -17651,7 +17656,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(end, 1.0);
-        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert!(!context.contains_direct_mobject(&square).unwrap());
         assert_eq!(square.state().unwrap(), before);
         assert_eq!(
             context.bindings.get(&ObjectId::new(0)),
@@ -17678,14 +17683,14 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
         {
             let player = context.active_live_player().unwrap();
             assert_eq!(player.time(), 0.0);
             player.live_advance_segment_to(fade_in_end).unwrap();
             player.live_complete_segment().unwrap();
         }
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
 
         let fade_out_end = begin_request(
             &mut context,
@@ -17703,12 +17708,12 @@ mod tests {
             player.live_advance_segment_to(fade_out_end).unwrap();
             player.live_complete_segment().unwrap();
         }
-        assert!(!context.live_contains_mobject(&circle).unwrap());
+        assert!(!context.contains_direct_mobject(&circle).unwrap());
 
         // The original derived ObjectId re-enters through the shared session;
         // no replacement semantic handle or second runtime is allocated.
         context.live_add_mobject(ObjectId::new(0), &circle).unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
     }
 
     #[test]
@@ -17764,7 +17769,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(end, 1.0);
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
         assert!(begin_request(
             &mut context,
             create_request(
@@ -17789,13 +17794,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(end, 1.0);
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(context.contains_direct_mobject(&square).unwrap());
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert!(!context.contains_direct_mobject(&square).unwrap());
         context.live_add_mobject(id, &square).unwrap();
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(context.contains_direct_mobject(&square).unwrap());
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
     }
 
@@ -17818,11 +17823,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(context.contains_direct_mobject(&square).unwrap());
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert!(!context.contains_direct_mobject(&square).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
     }
@@ -17851,7 +17856,7 @@ mod tests {
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
     }
 
     #[test]
@@ -17924,8 +17929,8 @@ mod tests {
         assert_eq!(player.time(), 0.0);
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&square).unwrap());
     }
 
     #[test]

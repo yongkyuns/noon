@@ -63,6 +63,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
         local, foreign = circle(first), circle(second)
         self.assertEqual((local.semanticSlot, local.semanticGeneration),
                          (foreign.semanticSlot, foreign.semanticGeneration))
+        self.assertFalse(context.containsDirectMobject(local))
         context.beginLiveExecution(1)
         self.assertIs(engine_call(context.requiresLiveMutationRouting), True)
         before = snapshot(context)
@@ -73,6 +74,11 @@ class WasmErrorProjectionTests(unittest.TestCase):
         self.assertEqual(snapshot(context), before)
         engine_call(context.bindMobject, "0", local)
         self.assertTrue(context.containsMobject(local))
+        self.assertTrue(context.containsDirectMobject(local))
+        with self.assertRaises(NoonForeignHandleError) as caught:
+            engine_call(context.containsDirectMobject, foreign)
+        self.assert_diagnostic(caught.exception, "foreign_handle")
+        self.assertEqual(caught.exception.code, "authoring.foreign_store")
         self.assertEqual(list(other.rootMembershipKeys()), [])
 
     def test_stale_generation_preserves_cause_without_freeing_js_wrapper(self):

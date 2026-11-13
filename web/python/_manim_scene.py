@@ -1801,7 +1801,7 @@ def _reconcile_fade_membership(
     if direction != "out":
         return
     context = _context(scene)
-    if bool(engine_call(context.liveContainsMobject, getattr(target, "_semantic_handle"), operation="Scene.membership")):
+    if bool(engine_call(context.containsDirectMobject, getattr(target, "_semantic_handle"), operation="Scene.membership")):
         raise RuntimeError("completed FadeOut still belongs to the canonical Scene")
     if target._scene is not scene:
         raise RuntimeError("FadeOut wrapper binding changed before completion")
