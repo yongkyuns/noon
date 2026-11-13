@@ -333,15 +333,47 @@ impl Scene {
     /// reject the whole edit before any addressed leaf changes. Repeated aliases
     /// are translated once by the shared semantic traversal.
     pub fn shift(&mut self, object: &Mobject, delta: Vec2) -> Result<(), AuthoringError> {
+        self.shift_3d(
+            object,
+            SemanticVec3::new(f64::from(delta.x), f64::from(delta.y), 0.0),
+        )
+    }
+
+    /// Translate an object's own content and unique descendants in three dimensions.
+    pub fn shift_3d(
+        &mut self,
+        object: &Mobject,
+        delta: SemanticVec3,
+    ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
+        if self.running_execution().is_some() {
+            if !delta.is_finite() {
+                let mut translation = object.state()?.transform.translation;
+                translation.x += delta.x;
+                translation.y += delta.y;
+                translation.z += delta.z;
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.set_property(
+                    object.node_id(),
+                    noon_core::SemanticObjectProperty::Translation,
+                    translation,
+                );
+                return self.apply_semantic_transaction(transaction).map(|_| ());
+            }
+            return self.with_running_execution(|store, root, execution| {
+                crate::family_layout::publish_shift_root(
+                    store,
+                    root,
+                    execution,
+                    object.node_id(),
+                    delta,
+                )
+                .map(|_| ())
+            });
+        }
         let transaction = {
             let store = self.integration_store().borrow();
-            FamilyTranslation::begin_3d(
-                &store,
-                object.node_id(),
-                SemanticVec3::new(f64::from(delta.x), f64::from(delta.y), 0.0),
-            )?
-            .transaction(&store)?
+            FamilyTranslation::begin_3d(&store, object.node_id(), delta)?.transaction(&store)?
         };
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
