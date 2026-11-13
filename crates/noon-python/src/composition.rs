@@ -65,8 +65,16 @@ impl DissolveTarget {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum FamilyTransformKind {
+    Transform,
+    MethodTarget,
+    MatchShape,
+    MatchSource,
+}
+
 #[derive(Clone)]
-pub(crate) enum Child {
+enum Child {
     Transform {
         source: Mobject,
         target: Mobject,
@@ -77,7 +85,7 @@ pub(crate) enum Child {
     FamilyTransform {
         source: noon::MobjectFamily,
         target: noon::MobjectFamily,
-        method: bool,
+        kind: FamilyTransformKind,
         options: AnimationOptions,
     },
     Create(Mobject, AnimationOptions),
@@ -181,23 +189,30 @@ impl Child {
             Self::FamilyTransform {
                 source,
                 target,
-                method,
+                kind,
                 options,
-            } => {
-                if *method {
-                    Request::FamilyMethodTargetTo {
-                        source,
-                        target_state: target,
-                        options: *options,
-                    }
-                } else {
-                    Request::FamilyTransformTo {
-                        source,
-                        target_state: target,
-                        options: *options,
-                    }
-                }
-            }
+            } => match kind {
+                FamilyTransformKind::Transform => Request::FamilyTransformTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+                FamilyTransformKind::MethodTarget => Request::FamilyMethodTargetTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+                FamilyTransformKind::MatchShape => Request::MatchingFamilyTransformTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+                FamilyTransformKind::MatchSource => Request::MatchingSourceFamilyTransformTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+            },
             Self::Create(target, options) => Request::Create {
                 target,
                 options: *options,
@@ -368,11 +383,41 @@ pub struct Composition {
     pub(crate) kind: Kind,
     pub(crate) options: AnimationOptions,
     pub(crate) play_options: AnimationOptions,
-    pub(crate) children: Vec<Child>,
+    children: Vec<Child>,
     // Wrapper provenance for newly entered objects; membership stays in the Rust request.
     pub(crate) bindings: Vec<Mobject>,
 }
 impl Composition {
+    fn push_family_transform(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        kind: FamilyTransformKind,
+        options: AnimationOptions,
+    ) {
+        self.children.push(Child::FamilyTransform {
+            source: source.family.clone(),
+            target: target.family.clone(),
+            kind,
+            options,
+        });
+    }
+
+    fn family_transform_options(
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<AnimationOptions> {
+        Ok(AnimationOptions {
+            run_time: duration,
+            rate_func: easing.map(rate).transpose()?,
+            lag_ratio: lag,
+            path_arc: arc,
+            ..AnimationOptions::new()
+        })
+    }
+
     pub(crate) fn new(
         kind: &str,
         duration: Option<f64>,
@@ -1184,18 +1229,12 @@ impl Composition {
         lag: Option<f64>,
         arc: Option<f64>,
     ) -> PyResult<()> {
-        self.children.push(Child::FamilyTransform {
-            source: source.family.clone(),
-            target: target.family.clone(),
-            method: false,
-            options: AnimationOptions {
-                run_time: duration,
-                rate_func: easing.map(rate).transpose()?,
-                lag_ratio: lag,
-                path_arc: arc,
-                ..AnimationOptions::new()
-            },
-        });
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::Transform,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
         Ok(())
     }
     #[pyo3(name = "appendFamilyMethodTargetTo")]
@@ -1208,11 +1247,48 @@ impl Composition {
         lag: Option<f64>,
         arc: Option<f64>,
     ) -> PyResult<()> {
-        self.family_transform(source, target, duration, easing, lag, arc)?;
-        let Some(Child::FamilyTransform { method, .. }) = self.children.last_mut() else {
-            unreachable!("family target append always stages one family child");
-        };
-        *method = true;
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::MethodTarget,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
+        Ok(())
+    }
+    #[pyo3(name = "appendMatchingFamilyTransformTo")]
+    fn matching_family_transform(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<()> {
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::MatchShape,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
+        Ok(())
+    }
+    #[pyo3(name = "appendMatchingSourceFamilyTransformTo")]
+    fn matching_source_family_transform(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<()> {
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::MatchSource,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
         Ok(())
     }
     #[pyo3(name = "appendTransformTo")]

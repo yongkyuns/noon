@@ -2480,7 +2480,12 @@ impl Context {
         Ok(None)
     }
     #[pyo3(name = "containsMobject")]
-    fn contains(&mut self, target: &MobjectHandle) -> PyResult<bool> {
+    fn contains(&self, target: &MobjectHandle) -> PyResult<bool> {
+        self.require_active()?;
+        self.scene.contains(&target.handle).map_err(engine_error)
+    }
+    #[pyo3(name = "liveContainsMobject")]
+    fn live_contains(&self, target: &MobjectHandle) -> PyResult<bool> {
         self.require_active()?;
         self.same_store(target)?;
         if self.has_execution() {
@@ -2490,10 +2495,6 @@ impl Context {
         } else {
             self.scene.contains(&target.handle).map_err(engine_error)
         }
-    }
-    #[pyo3(name = "liveContainsMobject")]
-    fn live_contains(&mut self, target: &MobjectHandle) -> PyResult<bool> {
-        self.contains(target)
     }
     #[pyo3(name = "rootMembershipKeys")]
     fn membership(&self) -> PyResult<Vec<String>> {
