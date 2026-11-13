@@ -2823,17 +2823,7 @@ def _group_layout_observation(value: _compat.Group):
 
 
 def _all_points_observation(value: _base.Mobject):
-    if _is_shared_family(value):
-        family = value._semantic_family_handle
-        context = _group_live_layout_context(value)
-        if context is not None:
-            return engine_call(context.queryFamilyAllPoints3D, family)
-        return engine_call(family.allPoints3D)
-    return _typed_manim_observation(
-        value,
-        "allPoints3D",
-        "queryMobjectAllPoints3D",
-    )
+    return _point_query_observation(value, "AllPoints3D")
 
 
 def _point_array_observation(value: _base.Mobject):
@@ -2843,17 +2833,7 @@ def _point_array_observation(value: _base.Mobject):
 
 def _point_reduction_tree_observation(value: _base.Mobject):
     """Return Rust-owned family nesting and per-object effective point arrays."""
-    if not _is_shared_family(value):
-        return _typed_manim_observation(
-            value,
-            "pointReductionTree",
-            "queryMobjectPointReductionTree",
-        )
-    family = value._semantic_family_handle
-    context = _group_live_layout_context(value)
-    if context is not None:
-        return engine_call(context.queryFamilyPointReductionTree, family)
-    return engine_call(family.pointReductionTree)
+    return _point_query_observation(value, "PointReductionTree")
 
 
 def _family_point_count_observation(value: _base.Mobject) -> int | None:
@@ -2907,37 +2887,14 @@ def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):
             dim,
             key,
         )
-    if _is_shared_family(value):
-        family = value._semantic_family_handle
-        context = _group_live_layout_context(value)
-        if context is not None:
-            return engine_call(context.queryFamilyExtremumAlongDim, family, dim, key)
-        return engine_call(family.extremumAlongDim, dim, key)
-
-    semantic_handle = getattr(value, "_semantic_handle", None)
-    if semantic_handle is None:
-        return None
-    if not bool(getattr(value, "_semantic_handle_fresh", False)):
-        raise NotImplementedError("typed Mobject observation requires a valid semantic handle")
-    if _is_bound(value):
-        context = getattr(value._scene, "_canonical_authoring_context", None)
-        query = getattr(context, "queryMobjectExtremumAlongDim", None)
-        if query is None:
-            raise NotImplementedError(
-                "typed Mobject observation is unavailable in this authoring phase"
-            )
-        return engine_call(query, semantic_handle, dim, key)
-    handle = _handle_for(value)
-    if handle is None:
-        raise NotImplementedError("typed Mobject observation is unavailable in this authoring phase")
-    return engine_call(handle.extremumAlongDim, dim, key)
+    return _point_query_observation(value, "ExtremumAlongDim", dim, key)
 
 
 def _point_query_observation(value: _base.Mobject, operation: str, *arguments):
     handle_method = operation[0].lower() + operation[1:]
     if _is_shared_family(value):
         family = value._semantic_family_handle
-        context = _group_live_layout_context(value)
+        context = _group_live_layout_context(value, include_setup=True)
         if context is not None:
             return engine_call(
                 getattr(context, f"queryFamily{operation}"),
@@ -3026,19 +2983,6 @@ def _vector_boundary_points_observation(value: _base.Mobject):
 
 def _path_boundary_points_observation(value: _base.Mobject):
     return _point_query_observation(value, "PathBoundaryPoints3D")
-
-
-def _path_boundary_extremum_along_dim_observation(
-    value: _base.Mobject,
-    dim: int,
-    key: float,
-):
-    return _point_query_observation(
-        value,
-        "PathBoundaryExtremumAlongDim",
-        dim,
-        key,
-    )
 
 
 def _length_over_dim_observation(value: _base.Mobject, dim: int):
