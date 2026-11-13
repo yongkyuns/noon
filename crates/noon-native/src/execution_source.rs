@@ -5,7 +5,7 @@ use noon::integration::{
 };
 use noon::{
     ExecutionSession, LiveContinuation, LiveProgram, PlaybackProgram, RustHostCallbackTable,
-    SceneExecution, ScriptError,
+    SceneExecution, ScriptError, TranslationDragError,
 };
 use noon_core::{
     Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,
@@ -306,9 +306,15 @@ impl NativeExecutionSource for StaticExecutionSource {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, NativeHostError> {
-        self.session
-            .submit_native_pointer_input(token, input)
-            .map_err(Into::into)
+        self.session.with_store_and_session(|store, session| {
+            session
+                .submit_translation_drag_input(store, token, input)
+                .map(|receipt| receipt.input)
+                .map_err(|error| match error {
+                    TranslationDragError::Input(error) => NativeHostError::Input(error),
+                    error => NativeHostError::TranslationDrag(error),
+                })
+        })
     }
 
     fn set_native_state_input(

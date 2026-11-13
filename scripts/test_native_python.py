@@ -101,6 +101,19 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_translation_drag_gallery_prepares_its_authored_endpoint(self):
+        path = ROOT / "web/python/examples/showcase_translation_drag.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        try:
+            self.assertAlmostEqual(view.duration, 2.6)
+            with self.assertRaisesRegex(RuntimeError, "authored endpoint"):
+                view.capture(time=0.0, width=320, height=180)
+            pixels = view.capture(time=2.6, width=320, height=180)
+            self.assertGreater(len(set(pixels)), 16)
+        finally:
+            view.close()
+
     @unittest.skipUnless(
         os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
         "requires an explicit native TeX compiler and BaKoMa font profile",

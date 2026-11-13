@@ -248,6 +248,8 @@ pub struct Context {
     pub(crate) scene: Scene,
     // Host binding provenance only; membership and object state stay in Rust Scene.
     bound_ids: HashSet<noon_core::SemanticNodeId>,
+    // Pointer policy declared before the first segment installs the session.
+    drag_targets: Vec<noon_core::SemanticNodeId>,
     pub(crate) segment: Option<ExecutionSegment>,
     pub(crate) terminal: bool,
     pub(crate) sample_hz: f64,
@@ -269,6 +271,7 @@ impl Context {
         Self {
             scene,
             bound_ids: HashSet::new(),
+            drag_targets: Vec::new(),
             segment: None,
             terminal: false,
             sample_hz: 60.0,
@@ -306,7 +309,11 @@ impl Context {
             .map_err(|e| engine_error(e.to_string()))?;
         session.require_effect_resource_preparation();
         // Predeclared audio uses the immutable timeline for preview and export.
-        if self.retain_history && !session.has_audio() {
+        if !self.drag_targets.is_empty() {
+            session
+                .set_translation_drag_targets(self.drag_targets.iter().copied())
+                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+        } else if self.retain_history && !session.has_audio() {
             session
                 .begin_replay_retention(Default::default())
                 .map_err(|e| engine_error(e.to_string()))?;
@@ -316,7 +323,9 @@ impl Context {
 
     fn attach_session(&mut self, session: ExecutionSession) -> PyResult<()> {
         scene_execution::attach(&mut self.scene, session)
-            .map_err(|error| engine_error(error.to_string()))
+            .map_err(|error| engine_error(error.to_string()))?;
+        self.drag_targets.clear();
+        Ok(())
     }
 
     fn with_bootstrapped_live<T>(
@@ -340,7 +349,15 @@ impl Context {
         }
         let (_, _, session) = scene_execution::parts_mut(&mut self.scene)
             .expect("viewer bootstrap installed execution");
-        if session.replay_scope_active() {
+        let interactive = session.has_translation_drag_targets();
+        if interactive {
+            if session.has_required_callbacks() || session.pending_callback_token().is_some() {
+                return Err(engine_error(
+                    "native translation drag requires completed source without required callbacks",
+                ));
+            }
+            session.discard_replay_retention();
+        } else if session.replay_scope_active() {
             session.seal_replay_for_viewer().map_err(|error| {
                 engine_error(noon::integration::AuthoringFailure::new(
                     "unsupported_operation",
@@ -364,9 +381,11 @@ impl Context {
         let mut execution = scene
             .into_execution()
             .map_err(|e| engine_error(e.to_string()))?;
-        execution
-            .seek(0.0)
-            .map_err(|e| engine_error(e.to_string()))?;
+        if !interactive {
+            execution
+                .seek(0.0)
+                .map_err(|e| engine_error(e.to_string()))?;
+        }
         Ok(execution)
     }
 
@@ -2561,6 +2580,40 @@ impl Context {
 
     fn prepare_view(&mut self) -> PyResult<crate::viewer::PreparedScene> {
         self.prepare_viewer().map(crate::viewer::PreparedScene::new)
+    }
+
+    #[pyo3(name = "setTranslationDragTargets")]
+    fn set_translation_drag_targets(&mut self, batch: &MembershipBatch) -> PyResult<()> {
+        self.available()?;
+        let mut nodes = Vec::new();
+        let mut seen = HashSet::new();
+        for target in batch.add_targets()? {
+            let MobjectTarget::Object(object) = target else {
+                return Err(engine_error("translation drag requires leaf mobjects"));
+            };
+            if !Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
+                return Err(engine_error(noon::AuthoringError::ForeignStore));
+            }
+            object.validate().map_err(engine_error)?;
+            let node = object.node_id();
+            if !self.bound_ids.contains(&node) {
+                return Err(engine_error(
+                    "translation drag target is not bound to this canonical Scene",
+                ));
+            }
+            if !seen.insert(node) {
+                return Err(engine_error("translation drag targets must be unique"));
+            }
+            nodes.push(node);
+        }
+        if let Some((_, _, session)) = scene_execution::parts_mut(&mut self.scene) {
+            session
+                .set_translation_drag_targets(nodes)
+                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+        } else {
+            self.drag_targets = nodes;
+        }
+        Ok(())
     }
     #[pyo3(name = "requiresLiveMutationRouting")]
     fn requires_live_mutation_routing(&self) -> PyResult<bool> {
