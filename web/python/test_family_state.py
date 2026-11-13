@@ -28,10 +28,10 @@ class FamilyStateTests(unittest.TestCase):
         target = identity_only_wrapper(compat.Group)
         source._semantic_family_handle = object()
         target._semantic_family_handle = object()
-        context = SimpleNamespace(liveBecomeFamily=Mock())
+        context = SimpleNamespace(becomeFamily=Mock())
         with patch.object(handles, '_group_target_context', return_value=context):
             source.become(target, stretch=True)
-        context.liveBecomeFamily.assert_called_once_with(
+        context.becomeFamily.assert_called_once_with(
             source._semantic_family_handle, target._semantic_family_handle,
             False, False, False, True)
         with self.assertRaises(NotImplementedError):

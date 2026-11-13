@@ -320,7 +320,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 def liveShift(self, source, x, y):
                     self.live_calls.append(("shift", source, x, y))
 
-                def liveBecomeMobject(self, source, target, *flags):
+                def becomeMobject(self, source, target, *flags):
                     if self.transferred:
                         raise RuntimeError("live execution session is running in the semantic engine")
                     self.live_calls.append(("become", source, target, *flags))
@@ -381,7 +381,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             context.transferred = False
             live_calls = []
             context.liveShift = lambda target, x, y: live_calls.append((target, x, y))
-            context.liveTargetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
+            context.targetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
             square.shift(RIGHT)
             target = square.copy()
             target.shift(RIGHT)
@@ -416,12 +416,13 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             detached_peer = Square()
             detached_before_handle = detached_before_wait._semantic_handle
             detached_before_handle.calls.clear()
-            original_live_constructor_context = handles._live_constructor_context
-            handles._live_constructor_context = lambda kind="primitive": context
+            import _manim_reactive as reactive
+            original_current_scene = reactive._current_authoring_scene
+            reactive._current_authoring_scene = lambda: scene
             try:
                 detached_before_wait.become(detached_peer)
             finally:
-                handles._live_constructor_context = original_live_constructor_context
+                reactive._current_authoring_scene = original_current_scene
             assert context.live_calls[-1] == (
                 "become", detached_before_handle, detached_peer._semantic_handle,
                 False, False, False, False,

@@ -600,7 +600,7 @@ def _copy_nested_mobject(
     context: object | None,
     memo: dict[int, object],
 ):
-    """Preserve wrapper-specific copy behavior under the parent's live owner."""
+    """Preserve wrapper-specific copy behavior under the parent's Scene."""
     existing = memo.get(id(value))
     if existing is not None:
         return existing
@@ -642,10 +642,7 @@ def _clone_mobject(
                 "canonical callback copies are unsupported while a callback phase is active"
             )
         raise RuntimeError("Mobject copy requires a current shared Rust semantic handle")
-    context = (_path_authoring_context(self) if subcurve is not None
-               else _live_mutation_context(self))
-    if context is None:
-        context = context_override
+    context = _object_authoring_context(self) or context_override or _path_authoring_context(self)
     clone = object.__new__(type(self))
     clone._raw = None
     clone._scene = None
@@ -656,7 +653,7 @@ def _clone_mobject(
             if context is not None else engine_call(handle.subcurve, *subcurve)
         )
     elif context is not None:
-        clone._semantic_handle = engine_call(context.liveTargetEditor, handle)
+        clone._semantic_handle = engine_call(context.targetEditor, handle)
     else:
         clone._semantic_handle = engine_call(handle.targetEditor if target_state else handle.cloneHandle)
     clone._semantic_handle_fresh = True
@@ -1257,11 +1254,12 @@ def _become(
         source = self._semantic_family_handle
         target = mobject._semantic_family_handle
         flags = (bool(match_height), bool(match_width), bool(match_center), bool(stretch))
-        context = _group_target_context(self) or _group_target_context(mobject)
+        context = (_group_target_context(self, include_setup=True)
+                   or _group_target_context(mobject, include_setup=True))
         if context is None:
             engine_call(source.becomeFamily, target, *flags)
         else:
-            engine_call(context.liveBecomeFamily, source, target, *flags)
+            engine_call(context.becomeFamily, source, target, *flags)
         return self
 
     handle = _handle_for(self)
@@ -1273,17 +1271,9 @@ def _become(
             bool(match_center),
             bool(stretch),
         )
-        context = _live_mutation_context(self)
-        if context is None:
-            context = _live_mutation_context(mobject)
-        if context is None:
-            # A handle authored before live bootstrap may still be detached and
-            # therefore carry no wrapper-local context. Once a continuation is
-            # active, its store must only be mutated through that live session;
-            # Rust validates that both operands belong to the session's store.
-            context = _live_constructor_context("become")
+        context = _path_authoring_context(self, mobject)
         if context is not None:
-            engine_call(context.liveBecomeMobject, handle, other_handle, *flags)
+            engine_call(context.becomeMobject, handle, other_handle, *flags)
         else:
             engine_call(handle.becomeHandle, other_handle, *flags)
         return self
@@ -3669,7 +3659,7 @@ def _group_target_context(value: object, *, include_setup=False) -> object | Non
 def _group_copy_operation(
     self: _base.Mobject, *, cyclic_replace: bool, promote_own_points: bool = False
 ) -> _base.Mobject:
-    context = _group_target_context(self)
+    context = _group_target_context(self, include_setup=not promote_own_points)
 
     def excluded_fields(value):
         excluded = {
@@ -3700,13 +3690,13 @@ def _group_copy_operation(
         )
     elif cyclic_replace:
         copied = (
-            engine_call(context.liveCyclicReplaceTarget, self._semantic_family_handle, references)
+            engine_call(context.cyclicReplaceTarget, self._semantic_family_handle, references)
             if context is not None
             else engine_call(self._semantic_family_handle.cyclicReplaceTarget, references)
         )
     else:
         copied = (
-            _membership_call(self, context, "liveCopyFamily", "liveCopyMobjectFamily", "copyFamily", references)
+            _membership_call(self, context, "copyFamily", "copyMobjectFamily", "copyFamily", references)
         )
     for source, target in pairs:
         if _is_shared_family(source):

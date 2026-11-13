@@ -3496,26 +3496,15 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_target_editor(
-        &mut self,
-        source: &noon::Mobject,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
+    fn target_editor(&mut self, source: &noon::Mobject) -> Result<noon::Mobject, AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store()) {
             return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
                 .with_message("mobject belongs to another authoring store"));
         }
         source.validate().map_err(AuthoringFailure::from)?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => source.target_editor().map_err(AuthoringFailure::from),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .target_editor(source)
-                .map_err(AuthoringFailure::from_scene_capture),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        self.local_authoring_scene()?
+            .target_editor(source)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(test)]
@@ -3625,7 +3614,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_become_mobject(
+    fn become_mobject(
         &mut self,
         target: &noon::Mobject,
         other: &noon::Mobject,
@@ -3639,20 +3628,10 @@ impl CanonicalAuthoringScene {
                     ));
             }
         }
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .become_mobject(target, other, options)
-                .map(|_| ())
-                .map_err(AuthoringFailure::from_scene_capture),
-            PlayerOwnership::Unstarted => {
-                Err("live become requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        self.local_authoring_scene()?
+            .become_mobject(target, other, options)
+            .map(|_| ())
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -9343,14 +9322,14 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveTargetEditor)]
-        pub fn live_target_editor(
+        #[wasm_bindgen(js_name = targetEditor)]
+        pub fn target_editor(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-            source.id_in_store(self.inner.scene.integration_store(), "live target editor")?;
+            source.id_in_store(self.inner.scene.integration_store(), "scene target editor")?;
             self.inner
-                .live_target_editor(source.semantic_mobject())
+                .target_editor(source.semantic_mobject())
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
@@ -9393,18 +9372,17 @@ mod wasm {
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        /// Copy the complete family through one coherent live publication.
-        #[wasm_bindgen(js_name = liveCopyFamily)]
-        pub fn live_copy_family(
+        /// Copy a family through the owning Scene publication.
+        #[wasm_bindgen(js_name = copyFamily)]
+        pub fn copy_family(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             let source = source.semantic_family()?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .copy_family_with_references(
                     &source,
                     &references.copy_references().map_err(typed_js_error)?,
@@ -9413,17 +9391,16 @@ mod wasm {
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = liveCyclicReplaceTarget)]
-        pub fn live_cyclic_replace_target(
+        #[wasm_bindgen(js_name = cyclicReplaceTarget)]
+        pub fn cyclic_replace_target(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             let source = source.semantic_family()?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .cyclic_replace_target_with_references(
                     &source,
                     &references.copy_references().map_err(typed_js_error)?,
@@ -9432,8 +9409,8 @@ mod wasm {
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = liveBecomeFamily)]
-        pub fn live_become_family(
+        #[wasm_bindgen(js_name = becomeFamily)]
+        pub fn become_family(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
@@ -9443,9 +9420,8 @@ mod wasm {
             stretch: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .become_family(
                     &source.semantic_family()?,
                     &target.semantic_family()?,
@@ -10183,8 +10159,8 @@ mod wasm {
         }
 
         /// Replace one object's content and presentation through the shared semantic owner.
-        #[wasm_bindgen(js_name = liveBecomeMobject)]
-        pub fn live_become_mobject(
+        #[wasm_bindgen(js_name = becomeMobject)]
+        pub fn become_mobject(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             other: &crate::WasmAuthoringMobjectHandle,
@@ -10194,7 +10170,7 @@ mod wasm {
             stretch: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .live_become_mobject(
+                .become_mobject(
                     target.semantic_mobject(),
                     other.semantic_mobject(),
                     noon::ManimBecomeOptions {
@@ -11537,16 +11513,15 @@ mod wasm {
                 .replace_members((&family).into(), &members)
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
-        #[wasm_bindgen(js_name = liveCopyMobjectFamily)]
-        pub fn live_copy_mobject_family(
+        #[wasm_bindgen(js_name = copyMobjectFamily)]
+        pub fn copy_mobject_family(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .copy_mobject_with_references(
                     source.semantic_mobject(),
                     &references.copy_references().map_err(typed_js_error)?,
@@ -13488,7 +13463,7 @@ mod tests {
             .unwrap();
         assert_eq!(context.ordinary_wait(0.3).unwrap(), 0.3);
         // New detached state must publish through the active session as well.
-        let collision = context.live_target_editor(&anchor).unwrap();
+        let collision = context.target_editor(&anchor).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
             .live_add_mobject(ObjectId::new(0), &collision)
@@ -13866,7 +13841,7 @@ mod tests {
             .unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
 
-        let mut target = context.live_target_editor(&circle).unwrap();
+        let mut target = context.target_editor(&circle).unwrap();
         target.set_translation(2.0, -1.0).unwrap();
 
         assert!(context.player_ownership.is_unstarted());
@@ -13897,7 +13872,7 @@ mod tests {
         let id = source.node_id();
         let target_before = target.state().unwrap();
         context
-            .live_become_mobject(
+            .become_mobject(
                 &source,
                 &target,
                 noon::ManimBecomeOptions {
@@ -13916,7 +13891,7 @@ mod tests {
         let revision = context.scene.integration_store().borrow().scene_revision();
         let before = source.state().unwrap();
         let error = context
-            .live_become_mobject(&source, &target, Default::default())
+            .become_mobject(&source, &target, Default::default())
             .unwrap_err();
         assert_eq!(
             (error.category, error.code),
@@ -13929,11 +13904,11 @@ mod tests {
         assert_eq!(source.state().unwrap(), before);
         context.return_execution_player(handed_off).unwrap();
         context
-            .live_become_mobject(&source, &target, Default::default())
+            .become_mobject(&source, &target, Default::default())
             .unwrap();
         assert_eq!(source.center().unwrap(), (3.0, -1.0));
         assert_eq!(context.live_execution_ownership(), "returned");
-        context.live_target_editor(&source).unwrap();
+        context.target_editor(&source).unwrap();
     }
 
     #[test]
@@ -14106,7 +14081,7 @@ mod tests {
         assert_eq!(family.own_color().unwrap(), noon::Color::GREEN);
         assert_eq!(child.state().unwrap(), before);
         assert_eq!(context.scene.revision(), revision.checked_next().unwrap());
-        context.live_target_editor(&child).unwrap();
+        context.target_editor(&child).unwrap();
         let revision = context.scene.revision();
         assert!(context
             .live_family_with_color(
@@ -14125,7 +14100,7 @@ mod tests {
         let circle = context.scene.circle(0.4).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         context.live_player(1.0).unwrap();
-        let target = context.live_target_editor(&circle).unwrap();
+        let target = context.target_editor(&circle).unwrap();
         let family = context
             .live_family(&[noon::MobjectTarget::Object(&target)], 0.0)
             .unwrap();
@@ -14152,7 +14127,7 @@ mod tests {
         );
         // Another owner-mediated mutation remains valid after both publications
         // and the rejected foreign member: no stale execution revision is hidden.
-        context.live_target_editor(&circle).unwrap();
+        context.target_editor(&circle).unwrap();
     }
 
     #[test]
@@ -14171,7 +14146,7 @@ mod tests {
             bound_transform_child(&anchor, first_target.clone(), options),
         )
         .unwrap();
-        let second_target = context.live_target_editor(&anchor).unwrap();
+        let second_target = context.target_editor(&anchor).unwrap();
         context
             .active_live_player()
             .unwrap()
@@ -14399,7 +14374,7 @@ mod tests {
         let player = context.take_execution_player(1.0, 17).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
 
-        assert!(context.live_target_editor(&circle).is_err());
+        assert!(context.target_editor(&circle).is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
@@ -14407,7 +14382,7 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "transferred");
 
         context.return_execution_player(player).unwrap();
-        let target = context.live_target_editor(&circle).unwrap();
+        let target = context.target_editor(&circle).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
         assert!(target.validate().is_ok());
     }
@@ -14464,7 +14439,7 @@ mod tests {
         // Python's ordinary `Transform` creates this target after the runtime
         // exists. The target and its edit publish through that same runtime, so
         // the second activation neither rebuilds nor resets the live session.
-        let second_target = context.live_target_editor(&circle).unwrap();
+        let second_target = context.target_editor(&circle).unwrap();
         context
             .active_live_player()
             .unwrap()
@@ -14590,7 +14565,7 @@ mod tests {
         assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
         assert_eq!(context.identities.get(&label.node_id()), Some(&id));
 
-        let target = context.live_target_editor(&label).unwrap();
+        let target = context.target_editor(&label).unwrap();
         context
             .active_live_player()
             .unwrap()
@@ -17259,7 +17234,7 @@ mod tests {
             (2.0, -1.0, f64::from(0.8_f32), f64::from(0.8_f32))
         );
 
-        let next_target = context.live_target_editor(&circle).unwrap();
+        let next_target = context.target_editor(&circle).unwrap();
         context
             .active_live_player()
             .unwrap()

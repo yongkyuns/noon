@@ -519,7 +519,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls: list[object] = []
 
-            def liveTargetEditor(self, handle: object) -> object:
+            def targetEditor(self, handle: object) -> object:
                 self.calls.append(handle)
                 return target_handle
 

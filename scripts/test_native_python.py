@@ -45,6 +45,7 @@ class NativePythonTests(unittest.TestCase):
                      "showcase_editorial_cover", "live_affine_animation", "live_affine_completion",
                      "live_masked_placement", "ordinary_family_placement",
                      "live_semantic_scene", "live_content_switch", "ordinary_become_semantics",
+                     "manim_parity_cyclic_replace",
                      "shader_time", "showcase_wave_interference", "showcase_shader_material",
                      "noon_spatial_surface_lighting", "showcase_spatial_scene", "noon_spatial_three_d_axes",
                      "manim_example_three_d_camera_rotation", "manim_example_three_d_camera_illusion_rotation",

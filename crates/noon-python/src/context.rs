@@ -2968,7 +2968,7 @@ impl Context {
         self.promote_own_points((&target.handle).into(), references)
     }
 
-    #[pyo3(name = "liveCopyFamily")]
+    #[pyo3(name = "copyFamily")]
     fn copy_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -2979,11 +2979,22 @@ impl Context {
         if references.kind != "add" {
             return Err(engine_error("family copy references require an add batch"));
         }
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .copy_family_with_references(&target.family, &references.targets())
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+    #[pyo3(name = "cyclicReplaceTarget")]
+    fn cyclic_replace_target(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.available()?;
+        self.scene
+            .cyclic_replace_target_with_references(&target.family, &references.add_targets()?)
             .map(|copied| crate::family::FamilyCopy {
                 copied: copied.into_entry_copy(),
             })
@@ -3065,7 +3076,7 @@ impl Context {
         self.edit_running_scene(|scene| scene.invert_family_members(&target.family, recursive))
     }
 
-    #[pyo3(name = "liveCopyMobjectFamily")]
+    #[pyo3(name = "copyMobjectFamily")]
     fn copy_mobject_family(
         &mut self,
         target: &MobjectHandle,
@@ -3073,7 +3084,6 @@ impl Context {
     ) -> PyResult<crate::family::FamilyCopy> {
         self.available()?;
         self.same_store(target)?;
-        self.require_execution()?;
         self.scene
             .copy_mobject_with_references(&target.handle, &references.add_targets()?)
             .map(|copied| crate::family::FamilyCopy {
@@ -3241,12 +3251,9 @@ impl Context {
             })
         }
     }
-    #[pyo3(name = "liveTargetEditor")]
+    #[pyo3(name = "targetEditor")]
     fn target(&mut self, source: &MobjectHandle) -> PyResult<MobjectHandle> {
         self.available()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .target_editor(&source.handle)
             .map(MobjectHandle::from_semantic_mobject)
@@ -4241,7 +4248,7 @@ impl Context {
         self.same_store(target)?;
         self.edit_running_scene(|scene| scene.remove(&target.handle))
     }
-    #[pyo3(name = "liveBecomeMobject")]
+    #[pyo3(name = "becomeMobject")]
     fn become_mobject(
         &mut self,
         target: &MobjectHandle,
@@ -4260,13 +4267,12 @@ impl Context {
             match_center,
             stretch,
         };
-        self.require_execution()?;
         self.scene
             .become_mobject(&target.handle, &source.handle, options)
             .map(|_| ())
             .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
-    #[pyo3(name = "liveBecomeFamily")]
+    #[pyo3(name = "becomeFamily")]
     fn become_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -4279,7 +4285,6 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.same_family_store(source)?;
-        self.require_execution()?;
         self.scene
             .become_family(
                 &target.family,
