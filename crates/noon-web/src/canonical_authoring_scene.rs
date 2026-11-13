@@ -3702,19 +3702,16 @@ impl CanonicalAuthoringScene {
         &mut self,
         options: noon::ManimArrowOptions,
     ) -> Result<noon::ManimArrow, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .manim_arrow(options)
-                .map_err(|error| noon::LiveSessionError::from(error).into()),
-            PlayerOwnership::Unstarted => {
-                Err("live Arrow construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .manim_arrow(options)
+            .map_err(|error| {
+                if running {
+                    noon::LiveSessionError::from(error).into()
+                } else {
+                    error.into()
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -4209,15 +4206,15 @@ impl CanonicalAuthoringScene {
         factor: f64,
         scale_tips: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.active_live_player()?
-            .scene_mut()
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
             .scale_arrow(arrow, factor, scale_tips)
             .map_err(|error| match error {
-                noon::ArrowScaleError::Authoring(noon::AuthoringError::ForeignStore) => {
+                noon::ArrowScaleError::Authoring(noon::AuthoringError::ForeignStore) if running => {
                     noon::LiveSessionError::ForeignMobjectStore.into()
                 }
                 noon::ArrowScaleError::Authoring(error) => {
-                    AuthoringFailure::from_scene_mutation(error, true)
+                    AuthoringFailure::from_scene_mutation(error, running)
                 }
                 other => AuthoringFailure::unclassified("live.unclassified", &other),
             })

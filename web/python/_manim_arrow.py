@@ -213,7 +213,7 @@ def _create(
 ) -> None:
     if _create_arrow_handle is None:
         raise RuntimeError("Arrow construction requires the shared Rust authoring host")
-    context = _shared._live_constructor_context("Arrow")
+    context = _shared._live_constructor_context("Arrow", allow_unstarted=True)
     _apply_constructor_options(options, kwargs)
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
@@ -320,7 +320,7 @@ class Arrow(_compat.Group):
             raise NotImplementedError(
                 f"Arrow.scale pivot option(s) are not yet shared Rust semantics: {unknown}"
             )
-        live_context = _shared._group_live_layout_context(self)
+        live_context = _shared._group_live_layout_context(self, include_setup=True)
         handle = getattr(self, "_semantic_arrow_handle", None)
         if handle is None:
             raise RuntimeError("Arrow.scale requires the shared Rust authoring host")

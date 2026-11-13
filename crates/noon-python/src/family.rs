@@ -41,6 +41,25 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    fn fade(&self, darkness: f64) -> PyResult<()> {
+        self.family.fade(darkness).map_err(engine_error)
+    }
+
+    #[pyo3(name = "applyMatrix")]
+    fn apply_matrix(
+        &self,
+        values: Vec<f64>,
+        rows: usize,
+        columns: usize,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.family
+            .apply_matrix(&values, rows, columns, x, y)
+            .map(|_| ())
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "becomeFamily")]
     fn become_family(
         &self,
@@ -1158,6 +1177,13 @@ pub struct FamilyCopy {
 }
 #[pymethods]
 impl FamilyCopy {
+    #[pyo3(name = "arrowFor")]
+    fn arrow_for(&self, source: &crate::arrow::ArrowHandle) -> PyResult<crate::arrow::ArrowHandle> {
+        self.copied
+            .rebind_manim_arrow(&source.0)
+            .map(crate::arrow::ArrowHandle)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "familyFor")]
     fn family_for(&self, source: &FamilyHandle) -> PyResult<FamilyHandle> {
         self.copied

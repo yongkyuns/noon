@@ -31,7 +31,7 @@ class NativePythonTests(unittest.TestCase):
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
                      "showcase_glass_lens", "showcase_camera_follows_path",
                      "ordinary_family_arrangement", "top_level_family_arrangement", "ordinary_family_grid",
-                     "ordinary_planar_affine", "ordinary_dimension_fitting",
+                     "ordinary_planar_affine", "ordinary_dimension_fitting", "ordinary_arrow_geometry",
                      "ordinary_circle_surround", "ordinary_family_replacement",
                      "tutorial_positioning", "tutorial_composition", "ordinary_value_tracker_continuation",
                      "ordinary_mixed_scalar_composition", "tutorial_value_tracker",
@@ -163,6 +163,23 @@ class Demo(Scene):
         family.shift(RIGHT)
         check(1)
         self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
+    def test_native_linear_transform_grows_and_rebuilds_vectors(self):
+        source = """from noon import *
+class Demo(LinearTransformationScene):
+    def __init__(self):
+        super().__init__(leave_ghost_vectors=True)
+
+    def construct(self):
+        vector = self.add_vector((2, 1), color=YELLOW)
+        assert tuple(vector.get_vector()) == (2, 1)
+        self.apply_matrix([[0, 1], [1, 0]], run_time=0.25)
+        assert tuple(vector.get_vector()) == (1, 2)
+        self.apply_matrix([[0, 1], [1, 0]], run_time=0.25)
+        assert tuple(vector.get_vector()) == (2, 1)
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)

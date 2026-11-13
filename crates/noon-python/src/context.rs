@@ -1663,6 +1663,54 @@ impl Context {
         Ok(())
     }
 
+    #[pyo3(name = "liveSetFamilyFade")]
+    fn fade_family(&mut self, target: &crate::family::FamilyHandle, darkness: f64) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| scene.fade_family(&target.family, darkness))
+    }
+
+    #[pyo3(name = "liveApplyMatrixFamily")]
+    fn apply_matrix_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+        rows: usize,
+        columns: usize,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.apply_matrix_to_family(&target.family, &values, rows, columns, x, y)
+        })
+    }
+
+    #[pyo3(name = "liveCreateManimArrow")]
+    fn create_arrow(
+        &mut self,
+        options: &crate::arrow::ArrowOptions,
+    ) -> PyResult<crate::arrow::ArrowHandle> {
+        self.available()?;
+        let running = self.has_execution();
+        self.scene
+            .manim_arrow(options.0.clone())
+            .map(crate::arrow::ArrowHandle)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[pyo3(name = "liveScaleArrow")]
+    fn scale_arrow(
+        &mut self,
+        arrow: &crate::arrow::ArrowHandle,
+        factor: f64,
+        scale_tips: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .scale_arrow(&arrow.0, factor, scale_tips)
+            .map_err(crate::arrow::scale_error)
+    }
+
     #[pyo3(name = "liveBindClickIndicate")]
     #[allow(clippy::too_many_arguments)]
     fn bind_click_indicate(

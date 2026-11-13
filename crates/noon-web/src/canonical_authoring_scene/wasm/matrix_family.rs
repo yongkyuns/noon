@@ -1,4 +1,4 @@
-//! Running pointwise family edits route through the active semantic session.
+//! Scene-owned pointwise family edits.
 
 use super::CanonicalAuthoringSceneContext;
 use crate::authoring_error::js_error;
@@ -19,18 +19,16 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<(), JsValue> {
         let family = handle.semantic_family()?;
         self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .scene_mut()
-            .apply_matrix_to_family(
-                &family,
-                &values,
-                rows as usize,
-                columns as usize,
-                about_x,
-                about_y,
-            )
-            .map_err(noon::LiveSessionError::from)
+            .place(|scene| {
+                scene.apply_matrix_to_family(
+                    &family,
+                    &values,
+                    rows as usize,
+                    columns as usize,
+                    about_x,
+                    about_y,
+                )
+            })
             .map_err(js_error)
     }
 }
