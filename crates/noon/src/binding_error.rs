@@ -165,12 +165,26 @@ impl From<&str> for AuthoringFailure {
 }
 
 impl AuthoringFailure {
+    /// Keep the existing host diagnostics for operations that capture effective state.
+    pub fn from_scene_capture(error: AuthoringError) -> Self {
+        match error {
+            AuthoringError::ExecutionCallback(cause) => {
+                Self::caused_by("live.callback", cause.to_string(), cause.into())
+            }
+            AuthoringError::ExecutionPublication(cause) => {
+                LiveSessionError::Publication(cause).into()
+            }
+            other => LiveSessionError::from(other).into(),
+        }
+    }
+
     /// Project a Scene mutation through the host's existing running error codes.
     pub fn from_scene_mutation(error: AuthoringError, running: bool) -> Self {
         if !running {
             return error.into();
         }
         match error {
+            error @ AuthoringError::ExecutionCallback(_) => return Self::from_scene_capture(error),
             AuthoringError::ExecutionPublication(error) => LiveSessionError::Publication(error),
             AuthoringError::ExecutionAnimation(error) => LiveSessionError::Activation(error),
             other => other.into(),
@@ -212,6 +226,9 @@ impl From<AuthoringError> for AuthoringFailure {
             }
             AuthoringError::Transaction(cause) => {
                 Self::caused_by("authoring.transaction", message, cause.into())
+            }
+            AuthoringError::ExecutionCallback(cause) => {
+                Self::caused_by("authoring.execution_callback", message, cause.into())
             }
             AuthoringError::ExecutionAnimation(cause) => Self::caused_by(
                 "authoring.execution_animation",
@@ -1031,7 +1048,6 @@ impl From<LiveSessionError> for AuthoringFailure {
                 | AuthoringError::InvalidClickActionDeclaration { .. }),
             ) => cause.into(),
             E::Authoring(cause) => Self::caused_by("live.authoring", message, cause.into()),
-            E::Callback(cause) => Self::caused_by("live.callback", message, cause.into()),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             E::Text(cause) => Self::caused_by("live.text", message, cause.into()),
             E::ForeignMobjectStore => Self::new("foreign_handle", "live.foreign_store", message),

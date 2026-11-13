@@ -37,7 +37,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let wait = session.live().wait_segment(0.1)?;
         session.live().advance_segment_to(wait, wait.end_time())?;
         session.live().complete_segment(wait)?;
-        assert!((session.live().effective_layout(&right_circle)?.width - 0.8).abs() < 1.0e-6);
+        assert!((session.scene().effective_layout(&right_circle)?.width - 0.8).abs() < 1.0e-6);
         session.scene_mut().surround_circle(
             &(&right_circle).into(),
             &(&right_target).into(),
@@ -45,8 +45,8 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             true,
             0.9,
         )?;
-        let left = session.live().effective_layout(&left_circle)?;
-        let right = session.live().effective_layout(&right_circle)?;
+        let left = session.scene().effective_layout(&left_circle)?;
+        let right = session.scene().effective_layout(&right_circle)?;
         assert!((left.width - 5.0_f64.sqrt() * 1.2).abs() < 1.0e-6);
         assert!((right.height / right.width - 0.5).abs() < 1.0e-6);
         let wait = session.live().wait_segment(0.1)?;

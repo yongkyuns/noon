@@ -245,7 +245,6 @@ impl Scene {
                 |node| {
                     let object = crate::Mobject::from_node(Rc::clone(store), node)?;
                     crate::effective_capture::capture_mobject_state(store, execution, &object)
-                        .map_err(crate::LiveSessionError::from)
                         .map_err(Into::into)
                 },
             )?
@@ -254,7 +253,6 @@ impl Scene {
             crate::path_editing::publish_running_path_edits(store, root, execution, prepared)
         })
         .map(|_| ())
-        .map_err(crate::LiveSessionError::from)
         .map_err(Into::into)
     }
 }

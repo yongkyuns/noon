@@ -787,7 +787,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .become_family(source, target, options)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -801,7 +801,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .become_mobject(target, other, options)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -960,7 +960,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .match_style(source, target)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_style(
@@ -1087,7 +1087,7 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .match_family_style(source, target)
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_own_color(
@@ -1400,7 +1400,7 @@ impl SemanticExecutionPlayer {
         self.source
             .scene_mut()
             .promote_own_points(source, references)
-            .map_err(AuthoringFailure::from)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -29,13 +29,13 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             marker.shift(right, center_y)?;
             scene.add_many(&[(&shape).into(), (&marker).into()])?;
         }
-        let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
-        assert_eq!(live.effective_layout(&empty)?.center, (0., 0.));
+        let mut execution = scene.into_execution()?;
+        assert_eq!(execution.scene().effective_layout(&empty)?.center, (0., 0.));
+        let mut live = execution.live();
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(execution)
     };
     build().map_err(|error| error.to_string())
 }

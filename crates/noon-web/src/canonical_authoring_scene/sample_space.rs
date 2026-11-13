@@ -50,7 +50,6 @@ fn sample_space_failure(error: noon::SampleSpaceError) -> AuthoringFailure {
         noon::SampleSpaceError::Authoring(error) => {
             AuthoringFailure::from_scene_mutation(error, true)
         }
-        noon::SampleSpaceError::Live(error) => error.into(),
         other => AuthoringFailure::unclassified("live.unclassified", &other),
     }
 }

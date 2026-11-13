@@ -428,7 +428,6 @@ pub enum LiveSessionError {
     ForeignMobjectStore,
     // The remaining animation-specific shape checks are migrated in R2b.
     Mobject(String),
-    Callback(crate::ExecutionSessionCallbackError),
     #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
     Text(crate::TextAuthoringError),
     Animation(String),
@@ -448,7 +447,6 @@ impl std::fmt::Display for LiveSessionError {
             }
             Self::Authoring(error) => error.fmt(formatter),
             Self::Mobject(error) => error.fmt(formatter),
-            Self::Callback(error) => error.fmt(formatter),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
@@ -466,7 +464,6 @@ impl std::error::Error for LiveSessionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Authoring(error) => Some(error),
-            Self::Callback(error) => Some(error),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             Self::Text(error) => Some(error),
             Self::Activation(error) => Some(error),
@@ -670,7 +667,7 @@ impl<'a> LiveSession<'a> {
 
     /// Read layout from own content and unique descendants at their coherent
     /// effective transforms. Work stays within the addressed root's scope.
-    pub(crate) fn effective_layout(
+    fn effective_layout(
         &self,
         mobject: &Mobject,
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
@@ -2183,7 +2180,7 @@ mod tests {
         };
         assert!(matches!(
             session.scene_mut().target_editor(&circle),
-            Err(LiveSessionError::Callback(
+            Err(crate::AuthoringError::ExecutionCallback(
                 crate::ExecutionSessionCallbackError::Pending(_)
             ))
         ));
@@ -2501,12 +2498,12 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
+        let mut execution = scene.into_execution().unwrap();
+        let mut live = execution.live();
         let segment = live.play_animation(&animation).unwrap();
         live.advance_segment_to(segment, 1.0).unwrap();
 
-        let layout = live.effective_layout(&circle).unwrap();
+        let layout = execution.scene().effective_layout(&circle).unwrap();
         assert_eq!(layout.center, (2.0, -1.0));
         assert_eq!((layout.width, layout.height), (2.0, 2.0));
     }
@@ -2521,7 +2518,7 @@ mod tests {
         let mut session = scene.into_execution().unwrap();
 
         assert_eq!(
-            session.live().effective_layout(&line).unwrap().center,
+            session.scene().effective_layout(&line).unwrap().center,
             (1.0, 0.0)
         );
         let result = session.scene_mut().move_to_point(&line, 5.0, -3.0).unwrap();
@@ -2537,7 +2534,7 @@ mod tests {
             SemanticVec3::new(4.0, -3.0, 0.0)
         );
         assert_eq!(
-            session.live().effective_layout(&line).unwrap().center,
+            session.scene().effective_layout(&line).unwrap().center,
             (5.0, -3.0)
         );
     }

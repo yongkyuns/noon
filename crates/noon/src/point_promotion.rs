@@ -5,8 +5,7 @@ use crate::{
         prepare_semantic_copy_with_root_membership, CopyRootMembership, PendingSemanticCopy,
     },
     path_editing::{prepare_object_edit, PathEdit, PreparedPathEdits},
-    AuthoringError, CompositeEntryHandle, LiveSessionError, Mobject, MobjectTarget, Scene,
-    SemanticCopy,
+    AuthoringError, CompositeEntryHandle, Mobject, MobjectTarget, Scene, SemanticCopy,
 };
 pub(crate) use alignment::alignment_side;
 pub use alignment::{PointAlignment, PointAlignmentSide};
@@ -127,14 +126,12 @@ impl Scene {
         &mut self,
         source: MobjectTarget<'_>,
         references: &[MobjectTarget<'_>],
-    ) -> Result<SemanticCopy<CompositeEntryHandle>, LiveSessionError> {
+    ) -> Result<SemanticCopy<CompositeEntryHandle>, AuthoringError> {
         let store = self.integration_store();
         source.require_store(store)?;
         self.require_effective_capture()?;
         let Some(execution) = self.running_execution() else {
-            return source
-                .promote_own_points_with_references(references)
-                .map_err(Into::into);
+            return source.promote_own_points_with_references(references);
         };
         let (prepared, pending) = prepare_point_promotion(
             source,
@@ -158,9 +155,7 @@ impl Scene {
             },
         )?;
         let result = self.publish_path_edits(prepared)?;
-        pending
-            .resolve(&result, CompositeEntryHandle::from_node)
-            .map_err(Into::into)
+        pending.resolve(&result, CompositeEntryHandle::from_node)
     }
 
     /// Align own-point presence by promoting the sole point-bearing operand.
@@ -170,14 +165,12 @@ impl Scene {
         right: MobjectTarget<'_>,
         left_references: &[MobjectTarget<'_>],
         right_references: &[MobjectTarget<'_>],
-    ) -> Result<Option<PointAlignment>, LiveSessionError> {
+    ) -> Result<Option<PointAlignment>, AuthoringError> {
         self.require_effective_capture()?;
         left.require_store(self.integration_store())?;
         right.require_store(self.integration_store())?;
         if self.running_execution().is_none() {
-            return left
-                .align_own_points_with_references(right, left_references, right_references)
-                .map_err(Into::into);
+            return left.align_own_points_with_references(right, left_references, right_references);
         }
         let count = |target| match target {
             MobjectTarget::Object(object) => self.effective_mobject_point_count(object),

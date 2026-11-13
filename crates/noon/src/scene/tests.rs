@@ -408,9 +408,8 @@ fn scene_point_matching_captures_effective_target_and_blocks_pending_publication
     scene.match_points(&source, &target).unwrap();
     assert!((source.center().unwrap().1 - 1.0).abs() < 1e-6);
     scene.owned_execution_mut().seek(2.0).unwrap();
-    let live = scene.owned_live();
-    assert!((live.effective_layout(&target).unwrap().center.1 - 2.0).abs() < 1e-6);
-    assert!((live.effective_layout(&source).unwrap().center.1 - 1.0).abs() < 1e-6);
+    assert!((scene.effective_layout(&target).unwrap().center.1 - 2.0).abs() < 1e-6);
+    assert!((scene.effective_layout(&source).unwrap().center.1 - 1.0).abs() < 1e-6);
 }
 
 #[test]

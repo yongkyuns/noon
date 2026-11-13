@@ -9,7 +9,7 @@ use crate::{
         layout_for_content, scale_state_about_center, stage_state_changes, state_center,
         validate_content,
     },
-    AuthoringError, LiveSessionError, Mobject, MobjectFamily, MobjectTarget, Scene,
+    AuthoringError, Mobject, MobjectFamily, MobjectTarget, Scene,
 };
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
@@ -703,7 +703,7 @@ impl Scene {
         object: &Mobject,
         other: &Mobject,
         options: ManimBecomeOptions,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         self.require_object(object)?;
         self.require_object(other)?;
         let execution = self.running_execution();
@@ -719,7 +719,7 @@ impl Scene {
             options,
             execution,
         )?;
-        Ok(self.publish_path_edits(prepared)?)
+        self.publish_path_edits(prepared)
     }
 
     /// Reconcile another family's presentation in one publication, reusing compatible members.
@@ -728,7 +728,7 @@ impl Scene {
         receiver: &MobjectFamily,
         other: &MobjectFamily,
         options: ManimBecomeOptions,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         MobjectTarget::from(receiver).require_store(self.integration_store())?;
         MobjectTarget::from(other).require_store(self.integration_store())?;
         let execution = self.running_execution();
@@ -736,7 +736,7 @@ impl Scene {
         let prepared = prepare_family_become(receiver, other, options, execution, |object| {
             self.capture_mobject_state(object)
         })?;
-        Ok(self.publish_path_edits(prepared)?)
+        self.publish_path_edits(prepared)
     }
 
     pub(crate) fn publish_path_edits(

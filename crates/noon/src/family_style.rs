@@ -8,7 +8,7 @@ use crate::{
         edit_stroke_opacity, edit_stroke_width, fade_factor, interpolate_manim_color,
         interpolate_manim_scalar, interpolate_manim_vmobject_style_values, PaintStyleEdit,
     },
-    Color, LiveSessionError, Mobject, MobjectFamily, MobjectTarget, Scene,
+    Color, Mobject, MobjectFamily, MobjectTarget, Scene,
 };
 use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticSheenDirection,
@@ -1308,21 +1308,21 @@ impl Scene {
         &mut self,
         source: &Mobject,
         target: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.require_object(source)?;
         self.require_object(target)?;
         self.require_effective_capture()?;
         let mut style = self.capture_mobject_state(source)?.style;
         let target = self.capture_mobject_state(target)?.style;
         crate::family_style::match_paint(&mut style, &target);
-        self.replace_style(source, style).map_err(Into::into)
+        self.replace_style(source, style)
     }
 
     pub fn match_family_style(
         &mut self,
         source: &MobjectFamily,
         target: &MobjectFamily,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.require_family_style_target(source)?;
         self.require_family_style_target(target)?;
         self.require_effective_capture()?;
@@ -1330,7 +1330,6 @@ impl Scene {
             self.capture_mobject_state(object).map(|state| state.style)
         })?;
         self.apply_semantic_transaction(transaction)
-            .map_err(Into::into)
     }
 
     /// Match a donor's effective RGB in one coherent family publication.

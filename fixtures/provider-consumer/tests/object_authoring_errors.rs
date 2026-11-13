@@ -7,10 +7,10 @@ use noon::integration::{
     SemanticSignalError,
 };
 use noon::{
-    AnimationOptions, AuthoringError, ExecutionSessionCallbackError, LayoutAnchor,
-    LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId,
-    SemanticObjectProperty, SemanticObjectState, SemanticVec3, StoredGeometry,
-    UnsupportedAuthoringOperation, Vec2, VectorPath,
+    AnimationOptions, AuthoringError, ExecutionSessionCallbackError, LayoutAnchor, Mobject,
+    MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId, SemanticObjectProperty,
+    SemanticObjectState, SemanticVec3, StoredGeometry, UnsupportedAuthoringOperation, Vec2,
+    VectorPath,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -310,7 +310,7 @@ fn pending_callback_capture_keeps_token_and_recovers_without_rebuilding() -> Tes
         running.scene_mut().copy_family(&family).unwrap_err(),
     ] {
         assert!(
-            matches!(&error, LiveSessionError::Callback(ExecutionSessionCallbackError::Pending(found)) if *found == token)
+            matches!(&error, AuthoringError::ExecutionCallback(ExecutionSessionCallbackError::Pending(found)) if *found == token)
         );
         assert!(error
             .source()

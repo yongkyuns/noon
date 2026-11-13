@@ -307,6 +307,8 @@ pub enum AuthoringError {
     Transaction(noon_core::SemanticMutationTransactionError),
     /// Scene-owned running authoring failed during execution publication.
     ExecutionPublication(crate::ExecutionSessionPublicationError),
+    /// Effective state capture was blocked by an ordered host callback phase.
+    ExecutionCallback(crate::ExecutionSessionCallbackError),
     /// Scene-owned running authoring failed while activating an execution operation.
     ///
     /// This keeps the exact runtime cause for operations such as live tracker
@@ -478,6 +480,7 @@ impl std::fmt::Display for AuthoringError {
             Self::Semantic(error) => error.fmt(f),
             Self::Transaction(error) => error.fmt(f),
             Self::ExecutionPublication(error) => error.fmt(f),
+            Self::ExecutionCallback(error) => error.fmt(f),
             Self::ExecutionAnimation(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
@@ -514,6 +517,7 @@ impl std::error::Error for AuthoringError {
             Self::Semantic(error) => Some(error),
             Self::Transaction(error) => Some(error),
             Self::ExecutionPublication(error) => Some(error),
+            Self::ExecutionCallback(error) => Some(error),
             Self::ExecutionAnimation(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),

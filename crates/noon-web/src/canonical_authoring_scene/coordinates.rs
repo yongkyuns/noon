@@ -66,7 +66,7 @@ impl CanonicalAuthoringScene {
                 values,
                 update_colors,
             )
-            .map_err(crate::plot_error::coordinate_failure)
+            .map_err(noon::integration::live_coordinate_publication_failure)
     }
 
     #[cfg(target_arch = "wasm32")]

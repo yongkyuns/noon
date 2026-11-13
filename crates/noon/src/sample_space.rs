@@ -46,7 +46,6 @@ pub struct SampleSpace {
 #[derive(Debug)]
 pub enum SampleSpaceError {
     Authoring(AuthoringError),
-    Live(crate::LiveSessionError),
     InvalidProbability,
     InvalidFamily,
 }
@@ -55,16 +54,10 @@ impl From<AuthoringError> for SampleSpaceError {
         Self::Authoring(value)
     }
 }
-impl From<crate::LiveSessionError> for SampleSpaceError {
-    fn from(value: crate::LiveSessionError) -> Self {
-        Self::Live(value)
-    }
-}
 impl std::fmt::Display for SampleSpaceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(e) => e.fmt(f),
-            Self::Live(e) => e.fmt(f),
             Self::InvalidProbability => {
                 f.write_str("probabilities must be finite, nonnegative, and sum to at most one")
             }

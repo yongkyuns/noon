@@ -74,8 +74,6 @@ pub enum GraphAuthoringError {
     StoreBorrowed,
     /// The live root has no authored graph declaration.
     MissingDeclaration(SemanticNodeId),
-    /// A graph operation could not publish through the active live session.
-    Live(crate::LiveSessionError),
     DuplicateVertexKey {
         vertex_index: usize,
     },
@@ -105,19 +103,12 @@ impl From<GraphTopologyError> for GraphAuthoringError {
     }
 }
 
-impl From<crate::LiveSessionError> for GraphAuthoringError {
-    fn from(value: crate::LiveSessionError) -> Self {
-        Self::Live(value)
-    }
-}
-
 impl std::fmt::Display for GraphAuthoringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Topology(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
-            Self::Live(error) => error.fmt(formatter),
             Self::StoreBorrowed => formatter.write_str("graph store is exclusively borrowed"),
             Self::MissingDeclaration(root) => write!(
                 formatter,
@@ -161,7 +152,6 @@ impl std::error::Error for GraphAuthoringError {
             Self::Authoring(error) => Some(error),
             Self::Topology(error) => Some(error),
             Self::Store(error) => Some(error),
-            Self::Live(error) => Some(error),
             _ => None,
         }
     }
