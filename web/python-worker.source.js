@@ -307,12 +307,12 @@ async function initializePyodide() {
       throw new Error(`${latexPreparationHint} before constructing BarChart`);
     }
     return context == null ? authoringStore.createLabeledBarChart(options, labels, latexCompiler)
-      : context.liveCreateLabeledBarChart(options, labels, latexCompiler);
+      : context.createLabeledBarChart(options, labels, latexCompiler);
   };
   self.noonBarChartLabels = (chart, size, buff, math, rgba, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing chart labels`);
     return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
-      : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
+      : context.barLabelFamily(chart, size, buff, math, rgba, latexCompiler);
   };
   self.noonNumberPlaneDecimalCoordinateLabelFamilies = (
     plane, xValues, automaticX, yValues, automaticY, xOptions, yOptions,

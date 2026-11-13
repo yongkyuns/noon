@@ -1115,7 +1115,7 @@ class PlottingAdapterTests(unittest.TestCase):
 
         with patch.object(plotting, "_bar_chart_options", Mock(return_value=options)) as make_options, \
              patch.object(plotting, "_create_bar_chart", Mock(return_value=chart)) as create_chart, \
-             patch.object(plotting._shared, "_live_constructor_context", return_value=None):
+             patch.object(plotting._shared, "_path_authoring_context", return_value=None):
             result = plotting.BarChart((1, 2))
 
         make_options.assert_called_once_with([1.0, 2.0], [], 0.0, 0.0)
@@ -1156,13 +1156,12 @@ class PlottingAdapterTests(unittest.TestCase):
 
         with patch.object(plotting, "_bar_chart_options", Mock(return_value=options)), \
              patch.object(plotting, "_create_bar_chart", Mock(return_value=chart)) as create_chart, \
-             patch.object(plotting._shared, "_live_constructor_context", return_value=context), \
-             patch.object(plotting, "_coordinate_context", return_value=context):
+             patch.object(plotting._shared, "_path_authoring_context", return_value=context):
             result = plotting.BarChart((1, 2))
             result.change_bar_values((3, 4), update_colors=False)
 
         create_chart.assert_called_once_with(options, unittest.mock.ANY, context)
-        context.liveChangeBarValues.assert_called_once_with(chart, [3.0, 4.0], False)
+        context.changeBarValues.assert_called_once_with(chart, [3.0, 4.0], False)
         chart.changeBarValues.assert_not_called()
 
     def test_bar_chart_copy_rebuilds_chart_and_child_wrappers_from_copied_family(self):
@@ -1194,7 +1193,7 @@ class PlottingAdapterTests(unittest.TestCase):
 
         with patch.object(plotting, "_bar_chart_options", Mock(return_value=Mock())), \
              patch.object(plotting, "_create_bar_chart", Mock(return_value=source_chart)), \
-             patch.object(plotting._shared, "_live_constructor_context", return_value=None):
+             patch.object(plotting._shared, "_path_authoring_context", return_value=None):
             source = plotting.BarChart((1, 2))
 
         copied_root = Mock()

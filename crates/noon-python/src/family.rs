@@ -48,6 +48,15 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "barChart")]
+    fn bar_chart(&self) -> PyResult<crate::bar_chart::BarChartHandle> {
+        noon::ManimBarChart::from_family(self.family.clone())
+            .map(crate::bar_chart::BarChartHandle)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "beginBrace")]
     fn begin_brace(
         &self,

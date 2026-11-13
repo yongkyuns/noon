@@ -257,6 +257,17 @@ class TableCellEdits(Scene):
         "requires an explicit native TeX compiler and BaKoMa font profile",
     )
     def test_numeric_scene_edits_preserve_text_size_and_rewind(self):
+        chart = ROOT / "web/python/examples/bar_chart.py"
+        source = chart.read_text() + """
+        await self.wait(0.1)
+        chart.change_bar_values([2, 1, -3, 1, -2])
+        assert chart.values == [2, 1, -3, 1, -2]
+        self.add(chart.get_bar_labels())
+        await self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source, filename=str(chart)))
+        close_scene(scene)
+
         variable = ROOT / "web/python/examples/variable.py"
         scene = asyncio.run(run_source(variable.read_text(), filename=str(variable)))
         try:

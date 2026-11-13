@@ -142,6 +142,14 @@ if hasattr(_native, "prepare_latex"):
     def noonCreateAuthoringLatexHandle(source, *arguments):
         return noonCreateAuthoringLatexStringsHandle([source], *arguments)
 
+    noonAuthoringBarChartOptions = _native.BarChartOptions
+
+    def noonCreateAuthoringBarChart(options, labels, context):
+        return _native.create_bar_chart(_arena(), options, labels, context)
+
+    def noonBarChartLabels(chart, size, buff, math, rgba, context):
+        return _native.bar_chart_labels(_arena(), chart, size, buff, math, rgba, context)
+
     noonMatrixFromFamily = _native.matrix_from_family
 
     def noonCreateAuthoringMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
