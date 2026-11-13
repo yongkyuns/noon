@@ -880,6 +880,14 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn local_authoring_scene(&mut self) -> Result<&mut noon::Scene, AuthoringFailure> {
+        if self.player_ownership.is_unstarted() {
+            return Ok(&mut self.scene);
+        }
+        Ok(self.active_live_player()?.scene_mut())
+    }
+
     /// Ordinary continuation declarations reuse an existing local lease as-is.
     /// Only the first declaration bootstraps a player; an explicit new run uses
     /// `live_player`/`prepare_execution_run` and owns any recovery transition.
@@ -4138,9 +4146,18 @@ impl CanonicalAuthoringScene {
         factor: f64,
         scale_tips: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.active_live_player()
-            .map_err(AuthoringFailure::from)?
-            .live_scale_arrow(arrow, factor, scale_tips)
+        self.active_live_player()?
+            .scene_mut()
+            .scale_arrow(arrow, factor, scale_tips)
+            .map_err(|error| match error {
+                noon::ArrowScaleError::Authoring(noon::AuthoringError::ForeignStore) => {
+                    noon::LiveSessionError::ForeignMobjectStore.into()
+                }
+                noon::ArrowScaleError::Authoring(error) => {
+                    AuthoringFailure::from_scene_mutation(error, true)
+                }
+                other => AuthoringFailure::unclassified("live.unclassified", &other),
+            })
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

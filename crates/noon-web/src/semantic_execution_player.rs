@@ -2,8 +2,6 @@
 //! It never parses authoring JSON or reconstructs engine state from transport.
 mod audio;
 #[cfg(target_arch = "wasm32")]
-mod brace;
-#[cfg(target_arch = "wasm32")]
 mod code;
 #[cfg(any(target_arch = "wasm32", test))]
 mod effects;
@@ -1412,16 +1410,6 @@ impl SemanticExecutionPlayer {
         self.edit_layout(|scene| {
             scene.match_dim_size_with_pivot(source, target, dimension, stretch, pivot)
         })
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_scale_arrow(
-        &mut self,
-        arrow: &noon::ManimArrow,
-        factor: f64,
-        scale_tips: bool,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|session| session.scale_arrow(arrow, factor, scale_tips))
     }
 
     #[cfg(target_arch = "wasm32")]
