@@ -428,26 +428,30 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
     let second = scene.square(1.0)?;
     scene.add(&first)?;
     scene.add(&second)?;
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    scene.live(&mut session).shift(&first, 1.0, 0.0)?;
-    let before = snapshot(&scene, &[&first, &second]);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    let mut running = scene.into_execution()?;
+    running.session_mut().take_frame_changes();
+    running.live().shift(&first, 1.0, 0.0)?;
+    let before = snapshot(running.scene(), &[&first, &second]);
+    let frame = running.session().frame().clone();
+    let publication = running.session().publication_context();
     assert!(matches!(
-        scene.live(&mut session).set_fill_opacity(&second, -1.0),
-        Err(LiveSessionError::Authoring(
-            AuthoringError::InvalidOpacity { .. }
-        ))
+        running.scene_mut().set_fill_opacity(&second, -1.0),
+        Err(AuthoringError::InvalidOpacity { .. })
     ));
-    assert_eq!(snapshot(&scene, &[&first, &second]), before);
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(session.publication_context(), publication);
+    assert_eq!(snapshot(running.scene(), &[&first, &second]), before);
+    assert_eq!(running.session().frame(), &frame);
+    assert_eq!(running.session().publication_context(), publication);
     // The successful first edit must neither disappear nor be expanded to the
     // unrelated second row merely because the later operation was rejected.
-    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
-    scene.live(&mut session).set_fill_opacity(&second, 0.5)?;
-    assert_eq!(session.take_frame_changes().object_indices(), &[1]);
+    assert_eq!(
+        running.session_mut().take_frame_changes().object_indices(),
+        &[0]
+    );
+    running.scene_mut().set_fill_opacity(&second, 0.5)?;
+    assert_eq!(
+        running.session_mut().take_frame_changes().object_indices(),
+        &[1]
+    );
     Ok(())
 }
 
