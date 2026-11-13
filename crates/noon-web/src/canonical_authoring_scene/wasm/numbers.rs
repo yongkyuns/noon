@@ -5,9 +5,9 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveCreateVariable)]
+    #[wasm_bindgen(js_name = createVariable)]
     #[allow(clippy::too_many_arguments)]
-    pub fn live_create_variable(
+    pub fn create_variable(
         &mut self,
         label: String,
         value: f64,
@@ -29,20 +29,20 @@ impl CanonicalAuthoringSceneContext {
             show_ellipsis,
             unit,
         };
-        let variable = if self.inner.player_ownership.is_unstarted() {
-            self.inner
-                .scene
-                .variable(compiler, label, value, format, font_size)
-                .map_err(js_error)?
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .scene_mut()
-                .variable(compiler, label, value, format, font_size)
-                .map_err(noon::integration::live_variable_failure)
-                .map_err(js_error)?
-        };
+        let running = self.inner.requires_live_mutation_routing();
+        let variable = self
+            .inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .variable(compiler, label, value, format, font_size)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_variable_failure(error)
+                } else {
+                    error.into()
+                }
+            })
+            .map_err(js_error)?;
         Ok(WasmVariableHandle::new(variable, store))
     }
 

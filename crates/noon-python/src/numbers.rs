@@ -92,6 +92,82 @@ impl DecimalHandle {
     }
 }
 
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+struct VariableHandle {
+    variable: noon::Variable,
+    compiler: LatexCompiler,
+}
+
+#[pymethods]
+impl VariableHandle {
+    fn family(&self) -> FamilyHandle {
+        FamilyHandle::from_semantic_family(self.variable.family().clone())
+    }
+
+    fn label(&self) -> crate::latex::LatexHandle {
+        crate::latex::LatexHandle(self.variable.label().clone())
+    }
+
+    fn equals(&self) -> PyResult<MobjectHandle> {
+        self.variable
+            .equals()
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(engine_error)
+    }
+
+    fn value(&self) -> DecimalHandle {
+        DecimalHandle {
+            number: self.variable.value().clone(),
+            compiler: self.compiler.clone(),
+        }
+    }
+
+    fn tracker(&self) -> crate::signals::ValueTrackerHandle {
+        crate::signals::ValueTrackerHandle {
+            value: self.variable.tracker().clone(),
+        }
+    }
+}
+
+#[pyfunction]
+fn create_variable(
+    store: &Store,
+    label: String,
+    value: f64,
+    format: (u32, bool, bool, bool, Option<String>),
+    font_size: f64,
+    context: &mut Context,
+) -> PyResult<VariableHandle> {
+    context.available()?;
+    let font_size = noon::integration::authoring_render_f64("font size", font_size)
+        .map_err(engine_error)? as f32;
+    let (decimal_places, include_sign, group_with_commas, show_ellipsis, unit) = format;
+    let format = DecimalFormat {
+        decimal_places,
+        include_sign,
+        group_with_commas,
+        show_ellipsis,
+        unit,
+    };
+    let running = context.has_execution();
+    let variable = store.latex.with_backend(|backend| {
+        context
+            .scene
+            .variable(backend, label, value, format, font_size)
+            .map_err(|error| {
+                if running {
+                    engine_error(noon::integration::live_variable_failure(error))
+                } else {
+                    engine_error(error)
+                }
+            })
+    })?;
+    Ok(VariableHandle {
+        variable,
+        compiler: store.latex.clone(),
+    })
+}
+
 fn numeric_failure(error: NumericAuthoringError, running: bool) -> PyErr {
     engine_error(noon::integration::AuthoringFailure::from_scene_number(
         error, running,
@@ -239,6 +315,7 @@ fn decimal_label_members(store: &Store, family: &FamilyHandle) -> PyResult<Vec<D
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<DecimalHandle>()?;
+    module.add_function(wrap_pyfunction!(create_variable, module)?)?;
     module.add_function(wrap_pyfunction!(create_decimal, module)?)?;
     module.add_function(wrap_pyfunction!(decimal_from_mobject, module)?)?;
     module.add_function(wrap_pyfunction!(line_decimal_labels, module)?)?;

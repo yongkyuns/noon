@@ -196,6 +196,11 @@ if hasattr(_native, "prepare_latex"):
     def noonHighlightTableCell(context, selection, column, red, green, blue, alpha, opacity):
         return _native.highlighted_cell(context, selection, column, (red, green, blue, alpha), opacity, True)
 
+    def noonCreateAuthoringVariableHandle(label, value, places, sign, commas, ellipsis, unit, size, context):
+        return _native.create_variable(
+            _arena(), label, value, (places, sign, commas, ellipsis, unit), size, context,
+        )
+
     def noonCreateAuthoringDecimalNumberHandle(*arguments):
         return _native.create_decimal(_arena(), *arguments)
 
