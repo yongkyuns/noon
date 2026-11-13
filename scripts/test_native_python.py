@@ -289,7 +289,7 @@ class Demo(Scene):
         for width in (4, 8):
             family.set_fill(RED, 0.3, family=False)
             family.set_stroke(BLUE, width=width, opacity=0.4, family=False)
-            family.set_background_stroke(GREEN, width=2, opacity=0.5, family=False)
+            family.set_background_stroke(color=GREEN, width=2, opacity=0.5, family=False)
             family.set_cap_style(CapStyleType.ROUND)
             assert abs(family.get_fill_opacity() - 0.3) < 1e-6
             assert abs(family.get_stroke_width() - width) < 1e-5
