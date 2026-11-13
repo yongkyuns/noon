@@ -10,17 +10,12 @@ impl CanonicalAuthoringSceneContext {
         source: &str,
         options: WasmCodeOptions,
     ) -> Result<WasmCodeHandle, JsValue> {
-        if self.inner.player_ownership.is_unstarted() {
-            noon::Code::new(&mut self.inner.scene, source, options.options)
-                .map(WasmCodeHandle::new)
-                .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_code(source, options.options)
-                .map(WasmCodeHandle::new)
-                .map_err(js_error)
-        }
+        noon::Code::new(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            source,
+            options.options,
+        )
+        .map(WasmCodeHandle::new)
+        .map_err(js_error)
     }
 }

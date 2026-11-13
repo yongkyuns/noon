@@ -71,23 +71,27 @@ fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
     let foreign = noon::Scene::new().circle(0.5).unwrap();
     let foreign_anchor = noon::LayoutAnchor::from(&foreign);
     let failure = player
-        .live_move_to(
+        .scene_mut()
+        .move_to(
             &circle,
             noon::LiveLayoutTarget::Anchor(&foreign_anchor),
             (0.0, 0.0),
             (1.0, 1.0),
         )
+        .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
         .unwrap_err();
     assert_eq!(failure.category, "foreign_handle");
     assert_eq!(failure.code, "live.foreign_store");
     assert_eq!(player.source.session().publication_context(), publication);
     player
-        .live_move_to(
+        .scene_mut()
+        .move_to(
             &circle,
             noon::LiveLayoutTarget::Point(3.0, -2.0),
             (0.0, 0.0),
             (1.0, 1.0),
         )
+        .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
         .unwrap();
     assert_eq!(player.ownership_identity(), identity);
     assert_eq!(
@@ -1754,19 +1758,39 @@ fn live_transform_projection_preserves_atomic_rejection_and_local_retry() {
         fn(&mut SemanticExecutionPlayer, &noon::Mobject, f64) -> Result<(), AuthoringFailure>;
     let edits: [(Edit, SemanticObjectProperty); 4] = [
         (
-            |player, object, value| player.live_set_translation(object, value, -1.0),
+            |player, object, value| {
+                player
+                    .scene_mut()
+                    .set_translation(object, value, -1.0)
+                    .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+            },
             SemanticObjectProperty::Translation,
         ),
         (
-            |player, object, value| player.live_shift(object, value, -1.0, 0.0),
+            |player, object, value| {
+                player
+                    .scene_mut()
+                    .shift_3d(object, noon::SemanticVec3::new(value, -1.0, 0.0))
+                    .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+            },
             SemanticObjectProperty::Translation,
         ),
         (
-            |player, object, value| player.live_set_scale(object, value, 0.5),
+            |player, object, value| {
+                player
+                    .scene_mut()
+                    .set_scale(object, value, 0.5)
+                    .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+            },
             SemanticObjectProperty::Scale,
         ),
         (
-            |player, object, value| player.live_set_rotation(object, value),
+            |player, object, value| {
+                player
+                    .scene_mut()
+                    .set_rotation(object, value)
+                    .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+            },
             SemanticObjectProperty::RotationZ,
         ),
     ];
@@ -1847,7 +1871,9 @@ fn live_content_and_observation_errors_keep_atomicity_and_local_retry() {
     let resources = player.resource_bundle_bytes();
     for (invalid_target, invalid_source) in [(&foreign, &source), (&target, &foreign)] {
         let error = player
-            .live_replace_content(invalid_target, invalid_source)
+            .scene_mut()
+            .replace_content(invalid_target, invalid_source)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
             .unwrap_err();
         assert_eq!(error.category, "foreign_handle");
         assert_eq!(error.code, "live.foreign_store");
@@ -1870,7 +1896,11 @@ fn live_content_and_observation_errors_keep_atomicity_and_local_retry() {
     assert_eq!(player.resource_bundle_bytes(), resources);
     assert!(player.delta(false).unwrap().is_none());
 
-    player.live_replace_content(&target, &source).unwrap();
+    player
+        .scene_mut()
+        .replace_content(&target, &source)
+        .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+        .unwrap();
     let after = target.state().unwrap();
     assert_eq!(after.content, original_source.content);
     assert_ne!(after.content, authored.content);
@@ -1933,7 +1963,10 @@ fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
     assert_eq!(snapshot.retained.objects.len(), 1);
     assert_eq!(snapshot.retained.objects[0].order, 1);
     mirror.apply(snapshot.retained).unwrap();
-    player.live_set_translation(&toggled, 2.0, -1.0).unwrap();
+    player
+        .scene_mut()
+        .set_translation(&toggled, 2.0, -1.0)
+        .unwrap();
     let delta = player.delta(false).unwrap().unwrap();
     assert!(!delta.retained.snapshot);
     assert_eq!(delta.retained.objects.len(), 1);
@@ -4330,7 +4363,10 @@ fn live_variable_tracker_update_replaces_text_through_sparse_resource_delta() {
     assert!(admitted.resource_additions.is_some());
     mirror.apply_family(admitted).unwrap();
 
-    player.live_set_signal(variable.tracker(), 7.5).unwrap();
+    player
+        .scene_mut()
+        .set_value(variable.tracker(), 7.5)
+        .unwrap();
     let update = player.delta(false).unwrap().unwrap();
     assert!(!update.retained.snapshot);
     assert!(update.retained.objects.len() < admitted_object_count);

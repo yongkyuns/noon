@@ -434,7 +434,8 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_set_translation(&dot, 2.0, 0.0)
+            .scene_mut()
+            .set_translation(&dot, 2.0, 0.0)
             .unwrap();
         assert_eq!(context.mobject_layout(&dot).unwrap().0, 2.0);
     }
@@ -487,7 +488,10 @@ mod playback_tests {
                 .unwrap(),
             original.authored_definition().unwrap()
         );
-        player.live_set_translation(&target, 2.0, 0.0).unwrap();
+        player
+            .scene_mut()
+            .set_translation(&target, 2.0, 0.0)
+            .unwrap();
         player
             .scene_mut()
             .set_glow(
