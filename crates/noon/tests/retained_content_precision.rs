@@ -157,14 +157,11 @@ fn retained_content_precision_matches_all_pinned_coordinates_without_query_publi
                 .as_ref()
                 .map(|value| value.session().publication_context());
             for (index, query) in phase["queries"].as_array().unwrap().iter().enumerate() {
-                let actual = if let Some(execution) = execution.as_mut() {
-                    execution
-                        .scene()
-                        .effective_layout_critical_point_3d(&source, direction(query))
-                        .unwrap()
-                } else {
-                    source.critical_point_3d(direction(query)).unwrap()
-                };
+                let actual = execution
+                    .as_ref()
+                    .map_or_else(|| scene.as_ref().unwrap(), noon::SceneExecution::scene)
+                    .layout_critical_point_3d(&source, direction(query))
+                    .unwrap();
                 let actual = [actual.x, actual.y, actual.z];
                 let expected: [f64; 3] =
                     std::array::from_fn(|axis| query["output"]["value"][axis].as_f64().unwrap());

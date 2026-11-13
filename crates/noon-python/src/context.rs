@@ -2262,18 +2262,16 @@ impl Context {
     ) -> PyResult<(f64, f64, f64)> {
         self.require_active()?;
         let direction = noon::SemanticVec3::new(x, y, z);
-        if self.has_execution() {
-            self.scene
-                .effective_layout_critical_point_3d(&anchor.anchor, direction)
-                .map_err(|error| engine_error(noon::LiveSessionError::from(error)))
-                .map(|p| (p.x, p.y, p.z))
-        } else {
-            anchor
-                .anchor
-                .critical_point_3d(direction)
-                .map(|p| (p.x, p.y, p.z))
-                .map_err(engine_error)
-        }
+        self.scene
+            .layout_critical_point_3d(&anchor.anchor, direction)
+            .map(|p| (p.x, p.y, p.z))
+            .map_err(|error| {
+                if self.has_execution() {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
+            })
     }
 
     fn prepare_view(&mut self) -> PyResult<crate::viewer::PreparedScene> {

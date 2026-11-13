@@ -8483,15 +8483,21 @@ mod wasm {
             direction_y: f64,
             direction_z: f64,
         ) -> Result<Vec<f64>, JsValue> {
+            let running = !self.inner.player_ownership.is_unstarted();
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene()
-                .effective_layout_critical_point_3d(
+                .layout_critical_point_3d(
                     &source.anchor,
                     noon::SemanticVec3::new(direction_x, direction_y, direction_z),
                 )
-                .map_err(running_placement_error)
+                .map_err(|error| {
+                    if running {
+                        running_placement_error(error)
+                    } else {
+                        error.into()
+                    }
+                })
                 .map(|point| vec![point.x, point.y, point.z])
                 .map_err(typed_js_error)
         }

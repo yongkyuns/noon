@@ -81,25 +81,24 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         anchor.contentCriticalPoint3D.assert_not_called()
         anchor.free.assert_called_once_with()
 
-    def test_bound_content_before_first_play_queries_authored_anchor_in_owning_scene(self):
-        anchor = SimpleNamespace(contentCriticalPoint3D=Mock(return_value=(1.25, -4.5, 2.375)),
+    def test_bound_content_before_first_play_queries_owning_scene(self):
+        anchor = SimpleNamespace(contentCriticalPoint3D=Mock(side_effect=AssertionError("direct query")),
                                  free=Mock())
         value = self.wrapper(SimpleNamespace(requiresContentBoundary=Mock(return_value=True),
                                              layoutAnchor=Mock(return_value=anchor)))
         context = SimpleNamespace(requiresLiveMutationRouting=Mock(return_value=False),
                                   queryMobjectRequiresContentBoundary=Mock(return_value=True),
-                                  queryLayoutContentCriticalPoint3D=Mock(
-                                      side_effect=AssertionError("begin live execution before querying")))
+                                  queryLayoutContentCriticalPoint3D=Mock(return_value=(1.25, -4.5, 2.375)))
         foreign_context = SimpleNamespace(requiresLiveMutationRouting=Mock(
             side_effect=AssertionError("use owning scene, not old constructor context")))
         value._canonical_live_target_context = foreign_context
         value._scene = SimpleNamespace(_canonical_authoring_context=context)
         value._object = object()
         self.assert_point_result(value.get_center(), [1.25, -4.5, 2.375])
-        context.requiresLiveMutationRouting.assert_called_once_with()
-        context.queryLayoutContentCriticalPoint3D.assert_not_called()
+        context.requiresLiveMutationRouting.assert_not_called()
+        context.queryLayoutContentCriticalPoint3D.assert_called_once_with(anchor, 0., 0., 0.)
         foreign_context.requiresLiveMutationRouting.assert_not_called()
-        anchor.contentCriticalPoint3D.assert_called_once_with(0., 0., 0.)
+        anchor.contentCriticalPoint3D.assert_not_called()
         anchor.free.assert_called_once_with()
 
     def test_content_query_failure_frees_anchor_and_does_not_read_planar_bounds(self):
