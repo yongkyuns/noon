@@ -628,6 +628,7 @@ mod tests {
         );
 
         let fade = {
+            let mut live = execution.live();
             assert!(!live.contains(&label).unwrap());
             let fade = live
                 .declare_and_activate_fade(
