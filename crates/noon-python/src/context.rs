@@ -8,9 +8,7 @@ use crate::{
     geometry::GeometryOptions,
     mobject::{pivot, LayoutAnchor, LayoutObservation, MobjectHandle},
 };
-use noon::integration::{
-    scene_execution, AuthoringFailure, HostCallbackId, SemanticMutationTransaction, SemanticStore,
-};
+use noon::integration::{scene_execution, AuthoringFailure, HostCallbackId, SemanticStore};
 use noon::{
     ExecutionSegment, ExecutionSession, Mobject, MobjectTarget, Scene, SceneMembershipRequest,
 };
@@ -597,11 +595,12 @@ impl Context {
             }
         })
     }
-    fn publish(&mut self, transaction: SemanticMutationTransaction) -> PyResult<()> {
-        self.require_active()?;
+    fn edit_updaters(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+    ) -> PyResult<()> {
         let running = self.has_execution();
-        scene_execution::publish(&mut self.scene, transaction)
-            .map(|_| ())
+        edit(&mut self.scene)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 }
@@ -4321,41 +4320,44 @@ impl Context {
         ) {
             return Err(engine_error(noon::AuthoringError::ForeignStore));
         }
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(
-            target.handle.node_id(),
-            HostCallbackId::new(
-                id.parse()
-                    .map_err(|_| engine_error("invalid callback ID"))?,
-            ),
-            time,
-            position,
-        );
-        self.publish(transaction)
+        let callback = id
+            .parse()
+            .map_err(|_| engine_error("invalid callback ID"))?;
+        self.edit_updaters(|scene| {
+            scene_execution::add_updater(
+                scene,
+                &target.handle,
+                HostCallbackId::new(callback),
+                time,
+                position,
+            )
+        })
     }
+
     #[pyo3(name = "removeUpdater")]
     fn remove_updater(&mut self, target: &MobjectHandle, id: &str, time: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.remove_updater(
-            target.handle.node_id(),
-            HostCallbackId::new(
-                id.parse()
-                    .map_err(|_| engine_error("invalid callback ID"))?,
-            ),
-            time,
-        );
-        self.publish(transaction)
+        let callback = id
+            .parse()
+            .map_err(|_| engine_error("invalid callback ID"))?;
+        self.edit_updaters(|scene| {
+            scene_execution::remove_updater(
+                scene,
+                &target.handle,
+                HostCallbackId::new(callback),
+                time,
+            )
+        })
     }
+
     #[pyo3(name = "clearUpdaters")]
     fn clear_updaters(&mut self, target: &MobjectHandle, time: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        let mut tx = SemanticMutationTransaction::new();
-        tx.clear_updaters(target.handle.node_id(), time);
-        self.publish(tx)
+        self.edit_updaters(|scene| scene_execution::clear_updaters(scene, &target.handle, time))
     }
+
     #[pyo3(signature = (sample_hz, retain_history=false, prepare_shaders=true))]
     fn configure(
         &mut self,

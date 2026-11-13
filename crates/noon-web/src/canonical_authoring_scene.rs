@@ -46,8 +46,8 @@ use noon::integration::CallbackPhaseToken;
 use noon_core::ObjectId;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
-    HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticSceneMembershipRequest, SemanticStore, SemanticVec3,
+    HostCallbackId, SemanticFadeDirection, SemanticSceneMembershipRequest, SemanticStore,
+    SemanticVec3,
 };
 
 #[derive(Clone)]
@@ -670,9 +670,14 @@ impl CanonicalAuthoringScene {
         position: Option<usize>,
     ) -> Result<(), String> {
         self.require_updater_target(handle)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(handle.node_id(), callback, active_from, position);
-        self.publish_updater_edit(transaction)
+        scene_execution::add_updater(
+            self.updater_scene()?,
+            handle,
+            callback,
+            active_from,
+            position,
+        )
+        .map_err(|error| error.to_string())
     }
 
     /// Close the first open occurrence for this host callback at an exclusive
@@ -685,35 +690,31 @@ impl CanonicalAuthoringScene {
         inactive_from: f64,
     ) -> Result<(), String> {
         self.require_updater_target(handle)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.remove_updater(handle.node_id(), callback, inactive_from);
-        self.publish_updater_edit(transaction)
+        scene_execution::remove_updater(self.updater_scene()?, handle, callback, inactive_from)
+            .map_err(|error| error.to_string())
     }
 
     /// Close every open callback occurrence on this target at an exclusive
-    /// authored time through the owning live session when execution has begun.
+    /// authored time through the owning Scene.
     #[cfg(any(target_arch = "wasm32", test))]
     fn clear_updaters(&mut self, handle: &noon::Mobject, inactive_from: f64) -> Result<(), String> {
         self.require_updater_target(handle)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.clear_updaters(handle.node_id(), inactive_from);
-        self.publish_updater_edit(transaction)
+        scene_execution::clear_updaters(self.updater_scene()?, handle, inactive_from)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn publish_updater_edit(
-        &mut self,
-        transaction: SemanticMutationTransaction,
-    ) -> Result<(), String> {
+    fn updater_scene(&mut self) -> Result<&mut noon::Scene, String> {
         if self.player_ownership.is_transferred() {
             return Err("return the active execution player before editing updaters".into());
         }
         if let Some(player) = self.player_ownership.local_mut() {
-            return player.live_edit_updaters(transaction);
+            player
+                .require_completed_live_segment()
+                .map_err(|error| error.to_string())?;
+            return Ok(player.scene_mut());
         }
-        scene_execution::publish(&mut self.scene, transaction)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        Ok(&mut self.scene)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

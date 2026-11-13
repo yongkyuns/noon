@@ -845,20 +845,6 @@ impl SemanticExecutionPlayer {
             .collect())
     }
 
-    /// Route callback declarations through the same shared semantic publication
-    /// as native authoring. The browser host owns no callback schedule mirror.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_edit_updaters(
-        &mut self,
-        transaction: noon_core::SemanticMutationTransaction,
-    ) -> Result<(), String> {
-        self.require_completed_live_segment()
-            .map_err(|error| error.to_string())?;
-        noon::integration::scene_execution::publish(self.source.scene_mut(), transaction)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn require_completed_live_segment(&self) -> Result<(), AuthoringFailure> {
         self.require_callback_progression_available()?;
