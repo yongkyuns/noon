@@ -2606,164 +2606,142 @@ impl Context {
         self.place(|scene| scene.set_fill_hatch(&target.handle, paint.value.clone(), opacity))
     }
 
-    #[pyo3(name = "liveSetGlow")]
+    #[pyo3(name = "setGlow")]
     fn _set_glow(
         &mut self,
         target: &MobjectHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.set_glow(&target.handle, update.value.clone()))
+        self.edit_scene(|scene| scene.set_glow(&target.handle, update.value.clone()))
     }
 
-    #[pyo3(name = "liveRemoveGlow")]
+    #[pyo3(name = "removeGlow")]
     fn _remove_glow(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.remove_glow(&target.handle))
+        self.edit_scene(|scene| scene.remove_glow(&target.handle))
     }
 
-    #[pyo3(name = "liveAddEffect")]
+    #[pyo3(name = "addEffect")]
     fn _add_effect(
         &mut self,
         target: &MobjectHandle,
         definition: &crate::effects::EffectDefinition,
         name: &str,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| {
-            scene.add_effect(&target.handle, definition.definition(), name)
-        })
+        self.edit_scene(|scene| scene.add_effect(&target.handle, definition.definition(), name))
     }
 
-    #[pyo3(name = "liveSetEffect")]
+    #[pyo3(name = "setEffect")]
     fn _set_effect(
         &mut self,
         target: &MobjectHandle,
         name: &str,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| {
-            scene.set_effect(&target.handle, name, update.value.clone())
-        })
+        self.edit_scene(|scene| scene.set_effect(&target.handle, name, update.value.clone()))
     }
 
-    #[pyo3(name = "liveSetEffectHandle")]
+    #[pyo3(name = "setEffectHandle")]
     fn _set_effect_handle(
         &mut self,
         target: &MobjectHandle,
         handle: &crate::effects::EffectHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| {
+        self.edit_scene(|scene| {
             scene.set_effect(&target.handle, &handle.handle, update.value.clone())
         })
     }
 
-    #[pyo3(name = "liveRemoveEffect")]
+    #[pyo3(name = "removeEffect")]
     fn _remove_effect(&mut self, target: &MobjectHandle, name: &str) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.remove_effect(&target.handle, name))
+        self.edit_scene(|scene| scene.remove_effect(&target.handle, name))
     }
 
-    #[pyo3(name = "liveRemoveEffectHandle")]
+    #[pyo3(name = "removeEffectHandle")]
     fn _remove_effect_handle(
         &mut self,
         target: &MobjectHandle,
         handle: &crate::effects::EffectHandle,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.remove_effect(&target.handle, &handle.handle))
+        self.edit_scene(|scene| scene.remove_effect(&target.handle, &handle.handle))
     }
 
-    #[pyo3(name = "liveSetFamilyGlow")]
+    #[pyo3(name = "setFamilyGlow")]
     fn family_set_glow(
         &mut self,
         target: &crate::family::FamilyHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| scene.set_glow(&target.family, update.value.clone()))
+        self.edit_scene(|scene| scene.set_glow(&target.family, update.value.clone()))
     }
 
-    #[pyo3(name = "liveRemoveFamilyGlow")]
+    #[pyo3(name = "removeFamilyGlow")]
     fn family_remove_glow(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| scene.remove_glow(&target.family))
+        self.edit_scene(|scene| scene.remove_glow(&target.family))
     }
 
-    #[pyo3(name = "liveAddFamilyEffect")]
+    #[pyo3(name = "addFamilyEffect")]
     fn family_add_effect(
         &mut self,
         target: &crate::family::FamilyHandle,
         definition: &crate::effects::EffectDefinition,
         name: &str,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| {
-            scene.add_effect(&target.family, definition.definition(), name)
-        })
+        self.edit_scene(|scene| scene.add_effect(&target.family, definition.definition(), name))
     }
 
-    #[pyo3(name = "liveSetFamilyEffect")]
+    #[pyo3(name = "setFamilyEffect")]
     fn family_set_effect(
         &mut self,
         target: &crate::family::FamilyHandle,
         name: &str,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| {
-            scene.set_effect(&target.family, name, update.value.clone())
-        })
+        self.edit_scene(|scene| scene.set_effect(&target.family, name, update.value.clone()))
     }
 
-    #[pyo3(name = "liveSetFamilyEffectHandle")]
+    #[pyo3(name = "setFamilyEffectHandle")]
     fn family_set_effect_handle(
         &mut self,
         target: &crate::family::FamilyHandle,
         handle: &crate::effects::EffectHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| {
+        self.edit_scene(|scene| {
             scene.set_effect(&target.family, &handle.handle, update.value.clone())
         })
     }
 
-    #[pyo3(name = "liveRemoveFamilyEffect")]
+    #[pyo3(name = "removeFamilyEffect")]
     fn family_remove_effect(
         &mut self,
         target: &crate::family::FamilyHandle,
         name: &str,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| scene.remove_effect(&target.family, name))
+        self.edit_scene(|scene| scene.remove_effect(&target.family, name))
     }
 
-    #[pyo3(name = "liveRemoveFamilyEffectHandle")]
+    #[pyo3(name = "removeFamilyEffectHandle")]
     fn family_remove_effect_handle(
         &mut self,
         target: &crate::family::FamilyHandle,
         handle: &crate::effects::EffectHandle,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| scene.remove_effect(&target.family, &handle.handle))
+        self.edit_scene(|scene| scene.remove_effect(&target.family, &handle.handle))
     }
 
     #[pyo3(name = "queryLayoutDimensionLength")]
