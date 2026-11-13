@@ -213,14 +213,14 @@ def _create(
 ) -> None:
     if _create_arrow_handle is None:
         raise RuntimeError("Arrow construction requires the shared Rust authoring host")
-    context = _shared._live_constructor_context("Arrow", allow_unstarted=True)
+    context = _shared._path_authoring_context()
     _apply_constructor_options(options, kwargs)
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
     if context is None:
         created = engine_call(_create_arrow_handle, options)
     else:
-        created = engine_call(context.liveCreateManimArrow, options)
+        created = engine_call(context.createManimArrow, options)
     _attach_arrow_family(self, created)
     if context is not None:
         self._canonical_live_target_context = context
@@ -320,32 +320,20 @@ class Arrow(_compat.Group):
             raise NotImplementedError(
                 f"Arrow.scale pivot option(s) are not yet shared Rust semantics: {unknown}"
             )
-        live_context = _shared._group_live_layout_context(self, include_setup=True)
+        context = _shared._group_live_layout_context(self, include_setup=True)
         handle = getattr(self, "_semantic_arrow_handle", None)
         if handle is None:
             raise RuntimeError("Arrow.scale requires the shared Rust authoring host")
         factor = _ir._finite_number("factor", factor)
-        if live_context is not None:
-            operation = getattr(live_context, "liveScaleArrow", None)
-            if operation is None:
-                raise RuntimeError("live Arrow.scale requires the shared Rust live host")
-            engine_call(
-                operation,
-                handle,
-                factor,
-                bool(scale_tips),
-                operation="Arrow.scale",
-            )
-            return self
-        operation = getattr(handle, "scale", None)
+        if context is None:
+            operation = getattr(handle, "scale", None)
+            arguments = ()
+        else:
+            operation = getattr(context, "scaleArrow", None)
+            arguments = (handle,)
         if operation is None:
             raise RuntimeError("Arrow.scale requires the shared Rust authoring host")
-        engine_call(
-            operation,
-            factor,
-            bool(scale_tips),
-            operation="Arrow.scale",
-        )
+        engine_call(operation, *arguments, factor, bool(scale_tips), operation="Arrow.scale")
         return self
 
     def get_start(self) -> _base.Vec2:
