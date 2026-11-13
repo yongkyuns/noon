@@ -17,9 +17,9 @@ pub use family_layout::LiveLayoutTarget;
 use crate::effective_capture::target_style_from_effective;
 use crate::execution_session::NativePointerInputToken;
 use crate::{
-    semantic_mobject::authoring_render_f64, semantic_mobject::edit_color, DeclaredAnimation,
-    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError,
-    ExecutionSegmentError, ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    semantic_mobject::authoring_render_f64, DeclaredAnimation, ExecutionSegment,
+    ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError, ExecutionSegmentError,
+    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
     ExecutionSessionPublicationError, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
 };
@@ -28,8 +28,8 @@ use noon_core::{
     SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticSignalValue, SemanticStore, SemanticStyle, SemanticSubsetDisplayMode, SemanticVec3,
-    Style, Transform2D,
+    SemanticSignalValue, SemanticStore, SemanticSubsetDisplayMode, SemanticVec3, Style,
+    Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -2229,266 +2229,12 @@ impl<'a> LiveSession<'a> {
         self.set_property(mobject, SemanticObjectProperty::RotationZ, angle)
     }
 
-    pub fn replace_style(
-        &mut self,
-        mobject: &Mobject,
-        style: SemanticStyle,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.replace_style(mobject.node_id(), style);
-        self.apply(transaction)
-    }
-
-    /// Interpolate Manim VMobject paint and sheen fields from two coherent
-    /// effective source snapshots and publish them atomically to the receiver.
-    pub fn interpolate_manim_style(
-        &mut self,
-        receiver: &Mobject,
-        start: &Mobject,
-        end: &Mobject,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(receiver)?;
-        self.require_mobject(start)?;
-        self.require_mobject(end)?;
-
-        let receiver_state = self.capture_mobject_state(receiver)?;
-        let start_state = self.capture_mobject_state(start)?;
-        let end_state = self.capture_mobject_state(end)?;
-        let (style, sheen_direction) = crate::semantic_mobject::interpolate_manim_vmobject_style(
-            &receiver_state.style,
-            &start_state,
-            &end_state,
-            alpha,
-        )
-        .map_err(LiveSessionError::from)?;
-
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction
-            .replace_style(receiver.node_id(), style)
-            .set_sheen_direction(receiver.node_id(), sheen_direction);
-        self.apply(transaction)
-    }
-
-    /// Interpolate one VMobject's effective world-space points and supported
-    /// paint through one coherent live path/style publication.
-    pub fn interpolate_manim(
-        &mut self,
-        receiver: &Mobject,
-        start: &Mobject,
-        end: &Mobject,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(receiver)?;
-        self.require_mobject(start)?;
-        self.require_mobject(end)?;
-        crate::path_editing::require_running_path_resource_admission(
-            self.store,
-            self.root,
-            self.session,
-        )?;
-
-        let receiver_state = self.capture_mobject_state(receiver)?;
-        let start_state = self.capture_mobject_state(start)?;
-        let end_state = self.capture_mobject_state(end)?;
-        let start_points =
-            crate::path_queries::effective_path_query(self.store, self.session, start)?.points()?;
-        let end_points =
-            crate::path_queries::effective_path_query(self.store, self.session, end)?.points()?;
-        let prepared = {
-            let store = self.store.borrow();
-            crate::semantic_mobject::prepare_manim_interpolation(
-                &store,
-                receiver.node_id(),
-                receiver_state,
-                crate::semantic_mobject::ManimInterpolationInput {
-                    start_state: &start_state,
-                    end_state: &end_state,
-                    start_points: &start_points,
-                    end_points: &end_points,
-                    alpha,
-                },
-            )?
-        };
-        self.publish_path_edits(prepared)
-    }
-
-    /// Recolor the currently enabled fill and stroke without changing their opacity.
-    fn set_color(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_color(style, red, green, blue, alpha))
-    }
-
-    /// Match coherent effective paint, preserving non-paint source presentation.
-    pub fn match_style(
-        &mut self,
-        source: &Mobject,
-        target: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(source)?;
-        self.require_mobject(target)?;
-        self.require_target_capture()?;
-        let mut style = self.capture_mobject_state(source)?.style;
-        let target = self.capture_mobject_state(target)?.style;
-        crate::family_style::match_paint(&mut style, &target);
-        self.replace_style(source, style)
-    }
-
-    pub fn match_family_style(
-        &mut self,
-        source: &MobjectFamily,
-        target: &MobjectFamily,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(source)?;
-        self.require_family(target)?;
-        self.require_target_capture()?;
-        let transaction = source.match_style_transaction(target, |object| {
-            self.capture_mobject_state(object).map(|state| state.style)
-        })?;
-        self.apply(transaction)
-    }
-
-    pub fn set_color_by_gradient(
-        &mut self,
-        object: &Mobject,
-        colors: &[Color],
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let colors = crate::color_gradient(colors, 1).map_err(LiveSessionError::from)?;
-        let color = colors[0];
-        self.set_color(
-            object,
-            color.red.into(),
-            color.green.into(),
-            color.blue.into(),
-            color.alpha.into(),
-        )
-    }
-
-    pub fn set_family_color_by_radial_gradient(
-        &mut self,
-        family: &MobjectFamily,
-        center: (f64, f64, f64),
-        radius: f64,
-        inner: Color,
-        outer: Color,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_gradient::validate_radial_gradient_inputs(center, radius, inner, outer)
-            .map_err(LiveSessionError::from)?;
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let leaves = self
-            .store
-            .borrow()
-            .ordered_last_occurrence_leaf_nodes(family.node_id())
-            .map_err(crate::AuthoringError::from)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        for leaf in leaves {
-            let object =
-                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
-            if !object
-                .has_fade_to_points()
-                .map_err(LiveSessionError::from)?
-            {
-                continue;
-            }
-            let member_center = self.effective_layout(&object)?.center;
-            let color = crate::family_gradient::radial_gradient_color(
-                crate::family_gradient::radial_distance(member_center, center),
-                radius,
-                inner,
-                outer,
-            );
-            let mut style = self.capture_mobject_state(&object)?.style;
-            edit_color(
-                &mut style,
-                color.red.into(),
-                color.green.into(),
-                color.blue.into(),
-                color.alpha.into(),
-            )
-            .map_err(LiveSessionError::from)?;
-            transaction.replace_style(leaf, style);
-        }
-        self.apply(transaction)
-    }
-
-    pub fn set_color_by_radial_gradient(
-        &mut self,
-        object: &Mobject,
-        center: (f64, f64, f64),
-        radius: f64,
-        inner: Color,
-        outer: Color,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_gradient::validate_radial_gradient_inputs(center, radius, inner, outer)
-            .map_err(LiveSessionError::from)?;
-        self.require_mobject(object)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        if !object
-            .has_fade_to_points()
-            .map_err(LiveSessionError::from)?
-        {
-            return self.apply(SemanticMutationTransaction::new());
-        }
-        let member_center = self.effective_layout(object)?.center;
-        let color = crate::family_gradient::radial_gradient_color(
-            crate::family_gradient::radial_distance(member_center, center),
-            radius,
-            inner,
-            outer,
-        );
-        self.set_color(
-            object,
-            color.red.into(),
-            color.green.into(),
-            color.blue.into(),
-            color.alpha.into(),
-        )
-    }
-
-    /// Match a donor's effective RGB in one coherent family publication.
-    pub fn match_family_color(
-        &mut self,
-        family: &MobjectFamily,
-        donor: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let color =
-            crate::scene::object_edits::effective_manim_color(donor, self.effective(donor)?)?;
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.color_transaction(
-            color.red.into(),
-            color.green.into(),
-            color.blue.into(),
-            1.0,
-            true,
-        )?)
-    }
-
     #[cfg(feature = "latex")]
     pub fn latex_font_size(&self, parts: &crate::LatexParts) -> Result<f64, LiveSessionError> {
         let layout = self.effective_family_layout(parts.family())?;
         parts
             .font_size_for_height(layout.height)
             .map_err(LiveSessionError::from)
-    }
-
-    fn edit_style(
-        &mut self,
-        mobject: &Mobject,
-        edit: impl FnOnce(&mut SemanticStyle) -> Result<(), crate::AuthoringError>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut style = mobject.state().map_err(LiveSessionError::from)?.style;
-        edit(&mut style).map_err(LiveSessionError::from)?;
-        self.replace_style(mobject, style)
     }
 
     pub(crate) fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
@@ -2520,7 +2266,7 @@ mod tests {
     use crate::{ExecutionSessionCreateError, Scene};
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticObjectRole, SemanticPaint,
-        SemanticSheenDirection, SemanticVec3,
+        SemanticSheenDirection, SemanticStyle, SemanticVec3,
     };
 
     #[test]

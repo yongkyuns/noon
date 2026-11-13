@@ -405,17 +405,19 @@ fn live_empty_family_style_matching_updates_receiver_subtree_atomically() {
         })
         .unwrap();
     scene.add_many(&[(&receiver).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let revision = scene.revision();
+    let mut session = scene.into_execution().unwrap();
+    let revision = session.scene().revision();
 
-    let matched = live.match_family_style(&receiver, &donor).unwrap();
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let matched = session
+        .scene_mut()
+        .match_family_style(&receiver, &donor)
+        .unwrap();
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_eq!(matched.impacts().len(), 4);
     assert_eq!(receiver.own_style().unwrap(), donor.own_style().unwrap());
     assert_eq!(nested.own_style().unwrap(), donor.own_style().unwrap());
     for member in [&a, &b] {
-        let effective = live.effective(member).unwrap();
+        let effective = session.live().effective(member).unwrap();
         assert_eq!(
             effective.style.fill,
             Some(Color::rgba(
@@ -471,7 +473,10 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
         .unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
     let mut running = scene.into_execution().unwrap();
-    let matched = running.live().match_family_style(&source, &target).unwrap();
+    let matched = running
+        .scene_mut()
+        .match_family_style(&source, &target)
+        .unwrap();
     assert_eq!(matched.impacts().len(), 2);
     assert_eq!(source.own_style().unwrap(), target.own_style().unwrap());
     assert_eq!(running.scene().effective(&a).unwrap().fill_opacity(), 0.25);

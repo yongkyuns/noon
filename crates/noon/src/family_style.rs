@@ -8,7 +8,7 @@ use crate::{
         edit_stroke_opacity, edit_stroke_width, fade_factor, interpolate_manim_color,
         interpolate_manim_scalar, interpolate_manim_vmobject_style_values, PaintStyleEdit,
     },
-    Color, Mobject, MobjectFamily, MobjectTarget, Scene,
+    Color, LiveSessionError, Mobject, MobjectFamily, MobjectTarget, Scene,
 };
 use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticSheenDirection,
@@ -1218,13 +1218,152 @@ impl Scene {
         )
     }
 
-    fn require_family_style_target(&self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+    pub fn replace_style(
+        &mut self,
+        mobject: &Mobject,
+        style: SemanticStyle,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_object(mobject)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_style(mobject.node_id(), style);
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Interpolate Manim VMobject paint and sheen fields from two coherent
+    /// effective source snapshots and publish them atomically to the receiver.
+    pub fn interpolate_manim_style(
+        &mut self,
+        receiver: &Mobject,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_object(receiver)?;
+        self.require_object(start)?;
+        self.require_object(end)?;
+
+        let receiver_state = self.capture_mobject_state(receiver)?;
+        let start_state = self.capture_mobject_state(start)?;
+        let end_state = self.capture_mobject_state(end)?;
+        let (style, sheen_direction) = crate::semantic_mobject::interpolate_manim_vmobject_style(
+            &receiver_state.style,
+            &start_state,
+            &end_state,
+            alpha,
+        )?;
+
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction
+            .replace_style(receiver.node_id(), style)
+            .set_sheen_direction(receiver.node_id(), sheen_direction);
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Interpolate one VMobject's effective world-space points and supported
+    /// paint through one coherent live path/style publication.
+    pub fn interpolate_manim(
+        &mut self,
+        receiver: &Mobject,
+        start: &Mobject,
+        end: &Mobject,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_object(receiver)?;
+        self.require_object(start)?;
+        self.require_object(end)?;
+        self.require_resource_admission()?;
+
+        let receiver_state = self.capture_mobject_state(receiver)?;
+        let start_state = self.capture_mobject_state(start)?;
+        let end_state = self.capture_mobject_state(end)?;
+        let points = |object: &Mobject| {
+            if self.running_execution().is_some() {
+                self.effective_path_query(object)?.points()
+            } else {
+                object.path_query()?.points()
+            }
+        };
+        let start_points = points(start)?;
+        let end_points = points(end)?;
+        let prepared = {
+            let store = self.integration_store().borrow();
+            crate::semantic_mobject::prepare_manim_interpolation(
+                &store,
+                receiver.node_id(),
+                receiver_state,
+                crate::semantic_mobject::ManimInterpolationInput {
+                    start_state: &start_state,
+                    end_state: &end_state,
+                    start_points: &start_points,
+                    end_points: &end_points,
+                    alpha,
+                },
+            )?
+        };
+        self.publish_path_edits(prepared)
+    }
+
+    /// Match coherent effective paint, preserving non-paint source presentation.
+    pub fn match_style(
+        &mut self,
+        source: &Mobject,
+        target: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_object(source)?;
+        self.require_object(target)?;
+        self.require_effective_capture()?;
+        let mut style = self.capture_mobject_state(source)?.style;
+        let target = self.capture_mobject_state(target)?.style;
+        crate::family_style::match_paint(&mut style, &target);
+        self.replace_style(source, style).map_err(Into::into)
+    }
+
+    pub fn match_family_style(
+        &mut self,
+        source: &MobjectFamily,
+        target: &MobjectFamily,
+    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_family_style_target(source)?;
+        self.require_family_style_target(target)?;
+        self.require_effective_capture()?;
+        let transaction = source.match_style_transaction(target, |object| {
+            self.capture_mobject_state(object).map(|state| state.style)
+        })?;
+        self.apply_semantic_transaction(transaction)
+            .map_err(Into::into)
+    }
+
+    /// Match a donor's effective RGB in one coherent family publication.
+    pub fn match_family_color(
+        &mut self,
+        family: &MobjectFamily,
+        donor: &Mobject,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_object(donor)?;
+        let color = if self.running_execution().is_some() {
+            self.effective_manim_color(donor)?
+        } else {
+            donor.manim_color()?
+        };
+        self.set_family_color(
+            family,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            1.0,
+        )
+    }
+
+    pub(crate) fn require_family_style_target(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<(), AuthoringError> {
         MobjectTarget::from(family)
             .require_store(self.integration_store())
             .map(|_| ())
     }
 
-    fn require_style_publication(&self) -> Result<(), AuthoringError> {
+    pub(crate) fn require_style_publication(&self) -> Result<(), AuthoringError> {
         if let Some(execution) = self.running_execution() {
             execution.require_published_store(&self.integration_store().borrow())?;
         }

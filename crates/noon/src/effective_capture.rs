@@ -1,10 +1,30 @@
 //! Coherent effective-state capture shared by Scene-owned live operations.
 use crate::{
     AuthoringError, ExecutionSession, ExecutionSessionCallbackError, LiveSessionError, Mobject,
-    UnsupportedAuthoringOperation,
+    Scene, UnsupportedAuthoringOperation,
 };
 use noon_core::{Color, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, Style};
 use std::{cell::RefCell, rc::Rc};
+
+impl Scene {
+    pub(crate) fn require_effective_capture(&self) -> Result<(), LiveSessionError> {
+        if let Some(execution) = self.running_execution() {
+            require_target_capture(execution, &self.integration_store().borrow())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn capture_mobject_state(
+        &self,
+        object: &Mobject,
+    ) -> Result<SemanticObjectState, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            capture_mobject_state(self.integration_store(), execution, object)
+        } else {
+            object.state()
+        }
+    }
+}
 
 pub(crate) fn require_target_capture(
     execution: &ExecutionSession,
