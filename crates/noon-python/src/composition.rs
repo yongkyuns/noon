@@ -107,6 +107,7 @@ enum Child {
     FamilyReveal(noon::MobjectFamily, bool, AnimationOptions),
     MoveAlongPath(Mobject, Mobject, AnimationOptions),
     ValueTracker(noon::ValueTracker, f64, AnimationOptions),
+    FamilyArrowGrow(noon::ManimArrow, AnimationOptions),
     FamilyFade {
         target: noon::MobjectFamily,
         direction: SemanticFadeDirection,
@@ -256,6 +257,10 @@ impl Child {
             Self::ValueTracker(tracker, target, options) => Request::ValueTracker {
                 tracker,
                 target: *target,
+                options: *options,
+            },
+            Self::FamilyArrowGrow(target, options) => Request::FamilyArrowGrow {
+                target,
                 options: *options,
             },
             Self::FamilyFade {
@@ -1125,6 +1130,42 @@ impl Composition {
         }
         Ok(())
     }
+    #[pyo3(name = "appendFamilyArrowGrow")]
+    fn append_family_arrow_grow(
+        &mut self,
+        target: &crate::arrow::ArrowHandle,
+        duration: f64,
+        easing: &str,
+        lag_ratio: f64,
+    ) -> PyResult<()> {
+        let options = Self::options(duration, easing)?
+            .lag_ratio(lag_ratio)
+            .introducer(true)
+            .remover(false)
+            .path_arc(0.0);
+        self.children
+            .push(Child::FamilyArrowGrow(target.0.clone(), options));
+        Ok(())
+    }
+
+    #[pyo3(name = "appendFamilyArrowGrowEntering")]
+    fn append_family_arrow_grow_entering(
+        &mut self,
+        _id: &str,
+        member: &MobjectHandle,
+    ) -> PyResult<()> {
+        let Some(Child::FamilyArrowGrow(arrow, _)) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilyArrowGrow",
+            ));
+        };
+        noon::MobjectTarget::from(&member.handle)
+            .require_store(arrow.family().integration_store())
+            .map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
+
     #[pyo3(name = "appendFamilyFadeEntering")]
     fn append_family_fade_entering(&mut self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
         let Some(Child::FamilyFade { target, .. }) = self.children.last() else {

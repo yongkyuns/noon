@@ -2300,7 +2300,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
             "ApplyMatrix requires a typed semantic Mobject or family"
         )
     context = (
-        _semantic_handles._group_target_context(target)
+        _semantic_handles._group_target_context(target, include_setup=True)
         if is_family
         else getattr(target, "_canonical_live_target_context", None)
     )

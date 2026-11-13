@@ -78,6 +78,14 @@ noonAuthoringCoordinateOptions = _native.CoordinateOptions
 def noonCreateAuthoringCoordinateHandle(options):
     return _arena().coordinates(options)
 
+noonAuthoringArrowOptions = _native.ArrowOptions
+noonLinearTransformationPathArc = _native.linear_transformation_path_arc
+
+
+def noonCreateAuthoringArrowHandle(options):
+    return _native.create_arrow(_arena(), options)
+
+
 noonAuthoringGeometryOptions = _native.GeometryOptions
 noonAuthoringVectorPath = _native.AuthoringVectorPath
 noonAuthoringImageOptions = _native.ImageOptions
