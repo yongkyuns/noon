@@ -29,9 +29,7 @@ impl LiveContinuation for PointPromotion {
                         .points;
                     let captured = self.left.split_iter()?;
                     let references = [(&self.left_child).into()];
-                    let copied = scene
-                        .live()
-                        .promote_own_points((&self.left).into(), &references)?;
+                    let copied = scene.promote_own_points((&self.left).into(), &references)?;
                     let root = copied.mobject(&self.left)?;
                     let alias = copied.mobject(&self.left_child)?;
                     assert_eq!(self.left.get_num_points()?, 0);
@@ -63,7 +61,6 @@ impl LiveContinuation for PointPromotion {
                 }
                 2 => {
                     let aligned = scene
-                        .live()
                         .align_own_points((&self.left).into(), (&self.right).into(), &[], &[])?
                         .expect("only the right operand still has own points");
                     assert_eq!(aligned.side, PointAlignmentSide::Right);
@@ -78,7 +75,6 @@ impl LiveContinuation for PointPromotion {
                         root.node_id()
                     );
                     assert!(scene
-                        .live()
                         .align_own_points((&self.left).into(), (&self.right).into(), &[], &[])?
                         .is_none());
                     let (left_copy, left_alias) = self

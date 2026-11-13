@@ -1454,7 +1454,10 @@ impl SemanticExecutionPlayer {
         source: noon::MobjectTarget<'_>,
         references: &[noon::MobjectTarget<'_>],
     ) -> Result<noon::SemanticCopy<noon::CompositeEntryHandle>, AuthoringFailure> {
-        self.with_live_session(|live| live.promote_own_points(source, references))
+        self.source
+            .scene_mut()
+            .promote_own_points(source, references)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
