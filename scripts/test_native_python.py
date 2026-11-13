@@ -114,6 +114,18 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_always_redraw_gallery_uses_sampled_callback_content(self):
+        path = ROOT / "web/python/examples/showcase_always_redraw.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), sample_hz=12))
+        try:
+            from _manim_scene import _context
+            frames, segments, regions = _context(scene).metrics()
+            self.assertEqual(segments, 7)
+            self.assertGreater(frames, 7)
+            self.assertGreater(regions, 7)
+        finally:
+            close_scene(scene)
+
     @unittest.skipUnless(
         os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
         "requires an explicit native TeX compiler and BaKoMa font profile",

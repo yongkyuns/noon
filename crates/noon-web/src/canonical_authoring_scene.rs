@@ -250,20 +250,6 @@ impl SceneMembershipBatch {
         })
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn callback_provisionals(&self) -> Option<Vec<noon_core::SemanticLocalNodeToken>> {
-        let locals = self
-            .members
-            .iter()
-            .filter_map(|member| match member {
-                OwnedSceneMembershipMember::CallbackProvisional { local, .. } => Some(*local),
-                OwnedSceneMembershipMember::Mobject { .. }
-                | OwnedSceneMembershipMember::Family(_) => None,
-            })
-            .collect::<Vec<_>>();
-        (!locals.is_empty()).then_some(locals)
-    }
-
     /// Validate one ordered callback-local Scene.add batch. Existing typed
     /// handles retain their original store provenance; pending names retain the
     /// exact callback token that created them. The returned references preserve

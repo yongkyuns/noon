@@ -19,8 +19,14 @@
 //! rather than overwriting its publication revision or treating old frames as new.
 //!
 
+mod callback_membership;
 #[cfg(feature = "code")]
 pub mod code_input;
+pub use callback_membership::{
+    callback_line_path, callback_provisional_key, commit_callback_path,
+    commit_inline_callback_content, resolve_callback_provisional, CallbackMembershipCollector,
+    CallbackVisualContent, MAX_CALLBACK_MEMBERSHIP_STAGES,
+};
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
