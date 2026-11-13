@@ -10751,20 +10751,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetUpdatingSuspended)]
-        pub fn live_set_updating_suspended(
+        #[wasm_bindgen(js_name = setUpdatingSuspended)]
+        pub fn set_updating_suspended(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             suspended: bool,
             recursive: bool,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live updater suspension",
-            )?;
-            self.inner.active_live_player().map_err(typed_js_error)?;
-            noon::MobjectTarget::from(handle.semantic_mobject())
-                .set_updating_suspended(suspended, recursive)
+            self.inner
+                .edit_scene(|scene| {
+                    scene.set_updating_suspended(handle.semantic_mobject(), suspended, recursive)
+                })
                 .map_err(typed_js_error)
         }
 
@@ -11653,23 +11650,16 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyUpdatingSuspended)]
-        pub fn live_set_family_updating_suspended(
+        #[wasm_bindgen(js_name = setFamilyUpdatingSuspended)]
+        pub fn set_family_updating_suspended(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             suspended: bool,
             recursive: bool,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(
-                family.integration_store(),
-                self.inner.scene.integration_store(),
-            ) {
-                return Err(typed_js_error(noon::AuthoringError::ForeignStore));
-            }
-            self.inner.active_live_player().map_err(typed_js_error)?;
-            noon::MobjectTarget::from(&family)
-                .set_updating_suspended(suspended, recursive)
+            self.inner
+                .edit_scene(|scene| scene.set_updating_suspended(&family, suspended, recursive))
                 .map_err(typed_js_error)
         }
 

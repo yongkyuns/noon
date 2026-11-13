@@ -194,6 +194,34 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_detached_suspension_preserves_running_scene_publication(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        child = Square()
+        group = VGroup(child)
+        group.suspend_updating()
+        assert group.updating_suspended and child.updating_suspended
+        dot = Dot()
+        self.add(dot)
+        await self.wait(0.1)
+        group.resume_updating()
+        assert not group.updating_suspended and not child.updating_suspended
+        alias = VGroup(child, dot)
+        try:
+            alias.suspend_updating()
+        except NotImplementedError:
+            pass
+        else:
+            raise AssertionError("attached descendant was suspended")
+        assert not child.updating_suspended
+        dot.shift(RIGHT)
+        assert abs(dot.get_center()[0] - 1) < 1e-6
+        await self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source, retain_history=True))
+        close_scene(scene)
+
     def test_native_pointer_selection_gallery_prepares_retained_preview(self):
         path = ROOT / "web/python/examples/showcase_pointer_selection.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))

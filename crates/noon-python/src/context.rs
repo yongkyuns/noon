@@ -3471,6 +3471,26 @@ impl Context {
     ) -> PyResult<MobjectHandle> {
         crate::image::create_in_scene(self, &mut options)
     }
+    #[pyo3(name = "setUpdatingSuspended")]
+    fn set_updating_suspended(
+        &mut self,
+        target: &MobjectHandle,
+        suspended: bool,
+        recursive: bool,
+    ) -> PyResult<()> {
+        self.edit_scene(|scene| scene.set_updating_suspended(&target.handle, suspended, recursive))
+    }
+
+    #[pyo3(name = "setFamilyUpdatingSuspended")]
+    fn set_family_updating_suspended(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        suspended: bool,
+        recursive: bool,
+    ) -> PyResult<()> {
+        self.edit_scene(|scene| scene.set_updating_suspended(&target.family, suspended, recursive))
+    }
+
     #[pyo3(name = "setImageSampling")]
     fn set_image_sampling(&mut self, target: &MobjectHandle, value: &str) -> PyResult<()> {
         self.available()?;

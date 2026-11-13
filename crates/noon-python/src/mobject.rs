@@ -60,6 +60,18 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "updatingSuspended")]
+    fn updating_suspended(&self) -> PyResult<bool> {
+        self.handle.updating_suspended().map_err(engine_error)
+    }
+
+    #[pyo3(name = "setUpdatingSuspended")]
+    fn set_updating_suspended(&self, suspended: bool, recursive: bool) -> PyResult<()> {
+        self.handle
+            .set_updating_suspended(suspended, recursive)
+            .map_err(engine_error)
+    }
+
     #[cfg(any(feature = "native-text", feature = "typst"))]
     #[pyo3(name = "textSource")]
     fn text_source(&self) -> PyResult<String> {

@@ -48,6 +48,18 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "updatingSuspended")]
+    fn updating_suspended(&self) -> PyResult<bool> {
+        self.family.updating_suspended().map_err(engine_error)
+    }
+
+    #[pyo3(name = "setUpdatingSuspended")]
+    fn set_updating_suspended(&self, suspended: bool, recursive: bool) -> PyResult<()> {
+        self.family
+            .set_updating_suspended(suspended, recursive)
+            .map_err(engine_error)
+    }
+
     fn fade(&self, darkness: f64) -> PyResult<()> {
         self.family.fade(darkness).map_err(engine_error)
     }
