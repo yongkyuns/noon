@@ -27,7 +27,7 @@ fn shared_cross_kind_transform_publishes_target_content_without_replacing_identi
     live.advance_segment_to(segment, 1.5).unwrap();
     live.complete_segment(segment).unwrap();
     assert!(matches!(
-        live.authored(&circle).unwrap().content.geometry(),
+        scene.authored(&circle).unwrap().content.geometry(),
         Some(StoredGeometry::Rectangle { .. })
     ));
     assert_eq!(session.frame().objects[0].id, id);

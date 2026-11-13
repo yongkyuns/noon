@@ -149,18 +149,18 @@ fn live_replacement_uses_completed_effective_bounds_and_preserves_other_objects(
     let mut session = scene.into_execution().unwrap();
     let segment = session.live().play_animation(&animation).unwrap();
     session.live().advance_segment_to(segment, 1.0).unwrap();
-    let before = session.live().effective(&target).unwrap();
+    let before = session.scene().effective(&target).unwrap();
     assert!(session
         .scene_mut()
         .replace_layout(&(&target).into(), &(&family).into(), Width, false)
         .is_err());
-    assert_eq!(session.live().effective(&target).unwrap(), before);
+    assert_eq!(session.scene().effective(&target).unwrap(), before);
     session
         .live()
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
     session.live().complete_segment(segment).unwrap();
-    let before_unrelated = session.live().effective(&unrelated).unwrap();
+    let before_unrelated = session.scene().effective(&unrelated).unwrap();
     session
         .scene_mut()
         .replace_layout(&(&family).into(), &(&target).into(), Width, true)
@@ -170,7 +170,7 @@ fn live_replacement_uses_completed_effective_bounds_and_preserves_other_objects(
     close(source_bounds.width, target_bounds.width);
     close(source_bounds.height, target_bounds.height);
     assert_eq!(source_bounds.center, target_bounds.center);
-    let after = session.live().effective(&unrelated).unwrap();
+    let after = session.scene().effective(&unrelated).unwrap();
     assert_eq!(after.transform, before_unrelated.transform);
     assert_eq!(after.style, before_unrelated.style);
     assert_eq!(after.appearance, before_unrelated.appearance);

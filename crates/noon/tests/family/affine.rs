@@ -54,7 +54,7 @@ fn live_family_edits_publish_atomically_and_foreign_family_is_rejected() {
     session.scene_mut().scale_family(&family, 2.0, 1.0).unwrap();
     assert_eq!(
         session
-            .live()
+            .scene()
             .effective(&a)
             .unwrap()
             .transform
@@ -64,7 +64,7 @@ fn live_family_edits_publish_atomically_and_foreign_family_is_rejected() {
     );
     assert_eq!(
         session
-            .live()
+            .scene()
             .effective(&b)
             .unwrap()
             .transform
@@ -82,7 +82,7 @@ fn live_family_edits_publish_atomically_and_foreign_family_is_rejected() {
         .unwrap();
     assert!(
         (session
-            .live()
+            .scene()
             .effective(&b)
             .unwrap()
             .transform
@@ -92,7 +92,7 @@ fn live_family_edits_publish_atomically_and_foreign_family_is_rejected() {
             .abs()
             < 1e-6
     );
-    let before = session.live().effective(&a).unwrap();
+    let before = session.scene().effective(&a).unwrap();
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.family(&[]).unwrap();
     assert!(session
@@ -103,7 +103,7 @@ fn live_family_edits_publish_atomically_and_foreign_family_is_rejected() {
         .scene_mut()
         .scale_family(&family, f64::NAN, 2.0)
         .is_err());
-    assert_eq!(session.live().effective(&a).unwrap(), before);
+    assert_eq!(session.scene().effective(&a).unwrap(), before);
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn active_affine_driver_rejects_family_edit_without_partial_publication() {
     let mut session = scene.into_execution().unwrap();
     let segment = session.live().play_animation(&animation).unwrap();
     session.live().advance_segment_to(segment, 1.0).unwrap();
-    let before = session.live().effective(&a).unwrap();
+    let before = session.scene().effective(&a).unwrap();
     assert!(session.scene_mut().scale_family(&family, 2.0, 2.0).is_err());
     let anchor = noon::LayoutAnchor::from(&family);
     assert!(session
@@ -133,7 +133,7 @@ fn active_affine_driver_rejects_family_edit_without_partial_publication() {
         .scene_mut()
         .rotate_layout(&anchor, 0.5, ManimRotationPivot::Point(0., 0.))
         .is_err());
-    assert_eq!(session.live().effective(&a).unwrap(), before);
+    assert_eq!(session.scene().effective(&a).unwrap(), before);
     session
         .live()
         .advance_segment_to(segment, segment.end_time())

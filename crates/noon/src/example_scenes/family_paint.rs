@@ -64,7 +64,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         }
         for object in [&a, &b] {
             let effective = session
-                .live()
+                .scene()
                 .effective(object)
                 .map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), 0.5);
@@ -90,7 +90,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         }
         for (object, opacity) in [(&a, 0.0625), (&b, 0.25)] {
             let effective = session
-                .live()
+                .scene()
                 .effective(object)
                 .map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), opacity);
@@ -105,7 +105,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             (&b, Color::rgba(0.6, 0.3, 0.5, 0.25), 0.25),
         ] {
             let effective = session
-                .live()
+                .scene()
                 .effective(object)
                 .map_err(|e| e.to_string())?;
             assert_eq!(effective.style.fill, Some(color));

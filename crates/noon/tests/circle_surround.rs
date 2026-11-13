@@ -115,12 +115,12 @@ fn live_circle_surround_rejects_unfinished_source_drivers_without_writes() {
     let mut session = scene.into_execution().unwrap();
     let segment = session.live().play_animation(&animation).unwrap();
     session.live().advance_segment_to(segment, 1.0).unwrap();
-    let before = session.live().effective(&circle).unwrap();
+    let before = session.scene().effective(&circle).unwrap();
     assert!(session
         .scene_mut()
         .surround_circle(&(&circle).into(), &(&target).into(), 0, false, 1.2)
         .is_err());
-    assert_eq!(session.live().effective(&circle).unwrap(), before);
+    assert_eq!(session.scene().effective(&circle).unwrap(), before);
     session
         .live()
         .advance_segment_to(segment, segment.end_time())
@@ -176,7 +176,7 @@ fn live_circle_surround_publishes_once_and_preserves_unrelated_objects() {
     let mut session = scene.into_execution().unwrap();
     let revision = session.scene().revision();
     {
-        let before = session.live().effective(&other).unwrap();
+        let before = session.scene().effective(&other).unwrap();
         session
             .scene_mut()
             .surround_circle(&(&circle).into(), &(&target).into(), 1, true, 0.5)
@@ -184,17 +184,17 @@ fn live_circle_surround_publishes_once_and_preserves_unrelated_objects() {
         let layout = session.scene().effective_layout(&circle).unwrap();
         near(layout.width, 2.5);
         near(layout.height, 10.0 / 3.0);
-        let after = session.live().effective(&other).unwrap();
+        let after = session.scene().effective(&other).unwrap();
         assert_eq!(after.transform, before.transform);
         assert_eq!(after.style, before.style);
         assert_eq!(after.z_index, before.z_index);
         assert_eq!(after.appearance, before.appearance);
-        let before_circle = session.live().effective(&circle).unwrap();
+        let before_circle = session.scene().effective(&circle).unwrap();
         assert!(session
             .scene_mut()
             .surround_circle(&(&circle).into(), &(&target).into(), 0, false, f64::NAN)
             .is_err());
-        assert_eq!(session.live().effective(&circle).unwrap(), before_circle);
+        assert_eq!(session.scene().effective(&circle).unwrap(), before_circle);
     }
     assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
 }

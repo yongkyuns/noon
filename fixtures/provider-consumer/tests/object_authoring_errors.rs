@@ -379,9 +379,11 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
     assert_eq!(execution.session().frame(), &frame);
     assert_eq!(execution.session().publication_context(), publication);
     assert!(execution.session_mut().take_frame_changes().is_empty());
+    let authored = execution.scene().authored(&object)?;
+    let effective = execution.scene().effective(&object)?;
+    assert_eq!(authored.transform.translation.x, 0.0);
+    assert_eq!(effective.transform.translation.x, 2.0);
     let mut live = execution.live();
-    assert_eq!(live.authored(&object)?.transform.translation.x, 0.0);
-    assert_eq!(live.effective(&object)?.transform.translation.x, 2.0);
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
     execution.scene_mut().arrange_family_with_options(

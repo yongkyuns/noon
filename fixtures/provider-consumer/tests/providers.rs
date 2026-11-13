@@ -33,7 +33,7 @@ fn assert_shared_resource_path(mut scene: Scene, label: noon::Mobject) {
         .unwrap();
     assert_eq!(
         session
-            .live()
+            .scene()
             .effective(&label)
             .unwrap()
             .transform
@@ -41,7 +41,7 @@ fn assert_shared_resource_path(mut scene: Scene, label: noon::Mobject) {
         Vec2::new(2.0, 1.0)
     );
     assert_eq!(
-        session.live().authored(&label).unwrap().content.text(),
+        session.scene().authored(&label).unwrap().content.text(),
         Some(resource)
     );
     assert_eq!(

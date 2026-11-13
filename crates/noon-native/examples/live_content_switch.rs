@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .scene_mut()
             .replace_content(&target, &replacement_text)?;
         assert_eq!(
-            session.live().effective(&target)?.transform.translation.x,
+            session.scene().effective(&target)?.transform.translation.x,
             2.0
         );
     }

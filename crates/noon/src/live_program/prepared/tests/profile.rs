@@ -31,7 +31,7 @@ impl LiveContinuation for FollowPath {
             ),
             2 => {
                 assert_eq!(
-                    live.effective(&self.target)?.transform.translation,
+                    scene.effective(&self.target)?.transform.translation,
                     Vec2::new(2.0, 0.0)
                 );
                 ContinuationStep::Finished

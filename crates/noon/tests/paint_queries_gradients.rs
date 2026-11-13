@@ -384,7 +384,7 @@ fn recursive_background_stroke_style_publishes_nested_roots_and_leaves_atomicall
     assert_eq!(nested.own_background_stroke_width().unwrap(), 0.12);
     assert!(
         (session
-            .live()
+            .scene()
             .effective(&leaf)
             .unwrap()
             .style
@@ -466,7 +466,7 @@ fn recursive_paint_setters_update_roots_and_publish_live_leaves_once() {
         assert_eq!(style.stroke_opacity, 0.25);
         assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.25);
     }
-    let effective = session.live().effective(&leaf).unwrap();
+    let effective = session.scene().effective(&leaf).unwrap();
     assert_eq!(effective.fill_opacity(), 0.25);
     assert_eq!(effective.stroke_opacity(), 0.25);
     assert_eq!(effective.style.background_stroke.unwrap().alpha, 0.25);
@@ -564,7 +564,7 @@ fn recursive_fade_includes_aliased_roots_and_live_publication() {
         assert_root(family, 0.25);
     }
     assert_root(&shared, 0.0625);
-    let effective = session.live().effective(&a).unwrap();
+    let effective = session.scene().effective(&a).unwrap();
     assert!((effective.fill_opacity() - 0.05).abs() < 1e-7);
     assert!((effective.stroke_opacity() - 0.025).abs() < 1e-7);
     assert!((effective.style.background_stroke.unwrap().alpha - 0.0375).abs() < 1e-7);

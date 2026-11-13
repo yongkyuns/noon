@@ -174,18 +174,18 @@ fn live_copy_obeys_completion_and_captures_completed_state_without_changing_sour
     let mut execution = scene.into_execution().unwrap();
     let segment = execution.live().play_animation(&animation).unwrap();
     execution.live().advance_segment_to(segment, 1.0).unwrap();
-    let halfway = execution.live().effective(&leaf).unwrap();
+    let halfway = execution.scene().effective(&leaf).unwrap();
     assert!(execution.scene_mut().copy_family(&family).is_err());
-    assert_eq!(execution.live().effective(&leaf).unwrap(), halfway);
+    assert_eq!(execution.scene().effective(&leaf).unwrap(), halfway);
     execution.live().advance_segment_to(segment, 2.0).unwrap();
     execution.live().complete_segment(segment).unwrap();
-    let before = execution.live().effective(&leaf).unwrap();
+    let before = execution.scene().effective(&leaf).unwrap();
     let copied = execution.scene_mut().copy_family(&family).unwrap();
     let copy_leaf = copied.mobject(&leaf).unwrap();
     assert_eq!(copy_leaf.center().unwrap(), (4.0, 0.0));
     assert_eq!(leaf.center().unwrap(), (4.0, 0.0));
     assert_eq!(
-        execution.live().effective(&leaf).unwrap().transform,
+        execution.scene().effective(&leaf).unwrap().transform,
         before.transform
     );
     assert_eq!(

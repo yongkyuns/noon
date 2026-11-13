@@ -961,7 +961,7 @@ mod tests {
                     self.stage = 2;
                     scene.set_translation(&self.source, 3.0, -1.0)?;
                     assert_eq!(
-                        scene.live().effective(&self.source)?.transform.translation,
+                        scene.effective(&self.source)?.transform.translation,
                         Vec2::new(3.0, -1.0)
                     );
                     Ok(ContinuationStep::Finished)

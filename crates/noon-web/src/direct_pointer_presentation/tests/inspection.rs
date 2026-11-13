@@ -208,7 +208,7 @@ fn direct_inspection_and_real_indicate_restore_independently() {
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut execution = scene.into_execution().unwrap();
-    let original = execution.live().effective(&circle).unwrap();
+    let original = execution.scene().effective(&circle).unwrap();
     let segment = execution
         .live()
         .declare_and_activate_indicate(
@@ -218,7 +218,7 @@ fn direct_inspection_and_real_indicate_restore_independently() {
         )
         .unwrap();
     execution.live().advance_segment_to(segment, 0.5).unwrap();
-    let midpoint = execution.live().effective(&circle).unwrap();
+    let midpoint = execution.scene().effective(&circle).unwrap();
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
@@ -232,12 +232,12 @@ fn direct_inspection_and_real_indicate_restore_independently() {
         Some(true)
     );
     assert_eq!(
-        execution.live().effective(&circle).unwrap().transform,
+        execution.scene().effective(&circle).unwrap().transform,
         midpoint.transform
     );
     execution.live().advance_segment_to(segment, 1.0).unwrap();
     execution.live().complete_segment(segment).unwrap();
-    let final_state = execution.live().effective(&circle).unwrap();
+    let final_state = execution.scene().effective(&circle).unwrap();
     assert_eq!(final_state.transform, original.transform);
     assert_eq!(final_state.style, original.style);
     assert!(

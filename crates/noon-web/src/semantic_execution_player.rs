@@ -37,7 +37,7 @@ use noon_core::SemanticObjectContent;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
     stage_prepared_semantic_scene_membership, NativeEventOccurrence, NativeEventSource,
-    NativeInputValue, NativeStateSource, ReactiveValue, SemanticMutationTransaction,
+    NativeInputValue, NativeStateSource, SemanticMutationTransaction,
 };
 use noon_core::{
     ExecutionRevision, FrameEpoch, GeometryRef, GeometryResourceArena, GeometryResourceLookup,
@@ -885,43 +885,39 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.with_live_session(|live| {
-            target.background_stroke_color()?;
-            let color = live
-                .effective(target)?
-                .style
-                .background_stroke
-                .map(|color| noon_core::Color {
-                    alpha: 1.0,
-                    ..color
-                });
-            Ok(color)
-        })
+        target.background_stroke_color()?;
+        Ok(self
+            .live_effective(target)?
+            .style
+            .background_stroke
+            .map(|color| noon_core::Color {
+                alpha: 1.0,
+                ..color
+            }))
     }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_background_stroke_width(
         &mut self,
         target: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(f64::from(
-                live.effective(target)?.style.background_stroke_width,
-            ))
-        })
+        Ok(f64::from(
+            self.live_effective(target)?.style.background_stroke_width,
+        ))
     }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_background_stroke_opacity(
-        &mut self,
+        &self,
         target: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(live
-                .effective(target)?
-                .style
-                .background_stroke
-                .map_or(1.0, |color| f64::from(color.alpha)))
-        })
+        Ok(self
+            .live_effective(target)?
+            .style
+            .background_stroke
+            .map_or(1.0, |color| f64::from(color.alpha)))
     }
+
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_stroke_cap(
         &mut self,
@@ -1621,13 +1617,13 @@ impl SemanticExecutionPlayer {
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective(
-        &mut self,
+        &self,
         mobject: &noon::Mobject,
     ) -> Result<noon::EffectiveMobjectState, AuthoringFailure> {
         self.source
-            .live()
+            .scene()
             .effective(mobject)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2787,15 +2783,10 @@ impl SemanticExecutionPlayer {
         &self,
         tracker: &noon::ValueTracker,
     ) -> Result<f64, AuthoringFailure> {
-        match self
-            .source
-            .session()
-            .effective_signal_value(tracker.node_id())
-            .ok_or("ValueTracker is not lowered into this execution session")?
-        {
-            ReactiveValue::Scalar(value) => Ok(f64::from(*value)),
-            _ => Err("ValueTracker runtime signal is not scalar".into()),
-        }
+        self.source
+            .scene()
+            .value_tracker_value(tracker)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

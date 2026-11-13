@@ -101,7 +101,6 @@ impl LiveContinuation for TextFamilyReveal {
                         .contains_direct(&self.solo)
                         .map_err(|error| error.to_string())?
                     || (scene
-                        .live()
                         .effective(&self.moving)
                         .map_err(|error| error.to_string())?
                         .transform

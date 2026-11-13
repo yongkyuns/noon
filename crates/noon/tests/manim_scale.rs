@@ -46,12 +46,12 @@ fn rejected_live_manim_scale_does_not_publish_partial_state() {
     let before = session.scene().revision();
 
     {
-        let state = session.live().effective(&line).unwrap();
+        let state = session.scene().effective(&line).unwrap();
         assert!(session
             .scene_mut()
             .manim_scale(&line, f64::NAN, 1.0)
             .is_err());
-        assert_eq!(session.live().effective(&line).unwrap(), state);
+        assert_eq!(session.scene().effective(&line).unwrap(), state);
     }
 
     assert_eq!(session.scene().revision(), before);

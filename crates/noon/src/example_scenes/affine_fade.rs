@@ -38,7 +38,6 @@ impl LiveContinuation for AffineFade {
             }
             1 => {
                 let state = scene
-                    .live()
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
                 if state.transform != noon_core::Transform2D::IDENTITY {

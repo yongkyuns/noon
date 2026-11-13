@@ -459,7 +459,7 @@ fn only_a_stale_returned_runtime_can_be_replaced_at_a_rerun_boundary() {
     );
     scene.prepare_execution_run().unwrap();
     assert!(scene.player_ownership.is_unstarted());
-    let mut rerun = scene.take_execution_player(1.0, 41).unwrap();
+    let rerun = scene.take_execution_player(1.0, 41).unwrap();
     // Same transport session, but a genuinely new runtime incarnation.
     assert_ne!(rerun.ownership_identity(), identity);
     assert_eq!(

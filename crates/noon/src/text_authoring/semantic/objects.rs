@@ -413,7 +413,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&label)
                 .unwrap()
                 .transform
@@ -421,14 +421,14 @@ mod tests {
             noon_core::Vec2::new(3.0, -1.0)
         );
         assert_eq!(
-            session.live().authored(&label).unwrap().content.text(),
+            session.scene().authored(&label).unwrap().content.text(),
             Some(resource)
         );
-        let mut style = session.live().authored(&label).unwrap().style;
+        let mut style = session.scene().authored(&label).unwrap().style;
         style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::RED));
         session.scene_mut().replace_style(&label, style).unwrap();
         assert_eq!(
-            session.live().effective(&label).unwrap().style.fill,
+            session.scene().effective(&label).unwrap().style.fill,
             Some(noon_core::RED)
         );
         assert_eq!(
@@ -1027,12 +1027,12 @@ mod tests {
                 .replace_content(&target, &replacement_text)
                 .unwrap();
             assert_eq!(
-                session.live().authored(&target).unwrap().content.text(),
+                session.scene().authored(&target).unwrap().content.text(),
                 Some(text_handle)
             );
             assert_eq!(
                 session
-                    .live()
+                    .scene()
                     .effective(&target)
                     .unwrap()
                     .transform
@@ -1111,7 +1111,7 @@ mod tests {
 
             assert!(session.scene_mut().contains_direct(&label).unwrap());
             assert_eq!(label.node_id(), semantic_id);
-            assert_eq!(session.live().authored(&label).unwrap(), authored);
+            assert_eq!(session.scene().authored(&label).unwrap(), authored);
             segment
         };
         assert_eq!(session.session().frame().objects.len(), 1);

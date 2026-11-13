@@ -26,14 +26,7 @@ impl LiveContinuation for Source {
                 scene.live().wait_segment(self.durations[stage])?,
             ))
         } else {
-            let y = f64::from(
-                scene
-                    .live()
-                    .effective(&self.object)?
-                    .transform
-                    .translation
-                    .y,
-            );
+            let y = f64::from(scene.effective(&self.object)?.transform.translation.y);
             scene.set_translation(&self.object, 7.0, y)?;
             Ok(ContinuationStep::Finished)
         }

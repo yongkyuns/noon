@@ -1,8 +1,8 @@
 //! Compile and exercise the public facade as an independent consumer of only noon.
 //! Provider-feature CI runs these tests natively and compiles them for WASM.
 use noon::{
-    AnimationOptions, ExecutionSessionPublicationError, LiveSessionError, ManimGeometryOptions,
-    MobjectTarget, RateFunction, Scene, Vec2,
+    AnimationOptions, ExecutionSessionPublicationError, ManimGeometryOptions, MobjectTarget,
+    RateFunction, Scene, Vec2,
 };
 
 #[test]
@@ -101,8 +101,8 @@ fn integration_access_keeps_one_arena_and_stale_publication_protection(
             ExecutionSessionPublicationError::StaleSceneRevision { expected, actual }
         ) if expected == published.scene_revision() && actual == raw_revision));
         assert!(matches!(
-            session.live().effective(&circle),
-            Err(LiveSessionError::Publication(
+            session.scene().effective(&circle),
+            Err(noon::AuthoringError::ExecutionPublication(
                 ExecutionSessionPublicationError::StaleSceneRevision { .. }
             ))
         ));

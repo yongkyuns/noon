@@ -448,7 +448,7 @@ fn required_callback_barrier_is_not_bypassed_even_by_unit_zoom() {
 fn navigation_during_real_indicate_preserves_midpoint_completion_and_authored_guard() {
     let (scene, circle, session) = fixture();
     let mut running = scene.into_execution_with_session(session).unwrap();
-    let original = running.live().effective(&circle).unwrap();
+    let original = running.scene().effective(&circle).unwrap();
     let segment = running
         .live()
         .declare_and_activate_indicate(
@@ -458,7 +458,7 @@ fn navigation_during_real_indicate_preserves_midpoint_completion_and_authored_gu
         )
         .unwrap();
     running.live().advance_segment_to(segment, 0.5).unwrap();
-    let midpoint = running.live().effective(&circle).unwrap();
+    let midpoint = running.scene().effective(&circle).unwrap();
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
     assert_ne!(midpoint.style, original.style);
     let state = running.session().frame().clone();
@@ -479,7 +479,7 @@ fn navigation_during_real_indicate_preserves_midpoint_completion_and_authored_gu
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
     running.live().complete_segment(segment).unwrap();
-    let restored = running.live().effective(&circle).unwrap();
+    let restored = running.scene().effective(&circle).unwrap();
     assert_eq!(restored.transform, original.transform);
     assert_eq!(restored.style, original.style);
     assert_eq!(running.session().inspection_camera().unwrap().height, 4.0);

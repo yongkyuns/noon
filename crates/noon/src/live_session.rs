@@ -639,12 +639,6 @@ impl<'a> LiveSession<'a> {
         crate::scene::contains_direct(self.store, self.root, mobject).map_err(Into::into)
     }
 
-    /// Inspect authored/base state explicitly, separate from [`Self::effective`].
-    pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        mobject.state().map_err(LiveSessionError::from)
-    }
-
     pub(crate) fn capture_mobject_state(
         &self,
         source: &Mobject,
@@ -669,7 +663,11 @@ impl<'a> LiveSession<'a> {
     }
 
     /// Read the current effective runtime value at the session's publication.
-    pub fn effective(&self, mobject: &Mobject) -> Result<EffectiveMobjectState, LiveSessionError> {
+    #[cfg(test)]
+    pub(crate) fn effective(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<EffectiveMobjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
         crate::Scene::observe_effective(self.store, self.session, mobject).map_err(Into::into)
     }
@@ -1920,7 +1918,10 @@ mod tests {
             .scene_mut()
             .set_sheen_direction(&target, up, true)
             .unwrap();
-        assert_eq!(session.live().authored(&first).unwrap().sheen_direction, up);
+        assert_eq!(
+            session.scene().authored(&first).unwrap().sheen_direction,
+            up
+        );
         assert_eq!(family.own_sheen_direction().unwrap(), up);
         let published = session.live().session.publication_context();
         assert_ne!(published, publication_before);
@@ -1932,7 +1933,10 @@ mod tests {
             .set_sheen_direction(&target, root_only, false)
             .unwrap();
         assert_eq!(family.own_sheen_direction().unwrap(), root_only);
-        assert_eq!(session.live().authored(&first).unwrap().sheen_direction, up);
+        assert_eq!(
+            session.scene().authored(&first).unwrap().sheen_direction,
+            up
+        );
         let after_valid = session.live().session.publication_context();
         assert!(session
             .scene_mut()
@@ -1959,17 +1963,17 @@ mod tests {
         scene.add(&object).unwrap();
         let mut session = scene.into_execution().unwrap();
         session.scene_mut().fade(&object, 0.5).unwrap();
-        let observed = session.live().effective(&object).unwrap();
+        let observed = session.scene().effective(&object).unwrap();
         assert_eq!(observed.fill_opacity(), f64::from(0.2_f32));
         assert_eq!(observed.stroke_opacity(), 0.125);
         assert_eq!(observed.style.opacity, 0.3);
-        let authored = session.live().authored(&object).unwrap();
+        let authored = session.scene().authored(&object).unwrap();
         let publication = session.live().session.publication_context();
         for darkness in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
             assert!(session.scene_mut().fade(&object, darkness).is_err());
-            assert_eq!(session.live().authored(&object).unwrap(), authored);
+            assert_eq!(session.scene().authored(&object).unwrap(), authored);
             assert_eq!(session.live().session.publication_context(), publication);
-            assert_eq!(session.live().effective(&object).unwrap(), observed);
+            assert_eq!(session.scene().effective(&object).unwrap(), observed);
         }
     }
 
@@ -2010,8 +2014,8 @@ mod tests {
                 .unwrap();
             session.scene_mut().set_scale(&circle, 1.5, 0.5).unwrap();
             session.scene_mut().set_rotation(&circle, 0.25).unwrap();
-            let authored = session.live().authored(&circle).unwrap();
-            let effective = session.live().effective(&circle).unwrap();
+            let authored = session.scene().authored(&circle).unwrap();
+            let effective = session.scene().effective(&circle).unwrap();
             assert_eq!(
                 authored.transform.translation,
                 SemanticVec3::new(2.0, -1.0, 0.0)
@@ -2047,7 +2051,7 @@ mod tests {
         {
             session.scene_mut().set_angle_value(&angle, -0.75).unwrap();
             assert_eq!(
-                session.live().authored(&angle).unwrap().role(),
+                session.scene().authored(&angle).unwrap().role(),
                 SemanticObjectRole::Angle(noon_core::SemanticAngleRole::new(Some(-0.75)),)
             );
             assert_eq!(angle.angle_value(false).unwrap(), -0.75);
@@ -2135,7 +2139,7 @@ mod tests {
             .scene_mut()
             .set_object_opacity(&target, 0.5)
             .unwrap();
-        let style = session.live().authored(&target).unwrap().style;
+        let style = session.scene().authored(&target).unwrap().style;
         assert_eq!(
             style.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
@@ -2145,7 +2149,7 @@ mod tests {
 
         session.scene_mut().disable_fill(&target).unwrap();
         session.scene_mut().set_fill_opacity(&target, 0.25).unwrap();
-        let style = session.live().authored(&target).unwrap().style;
+        let style = session.scene().authored(&target).unwrap().style;
         assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::WHITE)));
         assert_eq!(style.fill_opacity, 0.25);
 
@@ -2157,7 +2161,7 @@ mod tests {
             .scene_mut()
             .set_color_rgba(&target, 0.0, 1.0, 0.0, 1.0)
             .unwrap();
-        let style = session.live().authored(&target).unwrap().style;
+        let style = session.scene().authored(&target).unwrap().style;
         assert_eq!(
             style.fill,
             Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
@@ -2170,7 +2174,7 @@ mod tests {
         assert_eq!(style.stroke_opacity, 0.7);
 
         session.scene_mut().set_opacity(&target, 0.5).unwrap();
-        let style = session.live().authored(&target).unwrap().style;
+        let style = session.scene().authored(&target).unwrap().style;
         assert_eq!(style.fill_opacity, 0.5);
         assert_eq!(style.stroke_opacity, 0.5);
         assert_eq!(style.object_opacity, 0.5);
@@ -2238,14 +2242,14 @@ mod tests {
         session.live().session.take_frame_changes();
         let target = session.scene_mut().target_editor(&circle).unwrap();
         assert_eq!(
-            session.live().effective(&circle).unwrap().fill_opacity(),
+            session.scene().effective(&circle).unwrap().fill_opacity(),
             0.25
         );
         assert_eq!(target.fill_opacity().unwrap(), 0.25);
         assert_eq!(target.stroke_opacity().unwrap(), 1.0);
         assert_eq!(target.emission().unwrap(), style.emission.strength());
         assert_eq!(circle.emission().unwrap(), 0.0);
-        let target_state = session.live().authored(&target).unwrap();
+        let target_state = session.scene().authored(&target).unwrap();
         assert_eq!(
             target_state.transform.translation,
             SemanticVec3::new(2.0, -1.0, 0.0)
@@ -2268,7 +2272,12 @@ mod tests {
                 fill_opacity: 1.0,
                 stroke: style.stroke.map(SemanticPaint::Solid),
                 stroke_opacity: 1.0,
-                stroke_width: session.live().authored(&circle).unwrap().style.stroke_width,
+                stroke_width: session
+                    .scene()
+                    .authored(&circle)
+                    .unwrap()
+                    .style
+                    .stroke_width,
                 stroke_width_mode: style.stroke_width_mode,
                 stroke_join: style.stroke_join,
                 stroke_cap: style.stroke_cap,
@@ -2281,7 +2290,7 @@ mod tests {
         // The source's authored base remains distinct from the callback effect.
         assert_eq!(
             session
-                .live()
+                .scene()
                 .authored(&circle)
                 .unwrap()
                 .transform
@@ -2299,7 +2308,7 @@ mod tests {
 
         session.scene_mut().scale(&circle, 2.0, 0.5).unwrap();
         session.scene_mut().rotate(&circle, 0.25).unwrap();
-        let effective = session.live().effective(&circle).unwrap();
+        let effective = session.scene().effective(&circle).unwrap();
         assert_eq!(effective.transform.scale, noon_core::Vec2::new(2.0, 0.5));
         assert_eq!(effective.transform.rotation, 0.25);
 
@@ -2307,7 +2316,7 @@ mod tests {
         let target = session.scene_mut().target_editor(&circle).unwrap();
         session.scene_mut().scale(&target, 0.5, 4.0).unwrap();
         session.scene_mut().rotate(&target, 0.75).unwrap();
-        let authored = session.live().authored(&target).unwrap();
+        let authored = session.scene().authored(&target).unwrap();
         assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
         assert_eq!(
             authored
@@ -2393,7 +2402,7 @@ mod tests {
         ));
         assert_eq!(
             session
-                .live()
+                .scene()
                 .authored(&circle)
                 .unwrap()
                 .transform
@@ -2402,7 +2411,7 @@ mod tests {
         );
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&circle)
                 .unwrap()
                 .transform
@@ -2421,7 +2430,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&circle)
                 .unwrap()
                 .transform
@@ -2474,7 +2483,7 @@ mod tests {
             running.scene().effective_manim_color(&line).unwrap(),
             Color::rgb(0.5, 0.0, 0.5)
         );
-        let effective = running.live().effective(&line).unwrap();
+        let effective = running.scene().effective(&line).unwrap();
         assert_eq!(effective.fill_opacity(), 0.0);
         assert_eq!(effective.stroke_opacity(), 0.5);
         assert_eq!(line.stroke_opacity().unwrap(), 0.25);
@@ -2546,7 +2555,7 @@ mod tests {
         assert_eq!(result.impacts().len(), 1);
         assert_eq!(
             session
-                .live()
+                .scene()
                 .authored(&line)
                 .unwrap()
                 .transform
@@ -2576,7 +2585,7 @@ mod tests {
         assert_eq!(result.impacts().len(), 1);
         assert_eq!(
             session
-                .live()
+                .scene()
                 .authored(&target)
                 .unwrap()
                 .transform
@@ -2585,8 +2594,8 @@ mod tests {
         );
         assert_eq!(target.center().unwrap(), (3.0, -2.0));
         assert!(matches!(
-            session.live().effective(&target),
-            Err(LiveSessionError::Publication(
+            session.scene().effective(&target),
+            Err(crate::AuthoringError::ExecutionPublication(
                 ExecutionSessionPublicationError::UnknownObject(_)
             ))
         ));
@@ -2698,7 +2707,7 @@ mod tests {
         assert_eq!(session.live().session.publication_context(), before);
         assert_eq!(
             session
-                .live()
+                .scene()
                 .authored(&circle)
                 .unwrap()
                 .transform
@@ -2788,7 +2797,7 @@ mod tests {
             session.live().advance_segment_to(segment, 0.5).unwrap();
             assert_eq!(
                 session
-                    .live()
+                    .scene()
                     .effective(&source)
                     .unwrap()
                     .transform
@@ -2796,7 +2805,7 @@ mod tests {
                 noon_core::Vec2::new(3.25, 1.25)
             );
             session.live().advance_segment_to(segment, 1.0).unwrap();
-            let before_completion = session.live().effective(&source).unwrap();
+            let before_completion = session.scene().effective(&source).unwrap();
             session.live().complete_segment(segment).unwrap();
             let mut expected = original;
             if mode == "mapped" {
@@ -2804,8 +2813,8 @@ mod tests {
                 expected.transform = target_state.transform;
                 expected.style = target_state.style;
             }
-            assert_eq!(session.live().authored(&source).unwrap(), expected);
-            let after_completion = session.live().effective(&source).unwrap();
+            assert_eq!(session.scene().authored(&source).unwrap(), expected);
+            let after_completion = session.scene().effective(&source).unwrap();
             assert_eq!(after_completion.transform, before_completion.transform);
             assert_eq!(after_completion.style, before_completion.style);
             session
@@ -2814,7 +2823,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 session
-                    .live()
+                    .scene()
                     .effective(&source)
                     .unwrap()
                     .transform
@@ -2851,7 +2860,7 @@ mod tests {
         session.live().advance_segment_to(segment, 0.0).unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&source)
                 .unwrap()
                 .transform
@@ -2859,7 +2868,7 @@ mod tests {
             noon_core::Vec2::new(3.25, 1.25)
         );
         session.live().advance_segment_to(segment, 1.0).unwrap();
-        let at_finish = session.live().effective(&source).unwrap();
+        let at_finish = session.scene().effective(&source).unwrap();
         assert_eq!(
             at_finish.transform.translation,
             noon_core::Vec2::new(
@@ -2868,10 +2877,10 @@ mod tests {
             )
         );
         session.live().complete_segment(segment).unwrap();
-        assert_eq!(session.live().authored(&source).unwrap(), original);
+        assert_eq!(session.scene().authored(&source).unwrap(), original);
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&source)
                 .unwrap()
                 .transform
@@ -2884,7 +2893,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&source)
                 .unwrap()
                 .transform
@@ -2940,13 +2949,10 @@ mod tests {
         live.advance_segment_to(segment, 2.0).unwrap();
         live.complete_segment(segment).unwrap();
         assert_eq!(
-            live.authored(&source).unwrap().transform,
+            source.state().unwrap().transform,
             first.state().unwrap().transform
         );
-        assert_eq!(
-            live.authored(&source).unwrap().style,
-            first.state().unwrap().style
-        );
+        assert_eq!(source.state().unwrap().style, first.state().unwrap().style);
         assert_eq!(
             live.effective(&source).unwrap().transform.translation,
             noon_core::Vec2::new(2.0, 1.0)
@@ -2992,7 +2998,7 @@ mod tests {
         assert!(session.live().segment_state(first_segment).is_complete());
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&circle)
                 .unwrap()
                 .transform
@@ -3007,7 +3013,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&circle)
                 .unwrap()
                 .transform
@@ -3023,7 +3029,7 @@ mod tests {
         session.live().complete_segment(second_segment).unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&circle)
                 .unwrap()
                 .transform
@@ -3070,7 +3076,7 @@ mod tests {
             .unwrap();
         live.complete_segment(segment).unwrap();
         assert_eq!(
-            live.authored(&circle).unwrap().transform.translation,
+            circle.state().unwrap().transform.translation,
             SemanticVec3::new(8.0, -2.0, 0.0)
         );
     }
@@ -3184,7 +3190,7 @@ mod tests {
             )
             .unwrap();
         assert!(session.scene_mut().contains_direct(&square).unwrap());
-        let start = session.live().effective(&square).unwrap();
+        let start = session.scene().effective(&square).unwrap();
         assert_eq!(start.transform.translation, noon_core::Vec2::new(-2.0, 1.0));
         assert_eq!(start.transform.scale, noon_core::Vec2::ZERO);
         session
@@ -3192,7 +3198,7 @@ mod tests {
             .advance_segment_to(grow, grow.end_time())
             .unwrap();
         session.live().complete_segment(grow).unwrap();
-        assert_eq!(session.live().authored(&square).unwrap(), authored);
+        assert_eq!(session.scene().authored(&square).unwrap(), authored);
 
         let shrink = session
             .live()
@@ -3243,7 +3249,7 @@ mod tests {
             .unwrap();
         assert_eq!(square.node_id(), semantic_id);
         assert!(session.scene_mut().contains_direct(&square).unwrap());
-        assert_eq!(session.live().authored(&square).unwrap(), authored);
+        assert_eq!(session.scene().authored(&square).unwrap(), authored);
         assert_eq!(
             session
                 .live()
@@ -3627,11 +3633,11 @@ mod tests {
             .unwrap();
         live.complete_segment(segment).unwrap();
         assert_eq!(
-            live.authored(&left).unwrap().transform.translation,
+            left.state().unwrap().transform.translation,
             SemanticVec3::new(-2.0, 1.0, 0.0)
         );
         assert_eq!(
-            live.authored(&right).unwrap().transform.translation,
+            right.state().unwrap().transform.translation,
             SemanticVec3::new(2.0, -1.0, 0.0)
         );
     }
@@ -3685,7 +3691,7 @@ mod tests {
         assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
         assert_eq!(endpoint.opacity, 0.5);
         live.complete_segment(segment).unwrap();
-        let authored = live.authored(&circle).unwrap().style;
+        let authored = circle.state().unwrap().style;
         assert_eq!(
             authored.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
@@ -3739,7 +3745,7 @@ mod tests {
         }
         live.complete_segment(segment).unwrap();
         assert_eq!(
-            live.authored(&circle).unwrap().transform.translation,
+            circle.state().unwrap().transform.translation,
             SemanticVec3::new(4.0, 0.0, 0.0)
         );
     }
@@ -4018,7 +4024,7 @@ mod tests {
         session.live().complete_segment(segment).unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&circle)
                 .unwrap()
                 .transform
@@ -4069,7 +4075,7 @@ mod tests {
         session.live().complete_segment(segment).unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&square)
                 .unwrap()
                 .transform
@@ -4091,9 +4097,9 @@ mod tests {
 
         {
             session.scene_mut().remove(&toggled).unwrap();
-            assert!(session.live().effective(&toggled).is_err());
+            assert!(session.scene().effective(&toggled).is_err());
             session.scene_mut().add(&toggled).unwrap();
-            assert!(session.live().effective(&toggled).is_ok());
+            assert!(session.scene().effective(&toggled).is_ok());
             session.scene_mut().add(&detached).unwrap();
             assert_eq!(
                 session
@@ -4109,7 +4115,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 session
-                    .live()
+                    .scene()
                     .effective(&detached)
                     .unwrap()
                     .transform
@@ -4263,7 +4269,7 @@ mod tests {
                 .declare_and_activate_fade(&fading, SemanticFadeDirection::In, options)
                 .unwrap();
             assert!(session.scene_mut().contains_direct(&fading).unwrap());
-            assert_eq!(session.live().effective(&fading).unwrap().appearance, 0.0);
+            assert_eq!(session.scene().effective(&fading).unwrap().appearance, 0.0);
             let publication = session.live().session.last_structural_publication_stats();
             assert_eq!(publication.entered_objects, 1);
             assert_eq!(publication.exited_objects, 0);
@@ -4286,14 +4292,14 @@ mod tests {
 
         {
             session.live().advance_segment_to(fade_in, 0.5).unwrap();
-            assert_eq!(session.live().effective(&fading).unwrap().appearance, 0.5);
+            assert_eq!(session.scene().effective(&fading).unwrap().appearance, 0.5);
             session
                 .live()
                 .advance_segment_to(fade_in, fade_in.end_time())
                 .unwrap();
             session.live().complete_segment(fade_in).unwrap();
-            assert_eq!(session.live().effective(&fading).unwrap().appearance, 1.0);
-            assert_eq!(session.live().authored(&fading).unwrap(), authored_before);
+            assert_eq!(session.scene().effective(&fading).unwrap().appearance, 1.0);
+            assert_eq!(session.scene().authored(&fading).unwrap(), authored_before);
         }
 
         let fade_out = {
@@ -4312,10 +4318,10 @@ mod tests {
         };
         {
             session.live().advance_segment_to(fade_out, 1.5).unwrap();
-            assert_eq!(session.live().effective(&fading).unwrap().appearance, 0.5);
+            assert_eq!(session.scene().effective(&fading).unwrap().appearance, 0.5);
             assert_eq!(
                 session
-                    .live()
+                    .scene()
                     .effective(&fading)
                     .unwrap()
                     .transform
@@ -4324,7 +4330,13 @@ mod tests {
                 1.0
             );
             assert_eq!(
-                session.live().effective(&fading).unwrap().transform.scale.x,
+                session
+                    .scene()
+                    .effective(&fading)
+                    .unwrap()
+                    .transform
+                    .scale
+                    .x,
                 0.75
             );
             session
@@ -4334,16 +4346,16 @@ mod tests {
             assert!(session.scene_mut().contains_direct(&fading).unwrap());
             session.live().complete_segment(fade_out).unwrap();
             assert!(!session.scene_mut().contains_direct(&fading).unwrap());
-            assert!(session.live().effective(&fading).is_err());
+            assert!(session.scene().effective(&fading).is_err());
             let publication = session.live().session.last_structural_publication_stats();
             assert_eq!(publication.entered_objects, 0);
             assert_eq!(publication.exited_objects, 1);
 
             session.scene_mut().add(&fading).unwrap();
             assert!(session.scene_mut().contains_direct(&fading).unwrap());
-            assert_eq!(session.live().effective(&fading).unwrap().appearance, 1.0);
+            assert_eq!(session.scene().effective(&fading).unwrap().appearance, 1.0);
             assert_eq!(fading.node_id(), fading_node);
-            assert_eq!(session.live().authored(&fading).unwrap(), authored_before);
+            assert_eq!(session.scene().authored(&fading).unwrap(), authored_before);
         }
         assert_eq!(
             session.session().execution_slot_for_frame_index(0),
@@ -5284,7 +5296,7 @@ mod recursive_composition_tests {
             let session = scene.execution_session().unwrap();
             scene.install_execution(session);
             let before = scene.owned_execution().publication_context();
-            let unrelated_before = scene.owned_live().effective(&unrelated).unwrap();
+            let unrelated_before = scene.effective(&unrelated).unwrap();
 
             assert!(scene
                 .arrange_family_with_options(
@@ -5311,34 +5323,16 @@ mod recursive_composition_tests {
             );
             assert!((first.center().unwrap().0 + 1.0).abs() < 1e-6);
             assert!((second.center().unwrap().0 - 1.0).abs() < 1e-6);
-            let unrelated_after = scene.owned_live().effective(&unrelated).unwrap();
+            let unrelated_after = scene.effective(&unrelated).unwrap();
             assert_eq!(unrelated_after.transform, unrelated_before.transform);
             assert_eq!(unrelated_after.style, unrelated_before.style);
             assert_eq!(unrelated_after.appearance, unrelated_before.appearance);
             if mounted {
                 assert!(
-                    (scene
-                        .owned_live()
-                        .effective(&first)
-                        .unwrap()
-                        .transform
-                        .translation
-                        .x
-                        + 1.0)
-                        .abs()
-                        < 1e-6
+                    (scene.effective(&first).unwrap().transform.translation.x + 1.0).abs() < 1e-6
                 );
                 assert!(
-                    (scene
-                        .owned_live()
-                        .effective(&second)
-                        .unwrap()
-                        .transform
-                        .translation
-                        .x
-                        - 1.0)
-                        .abs()
-                        < 1e-6
+                    (scene.effective(&second).unwrap().transform.translation.x - 1.0).abs() < 1e-6
                 );
             }
         }
@@ -6065,8 +6059,8 @@ mod recursive_composition_tests {
 
         let mut live = scene.owned_live();
         live.prepare_family_subset_display(&family).unwrap();
-        assert_eq!(live.authored(&first).unwrap().style.fill_opacity, 0.0);
-        assert_eq!(live.authored(&second).unwrap().style.fill_opacity, 0.0);
+        assert_eq!(first.state().unwrap().style.fill_opacity, 0.0);
+        assert_eq!(second.state().unwrap().style.fill_opacity, 0.0);
         let segment = live
             .declare_and_activate_family_subset_display(
                 &family,

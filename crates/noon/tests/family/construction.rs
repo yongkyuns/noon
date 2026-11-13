@@ -126,14 +126,14 @@ fn live_member_batch_rejects_a_late_cycle_without_partial_publication() {
         let wait = execution.live().wait_segment(0.5).unwrap();
         execution.live().advance_segment_to(wait, 0.5).unwrap();
         execution.live().complete_segment(wait).unwrap();
-        let before = execution.live().effective(&first).unwrap();
+        let before = execution.scene().effective(&first).unwrap();
         let revision = store.borrow().scene_revision();
         assert!(execution
             .scene_mut()
             .add_family_members(&nested, &[(&second).into(), (&root).into()])
             .is_err());
         assert_eq!(store.borrow().scene_revision(), revision);
-        assert_eq!(execution.live().effective(&first).unwrap(), before);
+        assert_eq!(execution.scene().effective(&first).unwrap(), before);
         assert_eq!(
             execution
                 .scene_mut()

@@ -117,7 +117,7 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
     session.live().advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(
         session
-            .live()
+            .scene()
             .effective(&marker)
             .unwrap()
             .transform
@@ -127,7 +127,7 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
     );
     assert_eq!(
         session
-            .live()
+            .scene()
             .effective(&left)
             .unwrap()
             .transform
@@ -137,7 +137,7 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
     );
     assert_eq!(
         session
-            .live()
+            .scene()
             .effective(&right)
             .unwrap()
             .transform
@@ -378,7 +378,7 @@ fn heterogeneous_tuple_and_array_use_canonical_admission_and_fade_completion() {
     assert_eq!(circle.node_id(), circle_id);
     assert_eq!(
         session
-            .live()
+            .scene()
             .effective(&circle)
             .unwrap()
             .transform
@@ -400,11 +400,11 @@ fn heterogeneous_tuple_and_array_use_canonical_admission_and_fade_completion() {
         .advance_segment_to(leaving, leaving.start_time() + 0.5)
         .unwrap();
     assert!(session.scene_mut().contains_direct(&square).unwrap());
-    assert!((session.live().effective(&square).unwrap().appearance - 0.5).abs() < 1e-6);
+    assert!((session.scene().effective(&square).unwrap().appearance - 0.5).abs() < 1e-6);
     finish(&mut session.live(), leaving);
     assert!(!session.scene_mut().contains_direct(&square).unwrap());
     assert!(session.scene_mut().contains_direct(&circle).unwrap());
-    let final_circle = session.live().effective(&circle).unwrap();
+    let final_circle = session.scene().effective(&circle).unwrap();
     assert_eq!(final_circle.transform.scale, Vec2::new(2.0, 2.0));
     assert_eq!(final_circle.transform.translation, RIGHT + UP);
 }
