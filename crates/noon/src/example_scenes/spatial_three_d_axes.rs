@@ -132,19 +132,12 @@ pub fn scene() -> Result<
 
 pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _, _, movement) = scene()?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// Circle screen-stroke qualification under the same finite moving 3D camera.
@@ -188,19 +181,12 @@ pub fn circle_screen_stroke_session() -> Result<crate::SceneExecution, String> {
     let movement = scene
         .declare_camera_profile_move(&camera, end_profile(), options)
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 #[cfg(test)]
