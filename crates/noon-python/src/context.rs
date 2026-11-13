@@ -2933,14 +2933,10 @@ impl Context {
             self, source, family, size, spacing, r, g, b, a, opacity, None, face, true,
         )
     }
-    #[pyo3(name = "liveSetAngleValue")]
+    #[pyo3(name = "setAngleValue")]
     fn set_angle_value(&mut self, target: &MobjectHandle, radians: f64) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        let running = self.has_execution();
-        self.scene
-            .set_angle_value(&target.handle, radians)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+        self.edit_scene(|scene| scene.set_angle_value(&target.handle, radians))
     }
     #[cfg(feature = "typst")]
     #[pyo3(name = "createManimTypst")]
