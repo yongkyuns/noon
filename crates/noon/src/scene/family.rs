@@ -95,6 +95,20 @@ impl Scene {
         Ok(())
     }
 
+    /// Publish updater suspension for a detached subtree without changing the callback schedule.
+    pub fn set_updating_suspended<'target>(
+        &mut self,
+        target: impl Into<MobjectTarget<'target>>,
+        suspended: bool,
+        recursive: bool,
+    ) -> Result<(), AuthoringError> {
+        let target = target.into();
+        target.require_store(self.integration_store())?;
+        let transaction =
+            target.updater_suspension_transaction(suspended, recursive, Some(self.root()))?;
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     /// Check direct membership in this Scene's root.
     pub fn contains_direct(&self, object: &Mobject) -> Result<bool, AuthoringError> {
         self.require_object(object)?;

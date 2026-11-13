@@ -1035,6 +1035,7 @@ for (const retired of [
   "liveCreateManimGeometry(", "liveCreateImage(", "liveSetImageSampling(",
   "liveCreateManimText(", "liveCreateManimMarkupText(", "liveCreateManimTypst(",
   "liveCreateLatex(", "liveSetLatexMemberColors(", "liveLatexFontSize(",
+  "liveSetUpdatingSuspended(", "liveSetFamilyUpdatingSuspended(",
   "liveScale(", "liveScaleFamily(", "liveScaleLayout(",
   "liveSetTranslation(", "liveSetRotation(", "liveSetScale(", "liveShift(", "liveShiftFamily(",
   "liveScaleLayout3d(", "liveRotateLayout(", "liveFlipLayout(", "liveStretchLayout(",
@@ -1082,6 +1083,7 @@ const sceneSurface = declarations.slice(sceneStart, sceneEnd < 0 ? undefined : s
 for (const method of [
   "createManimText(", "createManimMarkupText(", "createManimTypst(", "createLatex(",
   "createManimArrow(", "scaleArrow(",
+  "setUpdatingSuspended(", "setFamilyUpdatingSuspended(",
   "setTranslation(", "setRotation(", "setScale(", "shift(", "shiftFamily(",
   "scaleLayout3d(", "rotateLayout(", "flipLayout(", "stretchLayout(",
   "setZIndex(", "zIndex(", "applyMatrix(", "applyMatrixFamily(",

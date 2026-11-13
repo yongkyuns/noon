@@ -53,6 +53,18 @@ pub struct MobjectHandle {
     pub(crate) handle: noon::Mobject,
 }
 impl MobjectHandle {
+    #[pyo3(name = "updatingSuspended")]
+    fn updating_suspended(&self) -> PyResult<bool> {
+        self.handle.updating_suspended().map_err(engine_error)
+    }
+
+    #[pyo3(name = "setUpdatingSuspended")]
+    fn set_updating_suspended(&self, suspended: bool, recursive: bool) -> PyResult<()> {
+        self.handle
+            .set_updating_suspended(suspended, recursive)
+            .map_err(engine_error)
+    }
+
     pub(crate) fn from_semantic_mobject(handle: noon::Mobject) -> Self {
         Self { handle }
     }
