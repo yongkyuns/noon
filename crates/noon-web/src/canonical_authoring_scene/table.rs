@@ -23,10 +23,15 @@ impl CanonicalAuthoringSceneContext {
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_table_cell(&selection.selection, column)
+            selection
+                .selection
+                .get_cell_in_scene(
+                    self.inner
+                        .active_live_player()
+                        .map_err(js_error)?
+                        .scene_mut(),
+                    column,
+                )
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
@@ -51,10 +56,17 @@ impl CanonicalAuthoringSceneContext {
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_highlight_table_cell(&selection.selection, column, color, opacity)
+            selection
+                .selection
+                .highlight_cell_in_scene(
+                    self.inner
+                        .active_live_player()
+                        .map_err(js_error)?
+                        .scene_mut(),
+                    column,
+                    color,
+                    opacity,
+                )
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
@@ -79,10 +91,17 @@ impl CanonicalAuthoringSceneContext {
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_get_highlighted_table_cell(&selection.selection, column, color, opacity)
+            selection
+                .selection
+                .get_highlighted_cell_in_scene(
+                    self.inner
+                        .active_live_player()
+                        .map_err(js_error)?
+                        .scene_mut(),
+                    column,
+                    color,
+                    opacity,
+                )
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(js_error)
         }
@@ -94,18 +113,13 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows, "Table")?;
-        if self.inner.player_ownership.is_unstarted() {
-            noon::Table::from_rows_with_options(&mut self.inner.scene, rows, options.options)
-                .map(WasmTableHandle::new)
-                .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_table(rows, options.options)
-                .map(WasmTableHandle::new)
-                .map_err(js_error)
-        }
+        noon::Table::from_rows_with_options(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            rows,
+            options.options,
+        )
+        .map(WasmTableHandle::new)
+        .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveCreateTableWithLabels)]
     pub fn live_create_table_with_labels(
@@ -122,31 +136,16 @@ impl CanonicalAuthoringSceneContext {
             columns: column_labels,
             corner: top_left_entry,
         } = CompositeTableLabels::read(row_labels, column_labels, top_left_entry, "Table")?;
-        if self.inner.player_ownership.is_unstarted() {
-            noon::Table::from_rows_with_composite_labels(
-                &mut self.inner.scene,
-                rows,
-                row_labels,
-                column_labels,
-                top_left_entry,
-                options.options,
-            )
-            .map(WasmTableHandle::new)
-            .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_table_with_labels(
-                    rows,
-                    row_labels,
-                    column_labels,
-                    top_left_entry,
-                    options.options,
-                )
-                .map(WasmTableHandle::new)
-                .map_err(js_error)
-        }
+        noon::Table::from_rows_with_composite_labels(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            rows,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options.options,
+        )
+        .map(WasmTableHandle::new)
+        .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveCreateMathTable)]
     pub fn live_create_math_table(
@@ -156,23 +155,14 @@ impl CanonicalAuthoringSceneContext {
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = text_rows(rows, "Table")?;
-        if self.inner.player_ownership.is_unstarted() {
-            noon::MathTable::from_rows_with_options(
-                &mut self.inner.scene,
-                compiler,
-                rows,
-                options.options,
-            )
-            .map(|value| WasmTableHandle::new(value.into_table()))
-            .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_math_table(compiler, rows, options.options)
-                .map(WasmTableHandle::new)
-                .map_err(js_error)
-        }
+        noon::MathTable::from_rows_with_options(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            compiler,
+            rows,
+            options.options,
+        )
+        .map(|value| WasmTableHandle::new(value.into_table()))
+        .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveCreateIntegerTable)]
     pub fn live_create_integer_table(
@@ -182,23 +172,14 @@ impl CanonicalAuthoringSceneContext {
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = number_rows(rows, "Table")?;
-        if self.inner.player_ownership.is_unstarted() {
-            noon::IntegerTable::from_rows_with_options(
-                &mut self.inner.scene,
-                compiler,
-                rows,
-                options.options,
-            )
-            .map(|value| WasmTableHandle::new(value.into_table()))
-            .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_integer_table(compiler, rows, options.options)
-                .map(|value| WasmTableHandle::new(value.into_table()))
-                .map_err(js_error)
-        }
+        noon::IntegerTable::from_rows_with_options(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            compiler,
+            rows,
+            options.options,
+        )
+        .map(|value| WasmTableHandle::new(value.into_table()))
+        .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveCreateDecimalTable)]
     pub fn live_create_decimal_table(
@@ -220,24 +201,15 @@ impl CanonicalAuthoringSceneContext {
             show_ellipsis,
             unit,
         };
-        if self.inner.player_ownership.is_unstarted() {
-            noon::DecimalTable::from_rows_with_options(
-                &mut self.inner.scene,
-                compiler,
-                rows,
-                format,
-                options.options,
-            )
-            .map(|value| WasmTableHandle::new(value.into_table()))
-            .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_decimal_table(compiler, rows, format, options.options)
-                .map(|value| WasmTableHandle::new(value.into_table()))
-                .map_err(js_error)
-        }
+        noon::DecimalTable::from_rows_with_options(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            compiler,
+            rows,
+            format,
+            options.options,
+        )
+        .map(|value| WasmTableHandle::new(value.into_table()))
+        .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveCreateMobjectTable)]
     pub fn live_create_mobject_table(
@@ -246,22 +218,13 @@ impl CanonicalAuthoringSceneContext {
         options: WasmTableOptions,
     ) -> Result<WasmTableHandle, JsValue> {
         let rows = rows.targets();
-        if self.inner.player_ownership.is_unstarted() {
-            noon::MobjectTable::from_target_rows_with_options(
-                &mut self.inner.scene,
-                rows,
-                options.options,
-            )
-            .map(|value| WasmTableHandle::new(value.into_table()))
-            .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_mobject_table(rows, options.options)
-                .map(|value| WasmTableHandle::new(value.into_table()))
-                .map_err(js_error)
-        }
+        noon::MobjectTable::from_target_rows_with_options(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            rows,
+            options.options,
+        )
+        .map(|value| WasmTableHandle::new(value.into_table()))
+        .map_err(js_error)
     }
     #[wasm_bindgen(js_name = liveCreateMobjectTableWithLabels)]
     pub fn live_create_mobject_table_with_labels(
@@ -278,30 +241,15 @@ impl CanonicalAuthoringSceneContext {
             columns: column_labels,
             corner: top_left_entry,
         } = CompositeTableLabels::read(row_labels, column_labels, top_left_entry, "MobjectTable")?;
-        if self.inner.player_ownership.is_unstarted() {
-            noon::MobjectTable::from_target_rows_with_optional_composite_labels(
-                &mut self.inner.scene,
-                rows,
-                row_labels,
-                column_labels,
-                top_left_entry,
-                options.options,
-            )
-            .map(|value| WasmTableHandle::new(value.into_table()))
-            .map_err(js_error)
-        } else {
-            self.inner
-                .active_live_player()
-                .map_err(js_error)?
-                .live_create_mobject_table_with_labels_and_top_left_entry(
-                    rows,
-                    row_labels,
-                    column_labels,
-                    top_left_entry,
-                    options.options,
-                )
-                .map(|value| WasmTableHandle::new(value.into_table()))
-                .map_err(js_error)
-        }
+        noon::MobjectTable::from_target_rows_with_optional_composite_labels(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            rows,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options.options,
+        )
+        .map(|value| WasmTableHandle::new(value.into_table()))
+        .map_err(js_error)
     }
 }

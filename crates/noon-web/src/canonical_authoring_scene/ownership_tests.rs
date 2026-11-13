@@ -205,7 +205,10 @@ fn ownership_observations_and_continuation_follow_one_runtime() {
     assert_eq!(player.ownership_identity(), identity);
     assert_eq!(player.time(), 0.25);
     // Return/resume did not reset the initial-snapshot/encoder state.
-    player.live_set_translation(&circle, 1.0, 0.0).unwrap();
+    player
+        .scene_mut()
+        .set_translation(&circle, 1.0, 0.0)
+        .unwrap();
     let delta: serde_json::Value =
         serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap();
     assert_eq!(delta["session"], 41);
@@ -416,7 +419,10 @@ fn publication_while_leased_does_not_invalidate_the_ownership_identity() {
     let mut player = scene.take_execution_player(1.0, 41).unwrap();
     let identity = player.ownership_identity();
     let revision = player.scene_revision();
-    player.live_set_translation(&circle, 3.0, -1.0).unwrap();
+    player
+        .scene_mut()
+        .set_translation(&circle, 3.0, -1.0)
+        .unwrap();
     assert_ne!(player.scene_revision(), revision);
     assert_eq!(player.ownership_identity(), identity);
     scene.return_execution_player(player).unwrap();

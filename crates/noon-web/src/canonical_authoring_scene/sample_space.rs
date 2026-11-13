@@ -137,7 +137,8 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_move_to(
+            .scene_mut()
+            .move_to(
                 &rectangle,
                 noon::LiveLayoutTarget::Point(2.0, -1.0),
                 (0.0, 0.0),

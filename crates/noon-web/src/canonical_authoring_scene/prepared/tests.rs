@@ -217,7 +217,8 @@ fn completed_observed_source_keeps_original_history_for_replay() {
     context
         .active_live_player()
         .unwrap()
-        .live_set_translation(&target, 2.0, 0.0)
+        .scene_mut()
+        .set_translation(&target, 2.0, 0.0)
         .unwrap();
     context.begin_ordinary_wait(0.5).unwrap();
     let mut player = context.resume_execution_player().unwrap();
@@ -367,7 +368,8 @@ fn interpreter_prefix_final_edits_and_effect_survive_source_destruction() {
     context
         .active_live_player()
         .unwrap()
-        .live_set_translation(&target, 3.0, 0.0)
+        .scene_mut()
+        .set_translation(&target, 3.0, 0.0)
         .unwrap();
     assert!(context.finish_prepared_prefix(&mut publisher).is_err());
     assert_eq!(reader.end_time(), None);
@@ -594,7 +596,8 @@ fn completed_zero_barriers_keep_final_same_time_edits_and_reject_pending_work() 
     context
         .active_live_player()
         .unwrap()
-        .live_set_translation(&target, 3.0, 0.0)
+        .scene_mut()
+        .set_translation(&target, 3.0, 0.0)
         .unwrap();
     context.begin_ordinary_wait(0.0).unwrap();
     assert!(!context.prepare_initial_source_segment().unwrap());

@@ -44,7 +44,8 @@ fn interpreter_worker_completion_is_separate_from_quiet_historical_adoption() {
     context
         .active_live_player()
         .unwrap()
-        .live_set_translation(&target, 2.0, 0.0)
+        .scene_mut()
+        .set_translation(&target, 2.0, 0.0)
         .unwrap();
     context.begin_ordinary_wait(1.0).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
@@ -159,7 +160,8 @@ fn interpreter_worker_zero_duration_completion_defers_same_time_edits() {
     context
         .active_live_player()
         .unwrap()
-        .live_set_translation(&target, 3.0, 0.0)
+        .scene_mut()
+        .set_translation(&target, 3.0, 0.0)
         .unwrap();
     context.begin_ordinary_wait(0.0).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
