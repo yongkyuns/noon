@@ -44,13 +44,13 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     let a = scene.image(options()).unwrap();
     let b = scene.image(options()).unwrap();
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     let first = upload(
-        &mut session,
+        execution.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
@@ -64,12 +64,12 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     assert_eq!(renderer.image_residency_stats().objects, 2);
     let baseline = preparer.incremental_stats();
     for tick in 1..=128 {
-        scene
-            .live(&mut session)
+        execution
+            .live()
             .set_translation(&a, tick as f64 * 0.01, 0.0)
             .unwrap();
         let changed = upload(
-            &mut session,
+            execution.session_mut(),
             &mut preparer,
             &mut renderer,
             &device,
@@ -87,10 +87,10 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     assert_eq!(after.text_snapshot_copies, baseline.text_snapshot_copies);
     assert_eq!(after.mixed_order_rebuilds, baseline.mixed_order_rebuilds);
     assert_eq!(after.scratch_reuses - baseline.scratch_reuses, 128);
-    scene.live(&mut session).set_opacity(&a, 0.25).unwrap();
+    execution.live().set_opacity(&a, 0.25).unwrap();
     assert_eq!(
         upload(
-            &mut session,
+            execution.session_mut(),
             &mut preparer,
             &mut renderer,
             &device,
@@ -101,13 +101,13 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
         .pixel_bytes_uploaded,
         0
     );
-    scene
-        .live(&mut session)
+    execution
+        .scene_mut()
         .set_image_sampling(&a, RasterImageSampling::Bicubic)
         .unwrap();
     assert_eq!(
         upload(
-            &mut session,
+            execution.session_mut(),
             &mut preparer,
             &mut renderer,
             &device,
@@ -119,7 +119,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
         0
     );
     let idle = upload(
-        &mut session,
+        execution.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
@@ -128,9 +128,9 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     );
     assert_eq!(idle.images, Default::default());
     assert_eq!(idle.bytes_uploaded(), 0);
-    scene.live(&mut session).remove(&a).unwrap();
+    execution.live().remove(&a).unwrap();
     let removal = upload(
-        &mut session,
+        execution.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
@@ -139,9 +139,9 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     );
     assert_eq!(removal.images.textures_retired, 0);
     assert_eq!(renderer.image_residency_stats().textures, 1);
-    scene.live(&mut session).remove(&b).unwrap();
+    execution.live().remove(&b).unwrap();
     let removal = upload(
-        &mut session,
+        execution.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,

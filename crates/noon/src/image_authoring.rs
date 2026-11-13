@@ -138,7 +138,7 @@ pub(crate) fn prepare_image_fill_mapping(
 }
 
 /// Inert image constructor. It owns prepared pixels, but no semantic identity or
-/// retained-resource admission until a Scene/Mobject/live construction succeeds.
+/// retained-resource admission until construction succeeds.
 #[derive(Clone, Debug)]
 pub struct ImageMobjectOptions {
     pixels: RasterImageResource,
@@ -328,8 +328,8 @@ impl Mobject {
         let state = prepare_image_fill_mapping(self, mapping, opacity)?;
         self.commit_state(state)
     }
-    /// Cold-authoring image constructor. For an already-running Scene use
-    /// `Scene::image` or `LiveSession::create_image`, which preserve revision coherence.
+    /// Construct an authored image in a raw store. Use [`crate::Scene::image`]
+    /// when the Scene owns publication.
     pub fn from_image(
         store: Rc<RefCell<SemanticStore>>,
         options: ImageMobjectOptions,
@@ -371,10 +371,21 @@ impl Mobject {
         sampling: RasterImageSampling,
     ) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
-        let image = state.content.image().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::ImageContent,
-        ))?;
-        state.content = SemanticImageContent::with_sampling(image.resource(), sampling).into();
+        let content = image_content_with_sampling(&state, sampling)?;
+        state.content = content.into();
         self.commit_state(state)
     }
+}
+
+pub(crate) fn image_content_with_sampling(
+    state: &SemanticObjectState,
+    sampling: RasterImageSampling,
+) -> Result<SemanticImageContent, AuthoringError> {
+    let image = state.content.image().ok_or(AuthoringError::Unsupported(
+        crate::UnsupportedAuthoringOperation::ImageContent,
+    ))?;
+    Ok(SemanticImageContent::with_sampling(
+        image.resource(),
+        sampling,
+    ))
 }

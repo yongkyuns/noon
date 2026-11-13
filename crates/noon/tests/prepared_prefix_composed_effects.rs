@@ -94,23 +94,39 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
         .unwrap();
     scene.add_many(&[(&treated).into()]).unwrap();
 
-    let mut source = scene.execution_session().unwrap();
-    source
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
         .begin_replay_retention(ReplayLimits {
             revisions: 128,
             payloads: 512,
         })
         .unwrap();
-    let initial = source.wait_segment(0.6).unwrap();
-    source.advance_to(initial.end_time()).unwrap();
-    let (mut publisher, mut reader) = source.create_prepared_prefix(initial).unwrap();
+    let initial = execution.session_mut().wait_segment(0.6).unwrap();
+    execution
+        .session_mut()
+        .advance_to(initial.end_time())
+        .unwrap();
+    let (mut publisher, mut reader) = execution.session().create_prepared_prefix(initial).unwrap();
     reader.seek(0.3).unwrap();
     let paused = reader.frame().clone();
-    let owner = source.execution_object_id(treated.node_id()).unwrap();
+    let owner = execution
+        .session()
+        .execution_object_id(treated.node_id())
+        .unwrap();
     let members = [
-        source.execution_object_id(coral.node_id()).unwrap(),
-        source.execution_object_id(teal.node_id()).unwrap(),
-        source.execution_object_id(gold.node_id()).unwrap(),
+        execution
+            .session()
+            .execution_object_id(coral.node_id())
+            .unwrap(),
+        execution
+            .session()
+            .execution_object_id(teal.node_id())
+            .unwrap(),
+        execution
+            .session()
+            .execution_object_id(gold.node_id())
+            .unwrap(),
     ];
     assert_eq!(composed_source(&reader, owner).members(), members);
     let (old_version, old_at_start) = paint_pixels(&mut reader, 0.3, members[1]);
@@ -118,17 +134,17 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
     reader.seek(0.3).unwrap();
     let publication = reader.publication_context();
 
-    let target = scene.live(&mut source).copy_family(&treated).unwrap();
-    scene
-        .live(&mut source)
+    let target = execution.live().copy_family(&treated).unwrap();
+    execution
+        .live()
         .set_effect(
             target.root(),
             "soften",
             EffectUpdate::default().radius(Pixels(2.0)),
         )
         .unwrap();
-    scene
-        .live(&mut source)
+    execution
+        .live()
         .set_effect(
             target.root(),
             "glow",
@@ -138,8 +154,8 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
     let options = AnimationOptions::new()
         .run_time(1.0)
         .rate_func(RateFunction::Linear);
-    let track_segment = scene
-        .live(&mut source)
+    let track_segment = execution
+        .live()
         .declare_and_activate_animation_composition(
             SemanticAnimationCompositionKind::Parallel,
             &[AnimationCompositionRequest::FamilyMethodTargetTo {
@@ -151,20 +167,20 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
             AnimationOptions::new(),
         )
         .unwrap();
-    source
+    execution
+        .session_mut()
         .advance_segment_to(track_segment, track_segment.start_time() + 0.5)
         .unwrap();
-    let mid_track_time = source.frame().time;
-    source
+    let mid_track_time = execution.session().frame().time;
+    execution
+        .session_mut()
         .advance_segment_to(track_segment, track_segment.end_time())
         .unwrap();
-    scene
-        .live(&mut source)
-        .complete_segment(track_segment)
-        .unwrap();
+    execution.live().complete_segment(track_segment).unwrap();
     reader
         .append(
-            source
+            execution
+                .session()
                 .publish_prepared_prefix(track_segment, &mut publisher)
                 .unwrap(),
         )
@@ -189,11 +205,11 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
     assert!((effects.definitions()[1].as_glow().unwrap().intensity() - 0.8).abs() < 1e-12);
     assert_eq!(composed_source(&reader, owner).members(), members);
 
-    scene
-        .live(&mut source)
+    execution
+        .scene_mut()
         .set_fill_image(&teal, image_paint(new_pixels), Some(1.0))
         .unwrap();
-    append_wait(&mut source, &mut publisher, &mut reader);
+    append_wait(execution.session_mut(), &mut publisher, &mut reader);
     assert_eq!(reader.frame().time, mid_track_time);
     assert_eq!(
         reader
@@ -226,22 +242,25 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
                 .rate_func(RateFunction::Linear)
                 .remover(false),
         };
-        let segment = scene
-            .live(&mut source)
+        let segment = execution
+            .live()
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
-        source
+        execution
+            .session_mut()
             .advance_segment_to(segment, segment.start_time() + 0.3)
             .unwrap();
-        let middle = source.frame().time;
-        source
+        let middle = execution.session().frame().time;
+        execution
+            .session_mut()
             .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        scene.live(&mut source).complete_segment(segment).unwrap();
+        execution.live().complete_segment(segment).unwrap();
         let paused_frame = reader.frame().clone();
         reader
             .append(
-                source
+                execution
+                    .session()
                     .publish_prepared_prefix(segment, &mut publisher)
                     .unwrap(),
             )
@@ -289,14 +308,11 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
         .unwrap()
         .attachments()
         .to_vec();
-    let removal_start = source.frame().time;
-    scene
-        .live(&mut source)
-        .remove_effect(&treated, "soften")
-        .unwrap();
-    scene.live(&mut source).remove_glow(&treated).unwrap();
-    append_wait(&mut source, &mut publisher, &mut reader);
-    let removal_time = source.frame().time;
+    let removal_start = execution.session().frame().time;
+    execution.live().remove_effect(&treated, "soften").unwrap();
+    execution.live().remove_glow(&treated).unwrap();
+    append_wait(execution.session_mut(), &mut publisher, &mut reader);
+    let removal_time = execution.session().frame().time;
     reader.seek(removal_start + 0.25).unwrap();
     let row = reader
         .frame()
@@ -309,16 +325,16 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
         "completed dissolve retires visibility"
     );
 
-    scene
-        .live(&mut source)
+    execution
+        .live()
         .add_effect(
             &treated,
             Blur::new(EffectUpdate::default().radius(Pixels(0.0))).unwrap(),
             "soften",
         )
         .unwrap();
-    scene
-        .live(&mut source)
+    execution
+        .live()
         .set_glow(
             &treated,
             EffectUpdate::default()
@@ -327,7 +343,7 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
                 .color(noon::Color::rgba(0.35, 0.65, 1.0, 1.0)),
         )
         .unwrap();
-    append_wait(&mut source, &mut publisher, &mut reader);
+    append_wait(execution.session_mut(), &mut publisher, &mut reader);
     assert_eq!(reader.frame().time, removal_start + 0.25);
     reader.seek(removal_time + 0.25).unwrap();
     let stack = reader
@@ -353,22 +369,25 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
             .rate_func(RateFunction::Linear)
             .remover(false),
     };
-    let segment = scene
-        .live(&mut source)
+    let segment = execution
+        .live()
         .declare_and_activate_composition(&dissolve, AnimationOptions::new())
         .unwrap();
-    source
+    execution
+        .session_mut()
         .advance_segment_to(segment, segment.start_time() + 0.3)
         .unwrap();
-    let visibility_time = source.frame().time;
-    source
+    let visibility_time = execution.session().frame().time;
+    execution
+        .session_mut()
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    scene.live(&mut source).complete_segment(segment).unwrap();
+    execution.live().complete_segment(segment).unwrap();
     let paused_frame = reader.frame().clone();
     reader
         .append(
-            source
+            execution
+                .session()
                 .publish_prepared_prefix(segment, &mut publisher)
                 .unwrap(),
         )

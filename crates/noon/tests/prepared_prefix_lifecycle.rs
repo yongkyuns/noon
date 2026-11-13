@@ -71,16 +71,21 @@ fn image_paint_replacement_keeps_old_pixels_and_future_append_paused() {
     panel.set_fill_image(image_paint(first), Some(1.0)).unwrap();
     scene.add(&panel).unwrap();
 
-    let mut source = scene.execution_session().unwrap();
-    source
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
         .begin_replay_retention(ReplayLimits {
             revisions: 64,
             payloads: 256,
         })
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
-    let (mut publisher, mut reader) = source
+    let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+    execution
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
+    let (mut publisher, mut reader) = execution
+        .session()
         .create_prepared_prefix_with_resource_budget(boundary, bytes * 2)
         .unwrap();
     assert_eq!(publisher.extracted_resource_bytes(), bytes);
@@ -89,15 +94,16 @@ fn image_paint_replacement_keeps_old_pixels_and_future_append_paused() {
     assert_eq!(displayed_paint_pixels(&mut reader, 0.5), first);
     let paused_time = reader.frame().time;
     let paused_frame = reader.frame().clone();
-    scene
-        .live(&mut source)
+    execution
+        .scene_mut()
         .set_fill_image(&panel, image_paint(second), Some(1.0))
         .unwrap();
-    let next = source.wait_segment(1.0).unwrap();
-    source.advance_to(next.end_time()).unwrap();
+    let next = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(next.end_time()).unwrap();
     reader
         .append(
-            source
+            execution
+                .session()
                 .publish_prepared_prefix(next, &mut publisher)
                 .unwrap(),
         )
@@ -124,31 +130,36 @@ fn image_paint_resource_budget_failure_keeps_suffix_cursor_and_reader_unchanged(
     panel.set_fill_image(image_paint(first), Some(1.0)).unwrap();
     scene.add(&panel).unwrap();
 
-    let mut source = scene.execution_session().unwrap();
-    source
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
         .begin_replay_retention(ReplayLimits {
             revisions: 64,
             payloads: 256,
         })
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
-    let (mut publisher, mut reader) = source
+    let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+    execution
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
+    let (mut publisher, mut reader) = execution
+        .session()
         .create_prepared_prefix_with_resource_budget(boundary, bytes * 2 - 1)
         .unwrap();
     assert_eq!(publisher.extracted_resource_bytes(), bytes);
     reader.seek(0.5).unwrap();
     let before = reader.frame().clone();
-    scene
-        .live(&mut source)
+    execution
+        .scene_mut()
         .set_fill_image(&panel, image_paint(second), Some(1.0))
         .unwrap();
-    let next = source.wait_segment(1.0).unwrap();
-    source.advance_to(next.end_time()).unwrap();
+    let next = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(next.end_time()).unwrap();
 
     for _ in 0..2 {
         assert!(matches!(
-            source.publish_prepared_prefix(next, &mut publisher),
+            execution.session().publish_prepared_prefix(next, &mut publisher),
             Err(PrefixError::ResourceBudgetExceeded {
                 retained_bytes,
                 additional_bytes,
@@ -169,52 +180,57 @@ fn image_paint_resource_budget_failure_keeps_suffix_cursor_and_reader_unchanged(
 
 #[test]
 fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
-    let (scene, _, mut source, mut publisher, mut reader) = fixture();
-    let a = scene
-        .live(&mut source)
-        .create_image(image([240, 20, 10, 255]))
+    let (scene, _, source, mut publisher, mut reader) = fixture();
+    let mut execution = scene.into_execution_with_session(source).unwrap();
+    let a = execution
+        .scene_mut()
+        .image(image([240, 20, 10, 255]))
         .unwrap();
-    scene.live(&mut source).add(&a).unwrap();
+    execution.live().add(&a).unwrap();
     let first_handle = a.state().unwrap().content.image().unwrap().resource();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(2.0).unwrap();
-    let batch = source
+    let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(2.0).unwrap();
+    let batch = execution
+        .session()
         .publish_prepared_prefix(boundary, &mut publisher)
         .unwrap();
     assert_eq!(batch.stats().resource_payloads, 1);
     assert_eq!(batch.stats().new_object_slots, 1);
     reader.append(batch).unwrap();
-    let b = scene
-        .live(&mut source)
-        .create_image(image([10, 30, 240, 255]))
+    let b = execution
+        .scene_mut()
+        .image(image([10, 30, 240, 255]))
         .unwrap();
     let second_handle = b.state().unwrap().content.image().unwrap().resource();
     assert_ne!(first_handle, second_handle);
-    scene
-        .live(&mut source)
+    execution
+        .live()
         .become_mobject(&a, &b, ManimBecomeOptions::default())
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(3.0).unwrap();
-    let batch = source
+    let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(3.0).unwrap();
+    let batch = execution
+        .session()
         .publish_prepared_prefix(boundary, &mut publisher)
         .unwrap();
     assert_eq!(batch.stats().resource_payloads, 1);
     reader.append(batch).unwrap();
-    scene.live(&mut source).remove(&a).unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(4.0).unwrap();
+    execution.live().remove(&a).unwrap();
+    let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(4.0).unwrap();
     reader
         .append(
-            source
+            execution
+                .session()
                 .publish_prepared_prefix(boundary, &mut publisher)
                 .unwrap(),
         )
         .unwrap();
-    scene.live(&mut source).add(&a).unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(5.0).unwrap();
-    let batch = source
+    execution.live().add(&a).unwrap();
+    let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(5.0).unwrap();
+    let batch = execution
+        .session()
         .publish_prepared_prefix(boundary, &mut publisher)
         .unwrap();
     assert_eq!(batch.stats().new_object_slots, 0);
@@ -226,8 +242,8 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
     reader.append(batch).unwrap();
     drop(a);
     drop(b);
-    drop(scene);
-    drop(source);
+
+    drop(execution);
     drop(publisher);
     for (time, handle) in [
         (4.5, second_handle),
@@ -258,56 +274,68 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
         let mut scene = Scene::new();
         let anchor = scene.circle(0.15).unwrap();
         scene.add(&anchor).unwrap();
-        let mut source = scene.execution_session().unwrap();
-        source
+        let mut execution = scene.into_execution().unwrap();
+        execution
+            .session_mut()
             .begin_replay_retention(ReplayLimits {
                 revisions: 256,
                 payloads: 8192,
             })
             .unwrap();
-        let first = source.wait_segment(1.0).unwrap();
+        let first = execution.session_mut().wait_segment(1.0).unwrap();
         let mut oracle = raster_support::Raster::new().await;
         let mut raster = raster_support::Raster::new().await;
-        source.advance_to(0.5).unwrap();
-        let mut expected = vec![(0.5, oracle.capture(&source.take_renderer_publication()))];
-        source.advance_to(1.0).unwrap();
-        let (mut publisher, mut reader) = source.create_prepared_prefix(first).unwrap();
+        execution.session_mut().advance_to(0.5).unwrap();
+        let mut expected = vec![(
+            0.5,
+            oracle.capture(&execution.session_mut().take_renderer_publication()),
+        )];
+        execution.session_mut().advance_to(1.0).unwrap();
+        let (mut publisher, mut reader) =
+            execution.session().create_prepared_prefix(first).unwrap();
         reader.reserve_object_capacity(16).unwrap();
-        let a = scene
-            .live(&mut source)
-            .create_image(image([230, 35, 15, 255]))
+        let a = execution
+            .scene_mut()
+            .image(image([230, 35, 15, 255]))
             .unwrap();
-        scene.live(&mut source).add(&a).unwrap();
-        let b = scene
-            .live(&mut source)
-            .create_image(image([20, 80, 240, 255]))
+        execution.live().add(&a).unwrap();
+        let b = execution
+            .scene_mut()
+            .image(image([20, 80, 240, 255]))
             .unwrap();
         for step in 1..=4 {
             match step {
                 2 => {
-                    scene
-                        .live(&mut source)
+                    execution
+                        .live()
                         .become_mobject(&a, &b, ManimBecomeOptions::default())
                         .unwrap();
                 }
                 3 => {
-                    scene.live(&mut source).remove(&a).unwrap();
+                    execution.live().remove(&a).unwrap();
                 }
                 4 => {
-                    scene.live(&mut source).add(&a).unwrap();
+                    execution.live().add(&a).unwrap();
                 }
                 _ => {}
             }
-            let boundary = source.wait_segment(1.0).unwrap();
-            source.advance_to(step as f64 + 0.5).unwrap();
+            let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+            execution
+                .session_mut()
+                .advance_to(step as f64 + 0.5)
+                .unwrap();
             expected.push((
-                source.frame().time,
-                oracle.capture(&source.take_renderer_publication()),
+                execution.session().frame().time,
+                oracle.capture(&execution.session_mut().take_renderer_publication()),
             ));
-            source.advance_to(boundary.end_time()).unwrap();
+            execution
+                .session_mut()
+                .advance_to(boundary.end_time())
+                .unwrap();
             reader
                 .append(
-                    source
+                    execution
+                        .session()
                         .publish_prepared_prefix(boundary, &mut publisher)
                         .unwrap(),
                 )
@@ -323,8 +351,8 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
         );
         drop(a);
         drop(b);
-        drop(source);
-        drop(scene);
+        drop(execution);
+
         drop(publisher);
         for _ in 0..4 {
             for (time, pixels) in expected.iter().rev() {
@@ -349,32 +377,37 @@ fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreatio
         let mut scene = Scene::new();
         let anchor = scene.circle(0.15).unwrap();
         scene.add(&anchor).unwrap();
-        let mut source = scene.execution_session().unwrap();
-        source
+        let mut execution = scene.into_execution().unwrap();
+        execution
+            .session_mut()
             .begin_replay_retention(ReplayLimits {
                 revisions: 128,
                 payloads: 2048,
             })
             .unwrap();
-        let boundary = source.wait_segment(1.0).unwrap();
-        source.advance_to(1.0).unwrap();
-        let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+        let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+        execution.session_mut().advance_to(1.0).unwrap();
+        let (mut publisher, mut reader) = execution
+            .session()
+            .create_prepared_prefix(boundary)
+            .unwrap();
         reader.seek(0.5).unwrap();
         let mut raster = raster_support::Raster::new().await;
         let before = raster.capture(&reader.take_renderer_publication());
-        let image = scene
-            .live(&mut source)
-            .create_image(image([230, 35, 15, 255]))
+        let image = execution
+            .scene_mut()
+            .image(image([230, 35, 15, 255]))
             .unwrap();
-        scene.live(&mut source).add(&image).unwrap();
-        source.seal_replay().unwrap();
+        execution.live().add(&image).unwrap();
+        execution.session_mut().seal_replay().unwrap();
         let mut oracle = raster_support::Raster::new().await;
-        let endpoint = oracle.capture(&source.take_renderer_publication());
+        let endpoint = oracle.capture(&execution.session_mut().take_renderer_publication());
         assert_ne!(
             before, endpoint,
             "terminal resource must visibly change the frame"
         );
-        let terminal = source
+        let terminal = execution
+            .session()
             .finish_prepared_prefix(boundary, &mut publisher)
             .unwrap();
         assert_eq!(terminal.stats().resource_payloads, 1);
@@ -387,8 +420,8 @@ fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreatio
         assert_eq!(raster.capture(&reader.take_renderer_publication()), before);
         drop(image);
         drop(anchor);
-        drop(scene);
-        drop(source);
+
+        drop(execution);
         drop(publisher);
         for time in [1.0, 0.5, 1.0, 0.0, 1.0] {
             reader.seek(time).unwrap();

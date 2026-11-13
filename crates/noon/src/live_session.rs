@@ -11,7 +11,6 @@ mod brace;
 mod camera_motion;
 mod coordinates;
 mod family_layout;
-mod image;
 mod path_editing;
 mod point_promotion;
 mod spatial;

@@ -308,29 +308,34 @@ fn staged_player_with_snapshot(
     let mut scene = Scene::new();
     let target = scene.circle(0.65).unwrap();
     scene.add(&target).unwrap();
-    let mut source = scene.execution_session().unwrap();
-    source
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
         .begin_replay_retention(ReplayLimits {
             revisions: 128,
             payloads: 2048,
         })
         .unwrap();
-    let segment = source.wait_segment(1.0).unwrap();
-    source.advance_to(1.0).unwrap();
-    let (mut publisher, mut reader) = source.create_prepared_prefix(segment).unwrap();
+    let segment = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(1.0).unwrap();
+    let (mut publisher, mut reader) = execution.session().create_prepared_prefix(segment).unwrap();
     reader.seek(0.5).unwrap();
-    let image = scene
-        .live(&mut source)
-        .create_image(ImageMobjectOptions::rgba8(2, 2, [230, 40, 10, 255].repeat(4)).unwrap())
+    let image = execution
+        .scene_mut()
+        .image(ImageMobjectOptions::rgba8(2, 2, [230, 40, 10, 255].repeat(4)).unwrap())
         .unwrap();
-    scene.live(&mut source).add(&image).unwrap();
-    let segment = source.wait_segment(1.0).unwrap();
-    source.advance_to(2.0).unwrap();
+    execution.live().add(&image).unwrap();
+    let segment = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(2.0).unwrap();
     let batch = if terminal {
-        source.seal_replay().unwrap();
-        source.finish_prepared_prefix(segment, &mut publisher)
+        execution.session_mut().seal_replay().unwrap();
+        execution
+            .session()
+            .finish_prepared_prefix(segment, &mut publisher)
     } else {
-        source.publish_prepared_prefix(segment, &mut publisher)
+        execution
+            .session()
+            .publish_prepared_prefix(segment, &mut publisher)
     }
     .unwrap();
     let mut player = PreparedExecutionPlayer::from_reader(reader, session);

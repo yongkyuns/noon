@@ -140,7 +140,8 @@ fn worker_bitmap_and_fill_share_pixels_and_retire_only_after_both_roots_leave() 
     )
     .unwrap();
     player
-        .with_live_session(|live| live.set_fill_image_mapping(&source, mapping, Some(0.5)))
+        .scene_mut()
+        .set_fill_image_mapping(&source, mapping, Some(0.5))
         .unwrap();
     let delta = player.delta(false).unwrap().unwrap();
     assert!(delta.resource_additions.is_none());

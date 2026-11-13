@@ -88,14 +88,14 @@ pub(crate) fn live(
     // Match consumed WASM arguments on success and rejection.
     let options = input.take()?;
     context.available()?;
-    if context.has_execution() {
-        context.with_live(|live| live.create_image(options))
-    } else {
-        noon::Mobject::from_image(
-            std::rc::Rc::clone(context.scene.integration_store()),
-            options,
-        )
-        .map_err(engine_error)
-    }
-    .map(MobjectHandle::from_semantic_mobject)
+    let running = context.has_execution();
+    context
+        .scene
+        .image(options)
+        .map(MobjectHandle::from_semantic_mobject)
+        .map_err(|error| {
+            engine_error(noon::integration::AuthoringFailure::from_scene_mutation(
+                error, running,
+            ))
+        })
 }

@@ -1458,17 +1458,6 @@ impl SemanticExecutionPlayer {
             .map_err(AuthoringFailure::from)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_image(
-        &mut self,
-        options: noon::ImageMobjectOptions,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_image(options)
-            .map_err(AuthoringFailure::from)
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_create_text(
         &mut self,
@@ -1909,27 +1898,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_image(
-        &mut self,
-        mobject: &noon::Mobject,
-        paint: noon::ImagePaintOptions,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_image(mobject, paint, opacity))
-            .map(|_| ())
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_image_mapping(
-        &mut self,
-        mobject: &noon::Mobject,
-        mapping: noon::ImageMapping,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_image_mapping(mobject, mapping, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill_hatch(
         &mut self,
         mobject: &noon::Mobject,
@@ -2016,15 +1984,6 @@ impl SemanticExecutionPlayer {
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.set_fill_opacity(mobject, opacity))
             .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_image_sampling(
-        &mut self,
-        mobject: &noon::Mobject,
-        sampling: noon::RasterImageSampling,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_image_sampling(mobject, sampling))
     }
 
     #[cfg(target_arch = "wasm32")]
