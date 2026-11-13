@@ -1,7 +1,7 @@
 use super::SemanticExecutionPlayer;
 use crate::AuthoringFailure;
 #[cfg(target_arch = "wasm32")]
-use noon::{MobjectTarget, effects::EffectDefinition};
+use noon::{effects::EffectDefinition, MobjectTarget};
 
 impl SemanticExecutionPlayer {
     #[cfg(target_arch = "wasm32")]

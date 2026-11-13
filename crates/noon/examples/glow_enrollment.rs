@@ -1,8 +1,8 @@
 //! An absent glow becomes a neutral attachment only when its target animation activates.
 //! Paired with web/python/examples/glow_scene_worker_pixels.py on the same shared engine.
 use noon::{
-    AnimationOptions, Color, RateFunction, Scene,
     effects::{EffectUpdate, Pixels},
+    AnimationOptions, Color, RateFunction, Scene,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,8 +1,8 @@
 #![cfg(all(feature = "prepared-prefix", feature = "typst"))]
 mod raster_support;
 use noon::{
-    AnimationOptions, Color, ExecutionSession, MathTypst, PrefixReader, RateFunction, Scene,
     effects::{EffectUpdate, Pixels},
+    AnimationOptions, Color, ExecutionSession, MathTypst, PrefixReader, RateFunction, Scene,
 };
 use noon_runtime::{FrameState, PrefixError, ReplayLimits};
 
@@ -106,16 +106,12 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
 // New physical slots are dormant before their creation revision. Compare every
 // original frame column while explicitly rejecting visible future membership.
 fn historical_frame(mut frame: FrameState, expected_rows: usize) -> FrameState {
-    assert!(
-        frame.presences[expected_rows..]
-            .iter()
-            .all(|&present| !present)
-    );
-    assert!(
-        frame.family_animations[expected_rows..]
-            .iter()
-            .all(Option::is_none)
-    );
+    assert!(frame.presences[expected_rows..]
+        .iter()
+        .all(|&present| !present));
+    assert!(frame.family_animations[expected_rows..]
+        .iter()
+        .all(Option::is_none));
     frame.objects.truncate(expected_rows);
     frame.presences.truncate(expected_rows);
     frame.reveals.truncate(expected_rows);

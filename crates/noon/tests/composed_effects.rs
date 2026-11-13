@@ -1,8 +1,8 @@
 //! Public Scene/LiveSession publication of composed scopes, without a transport.
 mod composed_effect_animation;
 use noon::{
-    ExecutionSession, MobjectFamily, Scene,
     effects::{Blur, EffectUpdate, Pixels},
+    ExecutionSession, MobjectFamily, Scene,
 };
 use noon_core::{ComposedSource, SemanticMutationTransaction, SemanticNodeId};
 
@@ -52,12 +52,10 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
         .unwrap();
     let mut session = scene.into_execution().unwrap();
     let original_leaf = session.session().execution_object_id(a.node_id()).unwrap();
-    assert!(
-        session
-            .session()
-            .execution_object_id(outer.node_id())
-            .is_none()
-    );
+    assert!(session
+        .session()
+        .execution_object_id(outer.node_id())
+        .is_none());
     let outer_effect = attach(session.scene_mut(), &outer);
     let outer_object = session
         .session()
@@ -245,15 +243,13 @@ fn first_group_attachment_rejects_external_interleaving_before_semantic_commit()
     assert_eq!(scene.revision(), revision);
     assert_eq!(session.publication_context(), context);
     assert_eq!(session.frame(), &frame);
-    assert!(
-        scene
-            .integration_store()
-            .borrow()
-            .node(family.node_id())
-            .unwrap()
-            .effect_ids()
-            .is_empty()
-    );
+    assert!(scene
+        .integration_store()
+        .borrow()
+        .node(family.node_id())
+        .unwrap()
+        .effect_ids()
+        .is_empty());
     assert!(session.execution_object_id(family.node_id()).is_none());
 }
 
@@ -271,18 +267,14 @@ fn initial_named_family_effects_use_one_controller_and_exact_handle_removal() {
     let second = scene.get_effect(&family, "second").unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
     let mut session = scene.into_execution().unwrap();
-    assert!(
-        row(session.session(), a.node_id())
-            .unwrap()
-            .effects
-            .is_none()
-    );
-    assert!(
-        row(session.session(), b.node_id())
-            .unwrap()
-            .effects
-            .is_none()
-    );
+    assert!(row(session.session(), a.node_id())
+        .unwrap()
+        .effects
+        .is_none());
+    assert!(row(session.session(), b.node_id())
+        .unwrap()
+        .effects
+        .is_none());
     assert_eq!(
         row(session.session(), family.node_id())
             .unwrap()
@@ -309,12 +301,10 @@ fn initial_named_family_effects_use_one_controller_and_exact_handle_removal() {
     session.scene_mut().remove_effect(&family, &first).unwrap();
     let frame = session.session().frame().clone();
     let context = session.session().publication_context();
-    assert!(
-        session
-            .scene_mut()
-            .set_effect(&family, &first, EffectUpdate::default().radius(0.2))
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .set_effect(&family, &first, EffectUpdate::default().radius(0.2))
+        .is_err());
     assert_eq!(session.session().frame(), &frame);
     assert_eq!(session.session().publication_context(), context);
     session.scene_mut().remove_effect(&family, &second).unwrap();
@@ -437,12 +427,10 @@ fn live_scope_opacity_reuses_membership_and_rejects_invalid_values_atomically() 
     );
     let before = session.frame().objects.clone();
     for opacity in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
-        assert!(
-            scene
-                .live(&mut session)
-                .set_family_object_opacity(&group, opacity)
-                .is_err()
-        );
+        assert!(scene
+            .live(&mut session)
+            .set_family_object_opacity(&group, opacity)
+            .is_err());
         assert_eq!(session.frame().objects, before);
         assert_eq!(group.own_style().unwrap().object_opacity, 0.25);
     }

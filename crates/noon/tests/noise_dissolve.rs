@@ -1,7 +1,7 @@
 use noon::{
+    effects::{EffectUpdate, NoiseDissolve},
     AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest,
-    effects::{EffectUpdate, NoiseDissolve},
 };
 use noon_core::SemanticNodeId;
 
@@ -110,12 +110,10 @@ fn independent_mask_targets_seek_complete_and_retire_exact_generations() {
     let before = session.session().frame().clone();
     let context = session.session().publication_context();
     let revision = session.scene().revision();
-    assert!(
-        session
-            .scene_mut()
-            .set_effect(&source, &a, EffectUpdate::default().progress(0.3))
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .set_effect(&source, &a, EffectUpdate::default().progress(0.3))
+        .is_err());
     assert_eq!(session.session().frame(), &before);
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.scene().revision(), revision);
@@ -145,24 +143,22 @@ fn explicit_zero_mask_writes_conflict_atomically_and_seed_edits_stay_discrete() 
     let before = session.session().frame().clone();
     let context = session.session().publication_context();
     let revision = session.scene().revision();
-    assert!(
-        session
-            .live()
-            .declare_and_activate_animation_composition(
-                SemanticAnimationCompositionKind::Parallel,
-                &[
-                    AnimationCompositionRequest::TransformTo(
-                        TransformToRequest::new(&source, &a, options()).method_target()
-                    ),
-                    AnimationCompositionRequest::TransformTo(
-                        TransformToRequest::new(&source, &b, options()).method_target()
-                    ),
-                ],
-                AnimationOptions::new(),
-                AnimationOptions::new(),
-            )
-            .is_err()
-    );
+    assert!(session
+        .live()
+        .declare_and_activate_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            &[
+                AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::new(&source, &a, options()).method_target()
+                ),
+                AnimationCompositionRequest::TransformTo(
+                    TransformToRequest::new(&source, &b, options()).method_target()
+                ),
+            ],
+            AnimationOptions::new(),
+            AnimationOptions::new(),
+        )
+        .is_err());
     assert_eq!(session.session().frame(), &before);
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.scene().revision(), revision);
@@ -183,17 +179,15 @@ fn explicit_zero_mask_writes_conflict_atomically_and_seed_edits_stay_discrete() 
     let before = session.session().frame().clone();
     let context = session.session().publication_context();
     let revision = session.scene().revision();
-    assert!(
-        session
-            .live()
-            .declare_and_activate_composition(
-                &AnimationCompositionRequest::TransformTo(
-                    TransformToRequest::new(&source, target.root(), options()).method_target()
-                ),
-                AnimationOptions::new(),
-            )
-            .is_err()
-    );
+    assert!(session
+        .live()
+        .declare_and_activate_composition(
+            &AnimationCompositionRequest::TransformTo(
+                TransformToRequest::new(&source, target.root(), options()).method_target()
+            ),
+            AnimationOptions::new(),
+        )
+        .is_err());
     assert_eq!(session.session().frame(), &before);
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.scene().revision(), revision);

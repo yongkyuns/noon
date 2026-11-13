@@ -1,8 +1,8 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
 use noon::{
-    AnimationOptions, Color, ExecutionSession, PrefixReader, RateFunction, Scene,
     effects::{EffectUpdate, Pixels},
+    AnimationOptions, Color, ExecutionSession, PrefixReader, RateFunction, Scene,
 };
 use noon_runtime::ReplayLimits;
 

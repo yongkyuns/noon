@@ -151,12 +151,10 @@ fn glow_pulse_repeated_predeclared_activation_never_rebinds_a_stale_attachment()
     let current = object.get_effect("glow").unwrap().node_id();
     assert_ne!(old.node_id(), current);
     let publication = session.session().publication_context();
-    assert!(
-        session
-            .scene_mut()
-            .set_effect(&object, &old, EffectUpdate::default().intensity(0.8))
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .set_effect(&object, &old, EffectUpdate::default().intensity(0.8))
+        .is_err());
     assert_eq!(session.session().publication_context(), publication);
     assert_eq!(object.get_effect("glow").unwrap().node_id(), current);
     session
@@ -359,12 +357,10 @@ fn glow_pulse_overlapping_activation_fails_without_neutral_identity_or_tracks() 
         children: vec![pulse(&object), pulse(&object)],
         options: AnimationOptions::new(),
     };
-    assert!(
-        scene
-            .live(&mut session)
-            .declare_and_activate_composition(&request, AnimationOptions::new())
-            .is_err()
-    );
+    assert!(scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .is_err());
     assert_eq!(session.publication_context(), publication);
     assert_eq!(session.frame(), &frame);
     assert_eq!(scene.integration_store().borrow().len(), nodes);
@@ -476,12 +472,10 @@ fn glow_pulse_followed_by_complete_glow_target_persists_its_attachment() {
         children: children.clone(),
         options: AnimationOptions::new(),
     };
-    assert!(
-        scene
-            .live(&mut session)
-            .declare_and_activate_composition(&parallel, AnimationOptions::new())
-            .is_err()
-    );
+    assert!(scene
+        .live(&mut session)
+        .declare_and_activate_composition(&parallel, AnimationOptions::new())
+        .is_err());
     assert_eq!(session.publication_context(), publication);
     assert_eq!(scene.integration_store().borrow().len(), nodes);
     assert!(object.get_effect("glow").is_err());
@@ -535,12 +529,10 @@ fn glow_pulse_persistent_edit_respects_ordinary_parameter_ownership() {
     let publication = session.session().publication_context();
     let frame = session.session().frame().clone();
     for radius in [authored(&object).radius(), Pixels(5.0).into()] {
-        assert!(
-            session
-                .scene_mut()
-                .set_glow(&object, EffectUpdate::default().radius(radius))
-                .is_err()
-        );
+        assert!(session
+            .scene_mut()
+            .set_glow(&object, EffectUpdate::default().radius(radius))
+            .is_err());
         assert_eq!(session.session().publication_context(), publication);
         assert_eq!(session.session().frame(), &frame);
     }
@@ -605,11 +597,9 @@ fn glow_pulse_fade_out_retires_source_and_temporary_output_together() {
     );
     assert!(!session.semantic_object_is_reachable(object.node_id()));
     assert!(!session.frame().is_present(source_frame_index));
-    assert!(
-        !session
-            .painter_order()
-            .contains(&(source_frame_index as u32))
-    );
+    assert!(!session
+        .painter_order()
+        .contains(&(source_frame_index as u32)));
 }
 
 #[test]

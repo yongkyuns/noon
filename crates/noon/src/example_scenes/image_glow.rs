@@ -2,9 +2,9 @@
 //! Paired with `web/python/examples/image_glow.py`.
 
 use crate::{
+    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, ContinuationStep, ImageMobjectOptions, LiveContinuation, LiveProgram,
     Mobject, RasterImageSampling, RateFunction, Scene,
-    effects::{EffectUpdate, Pixels},
 };
 
 pub const SIDE: u32 = 9;

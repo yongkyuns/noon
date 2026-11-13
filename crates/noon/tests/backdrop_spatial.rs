@@ -1,8 +1,8 @@
 //! Typed native publication of the execution-owned prefix geometry query.
 //! This does not qualify backdrop pixels or promote the unfinished effect API.
 use noon::{
-    Rect, Scene, Vec2,
     effects::{BackdropBlur, EffectUpdate, Pixels},
+    Rect, Scene, Vec2,
 };
 use noon_core::{ObjectId, SemanticMutationTransaction};
 use noon_runtime::{PainterPrefixGeometryQueryError as Error, SpatialIndexUpdateStats};
@@ -113,13 +113,11 @@ fn backdrop_queries_borrow_the_synchronized_session_index_and_follow_local_edits
         SpatialIndexUpdateStats::default()
     );
     session.scene_mut().remove_effect(&panel, "glass").unwrap();
-    assert!(
-        session
-            .session_mut()
-            .take_renderer_publication()
-            .spatial_index()
-            .is_none()
-    );
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .spatial_index()
+        .is_none());
 }
 
 #[test]

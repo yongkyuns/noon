@@ -871,13 +871,11 @@ mod tests {
         assert_eq!(store.borrow().scene_revision(), revision);
         assert_eq!(store.borrow().len(), count);
         for panel in &program.continuation.0 {
-            assert!(
-                store
-                    .borrow()
-                    .effect_by_name(panel.node_id(), "stripes")
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(store
+                .borrow()
+                .effect_by_name(panel.node_id(), "stripes")
+                .unwrap()
+                .is_none());
         }
         assert!(program.take_renderer_publication().changes().is_empty());
         assert!(program.resume().is_err());
@@ -917,13 +915,11 @@ mod tests {
         assert_eq!(program.session().publication_context(), before);
         assert_eq!(store.borrow().scene_revision(), revision);
         assert_eq!(store.borrow().len(), count);
-        assert!(
-            store
-                .borrow()
-                .effect_by_name(panels[0].node_id(), "stripes")
-                .unwrap()
-                .is_none()
-        );
+        assert!(store
+            .borrow()
+            .effect_by_name(panels[0].node_id(), "stripes")
+            .unwrap()
+            .is_none());
 
         let mut retired = shader_attachment_program();
         retired.resume().unwrap();

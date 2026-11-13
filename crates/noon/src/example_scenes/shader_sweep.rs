@@ -2,14 +2,14 @@
 //! scene-space stripes stay fixed behind the right panel. Phase is an ordinary
 //! animation channel, with no shader clock or per-frame host callback.
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
-    TransformToRequest,
     effects::{
         EffectUpdate, ShaderCoordinates, ShaderDependencies, ShaderEffect,
         ShaderParameterDefinition, ShaderParameterKey, ShaderParameterType, ShaderProfile,
         ShaderSchema, ShaderUnit, ShaderValue, WgslEffectProgram,
     },
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
+    LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    TransformToRequest,
 };
 
 const SOURCE: &str = "

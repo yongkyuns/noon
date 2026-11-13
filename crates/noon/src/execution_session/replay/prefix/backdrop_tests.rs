@@ -1,6 +1,6 @@
 use crate::{
-    AnimationCompositionRequest, AnimationOptions, MobjectFamily, RateFunction, Scene, Text,
     effects::{BackdropBlur, EffectUpdate, Pixels},
+    AnimationCompositionRequest, AnimationOptions, MobjectFamily, RateFunction, Scene, Text,
 };
 use noon_core::EffectRadius;
 use noon_runtime::{FrameState, ReplayLimits};
@@ -134,18 +134,16 @@ fn editorial_backdrop_prefix_preserves_group_resources_and_radius_history() {
             Some(EffectRadius::Pixels(radius))
         );
     }
-    assert!(
-        source
-            .session()
-            .frame()
-            .objects
-            .iter()
-            .any(|row| row.effects.as_ref().is_some_and(|stack| {
-                stack
-                    .iter()
-                    .any(|effect| effect.definition.as_backdrop_blur().is_some())
-            }))
-    );
+    assert!(source
+        .session()
+        .frame()
+        .objects
+        .iter()
+        .any(|row| row.effects.as_ref().is_some_and(|stack| {
+            stack
+                .iter()
+                .any(|effect| effect.definition.as_backdrop_blur().is_some())
+        })));
 }
 
 #[test]

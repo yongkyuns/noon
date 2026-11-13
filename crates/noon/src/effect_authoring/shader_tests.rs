@@ -189,12 +189,10 @@ fn shader_membership_revalidates_program_and_view_after_preparation() {
         assert_eq!(session.session().publication_context(), before);
         assert_eq!(session.session().frame(), &frame);
         assert!(session.session_mut().take_frame_changes().is_empty());
-        assert!(
-            session
-                .session()
-                .execution_object_id(source.node_id())
-                .is_none()
-        );
+        assert!(session
+            .session()
+            .execution_object_id(source.node_id())
+            .is_none());
         if change_program {
             let retry = session
                 .live()
@@ -202,12 +200,10 @@ fn shader_membership_revalidates_program_and_view_after_preparation() {
                 .unwrap();
             assert_ne!(retry.programs(), &[original]);
             session.live().publish_staged_effects(retry).unwrap();
-            assert!(
-                session
-                    .session()
-                    .execution_object_id(source.node_id())
-                    .is_some()
-            );
+            assert!(session
+                .session()
+                .execution_object_id(source.node_id())
+                .is_some());
         }
     }
 }
@@ -262,21 +258,17 @@ fn shader_membership_preparation_preserves_replacement_foreground_and_provenance
         .unwrap();
     let mut foreign_scene = Scene::new();
     let mut foreign_session = foreign_scene.execution_session().unwrap();
-    assert!(
-        foreign_scene
-            .live(&mut foreign_session)
-            .publish_staged_effects(pending)
-            .is_err()
-    );
+    assert!(foreign_scene
+        .live(&mut foreign_session)
+        .publish_staged_effects(pending)
+        .is_err());
     assert!(scene.live(&mut session).contains(&source).unwrap());
     let foreign = foreign_scene.circle(0.3).unwrap();
     let before = session.publication_context();
-    assert!(
-        scene
-            .live(&mut session)
-            .prepare_membership(crate::SceneMembershipRequest::Add(&[(&foreign).into()]))
-            .is_err()
-    );
+    assert!(scene
+        .live(&mut session)
+        .prepare_membership(crate::SceneMembershipRequest::Add(&[(&foreign).into()]))
+        .is_err());
     assert_eq!(session.publication_context(), before);
 }
 
@@ -396,16 +388,14 @@ fn shader_view_rejects_live_profile_or_attachment_before_publication() {
         assert!(session.take_frame_changes().is_empty());
         if hdr {
             assert!(source.get_effect("material").is_err());
-            assert!(
-                scene
-                    .live(&mut session)
-                    .prepare_effect_attachments([(
-                        &source,
-                        ShaderEffect::new(program()).into(),
-                        "material"
-                    )])
-                    .is_err()
-            );
+            assert!(scene
+                .live(&mut session)
+                .prepare_effect_attachments([(
+                    &source,
+                    ShaderEffect::new(program()).into(),
+                    "material"
+                )])
+                .is_err());
         } else {
             let mut tx = SemanticMutationTransaction::new();
             tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
@@ -625,17 +615,14 @@ fn shader_targets_share_ordinary_timing_seek_live_reconciliation_and_completion(
         )
         .unwrap();
     session.live().advance_segment_to(segment, 0.5).unwrap();
-    assert!(
-        session
-            .scene_mut()
-            .set_effect(
-                &source,
-                &original,
-                EffectUpdate::default()
-                    .shader_parameter(&key("field3"), ShaderValue::Scalar(0.875)),
-            )
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .set_effect(
+            &source,
+            &original,
+            EffectUpdate::default().shader_parameter(&key("field3"), ShaderValue::Scalar(0.875)),
+        )
+        .is_err());
     for time in [0.75, 0.25, 0.5, 0.5] {
         session.seek(time).unwrap();
         let actual = effective(session.session(), &source);
@@ -694,12 +681,10 @@ fn shader_targets_share_ordinary_timing_seek_live_reconciliation_and_completion(
         source.get_effect("scan").unwrap().node_id(),
         original.node_id()
     );
-    assert!(
-        session
-            .scene_mut()
-            .set_effect(&source, &original, EffectUpdate::default())
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .set_effect(&source, &original, EffectUpdate::default())
+        .is_err());
     assert_eq!(
         effective(session.session(), &source).values()[15],
         ShaderValue::Scalar(0.125)
@@ -756,21 +741,15 @@ fn shader_raw_channels_reject_invalid_schema_and_retire_exact_generation_atomica
             parameter: 0,
             value: v,
         };
-        assert!(
-            value(ShaderValue::Scalar(0.5))
-                .sample_value(value(ShaderValue::Boolean(true)), alpha)
-                .is_err()
-        );
-        assert!(
-            value(ShaderValue::Boolean(false))
-                .sample_value(value(ShaderValue::Boolean(true)), alpha)
-                .is_err()
-        );
-        assert!(
-            value(ShaderValue::Unsigned(0))
-                .sample_value(value(ShaderValue::Unsigned(1)), alpha)
-                .is_err()
-        );
+        assert!(value(ShaderValue::Scalar(0.5))
+            .sample_value(value(ShaderValue::Boolean(true)), alpha)
+            .is_err());
+        assert!(value(ShaderValue::Boolean(false))
+            .sample_value(value(ShaderValue::Boolean(true)), alpha)
+            .is_err());
+        assert!(value(ShaderValue::Unsigned(0))
+            .sample_value(value(ShaderValue::Unsigned(1)), alpha)
+            .is_err());
     }
     let tracks: Vec<_> = binding
         .parameter_channels(
@@ -803,11 +782,9 @@ fn shader_raw_channels_reject_invalid_schema_and_retire_exact_generation_atomica
         *attachment = SemanticNodeId::new(10, 2);
     }
     let before = runtime.frame().clone();
-    assert!(
-        runtime
-            .apply_execution_patch(&ExecutionPatch::AddTrack(stale))
-            .is_err()
-    );
+    assert!(runtime
+        .apply_execution_patch(&ExecutionPatch::AddTrack(stale))
+        .is_err());
     assert_eq!(runtime.frame(), &before);
     runtime.evaluate(0.5).unwrap();
     let edited = EffectUpdate::default()
@@ -949,15 +926,13 @@ fn declared_shader_time_invalidates_only_active_dependencies_and_prepared_commit
     runtime.take_frame_changes();
     runtime.advance_to(1.0).unwrap();
     assert_eq!(runtime.take_frame_changes().object_indices(), &[INDEX]);
-    assert!(
-        runtime
-            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
-                object,
-                expected: Box::new([SemanticNodeId::new(100_001, 0)]),
-                effects: None,
-            })
-            .is_err()
-    );
+    assert!(runtime
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+            object,
+            expected: Box::new([SemanticNodeId::new(100_001, 0)]),
+            effects: None,
+        })
+        .is_err());
     assert_eq!(
         runtime.wake_state().timeline(),
         TimelineWakeState::Continuous
@@ -1134,13 +1109,11 @@ fn shader_time_dependency_follows_selected_history_across_attachment_removal() {
             TimelineWakeState::Quiescent
         );
         session.session_mut().advance_to(1.75).unwrap();
-        assert!(
-            session
-                .session_mut()
-                .take_renderer_publication()
-                .changes()
-                .is_empty()
-        );
+        assert!(session
+            .session_mut()
+            .take_renderer_publication()
+            .changes()
+            .is_empty());
     }
 }
 
@@ -1368,13 +1341,11 @@ fn raw_composed_local_shader_rejects_initial_and_incremental_admission_atomicall
     );
     let mut invalid = owner.clone();
     invalid.effects = Some(effects.clone());
-    assert!(
-        format!(
-            "{:?}",
-            CompiledScene::compile_objects(vec![leaf.clone(), invalid], &[])
-        )
-        .contains("UnsupportedLocalShaderCoordinates")
-    );
+    assert!(format!(
+        "{:?}",
+        CompiledScene::compile_objects(vec![leaf.clone(), invalid], &[])
+    )
+    .contains("UnsupportedLocalShaderCoordinates"));
     let mut runtime = noon_runtime::SceneInstance::new(
         CompiledScene::compile_objects(vec![leaf, owner.clone()], &[]).unwrap(),
     );

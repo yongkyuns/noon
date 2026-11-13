@@ -103,14 +103,12 @@ fn dissolve_lifecycle_reuses_warmed_resources_and_restores_exact_source_pixels()
                 images += 1;
                 if direction == DissolveDirection::In {
                     assert_eq!(pixels, original);
-                    assert!(
-                        scene
-                            .integration_store()
-                            .borrow()
-                            .visibility_effect(owner)
-                            .unwrap()
-                            .is_none()
-                    );
+                    assert!(scene
+                        .integration_store()
+                        .borrow()
+                        .visibility_effect(owner)
+                        .unwrap()
+                        .is_none());
                 } else {
                     assert!(pixels.iter().all(|value| *value == 0));
                 }

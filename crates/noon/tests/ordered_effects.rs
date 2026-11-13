@@ -1,7 +1,7 @@
 use noon::{
+    effects::{Blur, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest,
-    effects::{Blur, EffectUpdate, Pixels},
 };
 
 fn options() -> AnimationOptions {
@@ -121,12 +121,10 @@ fn ordinary_parallel_targets_drive_two_blurs_and_preserve_order_through_seek_and
     );
     let before = session.session().publication_context();
     let frame = session.session().frame().clone();
-    assert!(
-        session
-            .scene_mut()
-            .set_effect(&source, &a, EffectUpdate::default().radius(Pixels(7.0)))
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .set_effect(&source, &a, EffectUpdate::default().radius(Pixels(7.0)))
+        .is_err());
     assert_eq!(session.session().publication_context(), before);
     assert_eq!(session.session().frame(), &frame);
 }

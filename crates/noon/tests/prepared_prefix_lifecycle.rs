@@ -473,12 +473,10 @@ fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreatio
             .unwrap();
         assert!(!publication.changes().is_empty());
         assert!(!publication.changes().is_all());
-        assert!(
-            !publication
-                .changes()
-                .object_indices()
-                .contains(&image_index)
-        );
+        assert!(!publication
+            .changes()
+            .object_indices()
+            .contains(&image_index));
         let context = publication.context();
         let expected = raster.capture(&publication);
         assert_cold_image_recovery(&publication, &expected).await;
@@ -657,8 +655,8 @@ fn pointer_driven_prefix_effect_pixels_restore_after_terminal_delivery_and_sourc
 }
 
 fn single_glow_prefix_history() -> (noon::SceneExecution, PrefixReader) {
-    use noon::Color;
     use noon::effects::{EffectUpdate, Pixels};
+    use noon::Color;
     let mut scene = Scene::new();
     let mut anchor = scene.circle(0.5).unwrap();
     anchor.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();

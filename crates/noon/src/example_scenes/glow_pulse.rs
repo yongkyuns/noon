@@ -2,10 +2,10 @@
 //! Paired with `web/python/examples/glow_pulse.py`.
 
 use crate::{
+    effects::{Blur, EffectUpdate, Pixels},
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     LiveContinuation, LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
     TransformToRequest,
-    effects::{Blur, EffectUpdate, Pixels},
 };
 
 pub struct GlowPulseScene {

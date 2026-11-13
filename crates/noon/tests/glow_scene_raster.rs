@@ -1,12 +1,12 @@
 //! Public authoring -> Scene execution -> ordinary retained wgpu rendering.
 //! The independent filter reference uses only a separate no-effect Scene image.
 use noon::{
-    AnimationOptions, Color, ExecutionSession, Mobject, RateFunction, Scene,
     effects::{EffectUpdate, Pixels},
+    AnimationOptions, Color, ExecutionSession, Mobject, RateFunction, Scene,
 };
 use noon_core::Vec2;
 use noon_render_wgpu::{
-    Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState, text::TextDeviceMetrics,
+    text::TextDeviceMetrics, Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
 };
 use std::time::Duration;
 
@@ -1615,7 +1615,7 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
 #[test]
 #[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
 fn image_glow_keeps_foreground_painter_order() {
-    use noon::{RasterImageSampling, effects::GlowSource};
+    use noon::{effects::GlowSource, RasterImageSampling};
 
     // Independently composite separately rendered premultiplied RGBA layers.
     fn over(foreground: &[u8], background: &[u8]) -> Vec<u8> {
@@ -1773,7 +1773,7 @@ fn image_glow_keeps_foreground_painter_order() {
 #[test]
 #[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
 fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
-    use noon::{RasterImageSampling, effects::GlowSource};
+    use noon::{effects::GlowSource, RasterImageSampling};
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -2086,7 +2086,7 @@ fn fractional_edge_reference(
 #[test]
 #[ignore = "requires a native raster adapter; absence is a failure, never a successful skip"]
 fn offscreen_image_glow_uses_global_pixel_crop() {
-    use noon::{RasterImageSampling, effects::GlowSource};
+    use noon::{effects::GlowSource, RasterImageSampling};
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))

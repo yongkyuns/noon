@@ -1,5 +1,5 @@
 use super::*;
-use crate::{AnimationOptions, MobjectTarget, Vec2, effects::*};
+use crate::{effects::*, AnimationOptions, MobjectTarget, Vec2};
 
 fn value(handle: &EffectHandle) -> Glow {
     (handle.authored_definition().unwrap()).as_glow().unwrap()
@@ -68,16 +68,14 @@ fn invalid_and_duplicate_calls_preserve_revision_and_prior_values() {
     let dot = scene.circle(0.08).unwrap();
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let before = scene.revision();
-    assert!(
-        scene
-            .set_glow(
-                &dot,
-                EffectUpdate::default()
-                    .color(crate::Color::RED)
-                    .intensity(-1.0)
-            )
-            .is_err()
-    );
+    assert!(scene
+        .set_glow(
+            &dot,
+            EffectUpdate::default()
+                .color(crate::Color::RED)
+                .intensity(-1.0)
+        )
+        .is_err());
     assert!(scene.add_effect(&dot, Glow::default(), "glow").is_err());
     assert_eq!(scene.revision(), before);
     assert_eq!(value(&dot.get_effect("glow").unwrap()), Glow::default());
@@ -92,11 +90,9 @@ fn stale_and_foreign_handles_do_not_select_a_replacement() {
     let other = scene.circle(0.08).unwrap();
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let old = dot.get_effect("glow").unwrap();
-    assert!(
-        scene
-            .set_effect(&other, &old, EffectUpdate::default())
-            .is_err()
-    );
+    assert!(scene
+        .set_effect(&other, &old, EffectUpdate::default())
+        .is_err());
     scene.remove_glow(&dot).unwrap();
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     assert!(scene.remove_effect(&dot, &old).is_err());
@@ -170,12 +166,10 @@ fn rejected_live_attachment_preserves_both_scene_and_runtime() {
     let nodes_before = session.scene().integration_store().borrow().len();
     let publication = session.session().publication_context();
     {
-        assert!(
-            session
-                .scene_mut()
-                .set_glow(&dot, EffectUpdate::default())
-                .is_err()
-        );
+        assert!(session
+            .scene_mut()
+            .set_glow(&dot, EffectUpdate::default())
+            .is_err());
         assert_eq!(
             session
                 .live()

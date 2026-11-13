@@ -6,10 +6,10 @@ use crate::{
     composition::Composition,
     engine_error,
     geometry::GeometryOptions,
-    mobject::{LayoutAnchor, LayoutObservation, MobjectHandle, pivot},
+    mobject::{pivot, LayoutAnchor, LayoutObservation, MobjectHandle},
 };
 use noon::integration::{
-    AuthoringFailure, HostCallbackId, SemanticMutationTransaction, SemanticStore, scene_execution,
+    scene_execution, AuthoringFailure, HostCallbackId, SemanticMutationTransaction, SemanticStore,
 };
 use noon::{
     ExecutionSegment, ExecutionSession, Mobject, MobjectTarget, Scene, SceneMembershipRequest,

@@ -2,8 +2,8 @@
 use super::wasm::{CanonicalAuthoringSceneContext, WasmSceneMembershipBatch};
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    WasmAuthoringMobjectHandle, WasmEffectDefinition, WasmEffectHandle, WasmEffectUpdate,
-    authoring_error::js_error,
+    authoring_error::js_error, WasmAuthoringMobjectHandle, WasmEffectDefinition, WasmEffectHandle,
+    WasmEffectUpdate,
 };
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -333,12 +333,10 @@ mod tests {
             original.authored_definition().unwrap()
         );
         let before = player.session_mut_for_test().frame().clone();
-        assert!(
-            player
-                .scene_mut()
-                .set_effect(copied.root(), &original, EffectUpdate::default())
-                .is_err()
-        );
+        assert!(player
+            .scene_mut()
+            .set_effect(copied.root(), &original, EffectUpdate::default())
+            .is_err());
         assert_eq!(player.session_mut_for_test().frame(), &before);
         player
             .scene_mut()
@@ -349,12 +347,10 @@ mod tests {
             .remove_effect(&family, &original)
             .unwrap();
         assert!(original.authored_definition().is_err());
-        assert!(
-            player
-                .scene_mut()
-                .remove_effect(&family, &original)
-                .is_err()
-        );
+        assert!(player
+            .scene_mut()
+            .remove_effect(&family, &original)
+            .is_err());
         player.scene_mut().remove_glow(&family).unwrap();
         player
             .scene_mut()
@@ -382,12 +378,10 @@ mod tests {
         let foreign_dot = foreign_scene.circle(0.3).unwrap();
         let foreign = foreign_scene.family(&[(&foreign_dot).into()]).unwrap();
         let before = player.session_mut_for_test().frame().clone();
-        assert!(
-            player
-                .scene_mut()
-                .add_effect(&foreign, Glow::default(), "foreign")
-                .is_err()
-        );
+        assert!(player
+            .scene_mut()
+            .add_effect(&foreign, Glow::default(), "foreign")
+            .is_err());
         assert_eq!(player.session_mut_for_test().frame(), &before);
         assert!(foreign.get_effect("foreign").is_err());
     }
@@ -425,12 +419,10 @@ mod tests {
             .category,
             "unsupported_operation"
         );
-        assert!(
-            player
-                .scene_mut()
-                .set_effect(&dot, "missing", EffectUpdate::default())
-                .is_err()
-        );
+        assert!(player
+            .scene_mut()
+            .set_effect(&dot, "missing", EffectUpdate::default())
+            .is_err());
         assert!(player.scene_mut().remove_effect(&dot, "missing").is_err());
         player.scene_mut().remove_glow(&dot).unwrap();
         assert_eq!(player.ownership_identity(), identity);
@@ -453,8 +445,8 @@ mod playback_tests {
     use super::super::*;
     use crate::retained_execution_transport::RetainedExecutionDeltaEnvelope;
     use noon::{
-        AnimationOptions, Color, RateFunction,
         effects::{EffectUpdate, Pixels},
+        AnimationOptions, Color, RateFunction,
     };
 
     #[test]

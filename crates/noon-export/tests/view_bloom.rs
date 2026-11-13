@@ -3,8 +3,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use noon::{
-    Scene,
     effects::{Bloom, EffectUpdate, Pixels},
+    Scene,
 };
 use noon_core::ViewColorProfile;
 use noon_export::{CaptureOptions, CapturePixelFormat, SessionCapture};

@@ -1,8 +1,8 @@
 //! Persistent composed masks, paired with web/python/examples/noise_dissolve.py.
 use crate::{
+    effects::{EffectUpdate, NoiseDissolve},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
     MobjectFamily, RateFunction, Scene,
-    effects::{EffectUpdate, NoiseDissolve},
 };
 
 pub struct ComposedMask {

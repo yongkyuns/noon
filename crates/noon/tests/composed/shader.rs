@@ -379,13 +379,11 @@ fn offscreen_shader_residency_and_rejected_source_keep_the_published_scene() {
     assert!(valid.iter().any(|&v| v > 0));
     let before = session.publication_context();
     let changes = session.resource_publication().changes().clone();
-    assert!(
-        WgslEffectProgram::prepare(
-            program.schema().clone(),
-            format!("{SOURCE}\nfn fs_sample() {{}}")
-        )
-        .is_err()
-    );
+    assert!(WgslEffectProgram::prepare(
+        program.schema().clone(),
+        format!("{SOURCE}\nfn fs_sample() {{}}")
+    )
+    .is_err());
     assert_eq!(session.publication_context(), before);
     assert_eq!(session.resource_publication().changes(), &changes);
     assert_eq!(
@@ -607,12 +605,10 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
         .unwrap()
         .try_ready()
         .expect("newer parameter publication reuses compiled module");
-    assert!(
-        surface
-            .renderer
-            .commit_effect_programs(&device, &session.session().resource_publication(), prepared)
-            .is_err()
-    );
+    assert!(surface
+        .renderer
+        .commit_effect_programs(&device, &session.session().resource_publication(), prepared)
+        .is_err());
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.session().resource_publication().changes(), &changes);
     assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 1]);
@@ -633,12 +629,10 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
         .iter()
         .map(|&v| (f64::from(v) * 0.6).round() as u8)
         .collect();
-    assert!(
-        actual
-            .iter()
-            .zip(&expected)
-            .all(|(a, b)| a.abs_diff(*b) <= 2)
-    );
+    assert!(actual
+        .iter()
+        .zip(&expected)
+        .all(|(a, b)| a.abs_diff(*b) <= 2));
     let old = surface
         .renderer
         .effect_program_preparation(&device, &session.session().resource_publication())
@@ -695,12 +689,10 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
             .iter()
             .map(|&v| (f64::from(v) * 0.7).round() as u8)
             .collect();
-        assert!(
-            actual
-                .iter()
-                .zip(&expected)
-                .all(|(a, b)| a.abs_diff(*b) <= 2)
-        );
+        assert!(actual
+            .iter()
+            .zip(&expected)
+            .all(|(a, b)| a.abs_diff(*b) <= 2));
         assert_eq!(surface.program_stats.pipeline_compiles, 1);
         assert_eq!(surface.renderer.resident_effect_program_counts(), [1, 1]);
         session
@@ -758,12 +750,10 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
         .iter()
         .map(|&v| (f64::from(v) * 0.7).round() as u8)
         .collect();
-    assert!(
-        actual
-            .iter()
-            .zip(&expected)
-            .all(|(a, b)| a.abs_diff(*b) <= 2)
-    );
+    assert!(actual
+        .iter()
+        .zip(&expected)
+        .all(|(a, b)| a.abs_diff(*b) <= 2));
     assert_eq!(surface.program_stats.pipeline_compiles, 0);
     eprintln!(
         "owned shader preparation: stale context and reset rejected; current module reused; pending changes/last image retained;16 real program enrollment/retirement cycles; shader-bearing replacement prepares before publication and matches independent coverage gain"

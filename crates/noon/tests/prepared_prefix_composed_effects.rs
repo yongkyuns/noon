@@ -1,9 +1,9 @@
 #![cfg(feature = "prepared-prefix")]
 
 use noon::{
+    effects::{Blur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ExecutionSession, ImagePaintOptions,
     PrefixReader, RateFunction, Scene, SemanticAnimationCompositionKind,
-    effects::{Blur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
 };
 use noon_core::{ComposedSource, EffectDefinition, ObjectId, SemanticPaint};
 use noon_runtime::ReplayLimits;

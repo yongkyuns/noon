@@ -1,13 +1,13 @@
 //! Camera-owned Bloom through ordinary authoring, shared time and retained output.
-use super::{SIZE, decode, expected, read, reference};
+use super::{decode, expected, read, reference, SIZE};
 use noon::{
-    AnimationOptions, RateFunction, Scene,
     effects::{Bloom, EffectUpdate, Pixels},
+    AnimationOptions, RateFunction, Scene,
 };
 use noon_core::{EffectParameter, ViewColorProfile};
 use noon_render_wgpu::{
-    Camera2D, GpuRenderer, HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomScope,
-    RetainedFramePreparer, text::TextDeviceMetrics,
+    text::TextDeviceMetrics, Camera2D, GpuRenderer, HdrBloomCapture, HdrBloomFilter,
+    HdrBloomParameters, HdrBloomScope, RetainedFramePreparer,
 };
 
 #[test]
@@ -63,12 +63,10 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
         before
     );
 
-    assert!(
-        execution
-            .scene_mut()
-            .add_effect(&a, Bloom::default(), "wrong")
-            .is_err()
-    );
+    assert!(execution
+        .scene_mut()
+        .add_effect(&a, Bloom::default(), "wrong")
+        .is_err());
     assert_eq!(
         execution
             .scene()
@@ -77,12 +75,10 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
             .scene_revision(),
         before
     );
-    assert!(
-        execution
-            .scene_mut()
-            .add_effect(&family, Bloom::default(), "wrong")
-            .is_err()
-    );
+    assert!(execution
+        .scene_mut()
+        .add_effect(&family, Bloom::default(), "wrong")
+        .is_err());
     assert_eq!(
         execution
             .scene()
@@ -91,12 +87,10 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
             .scene_revision(),
         before
     );
-    assert!(
-        execution
-            .scene_mut()
-            .add_effect(&camera, Bloom::default(), "duplicate")
-            .is_err()
-    );
+    assert!(execution
+        .scene_mut()
+        .add_effect(&camera, Bloom::default(), "duplicate")
+        .is_err());
     assert_eq!(
         execution
             .scene()
@@ -105,12 +99,10 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
             .scene_revision(),
         before
     );
-    assert!(
-        execution
-            .scene_mut()
-            .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
-            .is_err()
-    );
+    assert!(execution
+        .scene_mut()
+        .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
+        .is_err());
     assert_eq!(
         execution
             .scene()

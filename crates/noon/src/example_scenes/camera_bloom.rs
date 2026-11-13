@@ -1,8 +1,8 @@
 //! Material radiance and camera Bloom animate independently, then restore.
 use crate::{
+    effects::{Bloom, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
     Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
-    effects::{Bloom, EffectUpdate, Pixels},
 };
 use noon_core::ViewColorProfile;
 

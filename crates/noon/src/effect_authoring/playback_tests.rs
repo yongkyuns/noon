@@ -130,25 +130,21 @@ fn live_target_preserves_an_independent_attachment_then_activates() {
         target.get_effect("glow").unwrap().node_id(),
         source.get_effect("glow").unwrap().node_id()
     );
-    assert!(
-        session
-            .session_mut()
-            .take_renderer_publication()
-            .changes()
-            .is_empty()
-    );
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
     session
         .scene_mut()
         .set_glow(&target, EffectUpdate::default().intensity(1.5))
         .unwrap();
     session.live().shift(&target, 2.0, 0.0).unwrap();
-    assert!(
-        session
-            .session_mut()
-            .take_renderer_publication()
-            .changes()
-            .is_empty()
-    );
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
     let segment = session
         .live()
         .declare_and_activate_transform_to(&source, &target, options())
@@ -183,12 +179,10 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
         original.node_id()
     );
     let before = session.session().publication_context();
-    assert!(
-        session
-            .scene_mut()
-            .remove_effect(&source, &original)
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .remove_effect(&source, &original)
+        .is_err());
     assert_eq!(session.session().publication_context(), before);
     assert_eq!(
         session.session().execution_object_id(source.node_id()),
@@ -222,12 +216,10 @@ fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
     let before = session.session().publication_context();
     let original = row(session.session(), &source).clone();
     assert!(session.live().set_scale(&source, 0.0, 1.0).is_err());
-    assert!(
-        session
-            .scene_mut()
-            .add_effect(&source, noon_core::Glow::default(), "other")
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .add_effect(&source, noon_core::Glow::default(), "other")
+        .is_err());
     let mut batch = SemanticMutationTransaction::new();
     batch.set_property(
         source.node_id(),
@@ -431,13 +423,11 @@ fn absent_to_glow_enrolls_neutral_at_activation_and_completes_normally() {
             .intensity(),
         0.0
     );
-    assert!(
-        !session
-            .session_mut()
-            .take_renderer_publication()
-            .changes()
-            .is_empty()
-    );
+    assert!(!session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
 
     session.live().advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(
@@ -553,12 +543,10 @@ fn unsupported_absent_target_glow_does_not_allocate_or_publish() {
         .unwrap();
     let before = session.session().publication_context();
     let count = session.scene().integration_store().borrow().len();
-    assert!(
-        session
-            .live()
-            .declare_and_activate_transform_to(&source, &target, options())
-            .is_err()
-    );
+    assert!(session
+        .live()
+        .declare_and_activate_transform_to(&source, &target, options())
+        .is_err());
     assert_eq!(session.session().publication_context(), before);
     assert_eq!(session.scene().integration_store().borrow().len(), count);
     assert!(source.get_effect("glow").is_err());
@@ -657,12 +645,10 @@ fn ordinary_composition_rejects_stacked_absent_glow_without_any_publication() {
         &target,
         options(),
     ));
-    assert!(
-        session
-            .live()
-            .declare_and_activate_composition(&request, AnimationOptions::new())
-            .is_err()
-    );
+    assert!(session
+        .live()
+        .declare_and_activate_composition(&request, AnimationOptions::new())
+        .is_err());
     assert_eq!(session.session().publication_context(), before);
     assert_eq!(session.session().frame(), &old_frame);
     assert_eq!(

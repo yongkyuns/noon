@@ -1,9 +1,9 @@
 //! A moving glass card treats the earlier texture while retaining its own paint.
 //! Paired with `web/python/examples/showcase_glass_lens.py` on the ordinary live timeline.
 use crate::{
+    effects::{BackdropBlur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, ImageMobjectOptions,
     LiveContinuation, LiveProgram, MobjectFamily, RasterImageSampling, RateFunction, Scene, Text,
-    effects::{BackdropBlur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
 };
 
 pub struct GlassLens {
@@ -262,11 +262,9 @@ mod tests {
             .collect::<Vec<_>>();
         let resources = reader.resource_publication();
         assert_eq!(image_handles.len(), 2);
-        assert!(
-            image_handles
-                .iter()
-                .all(|handle| resources.raster_image_resources().get(*handle).is_some())
-        );
+        assert!(image_handles
+            .iter()
+            .all(|handle| resources.raster_image_resources().get(*handle).is_some()));
         assert!(reader.retained_resource_bytes() > 0);
 
         let mut last = first;

@@ -1,8 +1,8 @@
 //! One thousand authored attach/remove cycles: 100 dots, ten repetitions.
 //! Ordinary live source; no arbitrary seek or physical-performance claim.
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, Mobject,
     effects::{EffectUpdate, Pixels},
+    ContinuationStep, LiveContinuation, LiveProgram, Mobject,
 };
 
 pub struct GlowChurnScene {

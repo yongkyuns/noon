@@ -1,12 +1,12 @@
 use super::*;
 use noon::{
-    Scene,
     effects::{Bloom, EffectUpdate, Pixels},
+    Scene,
 };
 use noon_core::{Color, GeometryRef, Transform2D, Vec2, ViewColorProfile};
 use noon_render_wgpu::{
-    AnalyticOverlay, DEFAULT_EFFECT_TEXTURE_BUDGET, HdrBloomStats, InteractiveRetainedFrame,
-    RetainedFramePreparer, RetainedTextGpuState, text::TextDeviceMetrics,
+    text::TextDeviceMetrics, AnalyticOverlay, HdrBloomStats, InteractiveRetainedFrame,
+    RetainedFramePreparer, RetainedTextGpuState, DEFAULT_EFFECT_TEXTURE_BUDGET,
 };
 #[cfg(feature = "wgsl-effects")]
 mod native_hdr_corpus;
@@ -453,11 +453,9 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
                 noon_render_wgpu::OutputTransfer::Direct,
             );
             assert!(!unsupported.supports_hdr());
-            assert!(
-                unsupported
-                    .prepare(&device, &publication, false, size)
-                    .is_err()
-            );
+            assert!(unsupported
+                .prepare(&device, &publication, false, size)
+                .is_err());
             assert!(
                 unsupported.source_texture().is_none() && unsupported.display_output().is_none()
             );
@@ -467,11 +465,9 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
         if phase == 1 {
             let previous = output.source_texture().unwrap().clone();
             assert!(output.prepare(&device, &publication, true, size).is_err());
-            assert!(
-                output
-                    .prepare(&device, &publication, false, [3840, 2160])
-                    .is_err()
-            );
+            assert!(output
+                .prepare(&device, &publication, false, [3840, 2160])
+                .is_err());
             assert_eq!(output.source_texture(), Some(&previous));
         }
         let (actual, stats, uploads) = draw.frame(

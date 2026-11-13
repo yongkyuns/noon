@@ -1,10 +1,10 @@
 //! Persistent glow through public Scene/LiveSession; paired with the Python example.
 //! Runs without a Python/browser host. The native raster test qualifies its shared renderer path.
 use noon::{
+    effects::{EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, Color, MathTypst, RateFunction, Scene,
     SemanticAnimationCompositionKind, SemanticPaint, SemanticStyle, TransformToRequest, Vec2,
     VectorPath,
-    effects::{EffectUpdate, Pixels},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

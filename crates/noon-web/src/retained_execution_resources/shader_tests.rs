@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     RetainedFamilyExecutionDeltaEncoder, TransportEffectDefinition, TransportShaderProgramHandle,
 };
-use noon::{Color, ExecutionSession, Mobject, Scene, effects::*};
+use noon::{effects::*, Color, ExecutionSession, Mobject, Scene};
 use noon_core::ShaderParameterDefinition as Parameter;
 
 fn program(source: String) -> WgslEffectProgram {
@@ -227,11 +227,9 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
     );
     let mut missing = reenrolled.clone();
     missing.resource_additions = None;
-    assert!(
-        mirror
-            .apply_json(&serde_json::to_string(&missing).unwrap())
-            .is_err()
-    );
+    assert!(mirror
+        .apply_json(&serde_json::to_string(&missing).unwrap())
+        .is_err());
     assert_eq!(mirror.resources().shader_program_count(), 0);
     apply(&mut mirror, &reenrolled);
     assert_eq!(mirror.resources().shader_program_count(), 1);
@@ -262,8 +260,8 @@ fn shader_resource_and_value_failures_preserve_frame_resources_and_retry_sequenc
         match case {
             0 => bad["resource_additions"]["shader_programs"][0]["source"] = "fn shade(".into(),
             1 => {
-                bad["resource_additions"]["shader_programs"][0]["schema"]["parameters"][0]["default"] =
-                    serde_json::to_value(ShaderValue::Scalar(2.0)).unwrap()
+                bad["resource_additions"]["shader_programs"][0]["schema"]["parameters"][0]
+                    ["default"] = serde_json::to_value(ShaderValue::Scalar(2.0)).unwrap()
             }
             2 => {
                 let copy = bad["resource_additions"]["shader_programs"][0].clone();
@@ -298,11 +296,9 @@ fn shader_resource_and_value_failures_preserve_frame_resources_and_retry_sequenc
         // forged retry cannot use that uncommitted program through a leaked map.
         let mut missing = next.clone();
         missing.resource_additions = None;
-        assert!(
-            mirror
-                .apply_json(&serde_json::to_string(&missing).unwrap())
-                .is_err()
-        );
+        assert!(mirror
+            .apply_json(&serde_json::to_string(&missing).unwrap())
+            .is_err());
         assert_eq!(mirror.frame().unwrap(), &before);
         apply(&mut mirror, &next);
         assert_eq!(mirror.resources().shader_program_count(), 2);

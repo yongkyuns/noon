@@ -1,7 +1,7 @@
 //! Shared public live controls and membership, checked against literal source fields
 //! and an independently normalized full two-dimensional Gaussian.
 use super::*;
-use noon::{MobjectFamily, effects::Blur};
+use noon::{effects::Blur, MobjectFamily};
 
 mod animation;
 mod visibility;

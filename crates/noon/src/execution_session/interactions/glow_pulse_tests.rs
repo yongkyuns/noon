@@ -1,7 +1,7 @@
 use crate::{
-    AnimationOptions, Color, ExecutionSessionInputError, Mobject, Scene, SceneExecution,
     effects::{EffectRadius, EffectUpdate, Glow, Pixels},
     integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition},
+    AnimationOptions, Color, ExecutionSessionInputError, Mobject, Scene, SceneExecution,
 };
 use noon_core::{NativePointerId, NativePointerInput, SemanticNodeId, Vec2};
 
@@ -258,14 +258,13 @@ fn click_glow_pulse_absent_attachment_enrolls_neutrally_and_retires_exactly() {
     f.tick(2.0);
     assert!(!f.execution.session().interactions_active());
     assert_eq!(f.effect(0), None);
-    assert!(
-        f.execution
-            .scene()
-            .integration_store()
-            .borrow()
-            .node(temporary)
-            .is_none()
-    );
+    assert!(f
+        .execution
+        .scene()
+        .integration_store()
+        .borrow()
+        .node(temporary)
+        .is_none());
     assert_eq!(
         f.execution.scene().integration_store().borrow().len(),
         nodes
@@ -470,14 +469,13 @@ fn click_glow_pulse_failed_seek_is_atomic_and_successful_seek_retires_the_tempor
     assert_eq!(f.effect(0), None);
     assert_eq!(f.glow(0), None);
     assert!(!f.execution.session().interactions_active());
-    assert!(
-        f.execution
-            .scene()
-            .integration_store()
-            .borrow()
-            .node(attachment)
-            .is_none()
-    );
+    assert!(f
+        .execution
+        .scene()
+        .integration_store()
+        .borrow()
+        .node(attachment)
+        .is_none());
 }
 
 #[test]
@@ -499,12 +497,11 @@ fn foreign_semantic_store_cannot_publish_click_input_or_advance_a_persistent_pul
         },
     );
     let frame = f.execution.session().frame().clone();
-    assert!(
-        f.execution
-            .session_mut()
-            .submit_native_pointer_input(&mut foreign, &token, input)
-            .is_err()
-    );
+    assert!(f
+        .execution
+        .session_mut()
+        .submit_native_pointer_input(&mut foreign, &token, input)
+        .is_err());
     assert_eq!(f.execution.session().frame(), &frame);
     assert_eq!(f.execution.scene().revision(), revision);
     assert_eq!(foreign.scene_revision(), foreign_revision);
@@ -521,12 +518,11 @@ fn foreign_semantic_store_cannot_publish_click_input_or_advance_a_persistent_pul
     f.tick(1.25);
     let frame = f.execution.session().frame().clone();
     let attachment = f.effect(0);
-    assert!(
-        f.execution
-            .session_mut()
-            .advance_interactions(&mut foreign, 1.5)
-            .is_err()
-    );
+    assert!(f
+        .execution
+        .session_mut()
+        .advance_interactions(&mut foreign, 1.5)
+        .is_err());
     assert_eq!(f.execution.session().frame(), &frame);
     assert_eq!(f.execution.scene().revision(), revision);
     assert_eq!(foreign.scene_revision(), foreign_revision);
@@ -566,16 +562,15 @@ fn rejected_click_input_never_enrolls_and_retired_handles_cannot_mutate_a_new_ge
     let current = f.effect(0).unwrap();
     assert_ne!(current, stale.node_id());
     let revision = f.execution.scene().revision();
-    assert!(
-        f.execution
-            .scene_mut()
-            .set_effect(
-                &f.targets[0],
-                &stale,
-                EffectUpdate::default().intensity(4.0)
-            )
-            .is_err()
-    );
+    assert!(f
+        .execution
+        .scene_mut()
+        .set_effect(
+            &f.targets[0],
+            &stale,
+            EffectUpdate::default().intensity(4.0)
+        )
+        .is_err());
     assert_eq!(f.execution.scene().revision(), revision);
     assert_eq!(f.effect(0), Some(current));
     assert_eq!(f.glow(0).unwrap().intensity(), 0.0);
@@ -593,26 +588,24 @@ fn invalid_persistent_edit_does_not_adopt_the_temporary_click_attachment() {
     f.tick(1.5);
     let frame = f.execution.session().frame().clone();
     let revision = f.execution.scene().revision();
-    assert!(
-        f.execution
-            .scene_mut()
-            .set_glow(
-                &f.targets[0],
-                EffectUpdate::default().radius(Pixels(f64::NAN))
-            )
-            .is_err()
-    );
+    assert!(f
+        .execution
+        .scene_mut()
+        .set_glow(
+            &f.targets[0],
+            EffectUpdate::default().radius(Pixels(f64::NAN))
+        )
+        .is_err());
     assert_eq!(f.execution.scene().revision(), revision);
     assert_eq!(f.execution.session().frame(), &frame);
     assert_eq!(f.effect(0), Some(attachment));
     f.tick(2.0);
     assert_eq!(f.effect(0), None);
-    assert!(
-        f.execution
-            .scene()
-            .integration_store()
-            .borrow()
-            .node(attachment)
-            .is_none()
-    );
+    assert!(f
+        .execution
+        .scene()
+        .integration_store()
+        .borrow()
+        .node(attachment)
+        .is_none());
 }

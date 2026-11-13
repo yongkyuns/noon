@@ -34,12 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
     let mut execution = scene.into_execution()?;
-    assert!(
-        execution
-            .scene_mut()
-            .add_effect(&dot, Glow::default(), "overflow")
-            .is_err()
-    );
+    assert!(execution
+        .scene_mut()
+        .add_effect(&dot, Glow::default(), "overflow")
+        .is_err());
     assert!(dot.get_effect("overflow").is_err());
     assert_eq!(
         original

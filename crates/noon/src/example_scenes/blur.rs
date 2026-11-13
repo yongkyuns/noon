@@ -1,9 +1,9 @@
 //! Animated painted-source blur, paired with web/python/examples/blur.py.
 use super::image_glow::image_options;
 use crate::{
+    effects::{Blur, EffectUpdate, Pixels},
     AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, RateFunction,
     Scene,
-    effects::{Blur, EffectUpdate, Pixels},
 };
 
 pub struct ImageBlur {
@@ -167,13 +167,11 @@ mod tests {
             drive(&mut program, &mut callbacks, 6.0),
             LiveProgramStatus::Finished
         );
-        assert!(
-            program
-                .session()
-                .frame()
-                .objects
-                .iter()
-                .all(|row| row.effects.is_none())
-        );
+        assert!(program
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .all(|row| row.effects.is_none()));
     }
 }

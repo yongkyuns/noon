@@ -1,9 +1,9 @@
 //! Nested mixed-source controls, paired with web/python/examples/composed_effects.py.
 use crate::{
+    effects::{Blur, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, ImageMobjectOptions,
     LiveContinuation, LiveProgram, MobjectFamily, RasterImageSampling, RateFunction, Scene,
     SemanticAnimationCompositionKind,
-    effects::{Blur, EffectUpdate, Pixels},
 };
 
 pub struct ComposedEffects {
@@ -219,13 +219,11 @@ mod tests {
                 expected_scopes
             );
             for leaf in &leaves {
-                assert!(
-                    frame
-                        .objects
-                        .iter()
-                        .enumerate()
-                        .any(|(i, row)| row.id == *leaf && frame.is_present(i))
-                );
+                assert!(frame
+                    .objects
+                    .iter()
+                    .enumerate()
+                    .any(|(i, row)| row.id == *leaf && frame.is_present(i)));
             }
             if time == 2.0 {
                 assert_eq!(status, LiveProgramStatus::Finished);

@@ -59,13 +59,11 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
         session.scene().revision()
     );
     assert_eq!(session.session().frame().objects, objects);
-    assert!(
-        session
-            .session_mut()
-            .take_renderer_publication()
-            .changes()
-            .is_empty()
-    );
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
     let copy = session
         .scene()
         .integration_store()

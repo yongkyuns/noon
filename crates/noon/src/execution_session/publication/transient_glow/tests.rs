@@ -155,15 +155,13 @@ fn transient_glow_empty_or_rejected_edit_keeps_temporary_retirement_owned() {
     assert_eq!(execution.session().publication_context(), publication);
     // A live source-mode schema change is rejected by compiler preparation;
     // submitted intent must not adopt the effect before that preparation succeeds.
-    assert!(
-        execution
-            .scene_mut()
-            .set_glow(
-                &object,
-                EffectUpdate::default().source(GlowSource::Silhouette),
-            )
-            .is_err()
-    );
+    assert!(execution
+        .scene_mut()
+        .set_glow(
+            &object,
+            EffectUpdate::default().source(GlowSource::Silhouette),
+        )
+        .is_err());
     assert_eq!(execution.session().publication_context(), publication);
     assert_eq!(execution.session().frame(), &frame);
     assert!(execution.session().interactions_active());
@@ -311,15 +309,13 @@ fn transient_glow_admits_preclick_motion_target_without_adopting_temporary_attac
     assert_eq!(execution.session().frame().time, 0.4);
     assert!(object.get_effect("glow").is_err());
     assert!(temporary.authored_definition().is_err());
-    assert!(
-        execution
-            .session()
-            .runtime
-            .effective_object(object_id)
-            .unwrap()
-            .effects
-            .is_none()
-    );
+    assert!(execution
+        .session()
+        .runtime
+        .effective_object(object_id)
+        .unwrap()
+        .effects
+        .is_none());
     execution
         .live()
         .advance_segment_to(segment, segment.end_time())

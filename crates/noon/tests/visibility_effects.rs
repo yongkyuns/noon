@@ -1,8 +1,8 @@
 //! Visibility enrollment and lifecycle through the shared animation pipeline.
 //! Uses the ordinary Scene transaction, lowering and runtime publication path.
 use noon::{
-    ExecutionSession, Scene,
     effects::{EffectUpdate, Glow, NoiseDissolve, Pixels},
+    ExecutionSession, Scene,
 };
 use noon_core::{SemanticMutationTransaction, SemanticNodeId};
 
@@ -266,14 +266,12 @@ fn dissolve_sequence_captures_prior_progress_and_holds_each_seed_without_interpo
             );
         }
         scene.live(&mut session).complete_segment(segment).unwrap();
-        assert!(
-            scene
-                .integration_store()
-                .borrow()
-                .visibility_effect(owner)
-                .unwrap()
-                .is_none()
-        );
+        assert!(scene
+            .integration_store()
+            .borrow()
+            .visibility_effect(owner)
+            .unwrap()
+            .is_none());
     }
 }
 
@@ -373,12 +371,10 @@ fn dissolve_play_lifecycle_overrides_are_preflighted_before_nested_membership_ch
         style: DissolveStyle::default(),
         options: linear().remover(false),
     };
-    assert!(
-        scene
-            .live(&mut session)
-            .declare_and_activate_composition(&request, noon::AnimationOptions::new().remover(true))
-            .is_err()
-    );
+    assert!(scene
+        .live(&mut session)
+        .declare_and_activate_composition(&request, noon::AnimationOptions::new().remover(true))
+        .is_err());
     assert_eq!(session.frame(), &before);
     assert_eq!(session.publication_context(), context);
     assert_eq!(
@@ -557,14 +553,12 @@ fn dissolve_rejects_capacity_conflict_and_unsupported_options_without_publicatio
         assert_eq!(session.publication_context(), context);
         assert_eq!(scene.integration_store().borrow().len(), nodes);
         assert!(session.take_renderer_publication().changes().is_empty());
-        assert!(
-            scene
-                .integration_store()
-                .borrow()
-                .visibility_effect(source.node_id())
-                .unwrap()
-                .is_none()
-        );
+        assert!(scene
+            .integration_store()
+            .borrow()
+            .visibility_effect(source.node_id())
+            .unwrap()
+            .is_none());
     }
 }
 
@@ -580,23 +574,19 @@ fn declared_dissolve_is_inert_replayable_and_enrolls_at_activation() {
         .declare_dissolve(&source, Direction::Out, DissolveStyle::default(), linear())
         .unwrap();
     let nodes = scene.integration_store().borrow().len();
-    assert!(
-        scene
-            .integration_store()
-            .borrow()
-            .visibility_effect(source.node_id())
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        scene
-            .integration_store()
-            .borrow()
-            .node(source.node_id())
-            .unwrap()
-            .parents()
-            .is_empty()
-    );
+    assert!(scene
+        .integration_store()
+        .borrow()
+        .visibility_effect(source.node_id())
+        .unwrap()
+        .is_none());
+    assert!(scene
+        .integration_store()
+        .borrow()
+        .node(source.node_id())
+        .unwrap()
+        .parents()
+        .is_empty());
     let mut session = scene.execution_session().unwrap();
     for _ in 0..3 {
         for declaration in [&input, &output] {
@@ -903,34 +893,30 @@ fn pulse_enrollment_capacity_and_wrong_canonical_kind_reject_atomically() {
         let before = session.frame().clone();
         let context = session.publication_context();
         let revision = scene.revision();
-        assert!(
-            scene
-                .live(&mut session)
-                .declare_and_activate_composition(
-                    &noon::AnimationCompositionRequest::GlowPulse {
-                        target: &source,
-                        intensity: 2.0,
-                        options: noon::AnimationOptions::new().run_time(1.0)
-                    },
-                    noon::AnimationOptions::new(),
-                )
-                .is_err()
-        );
+        assert!(scene
+            .live(&mut session)
+            .declare_and_activate_composition(
+                &noon::AnimationCompositionRequest::GlowPulse {
+                    target: &source,
+                    intensity: 2.0,
+                    options: noon::AnimationOptions::new().run_time(1.0)
+                },
+                noon::AnimationOptions::new(),
+            )
+            .is_err());
         assert_eq!(session.frame(), &before);
         assert_eq!(session.publication_context(), context);
         assert_eq!(scene.revision(), revision);
         if full {
             assert!(source.get_effect("glow").is_err());
         } else {
-            assert!(
-                source
-                    .get_effect("glow")
-                    .unwrap()
-                    .authored_definition()
-                    .unwrap()
-                    .as_blur()
-                    .is_some()
-            );
+            assert!(source
+                .get_effect("glow")
+                .unwrap()
+                .authored_definition()
+                .unwrap()
+                .as_blur()
+                .is_some());
         }
         scene.live(&mut session).wait_segment(0.1).unwrap();
     }

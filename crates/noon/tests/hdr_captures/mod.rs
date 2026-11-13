@@ -1,13 +1,13 @@
 //! Actual authored composed/mixed captures in the linear working profile.
 use super::{decode, read, reference as bloom_reference, srgb_decode};
 use noon::{
-    ExecutionSession, Scene,
     effects::{Blur, EffectUpdate, Pixels},
+    ExecutionSession, Scene,
 };
 use noon_core::{SemanticMutationTransaction, Vec2, ViewColorProfile};
 use noon_render_wgpu::{
-    Camera2D, GpuRenderer, HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomScope,
-    RetainedFramePreparer, RetainedTextGpuState, text::TextDeviceMetrics,
+    text::TextDeviceMetrics, Camera2D, GpuRenderer, HdrBloomCapture, HdrBloomFilter,
+    HdrBloomParameters, HdrBloomScope, RetainedFramePreparer, RetainedTextGpuState,
 };
 const SIZE: [u32; 2] = [64, 48];
 const CLEAR: [f64; 4] = [0.015625, 0.03125, 0.0625, 0.25];

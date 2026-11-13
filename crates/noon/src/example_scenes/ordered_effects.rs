@@ -1,9 +1,9 @@
 //! Ordinary ordered appearance, paired with web/python/examples/ordered_effects.py.
 use crate::{
+    effects::{Blur, EffectOffset, EffectUpdate, Pixels, Shadow},
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
     LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
     TransformToRequest,
-    effects::{Blur, EffectOffset, EffectUpdate, Pixels, Shadow},
 };
 
 pub struct OrderedEffects {

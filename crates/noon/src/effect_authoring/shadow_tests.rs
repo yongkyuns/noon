@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    AnimationOptions, Color, RateFunction, TransformToRequest,
     effects::{EffectOffset, Pixels, Shadow},
+    AnimationOptions, Color, RateFunction, TransformToRequest,
 };
 
 #[test]
@@ -77,12 +77,10 @@ fn shadow_channels_capture_complete_seek_and_retire_through_one_attachment() {
     assert_eq!(authored.offset(), EffectOffset::Pixels([-5.75, 4.5]));
     assert_eq!(authored.color(), color);
     let context = session.session().publication_context();
-    assert!(
-        session
-            .scene_mut()
-            .set_effect(&source, "depth", EffectUpdate::default().intensity(1.0))
-            .is_err()
-    );
+    assert!(session
+        .scene_mut()
+        .set_effect(&source, "depth", EffectUpdate::default().intensity(1.0))
+        .is_err());
     assert_eq!(session.session().publication_context(), context);
     session.session_mut().take_renderer_publication();
     session

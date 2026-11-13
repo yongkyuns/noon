@@ -1,8 +1,8 @@
 //! Final composed-family opacity, paired with scope_opacity.py.
 use crate::{
+    effects::{Blur, DissolveDirection, DissolveStyle, EffectUpdate, Glow, GlowSource, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
     MobjectFamily, RateFunction, Scene, SemanticAnimationCompositionKind,
-    effects::{Blur, DissolveDirection, DissolveStyle, EffectUpdate, Glow, GlowSource, Pixels},
 };
 
 pub struct FamilyOpacity {
