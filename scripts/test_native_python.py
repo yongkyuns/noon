@@ -110,6 +110,21 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_scene_family_shift_uses_all_three_coordinates_in_both_phases(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        child = Line(LEFT, RIGHT)
+        family = VGroup(child)
+        self.add(family)
+        for depth in (0.25, 0.5):
+            family.shift((0., 0., 0.25))
+            assert abs(child.get_center()[2] - depth) < 1e-9
+            self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_native_style_edits_preserve_replay(self):
         source = """from noon import *
 class Demo(Scene):

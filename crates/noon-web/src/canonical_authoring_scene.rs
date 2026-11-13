@@ -887,7 +887,7 @@ impl CanonicalAuthoringScene {
         Ok(self.active_live_player()?.scene_mut())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn place<T>(
         &mut self,
         operation: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
@@ -3590,20 +3590,7 @@ impl CanonicalAuthoringScene {
         y: f64,
         z: f64,
     ) -> Result<(), AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .shift_family_3d(family, noon::SemanticVec3::new(x, y, z))
-                .map(|_| ())
-                .map_err(running_placement_error),
-            PlayerOwnership::Unstarted => {
-                Err("live family shift requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        self.place(|scene| scene.shift_family_3d(family, noon::SemanticVec3::new(x, y, z)))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -3622,18 +3609,13 @@ impl CanonicalAuthoringScene {
         .map_err(running_scene_error)
     }
 
-    /// Delegate live family layout to the reusable Rust semantic facade.
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_arrange_family(
         &mut self,
         family: &noon::MobjectFamily,
         options: &noon::FamilyArrangeOptions,
     ) -> Result<(), AuthoringFailure> {
-        self.active_live_player()?
-            .scene_mut()
-            .arrange_family_with_options(family, options)
-            .map(|_| ())
-            .map_err(running_placement_error)
+        self.place(|scene| scene.arrange_family_with_options(family, options))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -8406,17 +8388,14 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .move_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.move_family_to(
+                        &family,
+                        noon::LiveLayoutTarget::Point(x, y),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8434,17 +8413,14 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .move_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.move_family_to(
+                        &family,
+                        noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8462,17 +8438,14 @@ mod wasm {
             let family = handle.semantic_family()?;
             let target = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .move_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Family(&target),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.move_family_to(
+                        &family,
+                        noon::LiveLayoutTarget::Family(&target),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8626,22 +8599,19 @@ mod wasm {
             mask_y: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .next_layout_to_aligned(
-                    &source.anchor,
-                    noon::LiveLayoutTarget::Anchor(&target.anchor),
-                    &aligner.anchor,
-                    noon::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.next_layout_to_aligned(
+                        &source.anchor,
+                        noon::LiveLayoutTarget::Anchor(&target.anchor),
+                        &aligner.anchor,
+                        noon::ManimNextToArgs {
+                            direction: (direction_x, direction_y),
+                            buff,
+                            aligned_edge: (edge_x, edge_y),
+                            mask: (mask_x, mask_y),
+                        },
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8659,23 +8629,21 @@ mod wasm {
             frame_buff: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .next_layout_to_edge_in_frame(
-                    &source.anchor,
-                    &target.anchor,
-                    (edge_x, edge_y),
-                    noon::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (0.0, 0.0),
-                        mask: (1.0, 1.0),
-                    },
-                    frame_buff,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.next_layout_to_edge_in_frame(
+                        &source.anchor,
+                        &target.anchor,
+                        (edge_x, edge_y),
+                        noon::ManimNextToArgs {
+                            direction: (direction_x, direction_y),
+                            buff,
+                            aligned_edge: (0.0, 0.0),
+                            mask: (1.0, 1.0),
+                        },
+                        frame_buff,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveNextLayoutToPoint)]
@@ -8695,22 +8663,19 @@ mod wasm {
             mask_y: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .next_layout_to_aligned(
-                    &source.anchor,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    &aligner.anchor,
-                    noon::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.next_layout_to_aligned(
+                        &source.anchor,
+                        noon::LiveLayoutTarget::Point(x, y),
+                        &aligner.anchor,
+                        noon::ManimNextToArgs {
+                            direction: (direction_x, direction_y),
+                            buff,
+                            aligned_edge: (edge_x, edge_y),
+                            mask: (mask_x, mask_y),
+                        },
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8724,12 +8689,10 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .align_family_on_frame(&family, (direction_x, direction_y), buff)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.align_family_on_frame(&family, (direction_x, direction_y), buff)
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAlignMobjectOnFrame)]
@@ -8745,12 +8708,14 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .align_mobject_on_frame(handle.semantic_mobject(), (direction_x, direction_y), buff)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.align_mobject_on_frame(
+                        handle.semantic_mobject(),
+                        (direction_x, direction_y),
+                        buff,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
@@ -8766,16 +8731,13 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .align_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    (axis_x, axis_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.align_family_to(
+                        &family,
+                        noon::LiveLayoutTarget::Point(x, y),
+                        (axis_x, axis_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8791,16 +8753,13 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .align_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    (axis_x, axis_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.align_family_to(
+                        &family,
+                        noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                        (axis_x, axis_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8816,16 +8775,13 @@ mod wasm {
             let family = handle.semantic_family()?;
             let target = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .align_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Family(&target),
-                    (axis_x, axis_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.align_family_to(
+                        &family,
+                        noon::LiveLayoutTarget::Family(&target),
+                        (axis_x, axis_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -10768,17 +10724,14 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .move_to(
-                    handle.semantic_mobject(),
-                    noon::LiveLayoutTarget::Anchor(&target.anchor),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.move_to(
+                        handle.semantic_mobject(),
+                        noon::LiveLayoutTarget::Anchor(&target.anchor),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -10799,17 +10752,14 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .move_to(
-                    handle.semantic_mobject(),
-                    noon::LiveLayoutTarget::Point(x, y),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.move_to(
+                        handle.semantic_mobject(),
+                        noon::LiveLayoutTarget::Point(x, y),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -10832,17 +10782,14 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .move_to(
-                    handle.semantic_mobject(),
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
-                .map(|_| ())
-                .map_err(running_placement_error)
+                .place(|scene| {
+                    scene.move_to(
+                        handle.semantic_mobject(),
+                        noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -12455,12 +12402,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .arrange_family_in_grid_with_options(&family, &options.options)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| scene.arrange_family_in_grid_with_options(&family, &options.options))
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveScaleArrow)]
@@ -13997,6 +13940,29 @@ mod tests {
         assert_eq!(source.center().unwrap(), (3.0, -1.0));
         assert_eq!(context.live_execution_ownership(), "returned");
         context.live_target_editor(&source).unwrap();
+    }
+
+    #[test]
+    fn family_placement_edits_follow_the_local_scene_owner() {
+        let mut context = CanonicalAuthoringScene::default();
+        let child = context.scene.square(1.0).unwrap();
+        let family = context.scene.family(&[(&child).into()]).unwrap();
+        context.scene.add_many(&[(&family).into()]).unwrap();
+        context.live_shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        context.live_player(1.0).unwrap();
+        context.live_shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        let player = context.take_execution_player(1.0, 42).unwrap();
+        assert!(context.live_shift_family(&family, 1.0, 0.0, 0.25).is_err());
+        assert_eq!(
+            child.state().unwrap().transform.translation,
+            noon::SemanticVec3::new(2.0, 0.0, 0.5)
+        );
+        context.return_execution_player(player).unwrap();
+        context.live_shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        assert_eq!(
+            child.state().unwrap().transform.translation,
+            noon::SemanticVec3::new(3.0, 0.0, 0.75)
+        );
     }
 
     #[test]

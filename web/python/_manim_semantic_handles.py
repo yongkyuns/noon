@@ -929,7 +929,7 @@ def _move_to(
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
     args = (edge.x, edge.y, mask.x, mask.y)
-    context = _live_mutation_context(self)
+    context = _layout_authoring_context(self, point_or_mobject)
     if _is_shared_family(point_or_mobject):
         target = _layout_anchor(point_or_mobject)
         if target is None:
@@ -958,11 +958,10 @@ def _move_to(
 def _dimension_fit_source(self, dim, *, planar_depth=False):
     if dim not in ((0, 1, 2) if planar_depth else (0, 1)):
         raise NotImplementedError("dimension fitting requires X, Y or Z")
-    context = _group_live_layout_context(self) if _is_shared_family(self) else None
+    context = _layout_authoring_context(self)
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("dimension fitting requires a shared Rust layout handle")
-    context = context or _path_authoring_context(self)
     return anchor, context
 
 
@@ -1415,8 +1414,7 @@ def _next_to_edge_in_frame(self, target, edge, direction, buff, frame_buff):
     target_anchor = _layout_anchor(target)
     if source is None or target_anchor is None:
         raise RuntimeError("placement requires current shared Rust source and target handles")
-    context = (_group_live_layout_context(self) if _is_shared_family(self)
-               else _live_mutation_context(self) or _live_constructor_context())
+    context = _layout_authoring_context(self, target)
     arguments = (edge.x, edge.y, direction.x, direction.y, float(buff), float(frame_buff))
     try:
         if context is None:
@@ -1444,8 +1442,7 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
     arguments = (vector.x, vector.y, float(buff), edge.x, edge.y, mask.x, mask.y)
-    context = (_group_live_layout_context(self) if _is_shared_family(self)
-               else _live_mutation_context(self) or _live_constructor_context())
+    context = _layout_authoring_context(self, target, submobject_to_align)
     try:
         if target_anchor is not None:
             if context is None:
@@ -1486,7 +1483,7 @@ def _align_to(
     if handle is None:
         raise RuntimeError("alignment requires current shared Rust semantic handles")
     axis = _base._as_vec2(direction)
-    context = _live_mutation_context(self) or _live_constructor_context()
+    context = _layout_authoring_context(self, mobject_or_point)
     if context is not None:
         mask_x = 1.0 if axis.x != 0.0 else 0.0
         mask_y = 1.0 if axis.y != 0.0 else 0.0
@@ -1530,7 +1527,7 @@ def _align_on_frame(
     handle = _handle_for(self)
     if handle is None or not hasattr(handle, "alignOnFrame"):
         raise RuntimeError("Mobject frame alignment requires a current shared Rust semantic handle")
-    context = _live_mutation_context(self) or _live_constructor_context()
+    context = _layout_authoring_context(self)
     if context is not None:
         try:
             engine_call(
@@ -2608,7 +2605,7 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
         if values is not None:
             for value in values:
                 engine_call(add, None if value is None else float(value))
-    context = _group_live_layout_context(self)
+    context = _layout_authoring_context(self)
     try:
         if context is None:
             engine_call(handle.arrangeInGrid, options)
@@ -2642,7 +2639,7 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     from _manim_path_editing import _raw_point3
     offset = _raw_point3(direction)
     arguments = offset if offset[2] != 0.0 else offset[:2]
-    context = _group_target_context(self)
+    context = _group_target_context(self, include_setup=True)
     if context is not None:
         try:
             engine_call(context.liveShiftFamily, self._semantic_family_handle, *arguments)
@@ -2656,7 +2653,7 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     return self
 
 
-def _group_live_layout_context(value: _compat.Group):
+def _group_live_layout_context(value: _compat.Group, *, include_setup=False):
     # Callback registration does not invalidate the coherent live publication.
     # Family observations inside an ordered overlay need shared phase-local
     # aggregation; neither the authored state nor the last publication suffices.
@@ -2665,7 +2662,8 @@ def _group_live_layout_context(value: _compat.Group):
     leaves = _compat._leaf_mobjects(value)
     if any(_canonical_phase_context(leaf) is not None for leaf in leaves):
         raise NotImplementedError("family layout is unsupported during an active callback phase")
-    context = _group_target_context(value)
+    context = (_group_target_context(value, include_setup=True) if include_setup
+               else _group_target_context(value))
     if context is None:
         return None
     for leaf in leaves:
@@ -2673,6 +2671,11 @@ def _group_live_layout_context(value: _compat.Group):
                 or getattr(leaf, "_semantic_handle", None) is None):
             return None
     return context
+
+
+def _layout_authoring_context(value, *targets):
+    context = _group_live_layout_context(value, include_setup=True) if _is_shared_family(value) else None
+    return context or _path_authoring_context(value, *targets)
 
 
 def _live_family_placement(context, family, target, operation, *arguments):
@@ -2694,33 +2697,29 @@ def _group_move_to(
     aligned_edge: object = _base.ORIGIN,
     coor_mask: object = (1.0, 1.0, 1.0),
 ) -> _compat.Group:
-    context = _group_live_layout_context(self)
+    context = _layout_authoring_context(self, point_or_mobject)
+    edge = _base._as_vec2(aligned_edge)
+    mask = _alignment_mask2(coor_mask)
     if context is not None:
-        edge = _base._as_vec2(aligned_edge)
-        mask = _alignment_mask2(coor_mask)
         _live_family_placement(context, self._semantic_family_handle, point_or_mobject, "Move",
                                edge.x, edge.y, mask.x, mask.y)
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         raise RuntimeError("placement requires current shared Rust semantic handles")
-    session = shared
-    edge = _base._as_vec2(aligned_edge)
-    mask = _alignment_mask2(coor_mask)
-
     if _is_shared_family(point_or_mobject):
         target = _shared_family_layout(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
-        engine_call(session.moveToFamily, target, edge.x, edge.y, mask.x, mask.y)
+        engine_call(shared.moveToFamily, target, edge.x, edge.y, mask.x, mask.y)
     elif _alignment_is_mobject(point_or_mobject):
         target = _family_layout_leaf_adapter(point_or_mobject)
         if target is None:
             raise RuntimeError("placement target requires a current shared Rust semantic handle")
-        engine_call(session.moveToMobject, target, edge.x, edge.y, mask.x, mask.y)
+        engine_call(shared.moveToMobject, target, edge.x, edge.y, mask.x, mask.y)
     else:
         point = _base._as_vec2(point_or_mobject)
-        engine_call(session.moveToPoint, point.x, point.y, edge.x, edge.y, mask.x, mask.y)
+        engine_call(shared.moveToPoint, point.x, point.y, edge.x, edge.y, mask.x, mask.y)
 
     return self
 
@@ -2728,7 +2727,7 @@ def _group_move_to(
 
 
 def _group_align_on_frame(self: _compat.Group, direction: _base.Vec2, buff: float):
-    context = _group_live_layout_context(self)
+    context = _layout_authoring_context(self)
     if context is not None:
         engine_call(context.liveAlignFamilyOnFrame, self._semantic_family_handle,
                                        direction.x, direction.y, float(buff))
@@ -2745,30 +2744,27 @@ def _group_align_to(
     mobject_or_point: object,
     direction: object = _base.ORIGIN,
 ) -> _compat.Group:
-    context = _group_live_layout_context(self)
+    context = _layout_authoring_context(self, mobject_or_point)
+    axis = _base._as_vec2(direction)
     if context is not None:
-        axis = _base._as_vec2(direction)
         _live_family_placement(context, self._semantic_family_handle, mobject_or_point, "Align", axis.x, axis.y)
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
         raise RuntimeError("alignment requires current shared Rust semantic handles")
-    session = shared
-    axis = _base._as_vec2(direction)
-
     if _is_shared_family(mobject_or_point):
         target = _shared_family_layout(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment target requires a current shared Rust semantic handle")
-        engine_call(session.alignToFamily, target, axis.x, axis.y)
+        engine_call(shared.alignToFamily, target, axis.x, axis.y)
     elif _alignment_is_mobject(mobject_or_point):
         target = _family_layout_leaf_adapter(mobject_or_point)
         if target is None:
             raise RuntimeError("alignment target requires a current shared Rust semantic handle")
-        engine_call(session.alignToMobject, target, axis.x, axis.y)
+        engine_call(shared.alignToMobject, target, axis.x, axis.y)
     else:
         point = _base._as_vec2(mobject_or_point)
-        engine_call(session.alignToPoint, point.x, point.y, axis.x, axis.y)
+        engine_call(shared.alignToPoint, point.x, point.y, axis.x, axis.y)
 
     return self
 
@@ -2801,7 +2797,7 @@ def _group_arrange(
         if anchor is None:
             raise RuntimeError("arrange requires current shared Rust semantic handles")
         options.setAligner(anchor)
-    context = _group_live_layout_context(self)
+    context = _layout_authoring_context(self, aligner)
     try:
         if context is not None:
             engine_call(context.liveArrangeFamily, family_handle, options)
@@ -3698,15 +3694,16 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
-def _group_target_context(value: object) -> object | None:
+def _group_target_context(value: object, *, include_setup=False) -> object | None:
     contexts: list[object] = []
     seen: set[int] = set()
+    resolve = _object_authoring_context if include_setup else _live_mutation_context
 
     def collect(member: object) -> None:
         if id(member) in seen:
             return
         seen.add(id(member))
-        context = _live_mutation_context(member)
+        context = resolve(member)
         if context is not None:
             contexts.append(context)
         if _is_shared_family(member):
@@ -3716,11 +3713,9 @@ def _group_target_context(value: object) -> object | None:
 
     collect(value)
     if not contexts:
-        # A detached family may have been created before the first live segment,
-        # so its wrappers do not carry per-target context markers. Once source
-        # execution resumes, the current Scene's returned player is still the
-        # one mutation authority for that same-store family.
-        return _live_constructor_context()
+        # Detached families may lack owner markers. Source execution supplies
+        # the current Scene when the requested operation accepts that phase.
+        return _path_authoring_context(value) if include_setup else _live_constructor_context()
     context = contexts[0]
     if any(candidate is not context for candidate in contexts[1:]):
         raise RuntimeError("Group target members belong to different canonical contexts")
