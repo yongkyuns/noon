@@ -1001,12 +1001,8 @@ impl Scene {
         ExecutionSession::from_semantic_root(&self.store.borrow(), self.root)
     }
 
-    /// Lower this scene and one explicit authored animation root into the shared runtime.
-    ///
-    /// The root must belong to this scene's store. Exact property tracks keep their
-    /// authored timing; neutral family compositions start at zero. Declarations
-    /// outside this root are not scheduled.
-    pub fn execution_session_with_animation_root(
+    #[cfg(test)]
+    pub(crate) fn execution_session_with_animation_root(
         &self,
         animation_root: &crate::DeclaredAnimation,
     ) -> Result<ExecutionSession, String> {
@@ -1015,7 +1011,7 @@ impl Scene {
 
     /// Start initial family compositions at an explicit origin, including before time zero.
     /// Exact property tracks retain their own absolute timing.
-    pub fn execution_session_with_animation_root_at(
+    fn execution_session_with_animation_root_at(
         &self,
         animation_root: &crate::DeclaredAnimation,
         origin: f64,

@@ -649,7 +649,8 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "semantic scene root is no longer live".into())
     }
 
-    pub fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
         self.scene
             .execution_session()
             .map_err(|error| error.to_string())
