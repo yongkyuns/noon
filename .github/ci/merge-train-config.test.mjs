@@ -33,6 +33,7 @@ test('merge train remains serial, opt-in, and tests combined revisions', () => {
   assert.match(config, /^    merge_method: merge$/m);
   assert.match(conditionSection('queue_conditions'), /^      - base = master$/m);
   assert.match(conditionSection('queue_conditions'), /^      - -draft$/m);
+  assert.match(conditionSection('queue_conditions'), /^      - label = merge-train$/m);
   assert.match(config, /^pull_request_rules:\n/m);
   assert.match(config, /^      - label = merge-train$/m);
   assert.match(config, /^      queue:\n        name: master$/m);
@@ -54,6 +55,8 @@ test('both admission and integration checks cover all always-on jobs', () => {
 });
 
 test('integration cannot ignore pending or failed path-selected checks', () => {
+  const admission = conditionSection('queue_conditions');
+  assert.match(admission, /^      - label = merge-train$/m);
   const merge = conditionSection('merge_conditions');
   assert.match(merge, /^      - "-check-failure \\*= @github-actions\/\\*\\*"$/m);
   assert.match(merge, /^      - "-check-pending \\*= @github-actions\/\\*\\*"$/m);
