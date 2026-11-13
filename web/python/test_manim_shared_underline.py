@@ -184,7 +184,7 @@ class ManimSharedUnderlineTests(unittest.TestCase):
                 def beginUnderline(self, target, buff):
                     calls.append(("live-begin", target, float(buff)))
                     return target.beginUnderline(buff)
-                def liveCreateManimGeometry(self, candidate):
+                def createManimGeometry(self, candidate):
                     calls.append((
                         "live-create",
                         candidate.snapshot["style"]["stroke_width"],

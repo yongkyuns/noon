@@ -30,7 +30,7 @@ near(observation.centerY, 2, "current center y");
 
 function crossLine(index, expectedStart, expectedEnd) {
   const candidate = observation.beginCrossLine(index, 1.5);
-  const line = context.liveCreateManimGeometry(candidate);
+  const line = context.createManimGeometry(candidate);
   // A debug codec is used only to inspect the retained geometry in this test.
   const geometry = JSON.parse(line.snapshotJson()).geometry.line;
   near(geometry.start.x, expectedStart[0], `line ${index} start x`);
@@ -46,7 +46,7 @@ for (const candidate of [
   observation.beginSurroundingRectangle(0, 0, 0),
   observation.beginBackgroundRectangle(0, 0, 0, 0.75),
 ]) {
-  const matcher = context.liveCreateManimGeometry(candidate);
+  const matcher = context.createManimGeometry(candidate);
   near(matcher.centerX, 3, "matcher current center x");
   near(matcher.centerY, 2, "matcher current center y");
   near(matcher.width, 2, "matcher width");

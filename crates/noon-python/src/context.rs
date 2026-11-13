@@ -3480,16 +3480,14 @@ impl Context {
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
-    #[pyo3(name = "liveCreateManimGeometry")]
+    #[pyo3(name = "createManimGeometry")]
     fn geometry(&mut self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
         self.available()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
+        let running = self.has_execution();
         self.scene
             .geometry(options.options.clone())
             .map(MobjectHandle::from_semantic_mobject)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "liveCreateImage")]
     fn image(

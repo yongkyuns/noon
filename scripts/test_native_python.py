@@ -33,7 +33,7 @@ class NativePythonTests(unittest.TestCase):
                      "showcase_glass_lens", "showcase_camera_follows_path",
                      "ordinary_family_arrangement", "top_level_family_arrangement", "ordinary_family_grid",
                      "ordinary_planar_affine", "ordinary_dimension_fitting", "ordinary_arrow_geometry",
-                     "ordinary_paint_queries_gradients", "ordinary_style_operations", "ordinary_family_paint",
+                     "ordinary_live_primitive_construction", "ordinary_paint_queries_gradients", "ordinary_style_operations", "ordinary_family_paint",
                      "ordinary_circle_surround", "ordinary_family_replacement",
                      "tutorial_positioning", "tutorial_composition", "ordinary_value_tracker_continuation",
                      "ordinary_mixed_scalar_composition", "tutorial_value_tracker",
