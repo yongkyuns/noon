@@ -144,7 +144,8 @@ async function waitForApplied(page, previousGeneration) {
   // A new explicit Run can race the previous run's still-applied patch DOM.
   // Wait for the exact new generation's terminal patch, not a stale one;
   // retain the original 30s deadline and genuine source-completion gates.
-  await page.waitForFunction(freshProductRunSettled, previousGeneration, { timeout: 30_000 });
+  await page.waitForFunction(freshProductRunSettled, { previousGeneration, allowLegacyBaseline },
+    { timeout: 30_000 });
   const state = await page.evaluate(() => ({
     patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
     patchText:

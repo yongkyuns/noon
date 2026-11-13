@@ -29,3 +29,18 @@ export function observeUnpromptedPlayback(win = window, doc = document, Observer
   win.addEventListener('pagehide', retire, {once: true});
   sample();
 }
+
+// Stronger no-gesture autoplay proof than a historical MutationObserver flag:
+// the same real scene generation must advance both presented frame count and
+// playback time while its canonical controls say it is actively playing.
+// Playwright serializes this closure-free predicate into each real iframe.
+export function observedUnpromptedProgress(start, win = window, doc = document) {
+  const gallery = win.__noonExampleGallery;
+  const status = doc.querySelector('#status');
+  const frames = Number(status?.dataset?.presentedFrames);
+  const time = Number.parseFloat(doc.querySelector('#metric-time')?.value);
+  return gallery?.generationDiagnostics?.runGeneration === start.generation &&
+    gallery.runInFlight === false && status?.dataset?.playbackPlaying === 'true' &&
+    Number.isFinite(frames) && Number.isFinite(time) &&
+    frames > start.frames && Math.abs(time - start.time) > 0.01;
+}

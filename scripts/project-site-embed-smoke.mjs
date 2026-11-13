@@ -9,7 +9,7 @@ import { serveRepository } from './browser-test-server.mjs';
 import { playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { captureStalledRenderStacks } from './noon-site-worker-stack.mjs';
-import { observeUnpromptedPlayback } from './project-site-autoplay-observer.mjs';
+import { observeUnpromptedPlayback, observedUnpromptedProgress } from './project-site-autoplay-observer.mjs';
 
 // Real composed-host qualification. No stubbed main, editor, workers or canvas.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -231,9 +231,25 @@ try {
             mark('authored-frames',id);
             const initialGeneration = await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             assert.equal(initialGeneration,1,'exactly one canonical automatic initial Run');
-            // Keep the exact no-gesture proof; wait for the passive observer
-            // to sample it instead of racing a Firefox mutation callback.
-            await frame.waitForFunction(()=>window.__noonSitePlayingObserved === true);
+            // A frame may have played thousands of real frames while Firefox
+            // missed the injected observer's mutation/poll callbacks. Qualify
+            // genuine autoplay directly: no Run/Play gesture, same generation,
+            // active playback and both actual frame/time counters advancing.
+            await frame.waitForFunction(() => {
+              const frames = Number(document.querySelector('#status')?.dataset.presentedFrames);
+              const time = Number.parseFloat(document.querySelector('#metric-time')?.value);
+              return frames > 0 && Number.isFinite(time);
+            }, null, {timeout:30000});
+            const autoplayBefore = await frame.evaluate(() => ({
+              generation: window.__noonExampleGallery.generationDiagnostics.runGeneration,
+              frames: Number(document.querySelector('#status').dataset.presentedFrames),
+              time: Number.parseFloat(document.querySelector('#metric-time').value),
+            }));
+            await frame.waitForFunction(observedUnpromptedProgress, autoplayBefore, {timeout:30000});
+            const autoplayAfter = await frame.evaluate(() => ({
+              frames: Number(document.querySelector('#status').dataset.presentedFrames),
+              time: Number.parseFloat(document.querySelector('#metric-time').value),
+            }));
             assert.equal(await frame.locator('#auto-run').isChecked(),true);
             assert.equal(await frame.locator('button:visible').count(),2,'no playback/editor toolbar in View');
             const duration = await frame.locator('.playback-scrubber').evaluate(element=>Number(element.max));
@@ -280,7 +296,7 @@ try {
             }
             assert.equal(await element.evaluate(node=>node.isConnected),true,'hot reload keeps the same iframe/editor');
             assert.equal(await page.locator('iframe').count(),selection.length,'editing one scene does not evict the others');
-            report.push({browser:name,surface,id,duration,automaticStart:true,initialGeneration,samples,edited,recovery,workerRetirement:false});
+            report.push({browser:name,surface,id,duration,automaticStart:true,autoplayProgress:{before:autoplayBefore,after:autoplayAfter},initialGeneration,samples,edited,recovery,workerRetirement:false});
             assert.deepEqual(errors,[],`${prefix}: no uncaught page errors`);
           }
           mark('navigation-teardown');

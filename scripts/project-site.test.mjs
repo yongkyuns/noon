@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { playgroundRedirect } from "../web/site/site.js";
 import { buildProjectSite } from "./build-project-site.mjs";
-import { observeUnpromptedPlayback } from "./project-site-autoplay-observer.mjs";
+import { observeUnpromptedPlayback, observedUnpromptedProgress } from "./project-site-autoplay-observer.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = name => readFile(path.join(root, name), "utf8");
@@ -66,6 +66,36 @@ test("autoplay observer retires when page leaves before playback", () => {
   assert.equal(win.__noonSitePlayingObserved, false);
   assert.equal(disconnected, 1);
   assert.equal(pollsCleared, 1);
+});
+
+
+test("real autoplay proof requires frame and time progress without a source rerun or gesture", () => {
+  let generation = 1, inFlight = false, frames = 6474, time = "4.04 s";
+  let playing = "true";
+  const win = {__noonExampleGallery: {
+    generationDiagnostics: {get runGeneration() { return generation; }},
+    get runInFlight() { return inFlight; },
+  }};
+  const doc = {querySelector(selector) {
+    if (selector === "#status") return {dataset: {
+      get playbackPlaying() { return playing; },
+      get presentedFrames() { return String(frames); },
+    }};
+    if (selector === "#metric-time") return {get value() { return time; }};
+    return null;
+  }};
+  const first = {generation: 1,frames:6474,time:4.04};
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "old frame/time not enough");
+  frames += 9;
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "renderer frames alone do not prove playback");
+  time = "4.23 s";
+  assert.equal(observedUnpromptedProgress(first, win, doc), true, "unprompted active playback advanced");
+  playing = "false";
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "paused session not autoplay");
+  playing = "true"; inFlight = true;
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "source still building");
+  inFlight = false; generation = 2;
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "new generation not the observed initial Run");
 });
 
 test("website qualification uses the actual optimized Pages runtime without relaxing live browser coverage", async () => {
