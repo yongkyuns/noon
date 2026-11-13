@@ -297,15 +297,15 @@ pub fn authored_time_session() -> Result<crate::SceneExecution, String> {
     scene
         .add_effect(&panel, ShaderEffect::new(program), "clock")
         .map_err(message)?;
-    let mut session = scene.execution_session().map_err(message)?;
-    scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().map_err(message)?;
+    execution
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::Wait { duration: 2.0 },
             AnimationOptions::new(),
         )
         .map_err(message)?;
-    scene.into_execution_with_session(session).map_err(message)
+    Ok(execution)
 }
 
 #[cfg(all(test, feature = "prepared-prefix", feature = "wgsl-effects"))]

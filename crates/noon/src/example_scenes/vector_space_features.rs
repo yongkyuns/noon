@@ -137,11 +137,9 @@ fn build(
     let options = AnimationOptions::new()
         .run_time(0.5)
         .rate_func(RateFunction::Smooth);
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
     {
-        let mut live = scene.live(&mut session);
+        let mut live = execution.live();
         let pause = live.wait_segment(0.25).map_err(|error| error.to_string())?;
         live.advance_segment_to(pause, pause.end_time())
             .map_err(|error| error.to_string())?;
@@ -174,10 +172,8 @@ fn build(
         )
         .map_err(|error| error.to_string())?;
     }
-    session.seek(0.0).map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    execution.seek(0.0).map_err(|error| error.to_string())?;
+    Ok(execution)
 }
 
 fn matrix_step<'a>(
