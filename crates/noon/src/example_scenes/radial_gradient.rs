@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/radial_gradient.py`.
 use crate::{
     AnimationOptions, Color, ContinuationEffects, ContinuationStep, GradientStop, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RadialGradient, RateFunction, Scene,
+    LiveProgram, Mobject, RadialGradient, RateFunction, Scene,
 };
 use std::sync::Arc;
 
@@ -36,7 +36,8 @@ fn paint(vertical: bool) -> Result<Arc<RadialGradient>, String> {
 impl LiveContinuation for RadialSurface {
     const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 => live.wait_segment(0.5),
             1 | 3 | 5 => {

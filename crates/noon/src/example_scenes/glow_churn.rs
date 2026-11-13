@@ -2,7 +2,7 @@
 //! Ordinary live source; no arbitrary seek or physical-performance claim.
 use crate::{
     effects::{EffectUpdate, Pixels},
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
+    ContinuationStep, LiveContinuation, LiveProgram, Mobject,
 };
 
 pub struct GlowChurnScene {
@@ -14,7 +14,8 @@ pub struct GlowChurnScene {
 impl LiveContinuation for GlowChurnScene {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let duration = match self.stage {
             0 => 1.0 / 60.0,
             1..=20 => {

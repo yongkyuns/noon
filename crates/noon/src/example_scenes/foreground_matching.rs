@@ -2,9 +2,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    ManimGeometryOptions, Mobject, MobjectFamily, RateFunction, Scene, SemanticNodeId, Vec2,
-    VectorPath,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, ManimGeometryOptions,
+    Mobject, MobjectFamily, RateFunction, Scene, SemanticNodeId, Vec2, VectorPath,
 };
 use noon_core::SemanticStore;
 
@@ -40,7 +39,8 @@ impl ForegroundMatching {
 impl LiveContinuation for ForegroundMatching {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 => live.declare_and_activate_matching_family_transform_to(
                 &self.source,

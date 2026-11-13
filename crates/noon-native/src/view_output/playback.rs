@@ -1,9 +1,7 @@
 //! Real retained GPU output across incremental-reader to original-source handoff.
 use super::*;
 use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
-use noon::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, LiveSessionError, Mobject,
-};
+use noon::{ContinuationStep, LiveContinuation, LiveProgram, LiveSessionError, Mobject};
 use noon_core::{HostCallbackId, SemanticMutationTransaction};
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 const CALLBACK: HostCallbackId = HostCallbackId::new(720);
@@ -14,7 +12,11 @@ struct Source {
 impl LiveContinuation for Source {
     const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.stage;
         self.stage += 1;
         Ok(match step {

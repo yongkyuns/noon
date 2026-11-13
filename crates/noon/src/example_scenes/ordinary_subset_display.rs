@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use crate::{
-    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
+    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, Mobject,
     MobjectFamily, RateFunction, Scene, SubsetDisplayMode,
 };
 
@@ -17,7 +17,8 @@ impl LiveContinuation for OrdinarySubsetDisplay {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let options = AnimationOptions::new()
             .run_time(3.0)
             .rate_func(RateFunction::Linear);

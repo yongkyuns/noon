@@ -1,8 +1,7 @@
 //! Ordered leaf and composed-family save/restore, paired with effect_restore.py.
 use crate::{
     effects::{Blur, EffectUpdate, Glow, Pixels},
-    Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
-    Scene,
+    Color, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily, Scene,
 };
 
 pub struct EffectRestore {
@@ -25,7 +24,8 @@ impl EffectRestore {
 }
 impl LiveContinuation for EffectRestore {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {}
             1 => {

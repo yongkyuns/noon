@@ -1635,7 +1635,7 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use noon::{ContinuationStep, LiveSession, Scene};
+    use noon::{ContinuationStep, Scene};
     use noon_core::{AnimationOptions, RateFunction};
 
     use super::*;
@@ -1712,7 +1712,11 @@ mod tests {
         const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = noon::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             self.resumes.set(self.resumes.get() + 1);
             if self.waiting {
                 Ok(ContinuationStep::Finished)
@@ -1770,7 +1774,11 @@ mod tests {
         const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = noon::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             let step = self.step;
             self.step += 1;
             match step {
@@ -1846,7 +1854,11 @@ mod tests {
     impl LiveContinuation for NativeAnimatedContinuation {
         type Error = noon::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             self.resumes.set(self.resumes.get() + 1);
             if self.started {
                 Ok(ContinuationStep::Finished)

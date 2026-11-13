@@ -3,8 +3,8 @@
 //! Artwork is supplied by the caller, never bundled or fetched by the engine.
 //! The same continuation can be hosted natively or in a direct Rust/WASM host.
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    MobjectFamily, RateFunction, Scene, SvgImportOptions,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily,
+    RateFunction, Scene, SvgImportOptions,
 };
 use std::rc::Rc;
 
@@ -18,7 +18,8 @@ pub struct SvgMorph {
 impl LiveContinuation for SvgMorph {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 => live.wait_segment(0.5).map_err(|error| error.to_string())?,
             1 | 3 => {

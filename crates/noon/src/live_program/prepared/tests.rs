@@ -1,7 +1,5 @@
 use super::*;
-use crate::{
-    AnimationOptions, ContinuationStep, IndicateOptions, LiveSession, LiveSessionError, Mobject,
-};
+use crate::{AnimationOptions, ContinuationStep, IndicateOptions, LiveSessionError, Mobject};
 use noon_core::{Color, RateFunction, Vec2};
 use std::{cell::Cell, rc::Rc};
 
@@ -21,7 +19,11 @@ impl Drop for Script {
 impl LiveContinuation for Script {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         if self.fail_at == Some(step) {
@@ -1074,7 +1076,11 @@ fn zero_only_source_yields_then_retains_final_edits_at_exact_endpoint() {
     impl LiveContinuation for ZeroOnly {
         const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut crate::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             let step = self.calls.get();
             self.calls.set(step + 1);
             if step < 2 {

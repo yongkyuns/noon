@@ -10,7 +10,11 @@ struct FollowPath {
 impl LiveContinuation for FollowPath {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.stage;
         self.stage += 1;
         self.calls.set(self.calls.get() + 1);
@@ -121,7 +125,11 @@ struct StageAttachment {
 impl LiveContinuation for StageAttachment {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         Ok(match step {

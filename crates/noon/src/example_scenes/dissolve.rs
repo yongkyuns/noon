@@ -2,7 +2,7 @@
 use crate::{
     effects::{DissolveDirection, DissolveStyle, EffectUpdate, Glow, GlowSource, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, MobjectFamily, RateFunction, Scene,
+    MobjectFamily, RateFunction, Scene,
 };
 
 pub struct VisibilityLifecycle {
@@ -15,7 +15,8 @@ fn message(error: impl std::fmt::Display) -> String {
 
 impl LiveContinuation for VisibilityLifecycle {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 | 2 | 4 | 6 | 8 => live.wait_segment(0.5),
             1 | 3 | 5 | 7 => {

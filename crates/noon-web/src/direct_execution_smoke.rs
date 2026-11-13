@@ -24,8 +24,9 @@ impl noon::LiveContinuation for OverdueShortAnimation {
 
     fn resume(
         &mut self,
-        live: &mut noon::LiveSession<'_>,
+        scene: &mut noon::ContinuationScene,
     ) -> Result<noon::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let Some(target) = self.targets.get(self.next) else {
             return Ok(noon::ContinuationStep::Finished);
         };
@@ -75,7 +76,7 @@ impl noon::LiveContinuation for FinishedNativeDragSmoke {
 
     fn resume(
         &mut self,
-        _live: &mut noon::LiveSession<'_>,
+        _scene: &mut noon::ContinuationScene,
     ) -> Result<noon::ContinuationStep, Self::Error> {
         Ok(noon::ContinuationStep::Finished)
     }

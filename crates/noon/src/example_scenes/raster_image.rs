@@ -2,7 +2,7 @@
 
 use crate::{
     AnimationOptions, ContinuationStep, ImageMobjectOptions, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RasterImageSampling, RateFunction, Scene, SemanticFadeDirection,
+    Mobject, RasterImageSampling, RateFunction, Scene, SemanticFadeDirection,
 };
 
 /// Deliberately asymmetric straight-alpha fixture: top row red / half-green,
@@ -26,7 +26,8 @@ pub struct RasterImage {
 impl LiveContinuation for RasterImage {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);

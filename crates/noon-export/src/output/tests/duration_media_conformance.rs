@@ -5,8 +5,8 @@ use super::super::{FileSink, OutputOptions};
 use crate::{capture_frames, Backends, CaptureOptions};
 use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, Mobject,
-    RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveSessionError, Mobject, RateFunction,
+    RustHostCallbackTable, Scene,
 };
 use noon_core::DEFAULT_FRAME_HEIGHT;
 use std::{fs, io, path::Path, process::Command, time::Duration};
@@ -23,7 +23,11 @@ struct Source {
 
 impl LiveContinuation for Source {
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(ContinuationStep::Finished);
         }

@@ -51,7 +51,8 @@ pub struct ObjectMembershipQueries {
 impl LiveContinuation for ObjectMembershipQueries {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.stage == 2 {
             return Ok(ContinuationStep::Finished);
         }

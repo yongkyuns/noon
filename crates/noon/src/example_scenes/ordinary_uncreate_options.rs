@@ -2,8 +2,7 @@
 
 use crate::{
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, MobjectTarget, RateFunction, Scene,
-    SemanticAnimationCompositionKind,
+    LiveProgram, Mobject, MobjectTarget, RateFunction, Scene, SemanticAnimationCompositionKind,
 };
 
 pub struct UncreateOptions {
@@ -16,7 +15,8 @@ pub struct UncreateOptions {
 impl LiveContinuation for UncreateOptions {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let (target, options) = match self.stage {
             0 => {
                 live.add_many(&[

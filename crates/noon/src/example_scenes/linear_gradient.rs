@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/linear_gradient.py`.
 use crate::{
     AnimationOptions, Color, ContinuationStep, GradientStop, LinearGradient, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    LiveProgram, Mobject, RateFunction, Scene,
 };
 use std::sync::Arc;
 
@@ -32,7 +32,8 @@ fn paint(vertical: bool) -> Result<Arc<LinearGradient>, String> {
 
 impl LiveContinuation for PaintedSurface {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 => live.wait_segment(0.5),
             1 | 3 | 5 => {

@@ -1,7 +1,5 @@
 //! Paired constructor-default evidence on the ordinary typed engine path.
-use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, ManimNumberLineOptions, Scene,
-};
+use crate::{ContinuationStep, LiveContinuation, LiveProgram, ManimNumberLineOptions, Scene};
 
 pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
@@ -25,7 +23,8 @@ pub struct Hold(bool);
 impl LiveContinuation for Hold {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.0 {
             return Ok(ContinuationStep::Finished);
         }

@@ -2,7 +2,7 @@
 use super::image_glow::image_options;
 use crate::{
     effects::{EffectOffset, EffectUpdate, Pixels, Shadow},
-    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
+    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, Mobject,
     RateFunction, Scene,
 };
 
@@ -14,7 +14,8 @@ pub struct ImageShadow {
 impl LiveContinuation for ImageShadow {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let motion = AnimationOptions::new()
             .run_time(1.5)
             .rate_func(RateFunction::Smooth);

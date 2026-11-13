@@ -1,7 +1,7 @@
 //! One typed live program for own-point promotion and null-point alignment.
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, LiveSessionError,
-    ManimGeometryOptions, Mobject, PointAlignmentSide, Scene,
+    ContinuationStep, LiveContinuation, LiveProgram, LiveSessionError, ManimGeometryOptions,
+    Mobject, PointAlignmentSide, Scene,
 };
 
 pub struct PointPromotion {
@@ -16,7 +16,8 @@ pub struct PointPromotion {
 impl LiveContinuation for PointPromotion {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.stage == 3 {
             return Ok(ContinuationStep::Finished);
         }

@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/hatch_paint.py`.
 use crate::{
     AnimationOptions, Color, ContinuationEffects, ContinuationStep, HatchPaint, HatchPaintOptions,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
 };
 
 pub struct HatchedSurface {
@@ -36,7 +36,8 @@ fn paint(second: bool) -> Result<HatchPaint, String> {
 impl LiveContinuation for HatchedSurface {
     const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 => live.wait_segment(0.5),
             1 | 3 | 5 => {

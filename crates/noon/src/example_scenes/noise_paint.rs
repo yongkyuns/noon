@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/noise_paint.py`.
 use crate::{
     AnimationOptions, Color, ContinuationEffects, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, NoisePaint, RateFunction, Scene,
+    Mobject, NoisePaint, RateFunction, Scene,
 };
 use std::sync::Arc;
 
@@ -37,7 +37,8 @@ fn paint(vertical: bool) -> Result<Arc<NoisePaint>, String> {
 impl LiveContinuation for NoiseSurface {
     const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 => live.wait_segment(0.5),
             1 | 3 | 5 => {

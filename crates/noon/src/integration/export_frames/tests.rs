@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::*;
 use crate::integration::{HostCallbackId, SemanticMutationTransaction};
-use crate::{ContinuationStep, LiveSession, LiveSessionError, Mobject, Scene};
+use crate::{ContinuationStep, LiveSessionError, Mobject, Scene};
 
 const CALLBACK: HostCallbackId = HostCallbackId::new(1_896);
 
@@ -15,7 +15,11 @@ struct Source {
 impl LiveContinuation for Source {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let stage = self.stage;
         self.stage += 1;
         if stage < self.durations.len() {

@@ -525,8 +525,9 @@ impl crate::LiveContinuation for MoveLabels {
     type Error = String;
     fn resume(
         &mut self,
-        live: &mut crate::LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(crate::ContinuationStep::Finished);
         }

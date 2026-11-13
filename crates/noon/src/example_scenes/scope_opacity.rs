@@ -2,7 +2,7 @@
 use crate::{
     effects::{Blur, DissolveDirection, DissolveStyle, EffectUpdate, Glow, GlowSource, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, MobjectFamily, RateFunction, Scene, SemanticAnimationCompositionKind,
+    MobjectFamily, RateFunction, Scene, SemanticAnimationCompositionKind,
 };
 
 pub struct FamilyOpacity {
@@ -15,7 +15,8 @@ fn message(error: impl std::fmt::Display) -> String {
 }
 impl LiveContinuation for FamilyOpacity {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if matches!(self.stage, 10 | 12 | 14 | 18 | 20) {
             let options = AnimationOptions::new()
                 .run_time(1.0)

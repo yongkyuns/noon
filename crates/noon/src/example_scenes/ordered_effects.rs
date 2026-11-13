@@ -2,7 +2,7 @@
 use crate::{
     effects::{Blur, EffectOffset, EffectUpdate, Pixels, Shadow},
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
     TransformToRequest,
 };
 
@@ -18,7 +18,8 @@ fn message(error: impl std::fmt::Display) -> String {
 
 impl LiveContinuation for OrderedEffects {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);

@@ -1,6 +1,6 @@
 //! Native clock and physical-receipt policy over the actual shared player.
 use super::*;
-use noon::{ContinuationStep, LiveSession, LiveSessionError, Mobject, Scene};
+use noon::{ContinuationStep, LiveSessionError, Mobject, Scene};
 use std::{cell::Cell, rc::Rc};
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
@@ -25,7 +25,11 @@ struct DelayedPrefix {
 impl LiveContinuation for DelayedPrefix {
     const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         Ok(match step {
@@ -116,7 +120,11 @@ impl Drop for LateDrag {
 impl LiveContinuation for LateDrag {
     const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         if step == 1 {

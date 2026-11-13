@@ -417,7 +417,7 @@ fn scene_facade_preserves_time_and_rejects_live_source_before_continuation() {
         type Error = std::convert::Infallible;
         fn resume(
             &mut self,
-            _: &mut crate::LiveSession<'_>,
+            _scene: &mut crate::ContinuationScene,
         ) -> Result<crate::ContinuationStep, Self::Error> {
             panic!("unsupported live control profile must not run user continuation");
         }

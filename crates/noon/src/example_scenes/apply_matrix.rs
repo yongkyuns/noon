@@ -1,7 +1,6 @@
 //! Shared Rust counterpart of the Manim-compatible ApplyMatrix shear example.
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
 };
 
 pub struct ApplyMatrix {
@@ -12,7 +11,8 @@ pub struct ApplyMatrix {
 impl LiveContinuation for ApplyMatrix {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 let target = live

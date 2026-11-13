@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ContinuationStep, LiveSession, LiveSessionError, Mobject, Scene};
+use crate::{ContinuationStep, LiveSessionError, Mobject, Scene};
 use noon_core::{HostCallbackId, SemanticMutationTransaction};
 use std::{
     cell::{Cell, RefCell},
@@ -107,7 +107,11 @@ struct Pure {
 impl LiveContinuation for Pure {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         Ok(match step {
@@ -217,7 +221,11 @@ struct CallbackSource {
 impl LiveContinuation for CallbackSource {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         Ok(match step {
@@ -398,7 +406,11 @@ fn opaque_source_waits_for_the_original_presented_endpoint_before_external_work(
     }
     impl LiveContinuation for Opaque {
         type Error = LiveSessionError;
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut crate::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             let stage = self.stage;
             self.stage += 1;
             Ok(match stage {

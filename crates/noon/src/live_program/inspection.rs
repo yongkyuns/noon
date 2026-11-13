@@ -44,12 +44,15 @@ impl<C: LiveContinuation> LiveProgram<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ContinuationStep, LiveProgramStatus, LiveSession, Scene};
+    use crate::{ContinuationStep, LiveProgramStatus, Scene};
 
     struct Finish;
     impl LiveContinuation for Finish {
         type Error = std::convert::Infallible;
-        fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            _scene: &mut crate::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
             Ok(ContinuationStep::Finished)
         }
     }

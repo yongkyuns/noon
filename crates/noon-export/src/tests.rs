@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::rc::Rc;
 
 use noon::integration::{ExportStop, FrameRate};
-use noon::{ContinuationStep, LiveSession, Scene};
+use noon::{ContinuationStep, Scene};
 
 use super::*;
 
@@ -23,7 +23,10 @@ struct NeverRun(Rc<Cell<usize>>);
 impl LiveContinuation for NeverRun {
     type Error = Infallible;
 
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Infallible> {
+    fn resume(
+        &mut self,
+        _scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Infallible> {
         self.0.set(self.0.get() + 1);
         Ok(ContinuationStep::Finished)
     }
