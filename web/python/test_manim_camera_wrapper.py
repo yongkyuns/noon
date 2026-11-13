@@ -140,12 +140,12 @@ class MovingCameraWrapperTests(unittest.TestCase):
                     self.execution_revision = self.semantic_revision
                     self.calls.append("scale")
 
-                def liveMoveToPoint(self, handle, x, y, *args):
+                def moveToPoint(self, handle, x, y, *args):
                     self._require_coherent()
                     handle.state["center"] = [x, y]
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveMoveToPoint")
+                    self.calls.append("moveToPoint")
 
                 def becomeMobject(self, handle, target, *flags):
                     self._require_coherent()
@@ -205,7 +205,7 @@ class MovingCameraWrapperTests(unittest.TestCase):
             assert target.camera.frame._canonical_live_target_context is context
             assert context.semantic_revision == context.execution_revision
             assert context.calls.count("targetEditor") >= 5, context.calls
-            assert context.calls[-2:] == ["scale", "liveMoveToPoint"], context.calls
+            assert context.calls[-2:] == ["scale", "moveToPoint"], context.calls
 
             context.scale(frame._semantic_handle, 2.0, 2.0)
             frame.restore()

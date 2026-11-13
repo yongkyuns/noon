@@ -1,5 +1,5 @@
 use noon::ManimNextToArgs;
-use noon::{AnimationOptions, LiveLayoutTarget as Target, MobjectFamily, RateFunction, Scene};
+use noon::{AnimationOptions, LayoutTarget as Target, MobjectFamily, RateFunction, Scene};
 
 fn close(actual: f64, expected: f64) {
     assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");

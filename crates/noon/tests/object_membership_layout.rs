@@ -1,5 +1,5 @@
 use noon::{
-    AnimationOptions, LayoutAnchor, LiveLayoutTarget, Mobject, MobjectFamily, RateFunction, Scene,
+    AnimationOptions, LayoutAnchor, LayoutTarget, Mobject, MobjectFamily, RateFunction, Scene,
 };
 use noon_core::{SemanticMutationTransaction, SemanticNodeId};
 
@@ -175,12 +175,7 @@ fn effective_root_layout_reads_each_current_descendant_pose_without_publication(
             // A driven descendant cannot be baked into a persistent root move.
             assert!(execution
                 .scene_mut()
-                .move_to(
-                    &root,
-                    LiveLayoutTarget::Point(0.0, 0.0),
-                    (0.0, 0.0),
-                    (1.0, 1.0),
-                )
+                .move_to(&root, LayoutTarget::Point(0.0, 0.0), (0.0, 0.0), (1.0, 1.0),)
                 .is_err());
         }
         assert_eq!(execution.session().publication_context(), before);
@@ -245,12 +240,7 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
     );
     let result = execution
         .scene_mut()
-        .move_to(
-            &root,
-            LiveLayoutTarget::Point(3.0, 2.0),
-            (0.0, 0.0),
-            (1.0, 1.0),
-        )
+        .move_to(&root, LayoutTarget::Point(3.0, 2.0), (0.0, 0.0), (1.0, 1.0))
         .unwrap();
     assert_eq!(result.impacts().len(), 3);
     assert_eq!(

@@ -938,7 +938,7 @@ def _move_to(
         if context is None:
             engine_call(engine_call(handle.layoutAnchor, None).moveTo, target, *args)
         else:
-            engine_call(context.liveMoveToLayout, handle, target, *args)
+            engine_call(context.moveToLayout, handle, target, *args)
     elif _alignment_is_mobject(point_or_mobject):
         target = _handle_for(point_or_mobject)
         if target is None:
@@ -946,13 +946,13 @@ def _move_to(
         if context is None:
             engine_call(handle.manimMoveToHandle, target, *args)
         else:
-            engine_call(context.liveMoveToMobject, handle, target, *args)
+            engine_call(context.moveToMobject, handle, target, *args)
     else:
         point = _base._as_vec2(point_or_mobject)
         if context is None:
             engine_call(handle.manimMoveToPoint, point.x, point.y, *args)
         else:
-            engine_call(context.liveMoveToPoint, handle, point.x, point.y, *args)
+            engine_call(context.moveToPoint, handle, point.x, point.y, *args)
     return self
 
 
@@ -991,7 +991,7 @@ def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about
         if context is None:
             engine_call(anchor.rescaleToFit, length, dim, bool(stretch), *pivot)
         else:
-            engine_call(context.liveRescaleToFit, anchor, length, dim, bool(stretch), *pivot)
+            engine_call(context.rescaleToFit, anchor, length, dim, bool(stretch), *pivot)
     except Exception as error:
         _raise_boundary_error(error)
     finally:
@@ -1015,7 +1015,7 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
         if context is None:
             engine_call(anchor.matchDimSize, target, dim, bool(stretch), *pivot)
         else:
-            engine_call(context.liveMatchDimSize, anchor, target, dim, bool(stretch), *pivot)
+            engine_call(context.matchDimSize, anchor, target, dim, bool(stretch), *pivot)
     except Exception as error:
         _raise_boundary_error(error)
     finally:
@@ -1294,7 +1294,7 @@ def _replace(
     if context is None:
         engine_call(source.replaceLayout, target, int(dim_to_match), bool(stretch))
     else:
-        engine_call(context.liveReplaceLayout, source, target, int(dim_to_match), bool(stretch))
+        engine_call(context.replaceLayout, source, target, int(dim_to_match), bool(stretch))
     return self
 
 
@@ -1333,7 +1333,7 @@ def _circle_surround(self, mobject, dim_to_match=0, stretch=False, buffer_factor
     if context is None:
         engine_call(source.surroundCircle, target, dimension, stretch, float(buffer_factor))
     else:
-        engine_call(context.liveSurroundCircle, source, target, dimension, stretch, float(buffer_factor))
+        engine_call(context.surroundCircle, source, target, dimension, stretch, float(buffer_factor))
     return self
 
 
@@ -1401,7 +1401,7 @@ def _next_to_edge_in_frame(self, target, edge, direction, buff, frame_buff):
         if context is None:
             engine_call(source.nextToEdgeInFrame, target_anchor, *arguments)
         else:
-            engine_call(context.liveNextLayoutToEdgeInFrame, source, target_anchor, *arguments)
+            engine_call(context.nextLayoutToEdgeInFrame, source, target_anchor, *arguments)
     except Exception as error:
         raise_engine_error(error)
 
@@ -1429,13 +1429,13 @@ def _shared_next_to(self, target, direction, buff, aligned_edge,
             if context is None:
                 engine_call(source.nextTo, target_anchor, aligner, *arguments)
             else:
-                engine_call(context.liveNextLayoutTo, source, target_anchor, aligner, *arguments)
+                engine_call(context.nextLayoutTo, source, target_anchor, aligner, *arguments)
         else:
             point = _base._as_vec2(target)
             if context is None:
                 engine_call(source.nextToPoint, point.x, point.y, aligner, *arguments)
             else:
-                engine_call(context.liveNextLayoutToPoint, source, point.x, point.y, aligner, *arguments)
+                engine_call(context.nextLayoutToPoint, source, point.x, point.y, aligner, *arguments)
     except Exception as error:
         raise_engine_error(error)
 
@@ -1475,11 +1475,11 @@ def _align_to(
                     raise RuntimeError(
                         "alignment target requires current shared Rust semantic handles"
                     )
-                engine_call(context.liveMoveToLayout, handle, target,
+                engine_call(context.moveToLayout, handle, target,
                             axis.x, axis.y, mask_x, mask_y)
             else:
                 point = _base._as_vec2(mobject_or_point)
-                engine_call(context.liveMoveToPoint, handle, point.x, point.y,
+                engine_call(context.moveToPoint, handle, point.x, point.y,
                             axis.x, axis.y, mask_x, mask_y)
         except Exception as error:
             raise_engine_error(error)
@@ -1512,7 +1512,7 @@ def _align_on_frame(
     if context is not None:
         try:
             engine_call(
-                context.liveAlignMobjectOnFrame,
+                context.alignMobjectOnFrame,
                 handle,
                 direction.x,
                 direction.y,
@@ -2480,7 +2480,7 @@ def _group_arrange_in_grid(self, rows=None, cols=None, buff=_base.MED_SMALL_BUFF
         if context is None:
             engine_call(handle.arrangeInGrid, options)
         else:
-            engine_call(context.liveArrangeFamilyInGrid, handle, options)
+            engine_call(context.arrangeFamilyInGrid, handle, options)
     except Exception as error:
         raise_engine_error(error)
     return self
@@ -2548,16 +2548,16 @@ def _layout_authoring_context(value, *targets):
     return context or _path_authoring_context(value, *targets)
 
 
-def _live_family_placement(context, family, target, operation, *arguments):
+def _scene_family_placement(context, family, target, operation, *arguments):
     if _is_shared_family(target):
-        method = getattr(context, f"live{operation}FamilyToFamily")
+        method = getattr(context, f"{operation}FamilyToFamily")
         engine_call(method, family, target._semantic_family_handle, *arguments)
     elif isinstance(target, _base.Mobject):
-        method = getattr(context, f"live{operation}FamilyToMobject")
+        method = getattr(context, f"{operation}FamilyToMobject")
         engine_call(method, family, target._semantic_handle, *arguments)
     else:
         point = _base._as_vec2(target)
-        method = getattr(context, f"live{operation}FamilyToPoint")
+        method = getattr(context, f"{operation}FamilyToPoint")
         engine_call(method, family, point.x, point.y, *arguments)
 
 
@@ -2571,7 +2571,7 @@ def _group_move_to(
     edge = _base._as_vec2(aligned_edge)
     mask = _alignment_mask2(coor_mask)
     if context is not None:
-        _live_family_placement(context, self._semantic_family_handle, point_or_mobject, "Move",
+        _scene_family_placement(context, self._semantic_family_handle, point_or_mobject, "move",
                                edge.x, edge.y, mask.x, mask.y)
         return self
     shared = _shared_family_layout(self, mutation=True)
@@ -2599,7 +2599,7 @@ def _group_move_to(
 def _group_align_on_frame(self: _compat.Group, direction: _base.Vec2, buff: float):
     context = _layout_authoring_context(self)
     if context is not None:
-        engine_call(context.liveAlignFamilyOnFrame, self._semantic_family_handle,
+        engine_call(context.alignFamilyOnFrame, self._semantic_family_handle,
                                        direction.x, direction.y, float(buff))
     else:
         layout = _shared_family_layout(self, mutation=True)
@@ -2617,7 +2617,7 @@ def _group_align_to(
     context = _layout_authoring_context(self, mobject_or_point)
     axis = _base._as_vec2(direction)
     if context is not None:
-        _live_family_placement(context, self._semantic_family_handle, mobject_or_point, "Align", axis.x, axis.y)
+        _scene_family_placement(context, self._semantic_family_handle, mobject_or_point, "align", axis.x, axis.y)
         return self
     shared = _shared_family_layout(self, mutation=True)
     if shared is None:
@@ -2670,7 +2670,7 @@ def _group_arrange(
     context = _layout_authoring_context(self, aligner)
     try:
         if context is not None:
-            engine_call(context.liveArrangeFamily, family_handle, options)
+            engine_call(context.arrangeFamily, family_handle, options)
             return self
         leaves = _compat._leaf_mobjects(self)
         leaf_handles = [_family_layout_leaf_adapter(member, mutation=True) for member in leaves]

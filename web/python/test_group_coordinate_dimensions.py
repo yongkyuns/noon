@@ -51,9 +51,9 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
 
     def test_live_group_coordinates_and_dimensions_use_published_context(self):
         context = types.SimpleNamespace(
-            liveMoveFamilyToPoint=lambda *args: self.calls.append(("move", args)),
+            moveFamilyToPoint=lambda *args: self.calls.append(("move", args)),
             queryLayoutDimensionLength=lambda *args: self.calls.append(("length", args)) or 1.0,
-            liveRescaleToFit=lambda *args: self.calls.append(("fit", args)),
+            rescaleToFit=lambda *args: self.calls.append(("fit", args)),
         )
         with patch.object(semantic, "_group_live_layout_context", return_value=context), \
              patch.object(semantic, "_layout_anchor", return_value=self.anchor):

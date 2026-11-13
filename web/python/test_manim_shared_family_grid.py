@@ -23,7 +23,7 @@ class SharedFamilyGridTests(unittest.TestCase):
                 options.setAlignment.assert_called_once_with(0.0, 0.0, None, None)
                 options.setFlow.assert_called_once_with("rd")
                 if live:
-                    context.liveArrangeFamilyInGrid.assert_called_once_with(family._semantic_family_handle, options)
+                    context.arrangeFamilyInGrid.assert_called_once_with(family._semantic_family_handle, options)
                 else:
                     family._semantic_family_handle.arrangeInGrid.assert_called_once_with(options)
 

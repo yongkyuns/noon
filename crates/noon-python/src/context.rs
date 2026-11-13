@@ -1324,7 +1324,7 @@ impl Context {
             .map_err(engine_error)
     }
 
-    #[pyo3(name = "liveNextLayoutTo")]
+    #[pyo3(name = "nextLayoutTo")]
     fn next_layout_to_anchor(
         &mut self,
         source: &LayoutAnchor,
@@ -1342,7 +1342,7 @@ impl Context {
         self.place(|scene| {
             scene.next_layout_to_aligned(
                 &source.anchor,
-                noon::LiveLayoutTarget::Anchor(&target.anchor),
+                noon::LayoutTarget::Anchor(&target.anchor),
                 &aligner.anchor,
                 noon::ManimNextToArgs {
                     direction: (dx, dy),
@@ -1353,7 +1353,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name = "liveNextLayoutToPoint")]
+    #[pyo3(name = "nextLayoutToPoint")]
     fn next_layout_to_point(
         &mut self,
         source: &LayoutAnchor,
@@ -1372,7 +1372,7 @@ impl Context {
         self.place(|scene| {
             scene.next_layout_to_aligned(
                 &source.anchor,
-                noon::LiveLayoutTarget::Point(x, y),
+                noon::LayoutTarget::Point(x, y),
                 &aligner.anchor,
                 noon::ManimNextToArgs {
                     direction: (dx, dy),
@@ -1383,7 +1383,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name = "liveNextLayoutToEdgeInFrame")]
+    #[pyo3(name = "nextLayoutToEdgeInFrame")]
     fn next_layout_edge(
         &mut self,
         source: &LayoutAnchor,
@@ -1413,7 +1413,7 @@ impl Context {
                 .map(|_| ())
         })
     }
-    #[pyo3(name = "liveArrangeFamily")]
+    #[pyo3(name = "arrangeFamily")]
     fn arrange_family_with_options(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1423,7 +1423,7 @@ impl Context {
         self.same_family_store(target)?;
         self.place(|scene| scene.arrange_family_with_options(&target.family, &options.options))
     }
-    #[pyo3(name = "liveArrangeFamilyInGrid")]
+    #[pyo3(name = "arrangeFamilyInGrid")]
     fn arrange_family_in_grid_with_options(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1435,7 +1435,7 @@ impl Context {
             scene.arrange_family_in_grid_with_options(&target.family, &options.options)
         })
     }
-    #[pyo3(name = "liveMoveFamilyToPoint")]
+    #[pyo3(name = "moveFamilyToPoint")]
     fn move_family_to_point(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1451,13 +1451,13 @@ impl Context {
         self.place(|scene| {
             scene.move_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Point(x, y),
+                noon::LayoutTarget::Point(x, y),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveMoveFamilyToMobject")]
+    #[pyo3(name = "moveFamilyToMobject")]
     fn move_family_to_mobject(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1473,13 +1473,13 @@ impl Context {
         self.place(|scene| {
             scene.move_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Mobject(&other.handle),
+                noon::LayoutTarget::Mobject(&other.handle),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveMoveFamilyToFamily")]
+    #[pyo3(name = "moveFamilyToFamily")]
     fn move_family_to_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1495,13 +1495,13 @@ impl Context {
         self.place(|scene| {
             scene.move_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Family(&other.family),
+                noon::LayoutTarget::Family(&other.family),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveAlignFamilyToPoint")]
+    #[pyo3(name = "alignFamilyToPoint")]
     fn align_family_to_point(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1513,14 +1513,10 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.place(|scene| {
-            scene.align_family_to(
-                &target.family,
-                noon::LiveLayoutTarget::Point(x, y),
-                (ex, ey),
-            )
+            scene.align_family_to(&target.family, noon::LayoutTarget::Point(x, y), (ex, ey))
         })
     }
-    #[pyo3(name = "liveAlignFamilyToMobject")]
+    #[pyo3(name = "alignFamilyToMobject")]
     fn align_family_to_mobject(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1534,12 +1530,12 @@ impl Context {
         self.place(|scene| {
             scene.align_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Mobject(&other.handle),
+                noon::LayoutTarget::Mobject(&other.handle),
                 (ex, ey),
             )
         })
     }
-    #[pyo3(name = "liveAlignFamilyToFamily")]
+    #[pyo3(name = "alignFamilyToFamily")]
     fn align_family_to_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1553,12 +1549,12 @@ impl Context {
         self.place(|scene| {
             scene.align_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Family(&other.family),
+                noon::LayoutTarget::Family(&other.family),
                 (ex, ey),
             )
         })
     }
-    #[pyo3(name = "liveAlignFamilyOnFrame")]
+    #[pyo3(name = "alignFamilyOnFrame")]
     fn align_family_on_frame(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3593,7 +3589,7 @@ impl Context {
             .map(crate::path_query::PathQuery::new)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveRescaleToFit")]
+    #[pyo3(name = "rescaleToFit")]
     fn rescale_to_fit(
         &mut self,
         target: &LayoutAnchor,
@@ -4174,7 +4170,7 @@ impl Context {
         })
     }
 
-    #[pyo3(name = "liveReplaceLayout")]
+    #[pyo3(name = "replaceLayout")]
     fn replace_layout(
         &mut self,
         source: &LayoutAnchor,
@@ -4186,7 +4182,7 @@ impl Context {
         self.place(|scene| scene.replace_layout(&source.anchor, &target.anchor, dimension, stretch))
     }
 
-    #[pyo3(name = "liveSurroundCircle")]
+    #[pyo3(name = "surroundCircle")]
     fn surround_circle(
         &mut self,
         source: &LayoutAnchor,
@@ -4206,7 +4202,7 @@ impl Context {
         })
     }
 
-    #[pyo3(name = "liveMatchDimSize")]
+    #[pyo3(name = "matchDimSize")]
     #[allow(clippy::too_many_arguments)]
     fn match_dim_size(
         &mut self,
@@ -4953,7 +4949,7 @@ impl Context {
             target.handle.stroke_width().map_err(engine_error)
         }
     }
-    #[pyo3(name = "liveMoveToPoint")]
+    #[pyo3(name = "moveToPoint")]
     #[allow(clippy::too_many_arguments)]
     fn move_to_point(
         &mut self,
@@ -4969,13 +4965,13 @@ impl Context {
         self.place(|scene| {
             scene.move_to(
                 &target.handle,
-                noon::LiveLayoutTarget::Point(x, y),
+                noon::LayoutTarget::Point(x, y),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveMoveToLayout")]
+    #[pyo3(name = "moveToLayout")]
     fn move_to_layout(
         &mut self,
         source: &MobjectHandle,
@@ -4989,13 +4985,13 @@ impl Context {
         self.place(|scene| {
             scene.move_to(
                 &source.handle,
-                noon::LiveLayoutTarget::Anchor(&target.anchor),
+                noon::LayoutTarget::Anchor(&target.anchor),
                 (edge_x, edge_y),
                 (mask_x, mask_y),
             )
         })
     }
-    #[pyo3(name = "liveAlignMobjectOnFrame")]
+    #[pyo3(name = "alignMobjectOnFrame")]
     fn align_mobject_on_frame(
         &mut self,
         source: &MobjectHandle,
@@ -5008,7 +5004,7 @@ impl Context {
             scene.align_mobject_on_frame(&source.handle, (direction_x, direction_y), buff)
         })
     }
-    #[pyo3(name = "liveMoveToMobject")]
+    #[pyo3(name = "moveToMobject")]
     fn move_to_mobject(
         &mut self,
         target: &MobjectHandle,
@@ -5024,7 +5020,7 @@ impl Context {
         self.place(|scene| {
             scene.move_to(
                 &target.handle,
-                noon::LiveLayoutTarget::Mobject(&reference.handle),
+                noon::LayoutTarget::Mobject(&reference.handle),
                 (ex, ey),
                 (mx, my),
             )

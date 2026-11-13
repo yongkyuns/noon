@@ -41,7 +41,7 @@ pub enum FamilyLayoutTarget<'a> {
 ///
 /// During playback, the Scene observes the current publication before applying placement.
 #[derive(Clone, Copy)]
-pub enum LiveLayoutTarget<'a> {
+pub enum LayoutTarget<'a> {
     Point(f64, f64),
     Mobject(&'a Mobject),
     Family(&'a MobjectFamily),
@@ -798,41 +798,41 @@ fn effective_member_center(
 pub(crate) fn placement_target_point(
     store: &Rc<RefCell<SemanticStore>>,
     execution: Option<&ExecutionSession>,
-    target: LiveLayoutTarget<'_>,
+    target: LayoutTarget<'_>,
     x: f64,
     y: f64,
 ) -> Result<(f64, f64), AuthoringError> {
     match (execution, target) {
-        (_, LiveLayoutTarget::Point(px, py)) => {
+        (_, LayoutTarget::Point(px, py)) => {
             let point = authoring_xy_f64(px, py)?;
             Ok((point.x, point.y))
         }
-        (Some(execution), LiveLayoutTarget::Mobject(object)) => {
+        (Some(execution), LayoutTarget::Mobject(object)) => {
             effective_anchor_layout_measure(store, execution, &LayoutAnchor::from(object), true)
                 .map(|(_, bounds)| bounds_critical_point(bounds, x, y))
         }
-        (Some(execution), LiveLayoutTarget::Anchor(anchor)) => {
+        (Some(execution), LayoutTarget::Anchor(anchor)) => {
             effective_anchor_layout_measure(store, execution, anchor, true)
                 .map(|(_, bounds)| bounds_critical_point(bounds, x, y))
         }
-        (Some(execution), LiveLayoutTarget::Family(family)) => {
+        (Some(execution), LayoutTarget::Family(family)) => {
             effective_family_layout_measure(store, execution, family, true)
                 .map(|(_, bounds)| bounds_critical_point(bounds, x, y))
         }
-        (None, LiveLayoutTarget::Mobject(object)) => {
+        (None, LayoutTarget::Mobject(object)) => {
             if !Rc::ptr_eq(store, object.integration_store()) {
                 return Err(AuthoringError::ForeignStore);
             }
             object.validate()?;
             object.critical_point(x, y)
         }
-        (None, LiveLayoutTarget::Family(family)) => {
+        (None, LayoutTarget::Family(family)) => {
             if !Rc::ptr_eq(store, family.integration_store()) {
                 return Err(AuthoringError::ForeignStore);
             }
             Ok(family.layout()?.critical_point(x, y))
         }
-        (None, LiveLayoutTarget::Anchor(anchor)) => {
+        (None, LayoutTarget::Anchor(anchor)) => {
             if !anchor.belongs_to_store(store) {
                 return Err(AuthoringError::ForeignStore);
             }

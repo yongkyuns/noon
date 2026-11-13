@@ -27,7 +27,7 @@ class FamilyReplacementTests(unittest.TestCase):
         self.assertEqual(self.calls, [(self.target_anchor, 1, True)])
 
     def test_live_or_detached_source_uses_the_available_publication_context(self):
-        context = types.SimpleNamespace(liveReplaceLayout=lambda *args: self.calls.append(args))
+        context = types.SimpleNamespace(replaceLayout=lambda *args: self.calls.append(args))
         for source_context in (context, None):
             with patch.object(semantic, "_dimension_fit_source", return_value=(self.source_anchor, source_context)), \
                  patch.object(semantic, "_layout_anchor", return_value=self.target_anchor), \

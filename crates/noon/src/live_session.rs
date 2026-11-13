@@ -7,7 +7,7 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 #[cfg(test)]
-use crate::LiveLayoutTarget;
+use crate::LayoutTarget;
 
 #[cfg(test)]
 use crate::effective_capture::target_style_from_effective;
@@ -2542,7 +2542,7 @@ mod tests {
             .scene_mut()
             .move_to(
                 &source,
-                LiveLayoutTarget::Point(99.0, 5.0),
+                LayoutTarget::Point(99.0, 5.0),
                 (0.0, 1.0),
                 (0.0, 1.0),
             )
@@ -2566,7 +2566,7 @@ mod tests {
             .scene_mut()
             .move_to(
                 &target,
-                LiveLayoutTarget::Mobject(&reference),
+                LayoutTarget::Mobject(&reference),
                 (0.0, 1.0),
                 (0.5, 1.0),
             )
@@ -2582,7 +2582,7 @@ mod tests {
             .scene_mut()
             .move_to(
                 &target,
-                LiveLayoutTarget::Point(1.0, 2.0),
+                LayoutTarget::Point(1.0, 2.0),
                 (0.0, 0.0),
                 (f64::NAN, 1.0)
             )
@@ -2592,7 +2592,7 @@ mod tests {
             .scene_mut()
             .move_to(
                 &target,
-                LiveLayoutTarget::Mobject(&foreign),
+                LayoutTarget::Mobject(&foreign),
                 (0.0, 0.0),
                 (1.0, 1.0)
             )

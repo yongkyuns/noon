@@ -140,7 +140,7 @@ mod tests {
             .scene_mut()
             .move_to(
                 &rectangle,
-                noon::LiveLayoutTarget::Point(2.0, -1.0),
+                noon::LayoutTarget::Point(2.0, -1.0),
                 (0.0, 0.0),
                 (1.0, 1.0),
             )
