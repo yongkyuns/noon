@@ -887,6 +887,23 @@ impl CanonicalAuthoringScene {
         Ok(self.active_live_player()?.scene_mut())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn place<T>(
+        &mut self,
+        operation: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
+    ) -> Result<(), AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        operation(self.local_authoring_scene()?)
+            .map(|_| ())
+            .map_err(|error| {
+                if running {
+                    running_placement_error(error)
+                } else {
+                    error.into()
+                }
+            })
+    }
+
     /// Ordinary continuation declarations reuse an existing local lease as-is.
     /// Only the first declaration bootstraps a player; an explicit new run uses
     /// `live_player`/`prepare_execution_run` and owns any recovery transition.
@@ -972,11 +989,7 @@ impl CanonicalAuthoringScene {
             handle,
             |handle| noon::LayoutAnchor::from(handle).dimension_length(dimension),
             |scene, handle| {
-                effective_layout_dimension_length(
-                    scene,
-                    &noon::LayoutAnchor::from(handle),
-                    dimension,
-                )
+                layout_dimension_length(scene, &noon::LayoutAnchor::from(handle), dimension, true)
             },
         )
     }
@@ -4436,15 +4449,18 @@ fn running_placement_error(error: noon::AuthoringError) -> AuthoringFailure {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-fn effective_layout_dimension_length(
+fn layout_dimension_length(
     scene: &noon::Scene,
     anchor: &noon::LayoutAnchor,
     dimension: noon::LayoutDimension,
+    running: bool,
 ) -> Result<f64, AuthoringFailure> {
     scene
-        .effective_dimension_length(anchor, dimension)
+        .layout_dimension_length(anchor, dimension)
         .map_err(|error| {
-            if dimension == noon::LayoutDimension::Depth {
+            if !running {
+                error.into()
+            } else if dimension == noon::LayoutDimension::Depth {
                 running_scene_error(error)
             } else {
                 running_placement_error(error)
@@ -8466,13 +8482,11 @@ mod wasm {
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             dimension: u32,
         ) -> Result<f64, JsValue> {
-            let player = self.inner.active_live_player().map_err(typed_js_error)?;
-            effective_layout_dimension_length(
-                player.scene(),
-                &source.anchor,
-                dimension.try_into().map_err(typed_js_error)?,
-            )
-            .map_err(typed_js_error)
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
+            let running = !self.inner.player_ownership.is_unstarted();
+            let scene = self.inner.local_authoring_scene().map_err(typed_js_error)?;
+            layout_dimension_length(scene, &source.anchor, dimension, running)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryLayoutContentCriticalPoint3D)]
@@ -8516,18 +8530,18 @@ mod wasm {
             about_point: bool,
         ) -> Result<(), JsValue> {
             let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .rescale_to_fit_with_pivot(
-                    &source.anchor,
-                    length,
-                    dimension.try_into().map_err(typed_js_error)?,
-                    stretch,
-                    pivot,
-                )
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.rescale_to_fit_with_pivot(
+                        &source.anchor,
+                        length,
+                        dimension,
+                        stretch,
+                        pivot,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveReplaceLayout)]
@@ -8538,17 +8552,12 @@ mod wasm {
             dimension: u32,
             stretch: bool,
         ) -> Result<(), JsValue> {
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .replace_layout(
-                    &source.anchor,
-                    &target.anchor,
-                    dimension.try_into().map_err(typed_js_error)?,
-                    stretch,
-                )
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.replace_layout(&source.anchor, &target.anchor, dimension, stretch)
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSurroundCircle)]
@@ -8561,17 +8570,16 @@ mod wasm {
             buffer_factor: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .surround_circle(
-                    &source.anchor,
-                    &target.anchor,
-                    dimension,
-                    stretch,
-                    buffer_factor,
-                )
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.surround_circle(
+                        &source.anchor,
+                        &target.anchor,
+                        dimension,
+                        stretch,
+                        buffer_factor,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveMatchDimSize)]
@@ -8588,18 +8596,18 @@ mod wasm {
             about_point: bool,
         ) -> Result<(), JsValue> {
             let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .match_dim_size_with_pivot(
-                    &source.anchor,
-                    &target.anchor,
-                    dimension.try_into().map_err(typed_js_error)?,
-                    stretch,
-                    pivot,
-                )
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.match_dim_size_with_pivot(
+                        &source.anchor,
+                        &target.anchor,
+                        dimension,
+                        stretch,
+                        pivot,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveNextLayoutTo)]
@@ -12598,18 +12606,17 @@ mod wasm {
             z: f64,
             about_point: bool,
         ) -> Result<(), JsValue> {
+            let dimension = dimension.try_into().map_err(js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .stretch(
-                    &source.anchor,
-                    factor,
-                    dimension.try_into().map_err(js_error)?,
-                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.stretch(
+                        &source.anchor,
+                        factor,
+                        dimension,
+                        crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveScaleLayout3d)]

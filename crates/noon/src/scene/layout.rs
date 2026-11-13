@@ -361,7 +361,6 @@ impl Scene {
         stretch: bool,
         pivot: crate::ManimRotationPivot,
     ) -> Result<(), AuthoringError> {
-        self.require_layout_anchor(source)?;
         let previous = self.layout_dimension_length(source, dimension)?;
         let Some(factor) = crate::dimension_fit::fitting_factor(previous, length)? else {
             return Ok(());
@@ -402,7 +401,6 @@ impl Scene {
         stretch: bool,
         pivot: crate::ManimRotationPivot,
     ) -> Result<(), AuthoringError> {
-        self.require_layout_anchor(target)?;
         let length = self.layout_dimension_length(target, dimension)?;
         self.rescale_to_fit_with_pivot(source, length, dimension, stretch, pivot)
     }
@@ -672,11 +670,13 @@ impl Scene {
         Ok(())
     }
 
-    fn layout_dimension_length(
+    /// Measure the selected object's or family's current fitting extent.
+    pub fn layout_dimension_length(
         &self,
         anchor: &crate::LayoutAnchor,
         dimension: crate::LayoutDimension,
     ) -> Result<f64, AuthoringError> {
+        self.require_layout_anchor(anchor)?;
         match self.running_execution() {
             Some(_) => self.effective_dimension_length(anchor, dimension),
             None => anchor.dimension_length(dimension),

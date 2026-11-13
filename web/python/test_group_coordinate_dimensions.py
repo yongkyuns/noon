@@ -13,6 +13,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
         self.group = object.__new__(noon.VGroup)
         self.group._semantic_family_handle = object()
         self.anchor = types.SimpleNamespace(
+            free=lambda: None,
             dimensionLength=lambda dim: 1.0,
             rescaleToFit=lambda *args: self.calls.append(("fit", args)),
         )

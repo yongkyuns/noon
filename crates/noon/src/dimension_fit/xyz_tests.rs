@@ -207,11 +207,7 @@ fn fitting_xyz_matches_actual_ce_in_detached_cold_and_running_scenes() {
                     .enumerate()
                 {
                     let dim = (dim as u32).try_into().unwrap();
-                    let actual = if mode == 1 {
-                        scene.effective_dimension_length(&anchor, dim).unwrap()
-                    } else {
-                        anchor.dimension_length(dim).unwrap()
-                    };
+                    let actual = scene.layout_dimension_length(&anchor, dim).unwrap();
                     close(actual, expected.as_f64().unwrap(), &context);
                 }
                 assert_eq!(peer.state().unwrap(), peer_before, "{context}");

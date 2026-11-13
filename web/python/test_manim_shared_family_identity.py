@@ -361,7 +361,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         layout = SimpleNamespace(centerX=7, centerY=-2, width=99, height=13,
                                  criticalX=Mock(return_value=42),
                                  criticalY=Mock(return_value=-17))
-        anchor = object()
+        anchor = SimpleNamespace(free=Mock())
         context = SimpleNamespace(queryFamilyLayout=Mock(return_value=layout),
                                   queryLayoutDimensionLength=Mock(side_effect=lambda handle, dim: (99, 13)[dim]))
         with patch.object(handles, "_group_live_layout_context", return_value=context), \
@@ -450,6 +450,8 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
 
 
             class FakeFamilyHandle:
+                def free(self):
+                    pass
                 def __init__(self, store):
                     self.store = store
                     self.identity = store.allocate()
