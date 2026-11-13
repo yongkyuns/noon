@@ -1720,6 +1720,91 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "braceGeometryOptions")]
+    fn brace_geometry_options(
+        &self,
+        target: &LayoutAnchor,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<GeometryOptions> {
+        self.require_active()?;
+        let options = crate::brace::options(x, y, buff, sharpness, 0.0);
+        self.scene
+            .brace_geometry_options(&target.anchor, options)
+            .map(GeometryOptions::from_options)
+            .map_err(|error| crate::brace::failure("brace.prepare", &error))
+    }
+
+    #[pyo3(name = "createBraceLabel")]
+    fn create_brace_label(
+        &mut self,
+        target: &LayoutAnchor,
+        label: &LayoutAnchor,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+        label_buff: f64,
+    ) -> PyResult<crate::brace::BraceLabelHandle> {
+        self.available()?;
+        let options = crate::brace::options(x, y, buff, sharpness, label_buff);
+        noon::BraceLabel::new(
+            &mut self.scene,
+            &target.anchor,
+            label.anchor.clone(),
+            options,
+        )
+        .map(crate::brace::BraceLabelHandle)
+        .map_err(|error| crate::brace::failure("brace.create", &error))
+    }
+
+    #[pyo3(name = "shiftBraceLabel")]
+    fn shift_brace_label(
+        &mut self,
+        brace: &mut crate::brace::BraceLabelHandle,
+        target: &LayoutAnchor,
+    ) -> PyResult<()> {
+        self.available()?;
+        brace
+            .0
+            .shift_brace(&mut self.scene, &target.anchor)
+            .map_err(|error| crate::brace::failure("brace.shift", &error))
+    }
+
+    #[pyo3(name = "replaceBraceLabel")]
+    fn replace_brace_label(
+        &mut self,
+        brace: &mut crate::brace::BraceLabelHandle,
+        label: &LayoutAnchor,
+    ) -> PyResult<()> {
+        self.available()?;
+        brace
+            .0
+            .change_label(&mut self.scene, label.anchor.clone())
+            .map_err(|error| crate::brace::failure("brace.label", &error))
+    }
+
+    #[pyo3(name = "changeBraceLabel")]
+    fn change_brace_label(
+        &mut self,
+        brace: &mut crate::brace::BraceLabelHandle,
+        target: &LayoutAnchor,
+        label: &LayoutAnchor,
+    ) -> PyResult<()> {
+        self.available()?;
+        let code = if self.has_execution() {
+            "brace.change"
+        } else {
+            "brace.replace"
+        };
+        brace
+            .0
+            .change_brace_label(&mut self.scene, &target.anchor, label.anchor.clone())
+            .map_err(|error| crate::brace::failure(code, &error))
+    }
+
     #[pyo3(name = "createSampleSpace")]
     fn create_sample_space(
         &mut self,

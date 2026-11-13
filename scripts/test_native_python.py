@@ -116,6 +116,33 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_brace_text_rebuilds_against_the_current_scene(self):
+        source = """from noon import *
+class BraceEdits(Scene):
+    async def construct(self):
+        left, right = Square().shift(LEFT * 2), Square().shift(RIGHT * 2)
+        label = BraceText(left, "Left")
+        self.add(left, right, label)
+        await self.wait(0.1)
+        first_label = label.label
+        label.shift_brace(right)
+        assert label.label is first_label
+        assert abs(label.brace.get_center()[0] - right.get_center()[0]) < 1e-6
+        label.change_label("Right")
+        assert label.label is not first_label
+        label.change_brace_label(left, "Back")
+        assert abs(label.brace.get_center()[0] - left.get_center()[0]) < 1e-6
+        clone = label.copy()
+        assert clone.brace is not label.brace
+        self.add(clone.shift(UP * 2), BraceBetweenPoints(LEFT, RIGHT).shift(UP * 3))
+        await self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source))
+        try:
+            self.assertEqual(len(scene.mobjects), 5)
+        finally:
+            close_scene(scene)
+
     def test_sample_space_partitions_during_playback(self):
         path = ROOT / "web/python/examples/sample_space.py"
         source = path.read_text() + """
