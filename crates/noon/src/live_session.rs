@@ -8,8 +8,6 @@
 
 mod brace;
 mod camera_motion;
-mod path_editing;
-mod point_promotion;
 #[cfg(test)]
 use crate::LiveLayoutTarget;
 
@@ -491,6 +489,12 @@ impl From<crate::AuthoringError> for LiveSessionError {
             crate::AuthoringError::ForeignStore => Self::ForeignMobjectStore,
             other => Self::Authoring(other),
         }
+    }
+}
+
+impl From<noon_core::GeometryResourceError> for LiveSessionError {
+    fn from(error: noon_core::GeometryResourceError) -> Self {
+        crate::AuthoringError::from(error).into()
     }
 }
 

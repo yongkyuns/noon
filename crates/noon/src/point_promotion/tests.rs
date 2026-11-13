@@ -231,7 +231,7 @@ fn live_promotion_keeps_effective_xyz_and_child_identity_in_one_publication() {
     let before = session.session().publication_context();
     let revision = session.scene().revision();
     let copied = session
-        .live()
+        .scene_mut()
         .promote_own_points((&source).into(), &[])
         .unwrap();
     let promoted = copied.family(&source).unwrap();
@@ -261,7 +261,7 @@ fn live_promotion_keeps_effective_xyz_and_child_identity_in_one_publication() {
     let after = session.session().publication_context();
     let foreign = Scene::new().circle(0.1).unwrap();
     assert!(session
-        .live()
+        .scene_mut()
         .promote_own_points((&source).into(), &[(&foreign).into()])
         .is_err());
     assert_eq!(session.session().publication_context(), after);

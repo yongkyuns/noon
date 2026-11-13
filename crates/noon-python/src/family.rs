@@ -929,6 +929,14 @@ impl FamilyHandle {
         self.family.invert(recursive).map_err(engine_error)
     }
 
+    #[pyo3(name = "promoteOwnPoints")]
+    fn promote_own_points(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
+        noon::MobjectTarget::from(&self.family)
+            .promote_own_points_with_references(&references.add_targets()?)
+            .map(|copied| FamilyCopy { copied })
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "copyFamily")]
     fn copy_family(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
         if references.kind != "add" {

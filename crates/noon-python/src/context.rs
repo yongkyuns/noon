@@ -455,6 +455,19 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
 
+    fn promote_own_points(
+        &mut self,
+        target: MobjectTarget<'_>,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.available()?;
+        self.require_execution()?;
+        self.scene
+            .promote_own_points(target, &references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy { copied })
+            .map_err(engine_error)
+    }
+
     fn edit_children(
         &mut self,
         owner: MobjectTarget<'_>,
@@ -2541,6 +2554,24 @@ impl Context {
             .map(|family| crate::family::FamilyHandle { family })
             .map_err(engine_error)
     }
+    #[pyo3(name = "livePromoteFamilyOwnPoints")]
+    fn promote_family_own_points(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.promote_own_points((&target.family).into(), references)
+    }
+
+    #[pyo3(name = "livePromoteMobjectOwnPoints")]
+    fn promote_mobject_own_points(
+        &mut self,
+        target: &MobjectHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.promote_own_points((&target.handle).into(), references)
+    }
+
     #[pyo3(name = "liveCopyFamily")]
     fn copy_family(
         &mut self,

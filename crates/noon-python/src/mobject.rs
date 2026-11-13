@@ -250,6 +250,17 @@ impl MobjectHandle {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "promoteOwnPoints")]
+    fn promote_own_points(
+        &self,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        noon::MobjectTarget::from(&self.handle)
+            .promote_own_points_with_references(&references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy { copied })
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "copyFamily")]
     fn copy_family(&self, references: &MembershipBatch) -> PyResult<crate::family::FamilyCopy> {
         self.handle
