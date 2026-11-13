@@ -223,7 +223,7 @@ fn transferred_context_cannot_drive_query_publish_or_take_again() {
     let identity = player.ownership_identity();
     let revision = scene.scene.integration_store().borrow().scene_revision();
     assert!(scene.mobject_layout(&circle).is_err());
-    assert!(scene.live_contains_mobject(&circle).is_err());
+    assert!(scene.contains_direct_mobject(&circle).is_err());
     assert!(scene.active_live_player().is_err());
     assert!(scene.begin_ordinary_wait(0.25).is_err());
     assert!(scene.take_execution_player(1.0, 42).is_err());

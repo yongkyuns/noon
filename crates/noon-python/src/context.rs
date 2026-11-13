@@ -2824,17 +2824,15 @@ impl Context {
         self.require_active()?;
         self.scene.contains(&target.handle).map_err(engine_error)
     }
-    #[pyo3(name = "liveContainsMobject")]
-    fn live_contains(&self, target: &MobjectHandle) -> PyResult<bool> {
+    #[pyo3(name = "containsDirectMobject")]
+    fn contains_direct(&self, target: &MobjectHandle) -> PyResult<bool> {
         self.require_active()?;
-        self.same_store(target)?;
-        if self.has_execution() {
-            self.scene
-                .contains_direct(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-        } else {
-            self.scene.contains(&target.handle).map_err(engine_error)
-        }
+        self.scene.contains_direct(&target.handle).map_err(|error| {
+            engine_error(AuthoringFailure::from_scene_mutation(
+                error,
+                self.has_execution(),
+            ))
+        })
     }
     #[pyo3(name = "rootMembershipKeys")]
     fn membership(&self) -> PyResult<Vec<String>> {
