@@ -69,16 +69,6 @@ impl From<AuthoringError> for VariableAuthoringError {
     }
 }
 
-pub(crate) fn variable_live_error(error: VariableAuthoringError) -> crate::LiveSessionError {
-    match error {
-        VariableAuthoringError::Text(error) => crate::LiveSessionError::Text(error),
-        VariableAuthoringError::Numeric(error) => {
-            crate::numeric_authoring::numeric_live_error(error)
-        }
-        VariableAuthoringError::Authoring(error) => crate::LiveSessionError::from(error),
-    }
-}
-
 struct PublishedVariable {
     result: noon_core::SemanticMutationTransactionResult,
     signal: noon_core::SemanticLocalNodeToken,
@@ -497,19 +487,18 @@ mod tests {
 
     #[test]
     fn live_variable_constructs_after_wait_and_tracks_without_authored_text_edits() {
-        let scene = crate::Scene::new();
-        let mut session = scene.execution_session().unwrap();
+        let mut execution = crate::Scene::new().into_execution().unwrap();
         {
-            let mut live = scene.live(&mut session);
+            let mut live = execution.live();
             let wait = live.wait_segment(1.0).unwrap();
             live.advance_segment_to(wait, wait.end_time()).unwrap();
             live.complete_segment(wait).unwrap();
         }
-        let before = session.publication_context();
+        let before = execution.session().publication_context();
         let mut backend = RuleBackend::working();
-        let variable = scene
-            .live(&mut session)
-            .create_variable(&mut backend, "x", 1.25, DecimalFormat::default(), 48.0)
+        let variable = execution
+            .scene_mut()
+            .variable(&mut backend, "x", 1.25, DecimalFormat::default(), 48.0)
             .unwrap();
         let label_members = variable.label().current_members().unwrap();
         assert_eq!(label_members.len(), 2);
@@ -535,31 +524,46 @@ mod tests {
                 < 1.0e-9
         );
         assert_eq!(
-            session.publication_context().scene_revision(),
+            execution.session().publication_context().scene_revision(),
             before.scene_revision().checked_next().unwrap()
         );
-        assert_eq!(session.effective_text_resource_stats().live_resources, 0);
+        assert_eq!(
+            execution
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
+            0
+        );
 
-        scene
-            .live(&mut session)
+        execution
+            .scene_mut()
             .add_many(&[crate::MobjectTarget::Family(variable.family())])
             .unwrap();
-        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
-        let authored_revision = session.publication_context().scene_revision();
-        session
+        assert_eq!(
+            execution
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
+            1
+        );
+        let authored_revision = execution.session().publication_context().scene_revision();
+        execution
+            .session_mut()
             .set_reactive_input(variable.tracker().node_id(), 7.5_f32)
             .unwrap();
         assert_eq!(
-            session.publication_context().scene_revision(),
+            execution.session().publication_context().scene_revision(),
             authored_revision
         );
-        let store = scene.integration_store().borrow();
-        let effective = session
+        let store = execution.scene().integration_store().borrow();
+        let effective = execution
+            .session()
             .effective_semantic_object(&store, variable.value().mobject().node_id())
             .unwrap();
         let handle = effective.object.text().unwrap();
         assert_eq!(
-            session
+            execution
+                .session()
                 .text_resources()
                 .get(handle)
                 .unwrap()

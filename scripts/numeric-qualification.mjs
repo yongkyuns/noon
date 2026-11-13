@@ -23,11 +23,16 @@ class VariableLifecycle(Scene):
     async def construct(self):
         await prepare_latex()
         await self.wait(0.05)
-        number = DecimalNumber(12.5, font_size=32)
+        number = DecimalNumber(12.5, font_size=32, include_sign=True)
         assert not self.mobjects
         self.add(number)
         number.scale(1.5)
         assert number.get_value() == 12.5
+        assert abs(number.font_size - 48) < 1e-6
+        assert number.set_value(1234.5) is number
+        assert number.increment_value(0.25) is number
+        assert number.get_value() == 1234.75
+        assert number._source == "+1,234.75"
         assert abs(number.font_size - 48) < 1e-6
         self.remove(number)
         variable = Variable(1.25, "x")

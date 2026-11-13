@@ -18,8 +18,6 @@ mod graph;
 mod image_paint_tests;
 #[cfg(target_arch = "wasm32")]
 mod matrix;
-#[cfg(target_arch = "wasm32")]
-mod numbers;
 #[cfg(any(target_arch = "wasm32", test))]
 mod pointer_input;
 #[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]

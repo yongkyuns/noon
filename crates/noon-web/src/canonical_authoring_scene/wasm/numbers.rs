@@ -38,7 +38,9 @@ impl CanonicalAuthoringSceneContext {
             self.inner
                 .active_live_player()
                 .map_err(js_error)?
-                .live_create_variable(compiler, label, value, format, font_size)
+                .scene_mut()
+                .variable(compiler, label, value, format, font_size)
+                .map_err(noon::integration::live_variable_failure)
                 .map_err(js_error)?
         };
         Ok(WasmVariableHandle::new(variable, store))

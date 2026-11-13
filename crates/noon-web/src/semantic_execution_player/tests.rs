@@ -4312,21 +4312,18 @@ fn live_variable_tracker_update_replaces_text_through_sparse_resource_delta() {
     }
 
     let variable = player
-        .with_live_session(|live| {
-            live.create_variable(
-                &mut backend,
-                "x",
-                1.25,
-                noon::DecimalFormat::default(),
-                48.0,
-            )
-        })
+        .scene_mut()
+        .variable(
+            &mut backend,
+            "x",
+            1.25,
+            noon::DecimalFormat::default(),
+            48.0,
+        )
         .unwrap();
     player
-        .with_live_session(|live| {
-            live.add_many(&[noon::MobjectTarget::Family(variable.family())])
-                .map(|_| ())
-        })
+        .scene_mut()
+        .add_many(&[variable.family().into()])
         .unwrap();
     let admitted = player.delta(false).unwrap().unwrap();
     let admitted_object_count = admitted.retained.objects.len();
