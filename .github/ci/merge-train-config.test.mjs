@@ -19,9 +19,12 @@ const checkNames = [
 ];
 
 function conditionSection(name) {
-  const match = config.match(new RegExp('^    ' + name + ':\\n((?:      - [^\\n]+\\n)+)', 'm'));
-  assert.ok(match, 'missing ' + name + ' list');
-  return match[1];
+  const marker = '    ' + name + ':\n';
+  const start = config.indexOf(marker);
+  assert.notEqual(start, -1, 'missing ' + name + ' list');
+  const rest = config.slice(start + marker.length);
+  const next = rest.search(/^    [a-z_]+:|^[a-z_]+:/m);
+  return next < 0 ? rest : rest.slice(0, next);
 }
 
 test('merge train remains serial, opt-in, and tests combined revisions', () => {
