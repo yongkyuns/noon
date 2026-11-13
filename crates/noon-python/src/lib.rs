@@ -8,6 +8,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 mod callback;
 mod callback_values;
+#[cfg(feature = "code")]
+mod code;
 mod composition;
 mod context;
 mod coordinates;
@@ -75,6 +77,8 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<svg::SvgDefaults>()?;
     #[cfg(feature = "native-text")]
     text::register(m)?;
+    #[cfg(feature = "code")]
+    code::register(m)?;
     m.add_class::<effects::EffectUpdate>()?;
     m.add_class::<effects::EffectDefinition>()?;
     m.add_class::<effects::EffectHandle>()?;

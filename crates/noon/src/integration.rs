@@ -19,6 +19,8 @@
 //! rather than overwriting its publication revision or treating old frames as new.
 //!
 
+#[cfg(feature = "code")]
+pub mod code_input;
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
