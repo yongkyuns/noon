@@ -229,9 +229,9 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
             crate::MobjectTarget::Family(family.family()),
         ]))
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let before_frame = execution.frame().clone();
-    let before_context = execution.publication_context();
+    let mut execution = scene.into_execution().unwrap();
+    let before_frame = execution.session().frame().clone();
+    let before_context = execution.session().publication_context();
     let before_states = leaves
         .iter()
         .map(|node| {
@@ -244,10 +244,10 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
         .collect::<Vec<_>>();
     let before_resources = store.borrow().geometry_resources().stats();
     {
-        let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
         // The body accepts partial alpha, but its World cap does not. The
         // complete family publication must fail without changing either leaf.
-        assert!(live
+        assert!(execution
+            .scene_mut()
             .set_family_fill(family.family(), Some(Color::BLUE), Some(0.5))
             .is_err());
     }
@@ -261,10 +261,11 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
         store.borrow().geometry_resources().stats(),
         before_resources
     );
-    assert_eq!(execution.frame(), &before_frame);
-    assert_eq!(execution.publication_context(), before_context);
-    let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
-    live.set_family_fill(family.family(), Some(Color::BLUE), Some(1.0))
+    assert_eq!(execution.session().frame(), &before_frame);
+    assert_eq!(execution.session().publication_context(), before_context);
+    execution
+        .scene_mut()
+        .set_family_fill(family.family(), Some(Color::BLUE), Some(1.0))
         .unwrap();
 }
 

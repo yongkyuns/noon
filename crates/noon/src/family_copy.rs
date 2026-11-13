@@ -695,7 +695,7 @@ mod owned_root_fallback_copy_tests {
             let target = session.scene_mut().copy_family(&family).unwrap();
             assert_eq!(target.root().own_style().unwrap().object_opacity, start);
             session
-                .live()
+                .scene_mut()
                 .set_family_object_opacity(target.root(), 0.25)
                 .unwrap();
             let segment = session

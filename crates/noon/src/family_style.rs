@@ -8,9 +8,12 @@ use crate::{
         edit_stroke_opacity, edit_stroke_width, fade_factor, interpolate_manim_color,
         interpolate_manim_scalar, interpolate_manim_vmobject_style_values, PaintStyleEdit,
     },
-    Color, Mobject, MobjectFamily,
+    Color, Mobject, MobjectFamily, MobjectTarget, Scene,
 };
-use noon_core::{SemanticMutationTransaction, SemanticStyle};
+use noon_core::{
+    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticSheenDirection,
+    SemanticStyle, SemanticVec3,
+};
 
 /// Optional common paint fields, applied together through one semantic mutation.
 /// Omission preserves a field; disabling paint remains an explicit Rust operation.
@@ -931,6 +934,304 @@ impl MobjectFamily {
     }
 }
 
+impl Scene {
+    pub fn set_family_style(
+        &mut self,
+        family: &MobjectFamily,
+        update: crate::StyleUpdate,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.style_update_transaction(update)?)
+    }
+
+    /// Publish authored paint changes on the non-rendered family root only.
+    pub fn set_family_own_style(
+        &mut self,
+        family: &MobjectFamily,
+        update: crate::StyleUpdate,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.own_style_transaction(update)?)
+    }
+
+    /// Publish one final family-composite multiplier through the shared source
+    /// plan and ordinary style publication, without rewriting child styles.
+    pub fn set_family_object_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.object_opacity_transaction(opacity)?)
+    }
+
+    /// Interpolate only a VGroup root's authored style and background stroke.
+    /// Source/receiver family membership and descendant styles are untouched.
+    pub fn interpolate_family_manim_style(
+        &mut self,
+        receiver: &MobjectFamily,
+        start: &MobjectFamily,
+        end: &MobjectFamily,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(receiver)?;
+        self.require_family_style_target(start)?;
+        self.require_family_style_target(end)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(
+            receiver.interpolate_manim_style_transaction(start, end, alpha)?,
+        )
+    }
+
+    pub fn set_family_own_style_with_background_stroke(
+        &mut self,
+        family: &MobjectFamily,
+        update: crate::StyleUpdate,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(
+            family.own_style_with_background_stroke_opacity_transaction(
+                update,
+                background_stroke_color,
+                background_stroke_width,
+                background_stroke_opacity,
+            )?,
+        )
+    }
+
+    pub fn set_family_own_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.own_opacity_transaction(opacity)?)
+    }
+
+    pub fn set_family_own_background_stroke_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.own_background_stroke_opacity_transaction(opacity)?)
+    }
+
+    pub fn fade_family_own(
+        &mut self,
+        family: &MobjectFamily,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.fade_own_transaction(darkness)?)
+    }
+
+    pub fn set_family_own_stroke_cap(
+        &mut self,
+        family: &MobjectFamily,
+        cap: &str,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        let mut style = family.own_style()?;
+        style.stroke_cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_family_style(family.node_id(), style);
+        self.apply_semantic_transaction(transaction)
+    }
+
+    pub fn set_family_color_by_gradient(
+        &mut self,
+        family: &MobjectFamily,
+        colors: &[Color],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.gradient_transaction(colors)?)
+    }
+
+    /// Recolor a family's unique leaves through one coherent authored publication.
+    pub fn set_family_color(
+        &mut self,
+        family: &MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.color_transaction(red, green, blue, alpha, true)?)
+    }
+
+    /// Publish root-only authored color while preserving every descendant.
+    pub fn set_family_own_color(
+        &mut self,
+        family: &MobjectFamily,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.color_transaction(red, green, blue, alpha, false)?)
+    }
+
+    pub fn set_family_fill(
+        &mut self,
+        family: &MobjectFamily,
+        color: Option<Color>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.set_family_style(
+            family,
+            crate::StyleUpdate {
+                fill_color: color,
+                fill_opacity: opacity,
+                ..crate::StyleUpdate::default()
+            },
+        )
+    }
+
+    pub fn set_family_stroke(
+        &mut self,
+        family: &MobjectFamily,
+        color: Option<Color>,
+        width: Option<f64>,
+        opacity: Option<f64>,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.set_family_style(
+            family,
+            crate::StyleUpdate {
+                stroke_color: color,
+                stroke_width: width,
+                stroke_opacity: opacity,
+                ..crate::StyleUpdate::default()
+            },
+        )
+    }
+
+    pub fn set_family_opacity(
+        &mut self,
+        family: &MobjectFamily,
+        opacity: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.opacity_transaction(opacity)?)
+    }
+
+    /// Fade enabled fill and stroke channels through the owning Scene.
+    pub fn fade_family(
+        &mut self,
+        family: &MobjectFamily,
+        darkness: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.fade_transaction(darkness)?)
+    }
+
+    /// Publish a recursive family color interpolation through the owning Scene.
+    pub fn fade_to_family(
+        &mut self,
+        family: &MobjectFamily,
+        target: Color,
+        amount: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(family.fade_to_transaction(target, amount)?)
+    }
+
+    pub fn set_family_member_colors(
+        &mut self,
+        family: &MobjectFamily,
+        colors: &[Option<Color>],
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        let expected = self
+            .integration_store()
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())
+            .map_err(AuthoringError::from)?
+            .len();
+        if colors.len() != expected {
+            return Err(AuthoringError::FamilyMemberValueCount {
+                expected,
+                actual: colors.len(),
+            });
+        }
+        let transaction = family.style_transaction_indexed(|index, _, style| {
+            if let Some(Some(color)) = colors.get(index) {
+                edit_color(
+                    style,
+                    color.red.into(),
+                    color.green.into(),
+                    color.blue.into(),
+                    color.alpha.into(),
+                )?;
+            }
+            Ok(())
+        })?;
+        self.apply_semantic_transaction(transaction)
+    }
+
+    /// Publish a sheen-direction update on one object or its full semantic
+    /// family through one Rust transaction.
+    pub fn set_sheen_direction(
+        &mut self,
+        target: &MobjectTarget<'_>,
+        direction: SemanticSheenDirection,
+        family: bool,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        target.require_store(self.integration_store())?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(target.sheen_direction_transaction(direction, family)?)
+    }
+
+    /// Rotate every selected authored direction and publish the family
+    /// atomically after all axes and current values validate.
+    pub fn rotate_sheen_direction(
+        &mut self,
+        target: &MobjectTarget<'_>,
+        angle: f64,
+        axis: SemanticVec3,
+        family: bool,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        target.require_store(self.integration_store())?;
+        self.require_style_publication()?;
+        self.apply_semantic_transaction(
+            target.rotate_sheen_direction_transaction(angle, axis, family)?,
+        )
+    }
+
+    fn require_family_style_target(&self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+        MobjectTarget::from(family)
+            .require_store(self.integration_store())
+            .map(|_| ())
+    }
+
+    fn require_style_publication(&self) -> Result<(), AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            execution.require_published_store(&self.integration_store().borrow())?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1398,7 +1699,7 @@ mod tests {
         let leaf_before = session.live().effective(&leaf).unwrap();
 
         let result = session
-            .live()
+            .scene_mut()
             .set_family_own_style_with_background_stroke(
                 &family,
                 StyleUpdate {
@@ -1430,7 +1731,7 @@ mod tests {
         );
 
         session
-            .live()
+            .scene_mut()
             .set_family_own_stroke_cap(&family, "square")
             .unwrap();
         assert_eq!(

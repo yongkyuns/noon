@@ -678,7 +678,7 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.with_live(|live| live.set_family_style(&source.family, update).map(|_| ()))
+        self.edit_running_scene(|scene| scene.set_family_style(&source.family, update).map(|_| ()))
     }
     #[pyo3(name = "createMesh")]
     fn create_mesh(
@@ -1436,8 +1436,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.set_family_object_opacity(&target.family, value)
+        self.edit_running_scene(|scene| {
+            scene
+                .set_family_object_opacity(&target.family, value)
                 .map(|_| ())
         })
     }
@@ -1479,15 +1480,16 @@ impl Context {
         let emission = noon_core::Emission::new(value)
             .map_err(noon::AuthoringError::Emission)
             .map_err(engine_error)?;
-        self.with_live(|live| {
-            live.set_family_style(
-                &target.family,
-                noon::StyleUpdate {
-                    emission: Some(emission),
-                    ..Default::default()
-                },
-            )
-            .map(|_| ())
+        self.edit_running_scene(|scene| {
+            scene
+                .set_family_style(
+                    &target.family,
+                    noon::StyleUpdate {
+                        emission: Some(emission),
+                        ..Default::default()
+                    },
+                )
+                .map(|_| ())
         })
     }
 
@@ -2733,8 +2735,9 @@ impl Context {
         self.same_family_store(target)?;
         let color = noon::integration::family_color(has_color, red, green, blue, alpha)
             .map_err(engine_error)?;
-        self.with_live(|live| {
-            live.set_family_fill(&target.family, color, opacity)
+        self.edit_running_scene(|scene| {
+            scene
+                .set_family_fill(&target.family, color, opacity)
                 .map(|_| ())
         })
     }
@@ -2755,8 +2758,9 @@ impl Context {
         self.same_family_store(target)?;
         let color = noon::integration::family_color(has_color, red, green, blue, alpha)
             .map_err(engine_error)?;
-        self.with_live(|live| {
-            live.set_family_stroke(&target.family, color, width, opacity)
+        self.edit_running_scene(|scene| {
+            scene
+                .set_family_stroke(&target.family, color, width, opacity)
                 .map(|_| ())
         })
     }
@@ -2768,7 +2772,11 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.set_family_opacity(&target.family, opacity).map(|_| ()))
+        self.edit_running_scene(|scene| {
+            scene
+                .set_family_opacity(&target.family, opacity)
+                .map(|_| ())
+        })
     }
     #[pyo3(name = "liveSetFamilyColor")]
     fn family_color(
@@ -2781,8 +2789,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.set_family_color(&target.family, r, g, b, a)
+        self.edit_running_scene(|scene| {
+            scene
+                .set_family_color(&target.family, r, g, b, a)
                 .map(|_| ())
         })
     }
@@ -2797,8 +2806,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.set_family_own_color(&target.family, r, g, b, a)
+        self.edit_running_scene(|scene| {
+            scene
+                .set_family_own_color(&target.family, r, g, b, a)
                 .map(|_| ())
         })
     }

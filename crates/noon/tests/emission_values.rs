@@ -314,7 +314,7 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         drop(session.session_mut().take_renderer_publication());
         let end = 7.000000000000001;
         session
-            .live()
+            .scene_mut()
             .set_family_style(
                 &family,
                 StyleUpdate {
@@ -344,7 +344,7 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
             assert_eq!(nested.own_style().unwrap().emission.strength(), end);
         }
         assert!(session
-            .live()
+            .scene_mut()
             .set_family_style(
                 &family,
                 StyleUpdate {
@@ -359,7 +359,7 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         assert_eq!(family.own_style().unwrap().emission.strength(), end);
         let target = session.scene_mut().copy_family(&family).unwrap();
         session
-            .live()
+            .scene_mut()
             .set_family_style(
                 target.root(),
                 StyleUpdate {

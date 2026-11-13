@@ -218,7 +218,7 @@ fn aliased_family_gradient_is_one_local_publication_and_preserves_content_and_op
         .unwrap();
     let mut running = scene.into_execution().unwrap();
     let result = running
-        .live()
+        .scene_mut()
         .set_family_color_by_gradient(
             &family,
             &[Color::rgb(1.0, 0.0, 0.0), Color::rgb(0.0, 0.0, 1.0)],
@@ -234,7 +234,7 @@ fn aliased_family_gradient_is_one_local_publication_and_preserves_content_and_op
     assert_eq!(unrelated.state().unwrap(), untouched);
     let before = a.state().unwrap();
     assert!(running
-        .live()
+        .scene_mut()
         .set_family_color_by_gradient(&family, &[])
         .is_err());
     assert_eq!(a.state().unwrap(), before);
@@ -266,7 +266,7 @@ fn late_alias_gradient_uses_last_occurrence_order_authored_and_live_atomically()
         .unwrap();
     let mut running = scene.into_execution().unwrap();
     let result = running
-        .live()
+        .scene_mut()
         .set_family_color_by_gradient(&family, &[Color::BLUE, Color::RED])
         .unwrap();
     assert_eq!(result.impacts().len(), 2);
@@ -282,7 +282,7 @@ fn late_alias_gradient_uses_last_occurrence_order_authored_and_live_atomically()
     assert_eq!(unrelated.state().unwrap(), unchanged);
     let before = (a.state().unwrap(), b.state().unwrap());
     assert!(running
-        .live()
+        .scene_mut()
         .set_family_color_by_gradient(&family, &[Color::rgb(f32::NAN, 0.0, 0.0)])
         .is_err());
     assert_eq!((a.state().unwrap(), b.state().unwrap()), before);
@@ -366,21 +366,33 @@ fn recursive_background_stroke_style_publishes_nested_roots_and_leaves_atomicall
     }
     assert_eq!(leaf.background_stroke_color().unwrap(), Some(Color::BLUE));
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.set_family_style(
-        &family,
-        StyleUpdate {
-            background_stroke_width: Some(0.12),
-            ..StyleUpdate::default()
-        },
-    )
-    .unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
+        .set_family_style(
+            &family,
+            StyleUpdate {
+                background_stroke_width: Some(0.12),
+                ..StyleUpdate::default()
+            },
+        )
+        .unwrap();
     assert_eq!(family.own_background_stroke_width().unwrap(), 0.12);
     assert_eq!(nested.own_background_stroke_width().unwrap(), 0.12);
-    assert!((live.effective(&leaf).unwrap().style.background_stroke_width - 0.12).abs() < 1e-6);
-    let before = scene.revision();
-    assert!(live
+    assert!(
+        (session
+            .live()
+            .effective(&leaf)
+            .unwrap()
+            .style
+            .background_stroke_width
+            - 0.12)
+            .abs()
+            < 1e-6
+    );
+    let before = session.scene().revision();
+    assert!(session
+        .scene_mut()
         .set_family_style(
             &family,
             StyleUpdate {
@@ -390,7 +402,7 @@ fn recursive_background_stroke_style_publishes_nested_roots_and_leaves_atomicall
             }
         )
         .is_err());
-    assert_eq!(scene.revision(), before);
+    assert_eq!(session.scene().revision(), before);
     assert_eq!(family.own_background_stroke_color().unwrap(), Color::BLUE);
     assert_eq!(leaf.background_stroke_color().unwrap(), Some(Color::BLUE));
 }
@@ -427,15 +439,21 @@ fn recursive_paint_setters_update_roots_and_publish_live_leaves_once() {
     }
     assert_eq!(leaf.background_stroke_opacity().unwrap(), 0.8);
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.set_family_fill(&family, Some(Color::RED), Some(0.7))
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
+        .set_family_fill(&family, Some(Color::RED), Some(0.7))
         .unwrap();
-    live.set_family_stroke(&family, Some(Color::GREEN), Some(0.12), Some(0.9))
+    session
+        .scene_mut()
+        .set_family_stroke(&family, Some(Color::GREEN), Some(0.12), Some(0.9))
         .unwrap();
-    let before = scene.revision();
-    live.set_family_opacity(&family, 0.25).unwrap();
-    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    let before = session.scene().revision();
+    session
+        .scene_mut()
+        .set_family_opacity(&family, 0.25)
+        .unwrap();
+    assert_eq!(session.scene().revision(), before.checked_next().unwrap());
     for root in [&family, &nested] {
         let style = root.own_style().unwrap();
         assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::RED)));
@@ -445,24 +463,28 @@ fn recursive_paint_setters_update_roots_and_publish_live_leaves_once() {
         assert_eq!(style.stroke_opacity, 0.25);
         assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.25);
     }
-    let effective = live.effective(&leaf).unwrap();
+    let effective = session.live().effective(&leaf).unwrap();
     assert_eq!(effective.fill_opacity(), 0.25);
     assert_eq!(effective.stroke_opacity(), 0.25);
     assert_eq!(effective.style.background_stroke.unwrap().alpha, 0.25);
     assert_eq!(unrelated.state().unwrap(), unrelated_before);
 
     let before = (
-        scene.revision(),
+        session.scene().revision(),
         family.own_style().unwrap(),
         leaf.state().unwrap(),
     );
-    assert!(live.set_family_opacity(&family, f64::NAN).is_err());
-    assert!(live
+    assert!(session
+        .scene_mut()
+        .set_family_opacity(&family, f64::NAN)
+        .is_err());
+    assert!(session
+        .scene_mut()
         .set_family_stroke(&family, Some(Color::BLUE), Some(-1.0), Some(0.8))
         .is_err());
     assert_eq!(
         (
-            scene.revision(),
+            session.scene().revision(),
             family.own_style().unwrap(),
             leaf.state().unwrap()
         ),
@@ -530,17 +552,16 @@ fn recursive_fade_includes_aliased_roots_and_live_publication() {
     assert!((b.fill_opacity().unwrap() - 0.4).abs() < 1e-7);
 
     scene.add_many(&[(&root).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let before = scene.revision();
-    let result = live.fade_family(&root, 0.5).unwrap();
-    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    let mut session = scene.into_execution().unwrap();
+    let before = session.scene().revision();
+    let result = session.scene_mut().fade_family(&root, 0.5).unwrap();
+    assert_eq!(session.scene().revision(), before.checked_next().unwrap());
     assert_eq!(result.impacts().len(), 5);
     for family in [&root, &nested] {
         assert_root(family, 0.25);
     }
     assert_root(&shared, 0.0625);
-    let effective = live.effective(&a).unwrap();
+    let effective = session.live().effective(&a).unwrap();
     assert!((effective.fill_opacity() - 0.05).abs() < 1e-7);
     assert!((effective.stroke_opacity() - 0.025).abs() < 1e-7);
     assert!((effective.style.background_stroke.unwrap().alpha - 0.0375).abs() < 1e-7);
@@ -550,15 +571,15 @@ fn recursive_fade_includes_aliased_roots_and_live_publication() {
         content
     );
     let before = (
-        scene.revision(),
+        session.scene().revision(),
         root.own_style().unwrap(),
         shared.own_style().unwrap(),
     );
-    assert!(live.fade_family(&root, f64::NAN).is_err());
-    live.fade_family(&root, 0.0).unwrap();
+    assert!(session.scene_mut().fade_family(&root, f64::NAN).is_err());
+    session.scene_mut().fade_family(&root, 0.0).unwrap();
     assert_eq!(
         (
-            scene.revision(),
+            session.scene().revision(),
             root.own_style().unwrap(),
             shared.own_style().unwrap()
         ),
@@ -575,14 +596,16 @@ fn fading_an_empty_family_changes_only_its_root_paint() {
     assert_eq!(root.own_style().unwrap().stroke_opacity, 0.5);
     assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.5);
     scene.add_many(&[(&root).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    assert!(session.frame().objects.is_empty());
-    scene.live(&mut session).fade_family(&root, 0.5).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    assert!(session.session().frame().objects.is_empty());
+    session.scene_mut().fade_family(&root, 0.5).unwrap();
     assert_eq!(root.own_style().unwrap().stroke_opacity, 0.25);
     assert_eq!(root.own_background_stroke_opacity().unwrap(), 0.25);
-    drop(session);
-    let leaf = scene.square(1.0).unwrap();
+    let leaf = session.scene_mut().square(1.0).unwrap();
     let before = leaf.state().unwrap();
-    root.add((&leaf).into()).unwrap();
+    session
+        .scene_mut()
+        .add_family_members(&root, &[(&leaf).into()])
+        .unwrap();
     assert_eq!(leaf.state().unwrap(), before);
 }

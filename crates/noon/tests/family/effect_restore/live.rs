@@ -104,7 +104,7 @@ fn live_family_restore_is_one_local_publication_and_pending_failure_preserves_ha
 
     let target = session.scene_mut().copy_family(&source).unwrap();
     session
-        .live()
+        .scene_mut()
         .set_family_object_opacity(target.root(), 0.75)
         .unwrap();
     let segment = session

@@ -398,20 +398,27 @@ fn live_scope_opacity_reuses_membership_and_rejects_invalid_values_atomically() 
     let group = scene.family(&members).unwrap();
     group.set_object_opacity(0.5).unwrap();
     scene.add_many(&[(&group).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let identity = session.execution_object_id(group.node_id()).unwrap();
-    let original = row(&session, group.node_id()).unwrap().content.clone();
-    session.take_renderer_publication();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let identity = session
+        .session()
+        .execution_object_id(group.node_id())
+        .unwrap();
+    let original = row(session.session(), group.node_id())
+        .unwrap()
+        .content
+        .clone();
+    session.session_mut().take_renderer_publication();
+    session
+        .scene_mut()
         .set_family_object_opacity(&group, 0.25)
         .unwrap();
     assert!(std::ptr::eq(
         original.composed_source().unwrap(),
-        plan(&session, group.node_id())
+        plan(session.session(), group.node_id())
     ));
     assert_eq!(
         session
+            .session()
             .last_structural_publication_stats()
             .preparation
             .object_states_lowered,
@@ -419,32 +426,39 @@ fn live_scope_opacity_reuses_membership_and_rejects_invalid_values_atomically() 
     );
     assert_eq!(
         session
+            .session_mut()
             .take_renderer_publication()
             .changes()
             .object_indices()
             .len(),
         1
     );
-    let before = session.frame().objects.clone();
+    let before = session.session().frame().objects.clone();
     for opacity in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
-        assert!(scene
-            .live(&mut session)
+        assert!(session
+            .scene_mut()
             .set_family_object_opacity(&group, opacity)
             .is_err());
-        assert_eq!(session.frame().objects, before);
+        assert_eq!(session.session().frame().objects, before);
         assert_eq!(group.own_style().unwrap().object_opacity, 0.25);
     }
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_family_object_opacity(&group, 1.0)
         .unwrap();
-    assert!(row(&session, group.node_id()).is_none());
-    scene
-        .live(&mut session)
+    assert!(row(session.session(), group.node_id()).is_none());
+    session
+        .scene_mut()
         .set_family_object_opacity(&group, 0.5)
         .unwrap();
-    assert_eq!(session.execution_object_id(group.node_id()), Some(identity));
-    assert_eq!(plan(&session, group.node_id()).members().len(), 512);
+    assert_eq!(
+        session.session().execution_object_id(group.node_id()),
+        Some(identity)
+    );
+    assert_eq!(
+        plan(session.session(), group.node_id()).members().len(),
+        512
+    );
 }
 
 #[test]
