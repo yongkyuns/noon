@@ -12,10 +12,13 @@ fn app() -> NativeApp {
     object.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
     object.set_stroke_width(0.0).unwrap();
     scene.add(&object).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.enable_pointer_fill_selection(4.0).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
+        .enable_pointer_fill_selection(4.0)
+        .unwrap();
     NativeApp::new(
-        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
+        execution,
         NativeViewportConfig {
             title: "Noon paused click selection".to_owned(),
             width: SIZE.width,

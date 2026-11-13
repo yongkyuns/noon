@@ -186,15 +186,13 @@ fn object_move_to_family_anchor_reads_effective_bounds_and_stays_local() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     {
-        let mut live = scene.live(&mut execution);
+        let mut live = execution.live();
         let segment = live.play_animation(&animation).unwrap();
         live.advance_segment_to(segment, 2.0).unwrap();
         live.complete_segment(segment).unwrap();
     }
-    let mut execution =
-        noon::integration::scene_execution::consume_with_session(scene, execution).unwrap();
     execution.session_mut().take_frame_changes();
     {
         let scene = execution.scene_mut();

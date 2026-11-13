@@ -2,6 +2,7 @@
 //! that session's publication without replacing it with a Rust continuation.
 #![cfg(not(target_arch = "wasm32"))]
 
+use noon::integration::scene_execution;
 use noon::integration::{
     CallbackAdvance, ExportFrameOptions, ExportStop, FrameGrid, FrameRate, HostCallbackId,
     SemanticMutationTransaction,
@@ -69,9 +70,8 @@ impl LiveContinuation for Motion {
 
 fn external_session() -> (Scene, ExecutionSession, ExecutionSegment) {
     let (scene, object, target) = make_scene(false);
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene_execution::lower(&scene).unwrap();
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_transform_to(&object, &target, animation())
         .unwrap();
     (scene, session, segment)
@@ -80,7 +80,7 @@ fn external_session() -> (Scene, ExecutionSession, ExecutionSegment) {
 #[test]
 fn invalid_configuration_and_precancelled_session_fail_before_gpu_creation() {
     let (scene, _, _) = make_scene(false);
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut invalid = options();
     invalid.width = 0;
     assert!(matches!(
@@ -162,7 +162,9 @@ fn session_capture_matches_live_program_pixels_without_advancing_source() {
     assert_eq!(receipt.publication, context);
     assert_eq!(receipt.published_time, 0.3);
     assert_eq!(session.frame().time, 0.3);
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .complete_segment(segment)
+        .unwrap();
 }
 
 #[test]
@@ -204,9 +206,11 @@ fn foreign_runtime_and_cancellation_poison_capture_without_mutating_session() {
 #[ignore = "requires software Vulkan; selected by native output gate"]
 fn pending_callback_is_not_captured_completed_or_acknowledged() {
     let (scene, _object, _target) = make_scene(true);
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let mut capture = SessionCapture::new(&session, options()).unwrap();
-    let segment = scene.live(&mut session).wait_segment(0.5).unwrap();
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
+        .wait_segment(0.5)
+        .unwrap();
     assert!(matches!(
         session
             .advance_segment_to_callback_barrier(segment, 0.1)

@@ -10,7 +10,7 @@ fn path(options: Options) -> (Mobject, VectorPath) {
     let object =
         Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     let geometry = match session.frame().render_geometry(0).unwrap() {
         GeometryRef::VectorPath(path) => path.as_ref().clone(),
         GeometryRef::External(id) => {

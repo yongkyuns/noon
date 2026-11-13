@@ -1,4 +1,5 @@
 //! Complementary R2 acceptance probes; no alternate scene or rollback state.
+use noon::integration::scene_execution;
 use noon::integration::{CallbackAdvance, HostCallbackId, SemanticMutationTransaction};
 use noon::{
     AnimationOptions, ExecutionSessionPublicationError, ImageMobjectOptions, RateFunction, Scene,
@@ -180,17 +181,15 @@ fn invalid_publication_context_rejects_before_resource_import() -> TestResult {
     let other = scene.family(&[(&object).into()])?;
     let store = scene.integration_store().clone();
     for invalid_root in [object.node_id(), SemanticNodeId::new(u32::MAX, 1)] {
-        assert!(
-            noon::integration::scene_execution::adopt_root(store.clone(), invalid_root).is_err()
-        );
+        assert!(scene_execution::adopt_root(store.clone(), invalid_root).is_err());
     }
     for mut wrong in [
         Scene::new(),
-        noon::integration::scene_execution::adopt_root(store.clone(), other.node_id())?,
+        scene_execution::adopt_root(store.clone(), other.node_id())?,
     ] {
         let before = (resources(&wrong), wrong.revision());
         assert!(matches!(
-            noon::integration::scene_execution::attach(&mut wrong, scene.execution_session()?),
+            scene_execution::attach(&mut wrong, scene_execution::lower(&scene)?),
             Err(SceneExecutionError::Publication(_))
         ));
         assert_eq!((resources(&wrong), wrong.revision()), before);

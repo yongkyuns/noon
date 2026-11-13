@@ -84,8 +84,8 @@
 //!
 //! [`Scene::into_execution`] keeps authoring and execution together. Borrow
 //! [`SceneExecution::live`] or [`ContinuationScene::live`] for segment control.
-//! Scene scripts manage segments and callback phases internally. Hosts with a
-//! standalone runtime can use [`Scene::live`] during a checked handoff.
+//! Scene scripts manage segments and callback phases internally. Hosts that
+//! configure a runtime before installation use [`integration::scene_execution`].
 //!
 //! # Public surface
 //!

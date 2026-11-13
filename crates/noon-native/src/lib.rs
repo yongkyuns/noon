@@ -51,6 +51,8 @@ mod latex;
 #[cfg(feature = "latex")]
 pub use latex::{NativeLatexBackend, NativeLatexConfig};
 
+#[cfg(test)]
+use noon::integration::scene_execution;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -83,11 +85,7 @@ fn test_scene_from_store(mut store: noon_core::SemanticStore) -> noon::Scene {
     for member in members {
         store.add_semantic_family_member(root, member).unwrap();
     }
-    noon::integration::scene_execution::adopt_root(
-        std::rc::Rc::new(std::cell::RefCell::new(store)),
-        root,
-    )
-    .unwrap()
+    scene_execution::adopt_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root).unwrap()
 }
 
 #[cfg(test)]
@@ -95,11 +93,7 @@ fn test_scene_from_root(
     store: noon_core::SemanticStore,
     root: noon_core::SemanticNodeId,
 ) -> noon::Scene {
-    noon::integration::scene_execution::adopt_root(
-        std::rc::Rc::new(std::cell::RefCell::new(store)),
-        root,
-    )
-    .unwrap()
+    scene_execution::adopt_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root).unwrap()
 }
 use winit::window::{Window, WindowId};
 
@@ -2094,7 +2088,7 @@ mod tests {
             .insert(CALLBACK, |_context| Ok::<_, std::io::Error>(()))
             .unwrap();
         let scene = test_scene_from_store(store);
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         session
             .activate_animation(
                 &mut scene.integration_store().borrow_mut(),
@@ -2104,8 +2098,7 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let session =
-            noon::integration::scene_execution::consume_with_session(scene, session).unwrap();
+        let session = scene_execution::consume_with_session(scene, session).unwrap();
         let mut app =
             NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
 

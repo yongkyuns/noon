@@ -236,7 +236,7 @@ fn callback_driven_sessions_do_not_enter_the_immutable_export_profile() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     let publication = session.publication_context();
     assert!(matches!(
         export_session_file(

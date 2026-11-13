@@ -36,7 +36,7 @@ fn section_declarations_do_not_mutate_semantic_or_execution_state() {
     let mut scene = Scene::new();
     let square = scene.square(1.0).unwrap();
     scene.add(&square).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     session.take_frame_changes();
     let revision = scene.revision();
     let context = session.publication_context();

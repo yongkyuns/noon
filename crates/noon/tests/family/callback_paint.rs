@@ -133,7 +133,7 @@ fn caught_missing_leaf_and_foreign_family_leave_ordered_overlay_intact_then_retr
         .unwrap();
     let revision = scene.revision();
     let authored = [a.state().unwrap(), b.state().unwrap()];
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     let publication = session.publication_context();
     callbacks.advance_to(&mut session, 0.0).unwrap();
     assert_eq!(*observed.borrow(), ids);

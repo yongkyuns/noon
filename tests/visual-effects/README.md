@@ -632,7 +632,7 @@ fn authored_contract() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     assert_eq!(movement.options()?.run_time, Some(1.5));
     assert_ne!(dot.get_effect("glow")?.node_id(), target.get_effect("glow")?.node_id());
-    assert!(scene.execution_session().is_err()); // explicitly unavailable before M1
+    assert!(scene.into_execution().is_err()); // explicitly unavailable before M1
     Ok(())
 }
 ```

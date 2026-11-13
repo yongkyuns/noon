@@ -993,9 +993,8 @@ impl Scene {
         }
         Ok(true)
     }
-    /// Lower a standalone runtime for integrations that manage its handoff.
-    /// Use [`Self::into_execution`] to keep ordinary authoring on its owning Scene.
-    pub fn execution_session(
+
+    pub(crate) fn execution_session(
         &self,
     ) -> Result<ExecutionSession, noon_compile::SemanticExecutionLoweringError> {
         ExecutionSession::from_semantic_root(&self.store.borrow(), self.root)
@@ -1085,9 +1084,7 @@ impl Scene {
         LiveSession::new(store, root, execution)
     }
 
-    /// Borrow execution controls during an explicit standalone runtime handoff.
-    /// Ordinary callers can use [`SceneExecution::live`] on the owned execution.
-    pub fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
+    pub(crate) fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
         LiveSession::new(&self.store, self.root, session)
     }
 }

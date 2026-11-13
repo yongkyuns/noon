@@ -2,6 +2,7 @@ mod duration_media_conformance;
 
 use super::*;
 use crate::CaptureWork;
+use noon::integration::scene_execution;
 use noon::integration::{ExportFrame, FrameGrid, SampleObservation};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -158,7 +159,7 @@ fn frame<'a>(pixels: &'a [u8], width: u32, height: u32, index: u64) -> CapturedF
     let mut scene = noon::Scene::new();
     let object = scene.square(1.0).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let sample = FrameGrid::new(rate(), 0.0).unwrap().sample(index).unwrap();
     CapturedFrame {
         frame: ExportFrame {
@@ -263,7 +264,7 @@ fn one_frame_mp4_ends_exactly_at_shorter_authored_time() {
     let mut scene = noon::Scene::new();
     let square = scene.square(0.25).unwrap();
     scene.add(&square).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let sample = FrameGrid::new(rate, 0.0).unwrap().sample(0).unwrap();
     let rgba = [255_u8; 64];
     sink.write(CapturedFrame {

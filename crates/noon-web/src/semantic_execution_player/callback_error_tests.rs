@@ -253,7 +253,7 @@ fn family_read_rejection_preserves_nested_cause_and_the_same_pending_phase() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        noon::integration::scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,

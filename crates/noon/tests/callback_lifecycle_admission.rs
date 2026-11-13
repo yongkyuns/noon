@@ -1,6 +1,7 @@
 //! Acceptance tests for lifecycle animations beside an unrelated host updater.
 //! These exercise the shared execution path used by Python, without a browser.
 
+use noon::integration::scene_execution;
 use std::{cell::RefCell, rc::Rc};
 
 use noon::integration::HostCallbackId;
@@ -244,7 +245,7 @@ fn removed_callback_history_does_not_block_a_later_fade() {
 
     let mut removal = SemanticMutationTransaction::new();
     removal.remove_updater(moving.node_id(), MOVE, 1.0);
-    noon::integration::scene_execution::publish(execution.scene_mut(), removal).unwrap();
+    scene_execution::publish(execution.scene_mut(), removal).unwrap();
     let call_count = times.borrow().len();
     let frozen = execution.scene().effective(&moving).unwrap();
     let segment = execution
@@ -374,11 +375,10 @@ fn family_fade_coexists_with_an_unrelated_updater() {
         }
         let times = Rc::new(RefCell::new(Vec::new()));
         let mut callbacks = install_motion(&mut scene, &moving, &times);
-        let mut execution = scene.execution_session().unwrap();
+        let mut execution = scene_execution::lower(&scene).unwrap();
         callbacks.advance_to(&mut execution, 0.0).unwrap();
         let identity = execution.runtime_identity();
-        let segment = scene
-            .live(&mut execution)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut execution)
             .declare_and_activate_composition(
                 &Request::FamilyFade {
                     target: &family,
@@ -398,8 +398,7 @@ fn family_fade_coexists_with_an_unrelated_updater() {
         callbacks
             .advance_segment_to(&mut execution, segment, 1.0)
             .unwrap();
-        scene
-            .live(&mut execution)
+        scene_execution::borrow_uninstalled(&scene, &mut execution)
             .complete_segment(segment)
             .unwrap();
         assert_eq!(
@@ -410,11 +409,15 @@ fn family_fade_coexists_with_an_unrelated_updater() {
             execution.frame().is_present(2),
             direction == SemanticFadeDirection::In
         );
-        let hold = scene.live(&mut execution).wait_segment(0.5).unwrap();
+        let hold = scene_execution::borrow_uninstalled(&scene, &mut execution)
+            .wait_segment(0.5)
+            .unwrap();
         callbacks
             .advance_segment_to(&mut execution, hold, 1.5)
             .unwrap();
-        scene.live(&mut execution).complete_segment(hold).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut execution)
+            .complete_segment(hold)
+            .unwrap();
         assert_eq!(execution.frame().objects[0].transform.translation.x, 1.5);
         assert_eq!(execution.runtime_identity(), identity);
     }
@@ -432,10 +435,9 @@ fn family_or_descendant_updaters_are_rejected_without_partial_admission() {
         tx.add_updater(target, MOVE, 0.5, None);
         tx.apply(&mut scene.integration_store().borrow_mut())
             .unwrap();
-        let mut execution = scene.execution_session().unwrap();
+        let mut execution = scene_execution::lower(&scene).unwrap();
         let before = execution.publication_context();
-        let error = scene
-            .live(&mut execution)
+        let error = scene_execution::borrow_uninstalled(&scene, &mut execution)
             .declare_and_activate_composition(
                 &Request::FamilyFade {
                     target: &family,
@@ -589,11 +591,10 @@ fn unrelated_future_activation_is_not_skipped_by_lifecycle_progression() {
             None,
         )
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene_execution::lower(&scene).unwrap();
     callbacks.advance_to(&mut execution, 0.0).unwrap();
     assert!(times.borrow().is_empty());
-    let segment = scene
-        .live(&mut execution)
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut execution)
         .declare_and_activate_composition(
             &Lifecycle::FadeIn.request(&target),
             AnimationOptions::new(),
@@ -605,8 +606,7 @@ fn unrelated_future_activation_is_not_skipped_by_lifecycle_progression() {
     assert_eq!(*times.borrow(), [0.5, 1.0]);
     assert_eq!(execution.frame().objects[0].transform.translation.x, 1.0);
     assert_eq!(execution.frame().objects[1].appearance, 1.0);
-    scene
-        .live(&mut execution)
+    scene_execution::borrow_uninstalled(&scene, &mut execution)
         .complete_segment(segment)
         .unwrap();
 }
@@ -626,7 +626,7 @@ fn a_target_with_completed_updater_history_can_fade_out_without_restarting_it() 
     execution.live().complete_segment(wait).unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_updater(target.node_id(), MOVE, 1.0);
-    noon::integration::scene_execution::publish(execution.scene_mut(), tx).unwrap();
+    scene_execution::publish(execution.scene_mut(), tx).unwrap();
     let calls = times.borrow().clone();
     let frozen = execution.scene().effective(&target).unwrap().transform;
     let segment = execution

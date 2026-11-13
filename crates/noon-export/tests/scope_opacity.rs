@@ -2,6 +2,7 @@
 //! native Scene/LiveSession and SessionCapture path, without a scene transport.
 #![cfg(not(target_arch = "wasm32"))]
 
+use noon::integration::scene_execution;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
     Scene,
@@ -176,7 +177,7 @@ fn native_family_opacity_applies_once_across_empty_neutral_filtered_nested_and_r
             if mode > 0 {
                 let mut tx = SemanticMutationTransaction::new();
                 tx.remove_node(group.get_effect("soften").unwrap().node_id());
-                noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
+                scene_execution::publish(session.scene_mut(), tx).unwrap();
                 let frame = capture.capture(session.session_mut()).unwrap();
                 let expected = reference(0.5, outer, false);
                 assert!(
@@ -242,7 +243,7 @@ fn dissolve_of_nested_family_removes_its_ancestor_silhouette_contribution() {
             )
             .unwrap();
         scene.add_many(&[(&parent).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let mut options = CaptureOptions::new(80, 60);
         options.backends = if cfg!(target_os = "macos") {
             Backends::METAL
@@ -266,8 +267,7 @@ fn dissolve_of_nested_family_removes_its_ancestor_silhouette_contribution() {
                 .rate_func(noon::RateFunction::Linear)
                 .remover(false),
         };
-        let segment = scene
-            .live(&mut session)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
             .declare_and_activate_composition(&request, noon::AnimationOptions::new())
             .unwrap();
         session.seek(segment.start_time() + 1.0).unwrap();
@@ -285,7 +285,9 @@ fn dissolve_of_nested_family_removes_its_ancestor_silhouette_contribution() {
         session.seek(segment.start_time()).unwrap();
         assert_eq!(capture.capture(&mut session).unwrap().rgba, baseline);
         session.seek(segment.start_time() + 1.0).unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut session)
+            .complete_segment(segment)
+            .unwrap();
         assert_eq!(capture.capture(&mut session).unwrap().rgba, empty);
     }
 }

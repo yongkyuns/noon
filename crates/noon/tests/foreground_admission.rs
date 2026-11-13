@@ -1,4 +1,5 @@
 //! Every authoring entrypoint admits animation content below persistent foreground.
+use noon::integration::scene_execution;
 use noon::{
     AnimationCompositionRequest as Request, AnimationOptions, ExecutionSession, FocusOnOptions,
     Mobject, RateFunction, Scene, SemanticAnimationCompositionKind as Kind,
@@ -193,9 +194,8 @@ fn foreground_admission_preserves_pending_focus_positions_and_cleanup() {
     let a = scene.square(2.0).unwrap();
     let b = scene.circle(0.7).unwrap();
     scene.add_foreground_many(&[(&front).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene_execution::lower(&scene).unwrap();
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_composition(
             &Request::Composition {
                 kind: Kind::Parallel,
@@ -227,13 +227,14 @@ fn foreground_admission_preserves_pending_focus_positions_and_cleanup() {
     assert_eq!([order[0], order[2], order[4]], [id(&a), id(&b), id(&front)]);
     assert_ne!(order[1], order[3]);
     for t in [0.0, 0.5, 1.0] {
-        scene
-            .live(&mut session)
+        scene_execution::borrow_uninstalled(&scene, &mut session)
             .advance_segment_to(segment, t)
             .unwrap();
         assert_eq!(painter(&session), order);
     }
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .complete_segment(segment)
+        .unwrap();
     assert_eq!(painter(&session), [id(&a), id(&b), id(&front)]);
     assert_eq!(foreground(&scene), [front.node_id()]);
 }
@@ -244,27 +245,28 @@ fn foreground_admission_rejection_preserves_membership_publication_and_dirty_sta
     let front = scene.square(1.0).unwrap();
     let a = scene.square(2.0).unwrap();
     scene.add_foreground_many(&[(&front).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let before = session.publication_context();
     let frame = session.frame().clone();
     session.take_frame_changes();
-    let result = scene.live(&mut session).declare_and_activate_composition(
-        &Request::Composition {
-            kind: Kind::Parallel,
-            children: vec![
-                Request::FocusOn {
-                    focus: FocusOnOptions::new((0.0, 0.0)),
-                    options: options(),
-                },
-                Request::Create {
-                    target: &a,
-                    options: options().run_time(f64::NAN),
-                },
-            ],
-            options: options(),
-        },
-        options(),
-    );
+    let result = scene_execution::borrow_uninstalled(&scene, &mut session)
+        .declare_and_activate_composition(
+            &Request::Composition {
+                kind: Kind::Parallel,
+                children: vec![
+                    Request::FocusOn {
+                        focus: FocusOnOptions::new((0.0, 0.0)),
+                        options: options(),
+                    },
+                    Request::Create {
+                        target: &a,
+                        options: options().run_time(f64::NAN),
+                    },
+                ],
+                options: options(),
+            },
+            options(),
+        );
     assert!(result.is_err());
     assert_eq!(session.publication_context(), before);
     assert_eq!(session.frame(), &frame);

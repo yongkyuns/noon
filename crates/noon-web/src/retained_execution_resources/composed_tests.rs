@@ -5,6 +5,7 @@ use crate::{
     RetainedFamilyExecutionDeltaEncoder, RetainedResourceRetirements,
     TransportComposedSourceHandle, TransportSlotId,
 };
+use noon::integration::scene_execution;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
     ExecutionSession, Mobject, MobjectFamily, Scene,
@@ -201,7 +202,7 @@ impl Fixture {
             .add_many(&[(&outer).into(), (&outside).into()])
             .unwrap();
         let effect = inner.get_effect("inner").unwrap().node_id();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let inner_id = session.execution_object_id(inner.node_id()).unwrap();
         let outer_id = session.execution_object_id(outer.node_id()).unwrap();
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(73);
@@ -235,7 +236,7 @@ impl Fixture {
     fn parameter(&mut self) -> RetainedFamilyExecutionDeltaEnvelope {
         let mut tx = SemanticMutationTransaction::new();
         tx.update_effect(self.effect, EffectUpdate::default().radius(Pixels(4.0)));
-        noon::integration::scene_execution::publish_at_root(
+        scene_execution::publish_at_root(
             self.scene.integration_store(),
             self.scene.root(),
             &mut self.session,
@@ -287,7 +288,7 @@ fn nested_public_groups_cross_worker_codec_reuse_parameter_resources_and_retire_
     assert_coherent(&mut f.session, &f.mirror);
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_member(f.scene.root(), f.outer.node_id());
-    noon::integration::scene_execution::publish_at_root(
+    scene_execution::publish_at_root(
         f.scene.integration_store(),
         f.scene.root(),
         &mut f.session,
@@ -306,7 +307,7 @@ fn nested_public_groups_cross_worker_codec_reuse_parameter_resources_and_retire_
     assert_coherent(&mut f.session, &f.mirror);
     let mut tx = SemanticMutationTransaction::new();
     tx.add_member(f.scene.root(), f.outer.node_id());
-    noon::integration::scene_execution::publish_at_root(
+    scene_execution::publish_at_root(
         f.scene.integration_store(),
         f.scene.root(),
         &mut f.session,
@@ -566,7 +567,7 @@ fn membership_churn_retires_both_nested_plans_and_keeps_resource_closure_bounded
         ));
         tx.add_member(f.inner.node_id(), next);
         tx.remove_node(current);
-        current = noon::integration::scene_execution::publish_at_root(
+        current = scene_execution::publish_at_root(
             f.scene.integration_store(),
             f.scene.root(),
             &mut f.session,
@@ -597,7 +598,7 @@ fn membership_churn_retires_both_nested_plans_and_keeps_resource_closure_bounded
     }
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_member(f.scene.root(), f.outer.node_id());
-    noon::integration::scene_execution::publish_at_root(
+    scene_execution::publish_at_root(
         f.scene.integration_store(),
         f.scene.root(),
         &mut f.session,
@@ -708,7 +709,7 @@ fn dense_style_updates_preserve_new_and_changed_effect_definitions_as_full_rows(
 #[test]
 fn one_atomic_delta_resolves_pending_equal_interval_scopes_before_members_and_parent() {
     let scene = Scene::new();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(74);
     let mut mirror =
         InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
@@ -730,13 +731,9 @@ fn one_atomic_delta_resolves_pending_equal_interval_scopes_before_members_and_pa
         .add_member(inner, b)
         .add_member(outer, inner)
         .add_member(scene.root(), outer);
-    let committed = noon::integration::scene_execution::publish_at_root(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        tx,
-    )
-    .unwrap();
+    let committed =
+        scene_execution::publish_at_root(scene.integration_store(), scene.root(), &mut session, tx)
+            .unwrap();
     let outer_id = session
         .execution_object_id(committed.resolve(outer).unwrap())
         .unwrap();

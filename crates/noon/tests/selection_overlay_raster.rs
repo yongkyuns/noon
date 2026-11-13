@@ -1,5 +1,6 @@
 //! Real software-Vulkan pixel proof. Scene-only capture is intentionally exercised
 //! on the same renderer while the separate interactive GPU overlay stays resident.
+use noon::integration::scene_execution;
 use noon::integration::{
     NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
     NativePointerInputKind, NativePointerPosition,
@@ -143,7 +144,7 @@ fn paused_click_overlay_changes_only_exact_fill_pixels_and_never_exports() {
         .unwrap();
     label.shift(0.0, -2.5).unwrap();
     scene.add(&label).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     session
         .configure_native_pointer_input(
             NativePointerId {
@@ -270,7 +271,7 @@ fn paused_scene_drag_changes_target_pixels_then_release_or_cancel_resolves_once(
     unrelated.set_translation(2.5, 1.0).unwrap();
     scene.add(&unrelated).unwrap();
 
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let pointer = NativePointerId {
         source: 2,
         pointer: 0,

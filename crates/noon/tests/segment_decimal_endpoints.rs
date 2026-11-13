@@ -7,7 +7,7 @@ fn decimal_wait_completion_requires_the_exact_accumulated_endpoint() {
     let mut scene = Scene::new();
     let object = scene.circle(1.0).unwrap();
     scene.add(&object).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
 
     // Isolate the timing of the foreground fixture: a two-second segment
     // followed by two 0.2-second waits. No renderer or language wrapper is needed.

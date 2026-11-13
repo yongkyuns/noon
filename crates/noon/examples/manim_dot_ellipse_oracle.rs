@@ -22,7 +22,7 @@ fn main() {
     for object in [&dot, &shifted, &ellipse, &transformed] {
         scene.add(object).unwrap();
     }
-    let _session = scene.execution_session().unwrap();
+    let _execution = scene.into_execution().unwrap();
     println!(
         "{}",
         json!({

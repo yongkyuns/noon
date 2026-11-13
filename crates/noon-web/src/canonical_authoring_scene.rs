@@ -6,6 +6,8 @@ mod effects;
 mod prepared;
 mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::integration::scene_execution;
 #[cfg(target_arch = "wasm32")]
 mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -651,9 +653,7 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
-        self.scene
-            .execution_session()
-            .map_err(|error| error.to_string())
+        scene_execution::lower(&self.scene).map_err(|error| error.to_string())
     }
 
     /// Author one host-owned callable occurrence into this scene's semantic store.
@@ -711,7 +711,7 @@ impl CanonicalAuthoringScene {
         if let Some(player) = self.player_ownership.local_mut() {
             return player.live_edit_updaters(transaction);
         }
-        noon::integration::scene_execution::publish(&mut self.scene, transaction)
+        scene_execution::publish(&mut self.scene, transaction)
             .map(|_| ())
             .map_err(|error| error.to_string())
     }

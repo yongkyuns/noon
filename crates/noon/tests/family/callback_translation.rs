@@ -206,7 +206,7 @@ fn native_callback_preserves_prior_overlay_and_late_failures_then_retries_once_p
         .unwrap();
     let revision = scene.revision();
     let authored = a.state().unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     let untouched_before = session.frame().objects[2].clone();
     let geometry = session
         .frame()

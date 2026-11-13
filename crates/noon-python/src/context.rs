@@ -307,10 +307,8 @@ impl Context {
         })
     }
     fn bootstrap(&self) -> PyResult<ExecutionSession> {
-        let mut session = self
-            .scene
-            .execution_session()
-            .map_err(|e| engine_error(e.to_string()))?;
+        let mut session =
+            scene_execution::lower(&self.scene).map_err(|e| engine_error(e.to_string()))?;
         session.require_effect_resource_preparation();
         // Predeclared audio uses the immutable timeline for preview and export.
         if !self.drag_targets.is_empty() {
@@ -340,7 +338,8 @@ impl Context {
             return self.with_live(operation);
         }
         let mut session = self.bootstrap()?;
-        let result = operation(&mut self.scene.live(&mut session)).map_err(engine_error)?;
+        let mut live = scene_execution::borrow_uninstalled(&self.scene, &mut session);
+        let result = operation(&mut live).map_err(engine_error)?;
         self.attach_session(session)?;
         Ok(result)
     }

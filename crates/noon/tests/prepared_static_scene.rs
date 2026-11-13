@@ -1,5 +1,6 @@
 #![cfg(feature = "prepared-prefix")]
 
+use noon::integration::scene_execution;
 use noon::Scene;
 use noon_runtime::ReplayLimits;
 
@@ -8,7 +9,7 @@ fn completed_static_reader_keeps_exact_zero_endpoint_after_source_drop() {
     let mut scene = Scene::new();
     let shape = scene.square(1.0).unwrap();
     scene.add(&shape).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     // A closed stream must not reserve unused future-history capacity.
     source
         .begin_replay_retention(ReplayLimits {
@@ -44,7 +45,7 @@ fn completed_reader_requires_sealed_current_frontier() {
     let mut scene = Scene::new();
     let shape = scene.circle(0.5).unwrap();
     scene.add(&shape).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     source
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();

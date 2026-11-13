@@ -239,7 +239,7 @@ fn opaque_callbacks_are_not_misclassified_as_replayable_scalar_curves() {
             None,
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     session
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
