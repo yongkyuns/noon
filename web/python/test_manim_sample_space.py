@@ -163,8 +163,7 @@ class ManimSampleSpaceBridgeTests(unittest.TestCase):
             )),
             patch.object(sample_space, "_create_sample_space", create),
             patch.object(sample_space, "_to_js", lambda values: list(values)),
-            patch.object(sample_space._shared, "_live_constructor_context", return_value=None),
-            patch.object(sample_space._shared, "_live_mutation_context", return_value=None),
+            patch.object(sample_space._shared, "_path_authoring_context", return_value=None),
         ]
         for active in self.patches:
             active.start()
@@ -257,20 +256,20 @@ class ManimSampleSpaceBridgeTests(unittest.TestCase):
     def test_post_bootstrap_construction_and_partition_route_through_live_context(self):
         handle = _SampleSpaceHandle()
         context = Mock()
-        context.liveCreateSampleSpace.return_value = handle
-        context.liveGetHorizontalDivision.side_effect = lambda target, probabilities, colors: target.getHorizontalDivision(
+        context.createSampleSpace.return_value = handle
+        context.getHorizontalDivision.side_effect = lambda target, probabilities, colors: target.getHorizontalDivision(
             probabilities, colors
         )
-        context.liveGetVerticalDivision.side_effect = lambda target, probabilities, colors: target.getVerticalDivision(
+        context.getVerticalDivision.side_effect = lambda target, probabilities, colors: target.getVerticalDivision(
             probabilities, colors
         )
-        context.liveDivideHorizontally.side_effect = lambda target, probabilities, colors: target.divideHorizontally(
+        context.divideHorizontally.side_effect = lambda target, probabilities, colors: target.divideHorizontally(
             probabilities, colors
         )
-        context.liveDivideVertically.side_effect = lambda target, probabilities, colors: target.divideVertically(
+        context.divideVertically.side_effect = lambda target, probabilities, colors: target.divideVertically(
             probabilities, colors
         )
-        with patch.object(sample_space._shared, "_live_constructor_context", return_value=context):
+        with patch.object(sample_space._shared, "_path_authoring_context", return_value=context):
             space = sample_space.SampleSpace(height=2.0, width=4.0)
             self.assertIs(space._canonical_live_target_context, context)
             self.assertIsNone(space.horizontal_parts)
@@ -278,11 +277,11 @@ class ManimSampleSpaceBridgeTests(unittest.TestCase):
             self.assertIsInstance(space.get_vertical_division([0.5]), compat.Group)
             space.divide_horizontally([0.5])
             space.divide_vertically([0.5])
-        context.liveCreateSampleSpace.assert_called_once()
-        context.liveGetHorizontalDivision.assert_called_once()
-        context.liveGetVerticalDivision.assert_called_once()
-        context.liveDivideHorizontally.assert_called_once()
-        context.liveDivideVertically.assert_called_once()
+        context.createSampleSpace.assert_called_once()
+        context.getHorizontalDivision.assert_called_once()
+        context.getVerticalDivision.assert_called_once()
+        context.divideHorizontally.assert_called_once()
+        context.divideVertically.assert_called_once()
         self.assertIsInstance(space.horizontal_parts, compat.Group)
         self.assertIsInstance(space.vertical_parts, compat.Group)
 

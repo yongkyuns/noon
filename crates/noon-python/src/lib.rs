@@ -33,6 +33,7 @@ mod paints;
 mod path_input;
 mod path_query;
 mod plotting;
+mod sample_space;
 mod shaders;
 mod signals;
 mod spatial;
@@ -79,6 +80,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
     arrow::register(m)?;
     audio::register(m)?;
+    sample_space::register(m)?;
     #[cfg(feature = "latex")]
     {
         latex::register(m)?;

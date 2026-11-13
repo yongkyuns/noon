@@ -116,6 +116,23 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_sample_space_partitions_during_playback(self):
+        path = ROOT / "web/python/examples/sample_space.py"
+        source = path.read_text() + """
+        self.wait(0.1)
+        assert len(horizontal.get_vertical_division([0.5])) == 2
+        clone = horizontal.copy()
+        clone.divide_vertically([0.4])
+        assert clone.vertical_parts is not None and horizontal.vertical_parts is None
+        self.add(clone.shift((0, -2)))
+        self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source, filename=str(path)))
+        try:
+            self.assertEqual(len(scene.mobjects), 3)
+        finally:
+            close_scene(scene)
+
     def test_always_redraw_gallery_uses_sampled_callback_content(self):
         path = ROOT / "web/python/examples/showcase_always_redraw.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), sample_hz=12))

@@ -1,4 +1,4 @@
-//! SampleSpace bindings use the same private canonical context as other live edits.
+//! SampleSpace bindings use the same private canonical context as other Scene edits.
 use super::CanonicalAuthoringSceneContext;
 use crate::authoring_sample_space::{
     colors_from_rgba, WasmSampleSpaceHandle, WasmSampleSpaceOptions,
@@ -8,19 +8,19 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveCreateSampleSpace)]
-    pub fn live_create_sample_space(
+    #[wasm_bindgen(js_name = createSampleSpace)]
+    pub fn create_sample_space(
         &mut self,
         options: WasmSampleSpaceOptions,
     ) -> Result<WasmSampleSpaceHandle, JsValue> {
         self.inner
-            .live_create_sample_space(&options.options)
+            .create_sample_space(&options.options)
             .map(WasmSampleSpaceHandle::from_sample_space)
             .map_err(crate::authoring_error::js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGetHorizontalDivision)]
-    pub fn live_get_horizontal_division(
+    #[wasm_bindgen(js_name = getHorizontalDivision)]
+    pub fn get_horizontal_division(
         &mut self,
         sample_space: &WasmSampleSpaceHandle,
         probabilities: &[f64],
@@ -28,18 +28,13 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
         let colors = colors_from_rgba(colors)?;
         self.inner
-            .live_get_sample_space_division(
-                &sample_space.sample_space,
-                probabilities,
-                &colors,
-                false,
-            )
+            .get_sample_space_division(&sample_space.sample_space, probabilities, &colors, false)
             .map(WasmAuthoringFamilyHandle::from_semantic_family)
             .map_err(crate::authoring_error::js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGetVerticalDivision)]
-    pub fn live_get_vertical_division(
+    #[wasm_bindgen(js_name = getVerticalDivision)]
+    pub fn get_vertical_division(
         &mut self,
         sample_space: &WasmSampleSpaceHandle,
         probabilities: &[f64],
@@ -47,18 +42,13 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
         let colors = colors_from_rgba(colors)?;
         self.inner
-            .live_get_sample_space_division(
-                &sample_space.sample_space,
-                probabilities,
-                &colors,
-                true,
-            )
+            .get_sample_space_division(&sample_space.sample_space, probabilities, &colors, true)
             .map(WasmAuthoringFamilyHandle::from_semantic_family)
             .map_err(crate::authoring_error::js_error)
     }
 
-    #[wasm_bindgen(js_name = liveDivideHorizontally)]
-    pub fn live_divide_horizontally(
+    #[wasm_bindgen(js_name = divideHorizontally)]
+    pub fn divide_horizontally(
         &mut self,
         sample_space: &mut WasmSampleSpaceHandle,
         probabilities: &[f64],
@@ -66,7 +56,7 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
         let colors = colors_from_rgba(colors)?;
         self.inner
-            .live_divide_sample_space(
+            .divide_sample_space(
                 &mut sample_space.sample_space,
                 probabilities,
                 &colors,
@@ -76,8 +66,8 @@ impl CanonicalAuthoringSceneContext {
             .map_err(crate::authoring_error::js_error)
     }
 
-    #[wasm_bindgen(js_name = liveDivideVertically)]
-    pub fn live_divide_vertically(
+    #[wasm_bindgen(js_name = divideVertically)]
+    pub fn divide_vertically(
         &mut self,
         sample_space: &mut WasmSampleSpaceHandle,
         probabilities: &[f64],
@@ -85,7 +75,7 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
         let colors = colors_from_rgba(colors)?;
         self.inner
-            .live_divide_sample_space(&mut sample_space.sample_space, probabilities, &colors, true)
+            .divide_sample_space(&mut sample_space.sample_space, probabilities, &colors, true)
             .map(WasmAuthoringFamilyHandle::from_semantic_family)
             .map_err(crate::authoring_error::js_error)
     }

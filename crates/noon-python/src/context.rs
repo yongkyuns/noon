@@ -1720,6 +1720,77 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "createSampleSpace")]
+    fn create_sample_space(
+        &mut self,
+        options: &crate::sample_space::SampleSpaceOptions,
+    ) -> PyResult<crate::sample_space::SampleSpaceHandle> {
+        self.available()?;
+        noon::SampleSpace::new_with_options(&mut self.scene, &options.0)
+            .map(crate::sample_space::SampleSpaceHandle)
+            .map_err(crate::sample_space::failure)
+    }
+
+    #[pyo3(name = "getHorizontalDivision")]
+    fn get_horizontal_division(
+        &mut self,
+        space: &crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.get_horizontal_division_in_scene(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
+    #[pyo3(name = "getVerticalDivision")]
+    fn get_vertical_division(
+        &mut self,
+        space: &crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.get_vertical_division_in_scene(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
+    #[pyo3(name = "divideHorizontally")]
+    fn divide_horizontally(
+        &mut self,
+        space: &mut crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.divide_horizontally(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
+    #[pyo3(name = "divideVertically")]
+    fn divide_vertically(
+        &mut self,
+        space: &mut crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.divide_vertically(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
     #[pyo3(name = "createCoordinates")]
     fn coordinates(
         &mut self,

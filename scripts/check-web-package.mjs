@@ -1060,6 +1060,8 @@ for (const retired of [
   "livePromoteFamilyOwnPoints(", "livePromoteMobjectOwnPoints(",
   "liveCreateCoordinates(", "liveSetAngleValue(",
   "liveCreateVariable(", "liveCreateCode(",
+  "liveCreateSampleSpace(", "liveGetHorizontalDivision(", "liveGetVerticalDivision(",
+  "liveDivideHorizontally(", "liveDivideVertically(",
   "liveCreateMatrix(", "liveCreateIntegerMatrix(", "liveCreateDecimalMatrix(", "liveCreateMobjectMatrix(",
   "liveTableCell(", "liveHighlightTableCell(", "liveGetHighlightedTableCell(",
   "liveCreateTable(", "liveCreateTableWithLabels(", "liveCreateMathTable(",

@@ -76,6 +76,13 @@ def noonCreateAuthoringMeshHandle(candidate):
 def noonCreateAuthoringMeshFamilyHandle(candidate):
     return _arena().mesh_family(candidate)
 
+noonAuthoringSampleSpaceOptions = _native.SampleSpaceOptions
+
+
+def noonCreateAuthoringSampleSpaceHandle(options):
+    return _native.create_detached_sample_space(_arena(), options)
+
+
 noonAuthoringCoordinateOptions = _native.CoordinateOptions
 
 def noonCreateAuthoringCoordinateHandle(options):
