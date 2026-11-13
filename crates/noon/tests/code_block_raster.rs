@@ -146,7 +146,7 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
     retain("code-shifted", &shifted, SIZE, SIZE);
 
     session
-        .live()
+        .scene_mut()
         .set_family_opacity(code.family(), 0.0)
         .unwrap();
     let hidden = raster.capture(&session.session_mut().take_renderer_publication());
@@ -158,7 +158,7 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         "zero family opacity must hide background, numbers, and intrinsic glyph colors",
     );
     session
-        .live()
+        .scene_mut()
         .set_family_opacity(code.family(), 1.0)
         .unwrap();
     let restored = raster.capture(&session.session_mut().take_renderer_publication());

@@ -115,7 +115,7 @@ fn native_family_opacity_applies_once_across_empty_neutral_filtered_nested_and_r
             } else {
                 scene.add_many(&[(&group).into()]).unwrap();
             }
-            let mut session = scene.execution_session().unwrap();
+            let mut session = scene.into_execution().unwrap();
             let mut options = CaptureOptions::new(80, 60);
             options.backends = if cfg!(target_os = "macos") {
                 Backends::METAL
@@ -123,14 +123,18 @@ fn native_family_opacity_applies_once_across_empty_neutral_filtered_nested_and_r
                 Backends::VULKAN
             };
             options.background = [24.0 / 255.0, 48.0 / 255.0, 64.0 / 255.0];
-            let mut capture = SessionCapture::new(&session, options).unwrap();
+            let mut capture = SessionCapture::new(session.session(), options).unwrap();
             for opacity in [0.5, 0.25, 0.0, 1.0, 0.75, 0.5] {
-                scene
-                    .live(&mut session)
+                session
+                    .scene_mut()
                     .set_family_object_opacity(&group, opacity)
                     .unwrap();
                 let expected = reference(opacity, outer, mode == 2);
-                let rgba = capture.capture(&mut session).unwrap().rgba.to_vec();
+                let rgba = capture
+                    .capture(session.session_mut())
+                    .unwrap()
+                    .rgba
+                    .to_vec();
                 let error = rgba
                     .iter()
                     .zip(&expected)
@@ -144,14 +148,15 @@ fn native_family_opacity_applies_once_across_empty_neutral_filtered_nested_and_r
                         &rgba[(30 * 80 + 30) * 4..][..4],
                         &rgba[(30 * 80 + 50) * 4..][..4],
                         session
+                            .session()
                             .frame()
                             .objects
                             .iter()
                             .enumerate()
                             .map(|(i, row)| (
                                 row.id,
-                                session.frame().is_present(i),
-                                session.frame().is_drawable(i),
+                                session.session().frame().is_present(i),
+                                session.session().frame().is_drawable(i),
                                 row.style.opacity,
                                 row.content.composed_source().is_some()
                             ))
@@ -162,7 +167,7 @@ fn native_family_opacity_applies_once_across_empty_neutral_filtered_nested_and_r
                     error <= 2,
                     "nested={nested} mode={mode} opacity={opacity}: byte error {error}"
                 );
-                let held = capture.capture(&mut session).unwrap();
+                let held = capture.capture(session.session_mut()).unwrap();
                 assert_eq!(held.rgba, rgba);
                 assert_eq!(held.receipt.work.geometry_instances_repacked, 0);
                 assert_eq!(held.receipt.work.retained_upload_bytes, 0);
@@ -171,8 +176,8 @@ fn native_family_opacity_applies_once_across_empty_neutral_filtered_nested_and_r
             if mode > 0 {
                 let mut tx = SemanticMutationTransaction::new();
                 tx.remove_node(group.get_effect("soften").unwrap().node_id());
-                scene.live(&mut session).apply(tx).unwrap();
-                let frame = capture.capture(&mut session).unwrap();
+                session.live().apply(tx).unwrap();
+                let frame = capture.capture(session.session_mut()).unwrap();
                 let expected = reference(0.5, outer, false);
                 assert!(
                     frame

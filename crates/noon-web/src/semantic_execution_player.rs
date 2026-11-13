@@ -861,7 +861,7 @@ impl SemanticExecutionPlayer {
         target: &noon::MobjectFamily,
         colors: &[noon::Color],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_color_by_gradient(target, colors))
+        self.edit_scene(|scene| scene.set_family_color_by_gradient(target, colors))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1011,7 +1011,7 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         update: noon::StyleUpdate,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_style(source, update))
+        self.edit_scene(|scene| scene.set_family_style(source, update))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1021,7 +1021,7 @@ impl SemanticExecutionPlayer {
         direction: noon_core::SemanticSheenDirection,
         family: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_sheen_direction(source, direction, family))
+        self.edit_scene(|scene| scene.set_sheen_direction(source, direction, family))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1032,7 +1032,7 @@ impl SemanticExecutionPlayer {
         axis: noon_core::SemanticVec3,
         family: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.rotate_sheen_direction(source, angle, axis, family))
+        self.edit_scene(|scene| scene.rotate_sheen_direction(source, angle, axis, family))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1041,7 +1041,7 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         update: noon::StyleUpdate,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_own_style(source, update))
+        self.edit_scene(|scene| scene.set_family_own_style(source, update))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1052,10 +1052,8 @@ impl SemanticExecutionPlayer {
         end: &noon::MobjectFamily,
         alpha: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.interpolate_family_manim_style(receiver, start, end, alpha)
-        })
-        .map(|_| ())
+        self.edit_scene(|scene| scene.interpolate_family_manim_style(receiver, start, end, alpha))
+            .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_own_style_with_background_stroke(
@@ -1066,8 +1064,8 @@ impl SemanticExecutionPlayer {
         background_stroke_width: Option<f64>,
         background_stroke_opacity: Option<f64>,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.set_family_own_style_with_background_stroke(
+        self.edit_scene(|scene| {
+            scene.set_family_own_style_with_background_stroke(
                 source,
                 update,
                 background_stroke_color,
@@ -1083,7 +1081,7 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         opacity: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_own_opacity(source, opacity))
+        self.edit_scene(|scene| scene.set_family_own_opacity(source, opacity))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1092,7 +1090,7 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         opacity: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_object_opacity(source, opacity))
+        self.edit_scene(|scene| scene.set_family_object_opacity(source, opacity))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1101,10 +1099,8 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         opacity: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.set_family_own_background_stroke_opacity(source, opacity)
-        })
-        .map(|_| ())
+        self.edit_scene(|scene| scene.set_family_own_background_stroke_opacity(source, opacity))
+            .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_fade_family_own(
@@ -1112,7 +1108,7 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         darkness: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.fade_family_own(source, darkness))
+        self.edit_scene(|scene| scene.fade_family_own(source, darkness))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1121,7 +1117,7 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         cap: &str,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_own_stroke_cap(source, cap))
+        self.edit_scene(|scene| scene.set_family_own_stroke_cap(source, cap))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1142,7 +1138,7 @@ impl SemanticExecutionPlayer {
         blue: f64,
         alpha: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_own_color(family, red, green, blue, alpha))
+        self.edit_scene(|scene| scene.set_family_own_color(family, red, green, blue, alpha))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1154,7 +1150,7 @@ impl SemanticExecutionPlayer {
         blue: f64,
         alpha: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_color(family, red, green, blue, alpha))
+        self.edit_scene(|scene| scene.set_family_color(family, red, green, blue, alpha))
             .map(|_| ())
     }
 
@@ -1164,7 +1160,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         colors: &[Option<noon::Color>],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_member_colors(family, colors))
+        self.edit_scene(|scene| scene.set_family_member_colors(family, colors))
             .map(|_| ())
     }
 
@@ -1183,7 +1179,7 @@ impl SemanticExecutionPlayer {
         color: Option<noon::Color>,
         opacity: Option<f64>,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_fill(family, color, opacity))
+        self.edit_scene(|scene| scene.set_family_fill(family, color, opacity))
             .map(|_| ())
     }
 
@@ -1195,7 +1191,7 @@ impl SemanticExecutionPlayer {
         width: Option<f64>,
         opacity: Option<f64>,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_stroke(family, color, width, opacity))
+        self.edit_scene(|scene| scene.set_family_stroke(family, color, width, opacity))
             .map(|_| ())
     }
 
@@ -1205,7 +1201,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         opacity: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_family_opacity(family, opacity))
+        self.edit_scene(|scene| scene.set_family_opacity(family, opacity))
             .map(|_| ())
     }
 
@@ -1215,7 +1211,7 @@ impl SemanticExecutionPlayer {
         family: &noon::MobjectFamily,
         darkness: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.fade_family(family, darkness))
+        self.edit_scene(|scene| scene.fade_family(family, darkness))
             .map(|_| ())
     }
 
@@ -1226,13 +1222,22 @@ impl SemanticExecutionPlayer {
         color: noon::Color,
         amount: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.fade_to_family(family, color, amount))
+        self.edit_scene(|scene| scene.fade_to_family(family, color, amount))
             .map(|_| ())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn scene_mut(&mut self) -> &mut noon::Scene {
         self.source.scene_mut()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn edit_scene<T>(
+        &mut self,
+        operation: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        operation(self.source.scene_mut())
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

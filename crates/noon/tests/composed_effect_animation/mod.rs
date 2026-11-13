@@ -14,7 +14,7 @@ fn qualify_family_opacity_target(start: f64) {
         let target = session.scene_mut().copy_family(&source).unwrap();
         let end = 0.234567890123;
         session
-            .live()
+            .scene_mut()
             .set_family_object_opacity(target.root(), end)
             .unwrap();
         let options = AnimationOptions::new()
@@ -81,31 +81,39 @@ fn copied_scope_opacity_intent_only_write_has_no_render_dirtiness() {
     scene
         .add_many(&[(&family).into(), target.root().into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.take_renderer_publication();
-    let before = session.publication_context();
-    let objects = session.frame().objects.clone();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session.session_mut().take_renderer_publication();
+    let before = session.session().publication_context();
+    let objects = session.session().frame().objects.clone();
+    session
+        .scene_mut()
         .set_family_object_opacity(target.root(), 0.5)
         .unwrap();
     assert_eq!(
-        scene.revision(),
+        session.scene().revision(),
         before.scene_revision().checked_next().unwrap()
     );
     assert_eq!(
-        session.publication_context().scene_revision(),
-        scene.revision()
+        session.session().publication_context().scene_revision(),
+        session.scene().revision()
     );
-    assert_eq!(session.frame().objects, objects);
-    assert!(session.take_renderer_publication().changes().is_empty());
-    let committed = session.publication_context();
-    scene
-        .live(&mut session)
+    assert_eq!(session.session().frame().objects, objects);
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
+    let committed = session.session().publication_context();
+    session
+        .scene_mut()
         .set_family_object_opacity(target.root(), 0.5)
         .unwrap();
-    assert_eq!(session.publication_context(), committed);
-    assert!(session.take_renderer_publication().changes().is_empty());
+    assert_eq!(session.session().publication_context(), committed);
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
 }
 
 #[test]
@@ -130,7 +138,7 @@ fn sequential_family_targets_distinguish_omitted_method_opacity_from_full_snapsh
         let a = session.scene_mut().copy_family(&family).unwrap();
         let b = session.scene_mut().copy_family(&family).unwrap();
         session
-            .live()
+            .scene_mut()
             .set_family_object_opacity(a.root(), 0.25)
             .unwrap();
         session
@@ -217,12 +225,12 @@ fn explicit_equal_scope_opacity_writes_reserve_the_ordinary_driver_lane() {
         let a = session.scene_mut().copy_family(&family).unwrap();
         let b = session.scene_mut().copy_family(&family).unwrap();
         session
-            .live()
+            .scene_mut()
             .set_family_object_opacity(a.root(), 0.25)
             .unwrap();
         let revision = session.scene().revision();
         session
-            .live()
+            .scene_mut()
             .set_family_object_opacity(b.root(), start)
             .unwrap();
         assert_ne!(
@@ -279,11 +287,11 @@ fn parallel_family_opacity_targets_reject_conflicting_drivers_before_scope_admis
         let a = session.scene_mut().copy_family(&family).unwrap();
         let b = session.scene_mut().copy_family(&family).unwrap();
         session
-            .live()
+            .scene_mut()
             .set_family_object_opacity(a.root(), 0.25)
             .unwrap();
         session
-            .live()
+            .scene_mut()
             .set_family_object_opacity(b.root(), 0.75)
             .unwrap();
         let before = session.session().frame().clone();
@@ -333,7 +341,7 @@ fn family_opacity_uses_root_clock_with_member_lag_backward_seek_and_returning_co
         let mut session = scene.into_execution().unwrap();
         let target = session.scene_mut().copy_family(&source).unwrap();
         session
-            .live()
+            .scene_mut()
             .set_family_object_opacity(target.root(), 0.25)
             .unwrap();
         session
@@ -414,43 +422,52 @@ fn declared_opacity_scope_retires_when_its_last_declaration_is_cascade_removed()
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    assert_eq!(row(&session, source.node_id()).unwrap().style.opacity, 1.0);
-    let segment = scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .unwrap();
-    session.advance_segment_to(segment, 0.5).unwrap();
+    let mut session = scene.into_execution().unwrap();
     assert_eq!(
-        row(&session, source.node_id()).unwrap().style.opacity,
+        row(session.session(), source.node_id())
+            .unwrap()
+            .style
+            .opacity,
+        1.0
+    );
+    let segment = session.live().play_animation(&declaration).unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        row(session.session(), source.node_id())
+            .unwrap()
+            .style
+            .opacity,
         0.625
     );
-    session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
+    session
+        .scene_mut()
         .set_family_object_opacity(&source, 1.0)
         .unwrap();
     assert!(
-        row(&session, source.node_id()).is_some(),
+        row(session.session(), source.node_id()).is_some(),
         "live declaration retains the identity scope for replay"
     );
     let mut transaction = SemanticMutationTransaction::new();
     transaction.remove_node(target.root().node_id());
-    let before = scene.revision();
-    scene.live(&mut session).apply(transaction).unwrap();
-    assert_ne!(scene.revision(), before);
+    let before = session.scene().revision();
+    session.live().apply(transaction).unwrap();
+    assert_ne!(session.scene().revision(), before);
     assert!(
         declaration.options().is_err(),
         "the target dependency retires its declaration"
     );
     assert!(
-        row(&session, source.node_id()).is_none(),
+        row(session.session(), source.node_id()).is_none(),
         "no declaration, opacity or effect still requires isolation"
     );
-    assert!(row(&session, leaf.node_id()).is_some());
+    assert!(row(session.session(), leaf.node_id()).is_some());
     assert_eq!(
-        session.last_structural_publication_stats().exited_objects,
+        session
+            .session()
+            .last_structural_publication_stats()
+            .exited_objects,
         1
     );
 }

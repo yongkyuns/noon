@@ -75,7 +75,7 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     let outline = {
         let copied = execution.scene_mut().copy_family(&source).unwrap();
         execution
-            .live()
+            .scene_mut()
             .set_family_fill(copied.root(), None, Some(0.0))
             .unwrap();
         copied
@@ -95,7 +95,7 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     drain(execution.session_mut());
 
     execution
-        .live()
+        .scene_mut()
         .set_family_fill(&source, None, Some(1.0))
         .unwrap();
     drain(execution.session_mut());
@@ -108,7 +108,7 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     drain(execution.session_mut());
 
     execution
-        .live()
+        .scene_mut()
         .set_family_fill(&source, None, Some(0.0))
         .unwrap();
     drain(execution.session_mut());

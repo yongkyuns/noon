@@ -19,7 +19,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         scene.add_many(&[(&family).into()])?;
         let mut session = scene.into_execution()?;
         {
-            session.live().set_family_color_by_gradient(
+            session.scene_mut().set_family_color_by_gradient(
                 &family,
                 &[
                     Color::rgb(1.0, 0.0, 0.0),

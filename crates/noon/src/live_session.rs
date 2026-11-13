@@ -28,8 +28,8 @@ use noon_core::{
     SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticSheenDirection, SemanticSignalValue, SemanticStore, SemanticStyle,
-    SemanticSubsetDisplayMode, SemanticVec3, Style, Transform2D,
+    SemanticSignalValue, SemanticStore, SemanticStyle, SemanticSubsetDisplayMode, SemanticVec3,
+    Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -2326,144 +2326,6 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_color(style, red, green, blue, alpha))
     }
 
-    pub fn set_family_style(
-        &mut self,
-        family: &MobjectFamily,
-        update: crate::StyleUpdate,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.style_update_transaction(update)?)
-    }
-
-    /// Publish a sheen-direction update on one object or its full semantic
-    /// family through one Rust transaction.
-    pub fn set_sheen_direction(
-        &mut self,
-        target: &MobjectTarget<'_>,
-        direction: SemanticSheenDirection,
-        family: bool,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        target.require_store(self.store)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(target.sheen_direction_transaction(direction, family)?)
-    }
-
-    /// Rotate every selected authored direction and publish the family
-    /// atomically after all axes and current values validate.
-    pub fn rotate_sheen_direction(
-        &mut self,
-        target: &MobjectTarget<'_>,
-        angle: f64,
-        axis: SemanticVec3,
-        family: bool,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        target.require_store(self.store)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(target.rotate_sheen_direction_transaction(angle, axis, family)?)
-    }
-
-    /// Publish authored paint changes on the non-rendered family root only.
-    pub fn set_family_own_style(
-        &mut self,
-        family: &MobjectFamily,
-        update: crate::StyleUpdate,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.own_style_transaction(update)?)
-    }
-
-    /// Publish one final family-composite multiplier through the shared source
-    /// plan and ordinary style publication, without rewriting child styles.
-    pub fn set_family_object_opacity(
-        &mut self,
-        family: &MobjectFamily,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.object_opacity_transaction(opacity)?)
-    }
-
-    /// Interpolate only a VGroup root's authored style and background stroke.
-    /// Source/receiver family membership and descendant styles are untouched.
-    pub fn interpolate_family_manim_style(
-        &mut self,
-        receiver: &MobjectFamily,
-        start: &MobjectFamily,
-        end: &MobjectFamily,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(receiver)?;
-        self.require_family(start)?;
-        self.require_family(end)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(receiver.interpolate_manim_style_transaction(start, end, alpha)?)
-    }
-
-    pub fn set_family_own_style_with_background_stroke(
-        &mut self,
-        family: &MobjectFamily,
-        update: crate::StyleUpdate,
-        background_stroke_color: Option<crate::Color>,
-        background_stroke_width: Option<f64>,
-        background_stroke_opacity: Option<f64>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.own_style_with_background_stroke_opacity_transaction(
-            update,
-            background_stroke_color,
-            background_stroke_width,
-            background_stroke_opacity,
-        )?)
-    }
-
-    pub fn set_family_own_opacity(
-        &mut self,
-        family: &MobjectFamily,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.own_opacity_transaction(opacity)?)
-    }
-
-    pub fn set_family_own_background_stroke_opacity(
-        &mut self,
-        family: &MobjectFamily,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.own_background_stroke_opacity_transaction(opacity)?)
-    }
-
-    pub fn fade_family_own(
-        &mut self,
-        family: &MobjectFamily,
-        darkness: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.fade_own_transaction(darkness)?)
-    }
-
-    pub fn set_family_own_stroke_cap(
-        &mut self,
-        family: &MobjectFamily,
-        cap: &str,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let mut style = family.own_style()?;
-        style.stroke_cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_family_style(family.node_id(), style);
-        self.apply(transaction)
-    }
-
     /// Match coherent effective paint, preserving non-paint source presentation.
     pub fn match_style(
         &mut self,
@@ -2491,20 +2353,6 @@ impl<'a> LiveSession<'a> {
             self.capture_mobject_state(object).map(|state| state.style)
         })?;
         self.apply(transaction)
-    }
-
-    pub fn set_family_color_by_gradient(
-        &mut self,
-        family: &MobjectFamily,
-        colors: &[Color],
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(
-            family
-                .gradient_transaction(colors)
-                .map_err(LiveSessionError::from)?,
-        )
     }
 
     pub fn set_color_by_gradient(
@@ -2605,34 +2453,6 @@ impl<'a> LiveSession<'a> {
         )
     }
 
-    /// Recolor a family's unique leaves through one coherent authored publication.
-    pub fn set_family_color(
-        &mut self,
-        family: &MobjectFamily,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.color_transaction(red, green, blue, alpha, true)?)
-    }
-
-    /// Publish root-only authored color while preserving every descendant.
-    pub fn set_family_own_color(
-        &mut self,
-        family: &MobjectFamily,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.color_transaction(red, green, blue, alpha, false)?)
-    }
-
     /// Match a donor's effective RGB in one coherent family publication.
     pub fn match_family_color(
         &mut self,
@@ -2641,115 +2461,15 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         let color =
             crate::scene::object_edits::effective_manim_color(donor, self.effective(donor)?)?;
-        self.set_family_color(
-            family,
+        self.require_family(family)?;
+        self.session.require_published_store(&self.store.borrow())?;
+        self.apply(family.color_transaction(
             color.red.into(),
             color.green.into(),
             color.blue.into(),
             1.0,
-        )
-    }
-
-    pub fn set_family_fill(
-        &mut self,
-        family: &MobjectFamily,
-        color: Option<Color>,
-        opacity: Option<f64>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.set_family_style(
-            family,
-            crate::StyleUpdate {
-                fill_color: color,
-                fill_opacity: opacity,
-                ..crate::StyleUpdate::default()
-            },
-        )
-    }
-
-    pub fn set_family_stroke(
-        &mut self,
-        family: &MobjectFamily,
-        color: Option<Color>,
-        width: Option<f64>,
-        opacity: Option<f64>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.set_family_style(
-            family,
-            crate::StyleUpdate {
-                stroke_color: color,
-                stroke_width: width,
-                stroke_opacity: opacity,
-                ..crate::StyleUpdate::default()
-            },
-        )
-    }
-
-    pub fn set_family_opacity(
-        &mut self,
-        family: &MobjectFamily,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.opacity_transaction(opacity)?)
-    }
-
-    /// Fade enabled fill and stroke channels through the live execution owner.
-    pub fn fade_family(
-        &mut self,
-        family: &MobjectFamily,
-        darkness: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.fade_transaction(darkness)?)
-    }
-
-    /// Publish a recursive family color interpolation through the live owner.
-    pub fn fade_to_family(
-        &mut self,
-        family: &MobjectFamily,
-        target: Color,
-        amount: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        self.apply(family.fade_to_transaction(target, amount)?)
-    }
-
-    pub fn set_family_member_colors(
-        &mut self,
-        family: &MobjectFamily,
-        colors: &[Option<Color>],
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(family)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        let expected = self
-            .store
-            .borrow()
-            .ordered_leaf_nodes(family.node_id())
-            .map_err(crate::AuthoringError::from)?
-            .len();
-        if colors.len() != expected {
-            return Err(crate::AuthoringError::FamilyMemberValueCount {
-                expected,
-                actual: colors.len(),
-            }
-            .into());
-        }
-        let transaction = family.style_transaction_indexed(|index, _, style| {
-            if let Some(Some(color)) = colors.get(index) {
-                edit_color(
-                    style,
-                    color.red.into(),
-                    color.green.into(),
-                    color.blue.into(),
-                    color.alpha.into(),
-                )?;
-            }
-            Ok(())
-        })?;
-        self.apply(transaction)
+            true,
+        )?)
     }
 
     #[cfg(feature = "latex")]
@@ -2809,35 +2529,41 @@ mod tests {
         let first = scene.circle(0.2).unwrap();
         let second = scene.square(0.4).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let frame = session.frame().clone();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let frame = session.session().frame().clone();
         let target = MobjectTarget::from(&family);
-        let publication_before = live.session.publication_context();
+        let publication_before = session.live().session.publication_context();
         let up = SemanticSheenDirection::new(SemanticVec3::new(0.0, 1.0, 0.0), 3);
 
-        live.set_sheen_direction(&target, up, true).unwrap();
-        assert_eq!(live.authored(&first).unwrap().sheen_direction, up);
+        session
+            .scene_mut()
+            .set_sheen_direction(&target, up, true)
+            .unwrap();
+        assert_eq!(session.live().authored(&first).unwrap().sheen_direction, up);
         assert_eq!(family.own_sheen_direction().unwrap(), up);
-        let published = live.session.publication_context();
+        let published = session.live().session.publication_context();
         assert_ne!(published, publication_before);
-        live.session.take_frame_changes();
+        session.live().session.take_frame_changes();
 
         let root_only = SemanticSheenDirection::new(SemanticVec3::new(1.0, 0.0, 0.0), 2);
-        live.set_sheen_direction(&target, root_only, false).unwrap();
+        session
+            .scene_mut()
+            .set_sheen_direction(&target, root_only, false)
+            .unwrap();
         assert_eq!(family.own_sheen_direction().unwrap(), root_only);
-        assert_eq!(live.authored(&first).unwrap().sheen_direction, up);
-        let after_valid = live.session.publication_context();
-        assert!(live
+        assert_eq!(session.live().authored(&first).unwrap().sheen_direction, up);
+        let after_valid = session.live().session.publication_context();
+        assert!(session
+            .scene_mut()
             .set_sheen_direction(
                 &target,
                 SemanticSheenDirection::new(SemanticVec3::new(f64::NAN, 0.0, 0.0), 3),
                 true,
             )
             .is_err());
-        assert_eq!(live.session.publication_context(), after_valid);
-        assert_eq!(live.session.frame(), &frame);
+        assert_eq!(session.live().session.publication_context(), after_valid);
+        assert_eq!(session.live().session.frame(), &frame);
     }
 
     #[test]

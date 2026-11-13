@@ -286,7 +286,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
                     )
                     .unwrap();
                 session
-                    .live()
+                    .scene_mut()
                     .set_family_object_opacity(&group, opacity)
                     .unwrap();
             }
