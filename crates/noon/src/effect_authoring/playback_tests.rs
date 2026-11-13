@@ -243,12 +243,15 @@ fn detached_unsupported_target_is_inert_until_membership_admission() {
             .add_effect(noon_core::Glow::default(), &format!("extra{i}"))
             .unwrap();
     }
-    let mut session = scene.execution_session().unwrap();
-    assert!(row(&session, &source).effects.is_none());
-    let before = session.publication_context();
-    assert!(scene.live(&mut session).add(&target).is_err());
-    assert_eq!(session.publication_context(), before);
-    assert!(session.execution_object_id(target.node_id()).is_none());
+    let mut session = scene.into_execution().unwrap();
+    assert!(row(session.session(), &source).effects.is_none());
+    let before = session.session().publication_context();
+    assert!(session.scene_mut().add(&target).is_err());
+    assert_eq!(session.session().publication_context(), before);
+    assert!(session
+        .session()
+        .execution_object_id(target.node_id())
+        .is_none());
 }
 
 #[test]

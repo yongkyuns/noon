@@ -1010,7 +1010,7 @@ fn specialized_options_admit_through_one_live_geometry_path_after_wait() {
     let mut admitted = Vec::new();
     for options in options {
         let object = execution.scene_mut().geometry(options).unwrap();
-        assert!(!execution.live().contains(&object).unwrap());
+        assert!(!execution.scene_mut().contains_direct(&object).unwrap());
         execution.scene_mut().add(&object).unwrap();
         admitted.push(object);
     }

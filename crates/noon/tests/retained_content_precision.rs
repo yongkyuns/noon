@@ -111,16 +111,21 @@ fn retained_content_precision_matches_all_pinned_coordinates_without_query_publi
         let mut scene = Scene::new();
         let root = prepare(&mut scene, kind);
         let source = anchor(&root);
+        let mut scene = Some(scene);
         let mut execution = None;
         for (phase_index, phase) in case["phases"].as_array().unwrap().iter().enumerate() {
             if phase_index == 1 {
-                scene.add_many(&[root.as_target()]).unwrap();
+                scene
+                    .as_mut()
+                    .unwrap()
+                    .add_many(&[root.as_target()])
+                    .unwrap();
             }
             if phase_index == 2 {
-                execution = Some(scene.execution_session().unwrap());
+                execution = Some(scene.take().unwrap().into_execution().unwrap());
             }
             if phase_index == 3 {
-                let mut live = scene.live(execution.as_mut().unwrap());
+                let mut live = execution.as_mut().unwrap().live();
                 match &root {
                     CompositeEntryHandle::Mobject(value) => {
                         live.shift_3d(value, SemanticVec3::new(0.5, 0.25, 1.125))
@@ -133,17 +138,26 @@ fn retained_content_precision_matches_all_pinned_coordinates_without_query_publi
                 }
             }
             if phase_index == 4 {
-                scene
-                    .live(execution.as_mut().unwrap())
+                execution
+                    .as_mut()
+                    .unwrap()
+                    .scene_mut()
                     .remove_many(&[root.as_target()])
                     .unwrap();
             }
-            let revision = scene.revision();
-            let publication = execution.as_ref().map(|value| value.publication_context());
+            let current_revision = |running: Option<&noon::SceneExecution>| {
+                running
+                    .map_or_else(|| scene.as_ref().unwrap(), noon::SceneExecution::scene)
+                    .revision()
+            };
+            let revision = current_revision(execution.as_ref());
+            let publication = execution
+                .as_ref()
+                .map(|value| value.session().publication_context());
             for (index, query) in phase["queries"].as_array().unwrap().iter().enumerate() {
                 let actual = if let Some(execution) = execution.as_mut() {
-                    scene
-                        .live(execution)
+                    execution
+                        .live()
                         .layout_critical_point_3d(&source, direction(query))
                         .unwrap()
                 } else {
@@ -168,12 +182,14 @@ fn retained_content_precision_matches_all_pinned_coordinates_without_query_publi
                 }
             }
             assert_eq!(
-                scene.revision(),
+                current_revision(execution.as_ref()),
                 revision,
                 "authored queries must not mutate"
             );
             assert_eq!(
-                execution.as_ref().map(|value| value.publication_context()),
+                execution
+                    .as_ref()
+                    .map(|value| value.session().publication_context()),
                 publication,
                 "queries must not publish"
             );

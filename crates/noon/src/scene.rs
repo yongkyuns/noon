@@ -10,6 +10,7 @@ use crate::{
     SceneMembershipRequest, ValueTracker,
 };
 pub use execution::{host_execution, SceneExecution, SceneExecutionError};
+pub(crate) use family::contains_direct;
 use noon_core::{
     AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,

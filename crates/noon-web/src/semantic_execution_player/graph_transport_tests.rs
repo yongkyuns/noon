@@ -281,7 +281,8 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
         )
         .unwrap();
     player
-        .with_live_session(|live| live.add_many(&[noon::MobjectTarget::Family(graph.family())]))
+        .scene_mut()
+        .add_many(&[noon::MobjectTarget::Family(graph.family())])
         .unwrap();
     let NativeGraph::Directed(digraph) = &graph else {
         panic!("created directed graph must retain directed wrapper");

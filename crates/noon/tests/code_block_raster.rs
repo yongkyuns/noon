@@ -81,15 +81,15 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         .map(|index| code.line(index).unwrap().state().unwrap().content)
         .collect();
     let marker_state = marker.state().unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut raster = pollster::block_on(Raster::new());
-    let marker_only = raster.capture(&session.take_renderer_publication());
+    let marker_only = raster.capture(&session.session_mut().take_renderer_publication());
 
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_many(&[code.family().into()])
         .unwrap();
-    let original = raster.capture(&session.take_renderer_publication());
+    let original = raster.capture(&session.session_mut().take_renderer_publication());
     assert!(
         original != marker_only,
         "Code must render through retained text and geometry"
@@ -123,17 +123,17 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         colorful.into_iter().all(|count| count > 3),
         "syntax colors must survive actual rasterization: {colorful:?}"
     );
-    let repeated = raster.capture(&session.take_renderer_publication());
+    let repeated = raster.capture(&session.session_mut().take_renderer_publication());
     assert_pixels_equal(&repeated, &original, "a static redraw must be pixel-stable");
     assert_eq!(raster.last_scene_upload_bytes, 0);
     assert_eq!(raster.last_scene_repacked, 0);
     retain("code-original", &original, SIZE, SIZE);
 
-    scene
-        .live(&mut session)
+    session
+        .live()
         .shift_family(code.family(), 0.5, -0.5)
         .unwrap();
-    let shifted = raster.capture(&session.take_renderer_publication());
+    let shifted = raster.capture(&session.session_mut().take_renderer_publication());
     assert!(
         shifted != original,
         "ordinary live family translation must move Code pixels"
@@ -145,11 +145,11 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
     }
     retain("code-shifted", &shifted, SIZE, SIZE);
 
-    scene
-        .live(&mut session)
+    session
+        .live()
         .set_family_opacity(code.family(), 0.0)
         .unwrap();
-    let hidden = raster.capture(&session.take_renderer_publication());
+    let hidden = raster.capture(&session.session_mut().take_renderer_publication());
     retain("code-hidden", &hidden, SIZE, SIZE);
     retain("code-marker-only", &marker_only, SIZE, SIZE);
     assert_pixels_equal(
@@ -157,23 +157,25 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
         &marker_only,
         "zero family opacity must hide background, numbers, and intrinsic glyph colors",
     );
-    scene
-        .live(&mut session)
+    session
+        .live()
         .set_family_opacity(code.family(), 1.0)
         .unwrap();
-    let restored = raster.capture(&session.take_renderer_publication());
+    let restored = raster.capture(&session.session_mut().take_renderer_publication());
     assert_pixels_equal(
         &restored,
         &shifted,
         "restoring opacity must retain syntax paint and the live transform",
     );
     assert_pixels_equal(
-        &raster.capture(&session.take_renderer_publication()),
+        &raster.capture(&session.session_mut().take_renderer_publication()),
         &restored,
         "restored frame must settle",
     );
     assert_eq!(raster.last_scene_upload_bytes, 0);
-    eprintln!("Code retained raster: syntax_pixels={colorful:?}, size={SIZE}x{SIZE}, static_uploads=0, family_hide_restore=exact");
+    eprintln!(
+        "Code retained raster: syntax_pixels={colorful:?}, size={SIZE}x{SIZE}, static_uploads=0, family_hide_restore=exact"
+    );
 }
 
 #[test]

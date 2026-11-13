@@ -392,26 +392,33 @@ fn ordinary_family_transforms_reuse_text_and_leave_unrelated_state_unchanged() {
 
 #[test]
 fn stale_live_creation_rolls_back_resources_then_valid_creation_stays_detached() {
-    let mut scene = Scene::new();
-    let mut session = scene.execution_session().unwrap();
+    let scene = Scene::new();
+    let mut session = scene.into_execution().unwrap();
+    let store = session.scene().integration_store().clone();
+    let root = session.scene().root();
+    let mut scene = Scene::with_integration_root(store, root).unwrap();
     scene.circle(0.1).unwrap();
     let revision = scene.revision();
     let before = counts(&scene);
-    let mut live = crate::LiveSession::new(scene.integration_store(), scene.root(), &mut session);
-    assert!(Code::in_live_session(&mut live, "one\n    two", plain()).is_err());
+    assert!(Code::in_live_session(&mut session.live(), "one\n    two", plain()).is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(counts(&scene), before);
 
-    let mut session = scene.execution_session().unwrap();
-    let code =
-        Code::in_live_session(&mut scene.live(&mut session), "one\n    two", plain()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let code = Code::in_live_session(&mut session.live(), "one\n    two", plain()).unwrap();
     let line = code.line(0).unwrap();
-    assert!(session.execution_object_id(line.node_id()).is_none());
-    scene
-        .live(&mut session)
+    assert!(session
+        .session()
+        .execution_object_id(line.node_id())
+        .is_none());
+    session
+        .scene_mut()
         .add_many(&[code.family().into()])
         .unwrap();
-    assert!(session.execution_object_id(line.node_id()).is_some());
+    assert!(session
+        .session()
+        .execution_object_id(line.node_id())
+        .is_some());
 }
 
 #[test]

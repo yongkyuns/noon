@@ -4058,16 +4058,7 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn contains_mobject(&self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        target.validate().map_err(AuthoringFailure::from)?;
-        noon_core::semantic_scene_root_contains(
-            &self.scene.integration_store().borrow(),
-            self.scene.root(),
-            target.node_id(),
-        )
-        .map_err(AuthoringFailure::from)
+        self.scene.contains(target).map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

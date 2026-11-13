@@ -186,7 +186,7 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
         .scene_mut()
         .image(image([240, 20, 10, 255]))
         .unwrap();
-    execution.live().add(&a).unwrap();
+    execution.scene_mut().add(&a).unwrap();
     let first_handle = a.state().unwrap().content.image().unwrap().resource();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
     execution.session_mut().advance_to(2.0).unwrap();
@@ -215,7 +215,7 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
         .unwrap();
     assert_eq!(batch.stats().resource_payloads, 1);
     reader.append(batch).unwrap();
-    execution.live().remove(&a).unwrap();
+    execution.scene_mut().remove(&a).unwrap();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
     execution.session_mut().advance_to(4.0).unwrap();
     reader
@@ -226,7 +226,7 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
                 .unwrap(),
         )
         .unwrap();
-    execution.live().add(&a).unwrap();
+    execution.scene_mut().add(&a).unwrap();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
     execution.session_mut().advance_to(5.0).unwrap();
     let batch = execution
@@ -297,7 +297,7 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
             .scene_mut()
             .image(image([230, 35, 15, 255]))
             .unwrap();
-        execution.live().add(&a).unwrap();
+        execution.scene_mut().add(&a).unwrap();
         let b = execution
             .scene_mut()
             .image(image([20, 80, 240, 255]))
@@ -311,10 +311,10 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
                         .unwrap();
                 }
                 3 => {
-                    execution.live().remove(&a).unwrap();
+                    execution.scene_mut().remove(&a).unwrap();
                 }
                 4 => {
-                    execution.live().add(&a).unwrap();
+                    execution.scene_mut().add(&a).unwrap();
                 }
                 _ => {}
             }
@@ -399,7 +399,7 @@ fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreatio
             .scene_mut()
             .image(image([230, 35, 15, 255]))
             .unwrap();
-        execution.live().add(&image).unwrap();
+        execution.scene_mut().add(&image).unwrap();
         execution.session_mut().seal_replay().unwrap();
         let mut oracle = raster_support::Raster::new().await;
         let endpoint = oracle.capture(&execution.session_mut().take_renderer_publication());

@@ -117,17 +117,17 @@ fn removed_emissive_rows_do_not_block_a_compatibility_view() {
     let mut source = scene.circle(0.5).unwrap();
     source.set_emission(7.0).unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     assert!(noon_render_wgpu::validate_color_profile(
-        session.frame(),
+        session.session().frame(),
         &noon_runtime::FrameChanges::all(),
         noon_core::ViewColorProfile::Compatibility,
         true
     )
     .is_err());
-    scene.live(&mut session).remove(&source).unwrap();
+    session.scene_mut().remove(&source).unwrap();
     assert!(noon_render_wgpu::validate_color_profile(
-        session.frame(),
+        session.session().frame(),
         &noon_runtime::FrameChanges::all(),
         noon_core::ViewColorProfile::Compatibility,
         true

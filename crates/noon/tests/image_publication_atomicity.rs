@@ -82,7 +82,10 @@ fn pending_callback_image_creation_is_resource_atomic_and_recovers() -> TestResu
         .session()
         .execution_object_id(recovered.node_id())
         .is_none());
-    eprintln!("CALLBACK before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/token/revision preservation and recovery reached", resources(execution.scene()));
+    eprintln!(
+        "CALLBACK before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/token/revision preservation and recovery reached",
+        resources(execution.scene())
+    );
     assert_eq!(
         after_rejection_resources, before_resources,
         "rejected callback-pending creation must not retain a image resource"
@@ -155,7 +158,10 @@ fn active_segment_image_creation_is_resource_atomic_and_recovers() -> TestResult
         .session()
         .execution_object_id(recovered.node_id())
         .is_none());
-    eprintln!("SEGMENT before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/revision preservation and recovery reached", resources(execution.scene()));
+    eprintln!(
+        "SEGMENT before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/revision preservation and recovery reached",
+        resources(execution.scene())
+    );
     assert_eq!(
         after_rejection_resources, before_resources,
         "rejected segment-pending creation must not retain a image resource"
@@ -230,6 +236,6 @@ fn ordinary_wait_allows_resource_construction_without_frame_work() -> TestResult
     let mut live = execution.live();
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
-    live.add(&object)?;
+    execution.scene_mut().add(&object)?;
     Ok(())
 }

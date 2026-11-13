@@ -692,35 +692,6 @@ impl<'a> LiveSession<'a> {
         operation(&mut store, &mut publish).map_err(Into::into)
     }
 
-    /// Add an existing detached object to this live scene root.
-    pub fn add(
-        &mut self,
-        mobject: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Add(&[MobjectTarget::Object(
-            mobject,
-        )]))
-    }
-
-    /// Remove an existing object from this live scene root without deleting identity.
-    pub fn remove(
-        &mut self,
-        mobject: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Remove(&[MobjectTarget::Object(
-            mobject,
-        )]))
-    }
-
-    pub fn edit_membership(
-        &mut self,
-        request: SceneMembershipRequest<'_>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let transaction =
-            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)?;
-        self.apply(transaction)
-    }
-
     /// Stage an existing membership request until the host prepares any newly
     /// executable shader programs. Membership and identities remain unpublished.
     pub fn prepare_membership(
@@ -732,42 +703,9 @@ impl<'a> LiveSession<'a> {
         self.stage_effect_publication(transaction)
     }
 
-    pub fn add_many(
-        &mut self,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Add(members))
-    }
-
-    pub fn remove_many(
-        &mut self,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Remove(members))
-    }
-
-    pub fn clear(&mut self) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Clear)
-    }
-
-    pub fn replace(
-        &mut self,
-        old: MobjectTarget<'_>,
-        new: MobjectTarget<'_>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_membership(SceneMembershipRequest::Replace { old, new })
-    }
-
-    /// Check whether a handle is currently a direct member of this live scene root.
-    pub fn contains(&self, mobject: &Mobject) -> Result<bool, LiveSessionError> {
+    fn is_direct_member(&self, mobject: &Mobject) -> Result<bool, LiveSessionError> {
         self.require_mobject(mobject)?;
-        self.store
-            .borrow()
-            .is_direct_member(self.root, mobject.node_id())
-            .map_err(|error| {
-                crate::AuthoringError::from(noon_core::SemanticSceneOperationError::from(error))
-                    .into()
-            })
+        crate::scene::contains_direct(self.store, self.root, mobject).map_err(Into::into)
     }
 
     /// Replace one live object's content with content already authored in this store.
@@ -883,87 +821,6 @@ impl<'a> LiveSession<'a> {
                 .ok_or(crate::AuthoringError::NonFiniteObjectState)?,
         )
         .map_err(LiveSessionError::from)
-    }
-
-    /// Publish one atomic batch of direct family additions.
-    pub fn add_family_members<'root>(
-        &mut self,
-        family: impl Into<MobjectTarget<'root>>,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<Vec<bool>, LiveSessionError> {
-        let family = family.into();
-        self.edit_family_members(family, members, true)
-    }
-
-    /// Move the unique incoming direct members to the front of one live family.
-    pub fn prepend_family_members<'root>(
-        &mut self,
-        family: impl Into<MobjectTarget<'root>>,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<(), LiveSessionError> {
-        let family = family.into();
-        self.require_membership_root(family)?;
-        let transaction = crate::family_authoring::family_prepend_transaction(family, members)
-            .map_err(LiveSessionError::from)?;
-        if !transaction.mutations().is_empty() {
-            self.apply(transaction)?;
-        }
-        Ok(())
-    }
-
-    /// Insert or reposition one direct family member through one live commit.
-    pub fn insert_family_member<'root>(
-        &mut self,
-        family: impl Into<MobjectTarget<'root>>,
-        index: usize,
-        member: MobjectTarget<'_>,
-    ) -> Result<(), LiveSessionError> {
-        let family = family.into();
-        self.require_membership_root(family)?;
-        let transaction = crate::family_authoring::family_insert_transaction(family, index, member)
-            .map_err(LiveSessionError::from)?;
-        if !transaction.mutations().is_empty() {
-            self.apply(transaction)?;
-        }
-        Ok(())
-    }
-
-    /// Reverse a live family's order through one authored transaction.
-    pub fn invert_family_members(
-        &mut self,
-        family: &MobjectFamily,
-        recursive: bool,
-    ) -> Result<(), LiveSessionError> {
-        self.require_family(family)?;
-        let transaction = crate::family_authoring::family_invert_transaction(family, recursive)
-            .map_err(LiveSessionError::from)?;
-        if !transaction.mutations().is_empty() {
-            self.apply(transaction)?;
-        }
-        Ok(())
-    }
-
-    pub fn remove_family_members<'root>(
-        &mut self,
-        family: impl Into<MobjectTarget<'root>>,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<Vec<bool>, LiveSessionError> {
-        let family = family.into();
-        self.edit_family_members(family, members, false)
-    }
-
-    fn edit_family_members(
-        &mut self,
-        family: MobjectTarget<'_>,
-        members: &[MobjectTarget<'_>],
-        adding: bool,
-    ) -> Result<Vec<bool>, LiveSessionError> {
-        self.require_membership_root(family)?;
-        let (transaction, changed) =
-            crate::family_authoring::family_membership_transaction(family, members, adding)
-                .map_err(LiveSessionError::from)?;
-        self.apply(transaction)?;
-        Ok(changed)
     }
 
     /// Stage the ordinary family edit for the same resource-preparation barrier
@@ -1675,7 +1532,7 @@ impl<'a> LiveSession<'a> {
                         "effective-center lifecycle endpoints require a live removal target".into(),
                     ));
                 }
-                let center = if self.contains(target)? {
+                let center = if self.is_direct_member(target)? {
                     self.effective_layout(target)?.center
                 } else {
                     target.center().map_err(LiveSessionError::from)?
@@ -2129,7 +1986,7 @@ impl<'a> LiveSession<'a> {
         let needs_layout = endpoint.scale_factor != 1.0
             || matches!(endpoint.translation, FadeTranslation::Point(_));
         let center = if needs_layout {
-            Some(if self.contains(target)? {
+            Some(if self.is_direct_member(target)? {
                 self.effective_layout(target)?.center
             } else {
                 target.center().map_err(LiveSessionError::from)?
@@ -2989,18 +2846,6 @@ impl<'a> LiveSession<'a> {
             MobjectTarget::Object(object) => self.require_mobject(object),
             MobjectTarget::Family(family) => self.require_family(family),
         }
-    }
-
-    /// Replace an object or family's children through one coherent live publication.
-    pub fn replace_members(
-        &mut self,
-        root: MobjectTarget<'_>,
-        members: &[MobjectTarget<'_>],
-    ) -> Result<(), LiveSessionError> {
-        self.require_membership_root(root)?;
-        let transaction = crate::object_membership::replace_members_transaction(root, members)?;
-        self.apply(transaction)?;
-        Ok(())
     }
 
     pub(crate) fn require_family(&self, family: &MobjectFamily) -> Result<(), LiveSessionError> {
@@ -4071,16 +3916,16 @@ mod tests {
         let mut scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         let square = scene.square(0.8).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let before = session.publication_context();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let before = session.session().publication_context();
         let before_nodes = circle.integration_store().borrow().len();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth);
 
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_create_parallel(
                 &[(&circle, options), (&square, options)],
                 AnimationOptions::new()
@@ -4092,21 +3937,27 @@ mod tests {
         assert_eq!(segment.start_time(), 0.0);
         assert_eq!(segment.end_time(), 1.0);
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             before.scene_revision().checked_next().unwrap()
         );
         // Two Create leaves and one Parallel root share one semantic publication.
         assert_eq!(circle.integration_store().borrow().len(), before_nodes + 3);
-        assert!(live.contains(&circle).unwrap());
-        assert!(live.contains(&square).unwrap());
-        assert_eq!(live.session.frame().objects.len(), 2);
-        assert!(!live.segment_state(segment).is_complete());
+        assert!(session.scene_mut().contains_direct(&circle).unwrap());
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        assert_eq!(session.live().session.frame().objects.len(), 2);
+        assert!(!session.live().segment_state(segment).is_complete());
 
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
-        assert!(live.segment_state(segment).is_complete());
-        assert_eq!(live.session.frame().objects.len(), 2);
+        session.live().complete_segment(segment).unwrap();
+        assert!(session.live().segment_state(segment).is_complete());
+        assert_eq!(session.live().session.frame().objects.len(), 2);
     }
 
     #[test]
@@ -4148,14 +3999,14 @@ mod tests {
         let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         let authored = square.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
 
-        let grow = live
+        let grow = session
+            .live()
             .declare_and_activate_affine_lifecycle(
                 &square,
                 AffineLifecycleDirection::IntroduceFrom,
@@ -4168,15 +4019,19 @@ mod tests {
                 options,
             )
             .unwrap();
-        assert!(live.contains(&square).unwrap());
-        let start = live.effective(&square).unwrap();
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        let start = session.live().effective(&square).unwrap();
         assert_eq!(start.transform.translation, noon_core::Vec2::new(-2.0, 1.0));
         assert_eq!(start.transform.scale, noon_core::Vec2::ZERO);
-        live.advance_segment_to(grow, grow.end_time()).unwrap();
-        live.complete_segment(grow).unwrap();
-        assert_eq!(live.authored(&square).unwrap(), authored);
+        session
+            .live()
+            .advance_segment_to(grow, grow.end_time())
+            .unwrap();
+        session.live().complete_segment(grow).unwrap();
+        assert_eq!(session.live().authored(&square).unwrap(), authored);
 
-        let shrink = live
+        let shrink = session
+            .live()
             .declare_and_activate_affine_lifecycle(
                 &square,
                 AffineLifecycleDirection::RemoveTo,
@@ -4184,10 +4039,13 @@ mod tests {
                 options,
             )
             .unwrap();
-        live.advance_segment_to(shrink, shrink.end_time()).unwrap();
-        assert!(live.contains(&square).unwrap());
-        live.complete_segment(shrink).unwrap();
-        assert!(!live.contains(&square).unwrap());
+        session
+            .live()
+            .advance_segment_to(shrink, shrink.end_time())
+            .unwrap();
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        session.live().complete_segment(shrink).unwrap();
+        assert!(!session.scene_mut().contains_direct(&square).unwrap());
         assert_eq!(square.state().unwrap(), authored);
     }
 
@@ -4204,12 +4062,12 @@ mod tests {
         };
         let semantic_id = square.node_id();
         let authored = square.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let before_revision = session.publication_context().scene_revision();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let before_revision = session.session().publication_context().scene_revision();
 
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_affine_lifecycle(
                 &square,
                 AffineLifecycleDirection::RemoveTo,
@@ -4220,18 +4078,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(square.node_id(), semantic_id);
-        assert!(live.contains(&square).unwrap());
-        assert_eq!(live.authored(&square).unwrap(), authored);
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        assert_eq!(session.live().authored(&square).unwrap(), authored);
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             before_revision.checked_next().unwrap()
         );
 
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        assert!(live.contains(&square).unwrap());
-        live.complete_segment(segment).unwrap();
-        assert!(!live.contains(&square).unwrap());
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        session.live().complete_segment(segment).unwrap();
+        assert!(!session.scene_mut().contains_direct(&square).unwrap());
         assert_eq!(square.node_id(), semantic_id);
         assert_eq!(square.state().unwrap(), authored);
         let store = square.integration_store().borrow();
@@ -4251,9 +4115,8 @@ mod tests {
             family
         };
         let semantic_id = square.node_id();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
@@ -4264,7 +4127,8 @@ mod tests {
             point_color: None,
         };
 
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_affine_lifecycle(
                 &square,
                 AffineLifecycleDirection::IntroduceFrom,
@@ -4272,20 +4136,22 @@ mod tests {
                 options,
             )
             .unwrap();
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().complete_segment(segment).unwrap();
         assert_eq!(square.node_id(), semantic_id);
         {
             let store = square.integration_store().borrow();
             let parents = store.node(square.node_id()).unwrap().parents();
             assert_eq!(parents.len(), 2);
             assert!(parents.contains(&detached_family));
-            assert!(parents.contains(&scene.root()));
+            assert!(parents.contains(&session.scene().root()));
         }
 
-        let before = live.session.publication_context();
-        let result = live.declare_and_activate_affine_lifecycle(
+        let before = session.live().session.publication_context();
+        let result = session.live().declare_and_activate_affine_lifecycle(
             &square,
             AffineLifecycleDirection::IntroduceFrom,
             endpoint,
@@ -4300,11 +4166,11 @@ mod tests {
                 }
             ))
         ));
-        assert_eq!(live.session.publication_context(), before);
+        assert_eq!(session.live().session.publication_context(), before);
 
         let foreign = Scene::new().square(1.0).unwrap();
         assert!(matches!(
-            live.declare_and_activate_affine_lifecycle(
+            session.live().declare_and_activate_affine_lifecycle(
                 &foreign,
                 AffineLifecycleDirection::IntroduceFrom,
                 endpoint,
@@ -4312,9 +4178,10 @@ mod tests {
             ),
             Err(LiveSessionError::ForeignMobjectStore)
         ));
-        assert_eq!(live.session.publication_context(), before);
+        assert_eq!(session.live().session.publication_context(), before);
 
-        let shrink = live
+        let shrink = session
+            .live()
             .declare_and_activate_affine_lifecycle(
                 &square,
                 AffineLifecycleDirection::RemoveTo,
@@ -4322,9 +4189,12 @@ mod tests {
                 options,
             )
             .unwrap();
-        live.advance_segment_to(shrink, shrink.end_time()).unwrap();
-        live.complete_segment(shrink).unwrap();
-        assert!(!live.contains(&square).unwrap());
+        session
+            .live()
+            .advance_segment_to(shrink, shrink.end_time())
+            .unwrap();
+        session.live().complete_segment(shrink).unwrap();
+        assert!(!session.scene_mut().contains_direct(&square).unwrap());
         let store = square.integration_store().borrow();
         let parents = store.node(square.node_id()).unwrap().parents();
         assert_eq!(parents.len(), 1);
@@ -4428,11 +4298,11 @@ mod tests {
         let semantic_id = square.node_id();
         let authored = square.state().unwrap();
         scene.add(&square).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
 
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_uncreate(
                 &square,
                 AnimationOptions::new()
@@ -4440,14 +4310,16 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        assert!(live.contains(&square).unwrap());
-        assert_eq!(live.session.frame().reveal(0), 1.0);
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        assert_eq!(session.live().session.frame().reveal(0), 1.0);
 
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        assert_eq!(live.session.frame().reveal(0), 0.0);
-        live.complete_segment(segment).unwrap();
-        assert!(!live.contains(&square).unwrap());
+        assert_eq!(session.live().session.frame().reveal(0), 0.0);
+        session.live().complete_segment(segment).unwrap();
+        assert!(!session.scene_mut().contains_direct(&square).unwrap());
         assert_eq!(square.node_id(), semantic_id);
         assert_eq!(square.state().unwrap(), authored);
     }
@@ -4456,10 +4328,10 @@ mod tests {
     fn uncreate_honors_asymmetric_reversal_without_removing_kept_target() {
         let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let segment = session
+            .live()
             .declare_and_activate_uncreate(
                 &square,
                 AnimationOptions::new()
@@ -4469,27 +4341,33 @@ mod tests {
             )
             .unwrap();
 
-        live.advance_segment_to(segment, segment.start_time() + 0.25)
+        session
+            .live()
+            .advance_segment_to(segment, segment.start_time() + 0.25)
             .unwrap();
         assert!(
-            (live.session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.75)).abs() < 1e-6
+            (session.live().session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.75))
+                .abs()
+                < 1e-6
         );
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        assert_eq!(live.session.frame().reveal(0), 0.0);
-        live.complete_segment(segment).unwrap();
-        assert!(live.contains(&square).unwrap());
-        assert_eq!(live.session.frame().reveal(0), 0.0);
+        assert_eq!(session.live().session.frame().reveal(0), 0.0);
+        session.live().complete_segment(segment).unwrap();
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        assert_eq!(session.live().session.frame().reveal(0), 0.0);
     }
 
     #[test]
     fn uncreate_honors_explicit_forward_rate_and_keeps_membership() {
         let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let segment = session
+            .live()
             .declare_and_activate_uncreate(
                 &square,
                 AnimationOptions::new()
@@ -4500,16 +4378,22 @@ mod tests {
             )
             .unwrap();
 
-        live.advance_segment_to(segment, segment.start_time() + 0.25)
+        session
+            .live()
+            .advance_segment_to(segment, segment.start_time() + 0.25)
             .unwrap();
         assert!(
-            (live.session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.25)).abs() < 1e-6
+            (session.live().session.frame().reveal(0) - RateFunction::RushInto.evaluate(0.25))
+                .abs()
+                < 1e-6
         );
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
-        assert!(live.contains(&square).unwrap());
-        assert_eq!(live.session.frame().reveal(0), 1.0);
+        session.live().complete_segment(segment).unwrap();
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
+        assert_eq!(session.live().session.frame().reveal(0), 1.0);
     }
 
     #[test]
@@ -5006,7 +4890,7 @@ mod tests {
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
 
-        assert!(session.live().contains(&square).unwrap());
+        assert!(session.scene_mut().contains_direct(&square).unwrap());
         assert_eq!(segment.start_time(), 1.0);
         session
             .live()
@@ -5032,31 +4916,43 @@ mod tests {
         let detached = scene.circle(3.0).unwrap();
         scene.add(&anchor).unwrap();
         scene.add(&toggled).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let anchor_slot = session.execution_slot_for_frame_index(0).unwrap();
+        let mut session = scene.into_execution().unwrap();
+        let anchor_slot = session.session().execution_slot_for_frame_index(0).unwrap();
 
         {
-            let mut live = scene.live(&mut session);
-            live.remove(&toggled).unwrap();
-            assert!(live.effective(&toggled).is_err());
-            live.add(&toggled).unwrap();
-            assert!(live.effective(&toggled).is_ok());
-            live.add(&detached).unwrap();
+            session.scene_mut().remove(&toggled).unwrap();
+            assert!(session.live().effective(&toggled).is_err());
+            session.scene_mut().add(&toggled).unwrap();
+            assert!(session.live().effective(&toggled).is_ok());
+            session.scene_mut().add(&detached).unwrap();
             assert_eq!(
-                live.session
+                session
+                    .live()
+                    .session
                     .last_structural_publication_stats()
                     .entered_objects,
                 1
             );
-            live.set_translation(&detached, 4.0, -2.0).unwrap();
+            session
+                .live()
+                .set_translation(&detached, 4.0, -2.0)
+                .unwrap();
             assert_eq!(
-                live.effective(&detached).unwrap().transform.translation,
+                session
+                    .live()
+                    .effective(&detached)
+                    .unwrap()
+                    .transform
+                    .translation,
                 noon_core::Vec2::new(4.0, -2.0)
             );
         }
 
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
-        assert_eq!(session.frame().objects.len(), 3);
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(anchor_slot)
+        );
+        assert_eq!(session.session().frame().objects.len(), 3);
     }
 
     #[test]
@@ -5183,80 +5079,106 @@ mod tests {
         scene.add(&anchor).unwrap();
         let fading_node = fading.node_id();
         let authored_before = fading.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let anchor_slot = session.execution_slot_for_frame_index(0).unwrap();
-        session.take_frame_changes();
+        let mut session = scene.into_execution().unwrap();
+        let anchor_slot = session.session().execution_slot_for_frame_index(0).unwrap();
+        session.session_mut().take_frame_changes();
 
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
         let fade_in = {
-            let mut live = scene.live(&mut session);
-            assert!(!live.contains(&fading).unwrap());
-            let segment = live
+            assert!(!session.scene_mut().contains_direct(&fading).unwrap());
+            let segment = session
+                .live()
                 .declare_and_activate_fade(&fading, SemanticFadeDirection::In, options)
                 .unwrap();
-            assert!(live.contains(&fading).unwrap());
-            assert_eq!(live.effective(&fading).unwrap().appearance, 0.0);
-            let publication = live.session.last_structural_publication_stats();
+            assert!(session.scene_mut().contains_direct(&fading).unwrap());
+            assert_eq!(session.live().effective(&fading).unwrap().appearance, 0.0);
+            let publication = session.live().session.last_structural_publication_stats();
             assert_eq!(publication.entered_objects, 1);
             assert_eq!(publication.exited_objects, 0);
             assert_eq!(publication.preparation.object_states_lowered, 1);
-            assert_eq!(live.session.take_frame_changes().object_indices().len(), 1);
+            assert_eq!(
+                session
+                    .live()
+                    .session
+                    .take_frame_changes()
+                    .object_indices()
+                    .len(),
+                1
+            );
             segment
         };
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(anchor_slot)
+        );
 
         {
-            let mut live = scene.live(&mut session);
-            live.advance_segment_to(fade_in, 0.5).unwrap();
-            assert_eq!(live.effective(&fading).unwrap().appearance, 0.5);
-            live.advance_segment_to(fade_in, fade_in.end_time())
+            session.live().advance_segment_to(fade_in, 0.5).unwrap();
+            assert_eq!(session.live().effective(&fading).unwrap().appearance, 0.5);
+            session
+                .live()
+                .advance_segment_to(fade_in, fade_in.end_time())
                 .unwrap();
-            live.complete_segment(fade_in).unwrap();
-            assert_eq!(live.effective(&fading).unwrap().appearance, 1.0);
-            assert_eq!(live.authored(&fading).unwrap(), authored_before);
+            session.live().complete_segment(fade_in).unwrap();
+            assert_eq!(session.live().effective(&fading).unwrap().appearance, 1.0);
+            assert_eq!(session.live().authored(&fading).unwrap(), authored_before);
         }
 
         let fade_out = {
-            let mut live = scene.live(&mut session);
-            live.declare_and_activate_fade_with_endpoint(
-                &fading,
-                SemanticFadeDirection::Out,
-                FadeEndpoint::new(
-                    0.5,
-                    FadeTranslation::Shift(SemanticVec3::new(2.0, 0.0, 0.0)),
-                ),
-                options,
-            )
-            .unwrap()
+            session
+                .live()
+                .declare_and_activate_fade_with_endpoint(
+                    &fading,
+                    SemanticFadeDirection::Out,
+                    FadeEndpoint::new(
+                        0.5,
+                        FadeTranslation::Shift(SemanticVec3::new(2.0, 0.0, 0.0)),
+                    ),
+                    options,
+                )
+                .unwrap()
         };
         {
-            let mut live = scene.live(&mut session);
-            live.advance_segment_to(fade_out, 1.5).unwrap();
-            assert_eq!(live.effective(&fading).unwrap().appearance, 0.5);
+            session.live().advance_segment_to(fade_out, 1.5).unwrap();
+            assert_eq!(session.live().effective(&fading).unwrap().appearance, 0.5);
             assert_eq!(
-                live.effective(&fading).unwrap().transform.translation.x,
+                session
+                    .live()
+                    .effective(&fading)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
                 1.0
             );
-            assert_eq!(live.effective(&fading).unwrap().transform.scale.x, 0.75);
-            live.advance_segment_to(fade_out, fade_out.end_time())
+            assert_eq!(
+                session.live().effective(&fading).unwrap().transform.scale.x,
+                0.75
+            );
+            session
+                .live()
+                .advance_segment_to(fade_out, fade_out.end_time())
                 .unwrap();
-            assert!(live.contains(&fading).unwrap());
-            live.complete_segment(fade_out).unwrap();
-            assert!(!live.contains(&fading).unwrap());
-            assert!(live.effective(&fading).is_err());
-            let publication = live.session.last_structural_publication_stats();
+            assert!(session.scene_mut().contains_direct(&fading).unwrap());
+            session.live().complete_segment(fade_out).unwrap();
+            assert!(!session.scene_mut().contains_direct(&fading).unwrap());
+            assert!(session.live().effective(&fading).is_err());
+            let publication = session.live().session.last_structural_publication_stats();
             assert_eq!(publication.entered_objects, 0);
             assert_eq!(publication.exited_objects, 1);
 
-            live.add(&fading).unwrap();
-            assert!(live.contains(&fading).unwrap());
-            assert_eq!(live.effective(&fading).unwrap().appearance, 1.0);
+            session.scene_mut().add(&fading).unwrap();
+            assert!(session.scene_mut().contains_direct(&fading).unwrap());
+            assert_eq!(session.live().effective(&fading).unwrap().appearance, 1.0);
             assert_eq!(fading.node_id(), fading_node);
-            assert_eq!(live.authored(&fading).unwrap(), authored_before);
+            assert_eq!(session.live().authored(&fading).unwrap(), authored_before);
         }
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(anchor_slot));
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(anchor_slot)
+        );
     }
 
     #[test]
@@ -5265,12 +5187,12 @@ mod tests {
         let anchor = scene.circle(0.5).unwrap();
         let fading = scene.circle(1.0).unwrap();
         scene.add(&anchor).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let before = session.publication_context();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let before = session.session().publication_context();
 
-        let mut live = scene.live(&mut session);
-        assert!(live
+        assert!(session
+            .live()
             .declare_and_activate_fade(
                 &fading,
                 SemanticFadeDirection::Out,
@@ -5279,7 +5201,8 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .is_err());
-        assert!(live
+        assert!(session
+            .live()
             .declare_and_activate_fade_with_endpoint(
                 &fading,
                 SemanticFadeDirection::In,
@@ -5287,7 +5210,8 @@ mod tests {
                 AnimationOptions::new().run_time(1.0),
             )
             .is_err());
-        assert!(live
+        assert!(session
+            .live()
             .declare_and_activate_fade(
                 &fading,
                 SemanticFadeDirection::In,
@@ -5297,10 +5221,14 @@ mod tests {
                     .lag_ratio(0.5),
             )
             .is_err());
-        assert!(!live.contains(&fading).unwrap());
-        assert_eq!(live.session.publication_context(), before);
-        assert!(live.session.take_frame_changes().is_empty());
-        assert!(live.session.execution_object_id(fading.node_id()).is_none());
+        assert!(!session.scene_mut().contains_direct(&fading).unwrap());
+        assert_eq!(session.live().session.publication_context(), before);
+        assert!(session.live().session.take_frame_changes().is_empty());
+        assert!(session
+            .live()
+            .session
+            .execution_object_id(fading.node_id())
+            .is_none());
     }
 }
 
@@ -5321,9 +5249,9 @@ mod recursive_composition_tests {
         let mut scene = Scene::new();
         let first = scene.square(1.0).unwrap();
         let second = scene.square(1.0).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let before = session.publication_context();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let before = session.session().publication_context();
         let before_nodes = first.integration_store().borrow().len();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Sequence,
@@ -5346,35 +5274,47 @@ mod recursive_composition_tests {
                 },
             ],
         };
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
 
         assert!((segment.duration() - 0.6).abs() < 1e-12);
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             before.scene_revision().checked_next().unwrap()
         );
         assert_eq!(first.integration_store().borrow().len(), before_nodes + 5);
-        assert!(live.contains(&first).unwrap());
-        assert!(live.contains(&second).unwrap());
-        live.advance_segment_to(segment, segment.end_time())
+        assert!(session.scene_mut().contains_direct(&first).unwrap());
+        assert!(session.scene_mut().contains_direct(&second).unwrap());
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().complete_segment(segment).unwrap();
 
-        let second_execution = live
+        let second_execution = session
+            .live()
             .session
             .execution_object_id(second.node_id())
             .expect("admitted leaf keeps one execution identity");
-        let early = live.session.seek(segment.start_time() + 0.1).unwrap();
+        let early = session
+            .live()
+            .session
+            .seek(segment.start_time() + 0.1)
+            .unwrap();
         let second_index = early
             .objects
             .iter()
             .position(|object| object.id == second_execution)
             .expect("admitted leaf keeps one runtime slot");
         assert!(!early.is_present(second_index));
-        assert!(live
+        assert!(session
+            .live()
             .session
             .seek(segment.end_time())
             .unwrap()
@@ -5485,7 +5425,7 @@ mod recursive_composition_tests {
                     target
                         .set_glow(EffectUpdate::default().intensity(1.5))
                         .unwrap();
-                    let mut session = scene.execution_session().unwrap();
+                    let mut session = scene.into_execution().unwrap();
                     let reveal = match mode {
                         0 => AnimationCompositionRequest::Create {
                             target: &source,
@@ -5516,16 +5456,19 @@ mod recursive_composition_tests {
                         options: AnimationOptions::new(),
                         children,
                     };
-                    let mut live = scene.live(&mut session);
-                    let segment = live
+                    let segment = session
+                        .live()
                         .declare_and_activate_composition(&request, AnimationOptions::new())
                         .unwrap();
-                    assert!(live.contains(&source).unwrap());
-                    live.advance_segment_to(segment, 0.5).unwrap();
-                    assert_eq!(live.session.frame().objects.len(), 1);
+                    assert!(session.scene_mut().contains_direct(&source).unwrap());
+                    session.live().advance_segment_to(segment, 0.5).unwrap();
+                    assert_eq!(session.live().session.frame().objects.len(), 1);
                     assert_eq!(
                         crate::effect_authoring::only_effect(
-                            live.session.frame().objects[0].effects.as_ref().unwrap()
+                            session.live().session.frame().objects[0]
+                                .effects
+                                .as_ref()
+                                .unwrap()
                         )
                         .definition
                         .as_glow()
@@ -5533,8 +5476,8 @@ mod recursive_composition_tests {
                         .intensity(),
                         midpoint
                     );
-                    live.advance_segment_to(segment, 1.0).unwrap();
-                    live.complete_segment(segment).unwrap();
+                    session.live().advance_segment_to(segment, 1.0).unwrap();
+                    session.live().complete_segment(segment).unwrap();
                     let effect = (source
                         .get_effect("glow")
                         .unwrap()
@@ -5543,7 +5486,7 @@ mod recursive_composition_tests {
                     .as_glow()
                     .unwrap();
                     assert_eq!(effect.intensity(), 1.5);
-                    let rewind = live.session.seek(0.5).unwrap();
+                    let rewind = session.live().session.seek(0.5).unwrap();
                     assert_eq!(rewind.objects.len(), 1);
                     assert_eq!(
                         crate::effect_authoring::only_effect(
@@ -5667,24 +5610,32 @@ mod recursive_composition_tests {
             let retained = scene.circle(radius).unwrap();
             scene.add(&retained).unwrap();
         }
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
         let options = linear(0.2);
-        let fading_id = session.execution_object_id(fading.node_id()).unwrap();
-        let companion_id = session.execution_object_id(companion.node_id()).unwrap();
+        let fading_id = session
+            .session()
+            .execution_object_id(fading.node_id())
+            .unwrap();
+        let companion_id = session
+            .session()
+            .execution_object_id(companion.node_id())
+            .unwrap();
         let fading_row = session
+            .session()
             .frame()
             .objects
             .iter()
             .position(|object| object.id == fading_id)
             .unwrap();
         let companion_row = session
+            .session()
             .frame()
             .objects
             .iter()
             .position(|object| object.id == companion_id)
             .unwrap();
-        let row_count = session.frame().objects.len();
+        let row_count = session.session().frame().objects.len();
 
         let fade_out = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
@@ -5705,16 +5656,18 @@ mod recursive_composition_tests {
             ],
             options: AnimationOptions::new().rate_func(RateFunction::Linear),
         };
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_composition(&fade_out, AnimationOptions::new())
             .unwrap();
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().complete_segment(segment).unwrap();
 
-        assert!(!live.contains(&fading).unwrap());
-        assert!(!live.contains(&companion).unwrap());
+        assert!(!session.scene_mut().contains_direct(&fading).unwrap());
+        assert!(!session.scene_mut().contains_direct(&companion).unwrap());
         assert!(fading
             .integration_store()
             .borrow()
@@ -5723,11 +5676,14 @@ mod recursive_composition_tests {
             .parents()
             .is_empty());
         assert_eq!(
-            live.session.execution_object_id(fading.node_id()),
+            session.live().session.execution_object_id(fading.node_id()),
             Some(fading_id)
         );
         assert_eq!(
-            live.session.execution_object_id(companion.node_id()),
+            session
+                .live()
+                .session
+                .execution_object_id(companion.node_id()),
             Some(companion_id)
         );
 
@@ -5749,14 +5705,17 @@ mod recursive_composition_tests {
             ],
             options: AnimationOptions::new().rate_func(RateFunction::Linear),
         };
-        let reentry = live
+        let reentry = session
+            .live()
             .declare_and_activate_composition(&fade_in, AnimationOptions::new())
             .unwrap();
-        assert!(live.contains(&fading).unwrap());
-        assert!(live.contains(&companion).unwrap());
-        assert_eq!(live.session.frame().objects.len(), row_count);
+        assert!(session.scene_mut().contains_direct(&fading).unwrap());
+        assert!(session.scene_mut().contains_direct(&companion).unwrap());
+        assert_eq!(session.live().session.frame().objects.len(), row_count);
         assert_eq!(
-            live.session
+            session
+                .live()
+                .session
                 .frame()
                 .objects
                 .iter()
@@ -5764,16 +5723,20 @@ mod recursive_composition_tests {
             Some(fading_row)
         );
         assert_eq!(
-            live.session
+            session
+                .live()
+                .session
                 .frame()
                 .objects
                 .iter()
                 .position(|object| object.id == companion_id),
             Some(companion_row)
         );
-        live.advance_segment_to(reentry, reentry.end_time())
+        session
+            .live()
+            .advance_segment_to(reentry, reentry.end_time())
             .unwrap();
-        live.complete_segment(reentry).unwrap();
+        session.live().complete_segment(reentry).unwrap();
     }
 
     #[test]
@@ -6916,8 +6879,8 @@ mod recursive_composition_tests {
             .unwrap();
 
         assert_eq!(segment.start_time(), wait.end_time());
-        assert!(live.contains(&first).unwrap());
-        assert!(live.contains(&second).unwrap());
+        assert!(live.is_direct_member(&first).unwrap());
+        assert!(live.is_direct_member(&second).unwrap());
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
         live.complete_segment(segment).unwrap();

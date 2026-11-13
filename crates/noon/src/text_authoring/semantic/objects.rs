@@ -628,9 +628,9 @@ mod tests {
         );
 
         let fade = {
-            let mut live = execution.live();
-            assert!(!live.contains(&label).unwrap());
-            let fade = live
+            assert!(!execution.scene().contains_direct(&label).unwrap());
+            let fade = execution
+                .live()
                 .declare_and_activate_fade(
                     &label,
                     SemanticFadeDirection::In,
@@ -640,8 +640,8 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(fade.start_time(), 1.0);
-            assert!(live.contains(&label).unwrap());
-            assert_eq!(live.effective(&label).unwrap().appearance, 0.0);
+            assert!(execution.scene().contains_direct(&label).unwrap());
+            assert_eq!(execution.scene().effective(&label).unwrap().appearance, 0.0);
             fade
         };
         assert_eq!(execution.session().frame().objects.len(), 1);
@@ -654,8 +654,8 @@ mod tests {
         let mut live = execution.live();
         live.advance_segment_to(fade, fade.end_time()).unwrap();
         live.complete_segment(fade).unwrap();
-        assert!(live.contains(&label).unwrap());
-        assert_eq!(live.effective(&label).unwrap().appearance, 1.0);
+        assert!(execution.scene().contains_direct(&label).unwrap());
+        assert_eq!(execution.scene().effective(&label).unwrap().appearance, 1.0);
     }
 
     #[test]
@@ -891,11 +891,8 @@ mod tests {
             execution.session().publication_context().scene_revision()
         );
 
-        {
-            let mut live = execution.live();
-            live.add(&label).unwrap();
-            live.add(&equation).unwrap();
-        }
+        execution.scene_mut().add(&label).unwrap();
+        execution.scene_mut().add(&equation).unwrap();
         assert_eq!(execution.session().frame().objects.len(), 2);
         assert_eq!(
             execution
@@ -1034,14 +1031,22 @@ mod tests {
         let unrelated_resource = unrelated.state().unwrap().content.text().unwrap();
         let semantic_id = label.node_id();
         let authored = label.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
 
-        assert!(session.text_resources().get(label_resource).is_none());
-        assert!(session.text_resources().get(unrelated_resource).is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(label_resource)
+            .is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unrelated_resource)
+            .is_none());
 
         let segment = {
-            let mut live = scene.live(&mut session);
-            let segment = live
+            let segment = session
+                .live()
                 .declare_and_activate_affine_lifecycle(
                     &label,
                     crate::AffineLifecycleDirection::RemoveTo,
@@ -1050,22 +1055,34 @@ mod tests {
                 )
                 .unwrap();
 
-            assert!(live.contains(&label).unwrap());
+            assert!(session.scene_mut().contains_direct(&label).unwrap());
             assert_eq!(label.node_id(), semantic_id);
-            assert_eq!(live.authored(&label).unwrap(), authored);
+            assert_eq!(session.live().authored(&label).unwrap(), authored);
             segment
         };
-        assert_eq!(session.frame().objects.len(), 1);
-        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
-        assert!(session.frame().objects[0].text_bounds.is_some());
-        assert!(session.text_resources().get(label_resource).is_some());
-        assert!(session.text_resources().get(unrelated_resource).is_none());
+        assert_eq!(session.session().frame().objects.len(), 1);
+        assert_eq!(
+            session.session().frame().objects[0].text(),
+            Some(label_resource)
+        );
+        assert!(session.session().frame().objects[0].text_bounds.is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(label_resource)
+            .is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unrelated_resource)
+            .is_none());
 
-        let mut live = scene.live(&mut session);
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
-        assert!(!live.contains(&label).unwrap());
+        session.live().complete_segment(segment).unwrap();
+        assert!(!session.scene_mut().contains_direct(&label).unwrap());
         assert_eq!(label.node_id(), semantic_id);
         assert_eq!(label.state().unwrap(), authored);
     }

@@ -3255,7 +3255,7 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                     }
                     assert_eq!(surface.renderer.image_residency_stats().textures, 1);
                     assert_eq!(surface.renderer.image_residency_stats().pixel_bytes, 24);
-                    execution.live().remove(&bitmap).unwrap();
+                    execution.scene_mut().remove(&bitmap).unwrap();
                     surface.render(&device, &queue, execution.session_mut());
                     assert_eq!(surface.upload_stats.images.textures_retired, 0);
                     assert_eq!(surface.renderer.image_residency_stats().textures, 1);

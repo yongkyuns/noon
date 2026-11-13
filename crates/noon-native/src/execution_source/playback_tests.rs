@@ -170,7 +170,7 @@ fn native_transport_rejects_a_completed_live_projection_even_after_seek_to_zero(
         .unwrap();
     session.session_mut().advance_to(1.0).unwrap();
     session.live().complete_segment(segment).unwrap();
-    session.live().remove(&marker).unwrap();
+    session.scene_mut().remove(&marker).unwrap();
     session.seek(0.0).unwrap();
     // The completed source removed its marker without retaining history; the
     // current finite plan cannot reconstruct the former time-zero membership.

@@ -1721,21 +1721,23 @@ mod tests {
         timeline
             .apply(&mut scene.integration_store().borrow_mut())
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        scene.live(&mut session).remove(number.mobject()).unwrap();
-        let overlay = session.begin_required_callback_phase(1.0, []).unwrap();
-        let mut reentry = SemanticMutationTransaction::new();
-        reentry.add_member(scene.root(), number.mobject().node_id());
-        session
-            .commit_required_callback_transaction(
-                &mut scene.integration_store().borrow_mut(),
-                overlay.finish(),
-                reentry,
-            )
+        let mut session = scene.into_execution().unwrap();
+        session.scene_mut().remove(number.mobject()).unwrap();
+        let overlay = session
+            .session_mut()
+            .begin_required_callback_phase(1.0, [])
             .unwrap();
-        let handle = session.frame().objects[0].text().unwrap();
+        let mut reentry = SemanticMutationTransaction::new();
+        reentry.add_member(session.scene().root(), number.mobject().node_id());
+        session
+            .with_store_and_session(|store, execution| {
+                execution.commit_required_callback_transaction(store, overlay.finish(), reentry)
+            })
+            .unwrap();
+        let handle = session.session().frame().objects[0].text().unwrap();
         assert_eq!(
             session
+                .session()
                 .text_resources()
                 .get(handle)
                 .unwrap()
@@ -1744,7 +1746,13 @@ mod tests {
             "7.50"
         );
         assert_eq!(number.value().unwrap(), 1.25);
-        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
+        assert_eq!(
+            session
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
+            1
+        );
     }
 
     #[test]
@@ -1865,22 +1873,27 @@ mod tests {
             numbers.push(number);
         }
 
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
         assert_eq!(
-            session.effective_text_resource_stats().live_resources,
+            session
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
             DISPLAY_COUNT
         );
         assert_eq!(
-            session.effective_text_resource_slot_capacity(),
+            session.session().effective_text_resource_slot_capacity(),
             DISPLAY_COUNT
         );
         session
+            .session_mut()
             .set_reactive_input(tracker.node_id(), 9.75_f32)
             .unwrap();
-        for object in &session.frame().objects {
+        for object in &session.session().frame().objects {
             let handle = object.text().unwrap();
             assert_eq!(
                 session
+                    .session()
                     .text_resources()
                     .get(handle)
                     .unwrap()
@@ -1891,23 +1904,32 @@ mod tests {
         }
 
         for number in &numbers {
-            scene.live(&mut session).remove(number.mobject()).unwrap();
+            session.scene_mut().remove(number.mobject()).unwrap();
         }
-        assert_eq!(session.effective_text_resource_stats().live_resources, 0);
         assert_eq!(
-            session.effective_text_resource_slot_capacity(),
+            session
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
+            0
+        );
+        assert_eq!(
+            session.session().effective_text_resource_slot_capacity(),
             DISPLAY_COUNT
         );
 
         for number in &numbers {
-            scene.live(&mut session).add(number.mobject()).unwrap();
+            session.scene_mut().add(number.mobject()).unwrap();
         }
         assert_eq!(
-            session.effective_text_resource_stats().live_resources,
+            session
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
             DISPLAY_COUNT
         );
         assert_eq!(
-            session.effective_text_resource_slot_capacity(),
+            session.session().effective_text_resource_slot_capacity(),
             DISPLAY_COUNT
         );
     }

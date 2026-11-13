@@ -128,7 +128,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     );
     assert_eq!(idle.images, Default::default());
     assert_eq!(idle.bytes_uploaded(), 0);
-    execution.live().remove(&a).unwrap();
+    execution.scene_mut().remove(&a).unwrap();
     let removal = upload(
         execution.session_mut(),
         &mut preparer,
@@ -139,7 +139,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     );
     assert_eq!(removal.images.textures_retired, 0);
     assert_eq!(renderer.image_residency_stats().textures, 1);
-    execution.live().remove(&b).unwrap();
+    execution.scene_mut().remove(&b).unwrap();
     let removal = upload(
         execution.session_mut(),
         &mut preparer,
@@ -158,7 +158,7 @@ fn removing_one_image_preserves_surviving_draws_through_readd() {
     let a = scene.image(options()).unwrap();
     let b = scene.image(options()).unwrap();
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
@@ -180,20 +180,20 @@ fn removing_one_image_preserves_surviving_draws_through_readd() {
     for (step, expected_draws) in [2, 1, 2, 1, 0].into_iter().enumerate() {
         match step {
             1 => {
-                scene.live(&mut session).remove(&a).unwrap();
+                session.scene_mut().remove(&a).unwrap();
             }
             2 => {
-                scene.live(&mut session).add(&a).unwrap();
+                session.scene_mut().add(&a).unwrap();
             }
             3 => {
-                scene.live(&mut session).remove(&b).unwrap();
+                session.scene_mut().remove(&b).unwrap();
             }
             4 => {
-                scene.live(&mut session).remove(&a).unwrap();
+                session.scene_mut().remove(&a).unwrap();
             }
             _ => {}
         }
-        let publication = session.take_renderer_publication();
+        let publication = session.session_mut().take_renderer_publication();
         let prepared = preparer
             .prepare_publication(
                 &device,

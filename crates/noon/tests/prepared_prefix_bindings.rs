@@ -291,17 +291,22 @@ fn appended_binding_changes_preserve_active_effect_until_displayed_revision_chan
 
 #[test]
 fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_deletion() {
-    let (scene, target, mut source, object, mut publisher, mut reader) = fixture(Some(A));
-    scene.live(&mut source).remove(&target).unwrap();
-    append_interval(&mut source, &mut publisher, &mut reader);
-    bind(&scene, &mut source, &target, Some(B));
+    let (scene, target, source, object, mut publisher, mut reader) = fixture(Some(A));
+    let mut source = scene.into_execution_with_session(source).unwrap();
+    source.scene_mut().remove(&target).unwrap();
+    append_interval(source.session_mut(), &mut publisher, &mut reader);
+    let (indication, animation) = options(B);
+    source
+        .scene_mut()
+        .on_click_indicate(&target, indication, animation)
+        .unwrap();
     assert_eq!(
-        append_interval(&mut source, &mut publisher, &mut reader).row_payloads,
+        append_interval(source.session_mut(), &mut publisher, &mut reader).row_payloads,
         0,
         "detached authoring does not create a displayed execution row"
     );
-    scene.live(&mut source).add(&target).unwrap();
-    let reentry = append_interval(&mut source, &mut publisher, &mut reader);
+    source.scene_mut().add(&target).unwrap();
+    let reentry = append_interval(source.session_mut(), &mut publisher, &mut reader);
     assert_eq!(
         reentry.new_object_slots, 0,
         "reentry preserves execution identity"
@@ -309,14 +314,11 @@ fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_
 
     let mut deletion = SemanticMutationTransaction::new();
     deletion.remove_node(target.node_id());
-    source
-        .apply_semantic_transaction(&mut scene.integration_store().borrow_mut(), deletion)
-        .unwrap();
-    assert_eq!(source.execution_object_id(target.node_id()), None);
-    append_interval(&mut source, &mut publisher, &mut reader);
+    source.live().apply(deletion).unwrap();
+    assert_eq!(source.session().execution_object_id(target.node_id()), None);
+    append_interval(source.session_mut(), &mut publisher, &mut reader);
     drop(target);
     drop(source);
-    drop(scene);
     drop(publisher);
 
     for (index, (time, binding)) in [
