@@ -21,6 +21,7 @@ mod effects;
 mod export;
 mod family;
 mod geometry;
+mod graph;
 mod image;
 #[cfg(feature = "latex")]
 mod latex;
@@ -81,6 +82,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
     arrow::register(m)?;
     audio::register(m)?;
+    m.add_class::<graph::GraphOptions>()?;
     sample_space::register(m)?;
     #[cfg(feature = "latex")]
     {

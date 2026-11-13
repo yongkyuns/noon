@@ -256,7 +256,7 @@ fn callback_motion_publishes_vertex_and_endpoints_in_one_retained_delta() {
 
 #[test]
 fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
-    use crate::authoring_graph::{GraphOperation, NativeGraph};
+    use noon::integration::graph::{GraphOperation, HostGraph};
 
     let mut scene = noon::Scene::new();
     let sentinel = scene.circle(0.1).unwrap();
@@ -270,7 +270,7 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
         .apply_family(player.delta(true).unwrap().unwrap())
         .unwrap();
 
-    let mut graph = NativeGraph::new(
+    let mut graph = HostGraph::new(
         player.scene_mut(),
         true,
         vec![(1, (-1.0, 0.0)), (2, (1.0, 0.0))],
@@ -288,7 +288,7 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
         .scene_mut()
         .add_many(&[noon::MobjectTarget::Family(graph.family())])
         .unwrap();
-    let NativeGraph::Directed(digraph) = &graph else {
+    let HostGraph::Directed(digraph) = &graph else {
         panic!("created directed graph must retain directed wrapper");
     };
     let arrow = digraph.edge(&1, &2).unwrap().arrow().unwrap();

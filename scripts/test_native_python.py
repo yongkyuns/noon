@@ -52,6 +52,7 @@ class NativePythonTests(unittest.TestCase):
                      "manim_example_three_d_camera_rotation", "manim_example_three_d_camera_illusion_rotation",
                      "manim_example_three_d_surface_plot", "live_line_match_callback",
                      "manim_gallery_moving_dots", "showcase_reactive_relationships",
+                     "ordinary_graph",
                      "ordinary_animated_stroke_width", "ordinary_z_index", "ordinary_animated_priority"):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
