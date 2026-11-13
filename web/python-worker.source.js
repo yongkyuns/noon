@@ -499,20 +499,20 @@ async function initializePyodide() {
   self.noonMatrixFromFamily = (family) => family.asMatrix();
   self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Matrix`);
-    return context.liveCreateMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    return context.createMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing IntegerMatrix`);
-    return context.liveCreateIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    return context.createIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalMatrix`);
-    return context.liveCreateDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    return context.createDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing MobjectMatrix`);
     const entries = compositeRows(rows);
-    return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    return context.createMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
