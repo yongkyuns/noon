@@ -27,11 +27,13 @@ class OrdinaryFamilyMembershipOrder(Scene):
         assert query_root.get_family() == [query_root, nested, b, a]
         assert query_root.get_family(recurse=False) == [query_root, nested, b, a]
         assert a.get_family() == [a]
-        family = VGroup(a, b, a)
+        family = VGroup(b)
+        self.add(family)
+        family.add(a, b, a)
         assert list(family) == [b, a]
+        assert isinstance(a.id, int)
         family.add(b)
         assert list(family) == [a, b]
-        self.add(family)
         self.wait(0.05)
         assert_nested_membership()
         assert family.get_family() == [family, a, b]

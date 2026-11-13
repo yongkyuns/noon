@@ -3764,22 +3764,24 @@ impl CanonicalAuthoringScene {
         &mut self,
         batch: SceneMembershipBatch,
     ) -> Result<(), AuthoringFailure> {
-        let player = self
-            .player_ownership
-            .local()
-            .ok_or("published association requires the local completed execution player")?;
-        if player.has_pending_live_segment() {
-            return Err("published association cannot precede segment completion".into());
-        }
-        if player.scene_revision() != self.scene.revision() {
-            return Err("published association requires a coherent execution revision".into());
+        if !self.player_ownership.is_unstarted() {
+            let player = self
+                .player_ownership
+                .local()
+                .ok_or("published association requires the local completed execution player")?;
+            if player.has_pending_live_segment() {
+                return Err("published association cannot precede segment completion".into());
+            }
+            if player.scene_revision() != self.scene.revision() {
+                return Err("published association requires a coherent execution revision".into());
+            }
         }
         self.associate_published_binding_reservations(batch)
     }
 
     /// Validate and atomically install derived bindings for already-published
-    /// direct-root Mobjects. Both local completed-segment and leased callback
-    /// acknowledgement paths share this proof.
+    /// Mobjects. Setup, completed-segment and leased callback acknowledgement
+    /// share this proof.
     #[cfg(any(target_arch = "wasm32", test))]
     fn associate_published_binding_reservations(
         &mut self,

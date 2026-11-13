@@ -1750,10 +1750,9 @@ impl Context {
                 "published association accepts add binding reservations only",
             ));
         }
-        let execution = scene_execution::session(&self.scene).ok_or_else(|| {
-            engine_error("published association requires the local completed execution player")
-        })?;
-        if execution.publication_context().scene_revision() != self.scene.revision() {
+        if scene_execution::session(&self.scene).is_some_and(|execution| {
+            execution.publication_context().scene_revision() != self.scene.revision()
+        }) {
             return Err(engine_error(
                 "published association requires a coherent execution revision",
             ));
