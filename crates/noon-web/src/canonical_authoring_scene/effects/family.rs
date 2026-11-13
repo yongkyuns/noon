@@ -32,72 +32,86 @@ impl CanonicalAuthoringSceneContext {
         })
     }
 
-    #[wasm_bindgen(js_name = liveSetFamilyGlow)]
-    pub fn live_set_family_glow(
+    #[wasm_bindgen(js_name = setFamilyGlow)]
+    pub fn set_family_glow(
         &mut self,
         family: &WasmAuthoringFamilyHandle,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.set_glow(family.semantic_family_ref(), update.value.clone()))
+        self.inner
+            .edit_scene(|scene| scene.set_glow(family.semantic_family_ref(), update.value.clone()))
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveAddFamilyEffect)]
-    pub fn live_add_family_effect(
+    #[wasm_bindgen(js_name = addFamilyEffect)]
+    pub fn add_family_effect(
         &mut self,
         family: &WasmAuthoringFamilyHandle,
         definition: &WasmEffectDefinition,
         name: &str,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| {
-            scene.add_effect(family.semantic_family_ref(), definition.definition(), name)
-        })
+        self.inner
+            .edit_scene(|scene| {
+                scene.add_effect(family.semantic_family_ref(), definition.definition(), name)
+            })
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveSetFamilyEffect)]
-    pub fn live_set_family_effect(
+    #[wasm_bindgen(js_name = setFamilyEffect)]
+    pub fn set_family_effect(
         &mut self,
         family: &WasmAuthoringFamilyHandle,
         name: &str,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| {
-            scene.set_effect(family.semantic_family_ref(), name, update.value.clone())
-        })
+        self.inner
+            .edit_scene(|scene| {
+                scene.set_effect(family.semantic_family_ref(), name, update.value.clone())
+            })
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveSetFamilyEffectHandle)]
-    pub fn live_set_family_effect_handle(
+    #[wasm_bindgen(js_name = setFamilyEffectHandle)]
+    pub fn set_family_effect_handle(
         &mut self,
         family: &WasmAuthoringFamilyHandle,
         effect: &WasmEffectHandle,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| {
-            scene.set_effect(
-                family.semantic_family_ref(),
-                &effect.handle,
-                update.value.clone(),
-            )
-        })
+        self.inner
+            .edit_scene(|scene| {
+                scene.set_effect(
+                    family.semantic_family_ref(),
+                    &effect.handle,
+                    update.value.clone(),
+                )
+            })
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveRemoveFamilyEffect)]
-    pub fn live_remove_family_effect(
+    #[wasm_bindgen(js_name = removeFamilyEffect)]
+    pub fn remove_family_effect(
         &mut self,
         family: &WasmAuthoringFamilyHandle,
         name: &str,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.remove_effect(family.semantic_family_ref(), name))
+        self.inner
+            .edit_scene(|scene| scene.remove_effect(family.semantic_family_ref(), name))
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveRemoveFamilyEffectHandle)]
-    pub fn live_remove_family_effect_handle(
+    #[wasm_bindgen(js_name = removeFamilyEffectHandle)]
+    pub fn remove_family_effect_handle(
         &mut self,
         family: &WasmAuthoringFamilyHandle,
         effect: &WasmEffectHandle,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.remove_effect(family.semantic_family_ref(), &effect.handle))
+        self.inner
+            .edit_scene(|scene| scene.remove_effect(family.semantic_family_ref(), &effect.handle))
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveRemoveFamilyGlow)]
-    pub fn live_remove_family_glow(
+    #[wasm_bindgen(js_name = removeFamilyGlow)]
+    pub fn remove_family_glow(
         &mut self,
         family: &WasmAuthoringFamilyHandle,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.remove_glow(family.semantic_family_ref()))
+        self.inner
+            .edit_scene(|scene| scene.remove_glow(family.semantic_family_ref()))
+            .map_err(js_error)
     }
 }
