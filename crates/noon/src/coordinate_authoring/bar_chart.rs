@@ -217,27 +217,45 @@ impl ManimBarChart {
         })?;
         Ok(())
     }
+}
 
-    pub fn change_bar_values_live(
+impl Scene {
+    pub(crate) fn change_chart_values(
         &mut self,
-        live: &mut crate::LiveSession<'_>,
+        chart: &mut ManimBarChart,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), CoordinateAuthoringError> {
-        if !Rc::ptr_eq(live.integration_store(), self.family.integration_store()) {
+        let store = self.integration_store();
+        if !Rc::ptr_eq(store, chart.family.integration_store()) {
             return Err(AuthoringError::ForeignStore.into());
         }
-        let frame = live.effective_axes_frame(&self.axes)?;
-        let prepared = {
-            let store = live.integration_store().borrow();
-            prepare_value_update(&store, frame, &self.bars, values, update_colors, |node| {
-                let object =
-                    crate::Mobject::from_node(Rc::clone(self.family.integration_store()), node)?;
-                live.capture_mobject_state(&object).map_err(Into::into)
-            })?
+        let Some(execution) = self.running_execution() else {
+            return chart.change_bar_values_cold(values, update_colors);
         };
-        live.publish_path_edits(prepared)?;
-        Ok(())
+        let frame = self.effective_axes_frame(&chart.axes)?;
+        let prepared = {
+            let borrowed = store.borrow();
+            prepare_value_update(
+                &borrowed,
+                frame,
+                &chart.bars,
+                values,
+                update_colors,
+                |node| {
+                    let object = crate::Mobject::from_node(Rc::clone(store), node)?;
+                    crate::effective_capture::capture_mobject_state(store, execution, &object)
+                        .map_err(crate::LiveSessionError::from)
+                        .map_err(Into::into)
+                },
+            )?
+        };
+        self.with_running_execution(|store, root, execution| {
+            crate::path_editing::publish_running_path_edits(store, root, execution, prepared)
+        })
+        .map(|_| ())
+        .map_err(crate::LiveSessionError::from)
+        .map_err(Into::into)
     }
 }
 
@@ -462,7 +480,7 @@ impl ManimBarChart {
     }
 }
 
-pub(crate) fn prepare(
+fn prepare(
     options: &ManimBarChartOptions,
 ) -> Result<
     (
@@ -663,7 +681,7 @@ fn set_bar_color(style: &mut SemanticStyle, color: Color) {
 }
 
 #[cfg(all(feature = "native-text", feature = "latex"))]
-pub(crate) struct PreparedLabeledChart {
+struct PreparedLabeledChart {
     chart: PreparedChart,
     labels: crate::text_authoring::PreparedDecimalLabels,
     names: Option<labels::PreparedBarLabels>,

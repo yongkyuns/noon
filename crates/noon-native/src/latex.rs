@@ -454,28 +454,25 @@ mod tests {
         let mut scene = noon::Scene::new();
         let companion = scene.circle(1.0).unwrap();
         scene.add(&companion).unwrap();
-        let mut session = scene.execution_session().unwrap();
-
-        let number = {
-            let mut live = scene.live(&mut session);
-            let number = live
-                .create_decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
-                .unwrap();
-            live.add(number.mobject()).unwrap();
-            number
-        };
+        let mut scene = scene.into_execution().unwrap();
+        let number = scene
+            .scene_mut()
+            .decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
+            .unwrap();
+        scene.scene_mut().add(number.mobject()).unwrap();
+        let session = scene.session();
         let number_id = session
             .execution_object_id(number.mobject().node_id())
             .unwrap();
         let companion_id = session.execution_object_id(companion.node_id()).unwrap();
 
-        {
-            let mut live = scene.live(&mut session);
-            live.set_decimal_value(&number, &mut backend, 98.76)
-                .unwrap();
-        }
+        scene
+            .live()
+            .set_decimal_value(&number, &mut backend, 98.76)
+            .unwrap();
 
         assert_eq!(number.value().unwrap(), 98.76);
+        let session = scene.session();
         assert_eq!(
             session.execution_object_id(number.mobject().node_id()),
             Some(number_id)
@@ -497,36 +494,33 @@ mod tests {
         let mut scene = noon::Scene::new();
         let companion = scene.circle(1.0).unwrap();
         scene.add(&companion).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let number = {
-            let mut live = scene.live(&mut session);
-            let number = live
-                .create_decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
-                .unwrap();
-            live.add(number.mobject()).unwrap();
-            number
-        };
+        let mut scene = scene.into_execution().unwrap();
+        let number = scene
+            .scene_mut()
+            .decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
+            .unwrap();
+        scene.scene_mut().add(number.mobject()).unwrap();
         let before_value = number.value().unwrap();
         let before_state = number.mobject().state().unwrap();
         let before_source = before_state.content.text().unwrap();
         let (before_resource, before_resources) = {
-            let store = scene.integration_store().borrow();
+            let store = scene.scene().integration_store().borrow();
             (
                 store.text_resources().get(before_source).unwrap().clone(),
                 store.text_resources().stats(),
             )
         };
+        let session = scene.session();
         let number_id = session
             .execution_object_id(number.mobject().node_id())
             .unwrap();
         let companion_id = session.execution_object_id(companion.node_id()).unwrap();
 
         let mut failing_backend = FailingLatexBackend;
-        let error = {
-            let mut live = scene.live(&mut session);
-            live.set_decimal_value(&number, &mut failing_backend, 98.76)
-                .unwrap_err()
-        };
+        let error = scene
+            .live()
+            .set_decimal_value(&number, &mut failing_backend, 98.76)
+            .unwrap_err();
         assert!(error
             .to_string()
             .contains("intentional live DecimalNumber compiler failure"));
@@ -536,13 +530,14 @@ mod tests {
             number.mobject().state().unwrap().content,
             before_state.content
         );
-        let store = scene.integration_store().borrow();
+        let store = scene.scene().integration_store().borrow();
         assert_eq!(store.text_resources().stats(), before_resources);
         assert_eq!(
             store.text_resources().get(before_source),
             Some(&before_resource)
         );
         drop(store);
+        let session = scene.session();
         assert_eq!(
             session.execution_object_id(number.mobject().node_id()),
             Some(number_id)

@@ -978,7 +978,7 @@ pub(crate) fn create_on_scene(
     let failure = if !running {
         coordinate_failure
     } else if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
-        noon::integration::live_polar_plane_creation_failure
+        noon::integration::live_coordinate_publication_failure
     } else {
         noon::integration::live_coordinate_failure
     };
