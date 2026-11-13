@@ -40,10 +40,11 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 context = Mock() if live else None
                 with patch.object(handles, "_create_family_handle") as create, \
                      patch.object(handles, "_new_membership_batch", return_value=Mock()), \
-                     patch.object(handles, "_live_constructor_context", return_value=context):
+                     patch.object(handles, "_path_authoring_context", return_value=context):
                     family = cls()
-                operation = context.liveCreateFamily if live else create
-                self.assertEqual(operation.call_args.args[1:], (0.0, draws))
+                operation = context.createFamily if live else create
+                rgba = (1.0, 1.0, 1.0, 1.0) if live else ()
+                self.assertEqual(operation.call_args.args[1:], (0.0, draws, *rgba))
                 if live:
                     self.assertIs(family._canonical_live_target_context, context)
 
@@ -70,7 +71,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.object(handles, "_create_family_handle", return_value=handle) as create, \
                  patch.object(handles, "_new_membership_batch", return_value=Mock()), \
-                 patch.object(handles, "_live_constructor_context", return_value=context):
+                 patch.object(handles, "_path_authoring_context", return_value=context):
                 group = compat.Group(color=compat._base.GREEN)
             expected = (compat._base.GREEN.red, compat._base.GREEN.green,
                         compat._base.GREEN.blue, compat._base.GREEN.alpha)
@@ -78,13 +79,12 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 self.assertEqual(create.call_args.args[1:], (0.0, False, *expected))
                 handle.setOwnColor.assert_not_called()
             else:
-                context.liveCreateFamily.assert_not_called()
-                self.assertEqual(context.liveCreateFamilyWithColor.call_args.args[1:], (0.0, *expected, False))
+                self.assertEqual(context.createFamily.call_args.args[1:], (0.0, False, *expected))
 
     def test_omitted_constructor_color_is_white_but_explicit_none_is_black(self):
         with patch.object(handles, "_create_family_handle") as create, \
              patch.object(handles, "_new_membership_batch", return_value=Mock()), \
-             patch.object(handles, "_live_constructor_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             compat.Group()
             self.assertEqual(create.call_args.args[1:], (0.0, False))
             compat.Group(color=None)

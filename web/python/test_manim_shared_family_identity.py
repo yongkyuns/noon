@@ -37,7 +37,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
 
         with (
             patch.object(handles, "_group_members", return_value=[first, second]),
-            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_path_authoring_context", return_value=None),
             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
         ):
             self.assertIs(handles._group_insert(root, -1, added), root)
@@ -61,21 +61,21 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         for value, slot in ((first, 1), (added, 2)):
             value._semantic_handle = SimpleNamespace(semanticSlot=slot, semanticGeneration=4)
         batch = object()
-        context = SimpleNamespace(liveInsertFamilyMember=Mock())
+        context = SimpleNamespace(insertFamilyMember=Mock())
 
         with (
             patch.object(handles, "_group_members", return_value=[first]),
-            patch.object(handles, "_live_constructor_context", return_value=context),
+            patch.object(handles, "_path_authoring_context", return_value=context),
             patch.object(handles, "_family_membership_batch", return_value=batch),
         ):
             self.assertIs(handles._group_insert(root, 100, added), root)
-        context.liveInsertFamilyMember.assert_called_once_with(
+        context.insertFamilyMember.assert_called_once_with(
             root._semantic_family_handle, 1, batch
         )
 
         with (
             patch.object(handles, "_group_members", return_value=[first]),
-            patch.object(handles, "_live_constructor_context", side_effect=AssertionError("must reject before live edit")),
+            patch.object(handles, "_path_authoring_context", side_effect=AssertionError("must reject before live edit")),
         ):
             with self.assertRaisesRegex(NotImplementedError, "store each child identity once"):
                 handles._group_insert(root, 0, first)
@@ -99,7 +99,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         batch = object()
 
         with (
-            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_path_authoring_context", return_value=None),
             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
         ):
             self.assertIs(handles._group_add_to_back(root, first, second, first), root)
@@ -120,14 +120,14 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         family_handle = SimpleNamespace(invertMembers=Mock())
         root._semantic_family_handle = family_handle
 
-        with patch.object(handles, "_live_constructor_context", return_value=None):
+        with patch.object(handles, "_path_authoring_context", return_value=None):
             self.assertIs(handles._group_invert(root, recursive=0), root)
         family_handle.invertMembers.assert_called_once_with(False)
 
-        live_context = SimpleNamespace(liveInvertFamilyMembers=Mock())
-        with patch.object(handles, "_live_constructor_context", return_value=live_context):
+        live_context = SimpleNamespace(invertFamilyMembers=Mock())
+        with patch.object(handles, "_path_authoring_context", return_value=live_context):
             self.assertIs(handles._group_invert(root, recursive=1), root)
-        live_context.liveInvertFamilyMembers.assert_called_once_with(family_handle, True)
+        live_context.invertFamilyMembers.assert_called_once_with(family_handle, True)
 
     def test_group_invert_preserves_pinned_public_signature(self):
         import inspect
@@ -157,17 +157,17 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         batch = object()
         with patch.object(handles, "_group_members", return_value=[first, tied_first, tied_second]), \
              patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch, \
-             patch.object(handles, "_live_constructor_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             self.assertIs(handles._group_sort(root), root)
         make_batch.assert_called_once_with(None, "add", (tied_first, tied_second, first))
         family_handle.prependMembers.assert_called_once_with(batch)
 
-        live_context = SimpleNamespace(livePrependFamilyMembers=Mock())
+        live_context = SimpleNamespace(prependFamilyMembers=Mock())
         with patch.object(handles, "_group_members", return_value=[first, tied_first, tied_second]), \
              patch.object(handles, "_family_membership_batch", return_value=batch), \
-             patch.object(handles, "_live_constructor_context", return_value=live_context):
+             patch.object(handles, "_path_authoring_context", return_value=live_context):
             self.assertIs(handles._group_sort(root, submob_func=lambda member: -member.get_center()[1]), root)
-        live_context.livePrependFamilyMembers.assert_called_once_with(family_handle, batch)
+        live_context.prependFamilyMembers.assert_called_once_with(family_handle, batch)
 
     def test_group_sort_preserves_pinned_public_signatures_and_base_noop(self):
         import inspect
@@ -200,7 +200,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         batch = object()
         with patch.object(handles, "_group_members", return_value=[first, second]), \
              patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch, \
-             patch.object(handles, "_live_constructor_context", return_value=None), \
+             patch.object(handles, "_path_authoring_context", return_value=None), \
              patch("random.shuffle", side_effect=lambda members: members.reverse()):
             self.assertIs(handles._group_shuffle(root), root)
         make_batch.assert_called_once_with(None, "add", (second, first))
@@ -217,7 +217,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         root = identity_only_wrapper(compat.Group)
         root._semantic_family_handle = SimpleNamespace(prependMembers=Mock())
         with patch.object(handles, "_group_members", side_effect=AssertionError("must reject before reading")), \
-             patch.object(handles, "_live_constructor_context", side_effect=AssertionError("must reject before context")):
+             patch.object(handles, "_path_authoring_context", side_effect=AssertionError("must reject before context")):
             with self.assertRaisesRegex(NotImplementedError, "Rust owns its family traversal"):
                 handles._group_shuffle(root, recursive=True)
 

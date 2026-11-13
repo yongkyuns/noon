@@ -56,10 +56,11 @@ class ZIndexTests(unittest.TestCase):
             with patch.object(handles, "_create_family_handle", create), \
                  patch.object(handles, "_new_membership_batch", Mock()), \
                  patch.object(handles, "_family_membership_batch", return_value=batch), \
-                 patch.object(handles, "_live_constructor_context", return_value=context):
+                 patch.object(handles, "_path_authoring_context", return_value=context):
                 family = compat.VGroup(z_index=-3.5)
-                operation = context.liveCreateFamily if live else create
-                operation.assert_called_once_with(batch, -3.5, True)
+                operation = context.createFamily if live else create
+                rgba = (1.0, 1.0, 1.0, 1.0) if live else ()
+                operation.assert_called_once_with(batch, -3.5, True, *rgba)
                 self.assertNotIn("z_index", family.__dict__)
                 operation.reset_mock()
                 with self.assertRaises(ValueError):

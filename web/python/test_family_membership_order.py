@@ -46,7 +46,7 @@ class FamilyMembershipOrderTests(unittest.TestCase):
         group._semantic_family_handle = bridge
         group._semantic_member_wrappers = {'1:0': a, '2:0': b}
         with patch.object(handles, '_family_membership_batch', return_value=object()), \
-             patch.object(handles, '_live_constructor_context', return_value=None):
+             patch.object(handles, '_path_authoring_context', return_value=None):
             self.assertIs(group.add(a), group)
             bridge.memberKeys.assert_not_called()
             self.assertEqual(len(group), 2)
@@ -70,9 +70,9 @@ class FamilyMembershipOrderTests(unittest.TestCase):
         group = identity_only_wrapper(compat.VGroup)
         group._semantic_family_handle = bridge
         group._semantic_member_wrappers = {}
-        context = SimpleNamespace(liveEditFamilyMembership=Mock(return_value=[True]))
+        context = SimpleNamespace(editFamilyMembership=Mock(return_value=[True]))
         with patch.object(handles, '_family_membership_batch', return_value='batch'), \
-             patch.object(handles, '_live_constructor_context', return_value=context):
+             patch.object(handles, '_path_authoring_context', return_value=context):
             group.add(a)
-        context.liveEditFamilyMembership.assert_called_once_with(bridge, 'batch')
+        context.editFamilyMembership.assert_called_once_with(bridge, 'batch')
         self.assertIs(group[0], a)

@@ -301,8 +301,7 @@ const expectedJavascriptSurface = [
   "export class WasmAuthoringFamilyLayout",
   "layout(",
   "memberKeys(",
-  "liveCreateFamily(",
-  "liveEditFamilyMembership(",
+  "editFamilyMembership(",
   "arrange(",
   "shiftBy(",
   "moveToPoint(",
@@ -628,8 +627,7 @@ const expectedTypeSurface = [
   "familyFor(source: WasmAuthoringFamilyHandle): WasmAuthoringFamilyHandle",
   "createFamily(batch: WasmSceneMembershipBatch, z_index: number, draw_enabled?: boolean | null): WasmAuthoringFamilyHandle",
   "editMembership(batch: WasmSceneMembershipBatch): Uint8Array",
-  "liveCreateFamily(batch: WasmSceneMembershipBatch, z_index: number, draw_enabled?: boolean | null): WasmAuthoringFamilyHandle",
-  "liveEditFamilyMembership(handle: WasmAuthoringFamilyHandle, batch: WasmSceneMembershipBatch): Uint8Array",
+  "editFamilyMembership(handle: WasmAuthoringFamilyHandle, batch: WasmSceneMembershipBatch): Uint8Array",
   "arrange(options: WasmFamilyArrangeOptions): void",
   "shiftBy(delta_x: number, delta_y: number, delta_z?: number | null): void",
   "moveToPoint(",
@@ -1041,6 +1039,11 @@ for (const retired of [
   "liveCreateManimGeometry(", "liveCreateImage(", "liveSetImageSampling(",
   "liveCreateManimText(", "liveCreateManimMarkupText(", "liveCreateManimTypst(",
   "liveCreateLatex(", "liveSetLatexMemberColors(", "liveLatexFontSize(",
+  "liveCreateFamily(", "liveCreateFamilyWithColor(",
+  "liveEditFamilyMembership(", "liveEditObjectMembership(",
+  "livePrependFamilyMembers(", "livePrependObjectMembers(",
+  "liveInsertFamilyMember(", "liveInsertObjectMember(",
+  "liveReplaceFamilyMembers(", "liveReplaceObjectMembers(", "liveInvertFamilyMembers(",
   "liveMatchStyle(",
   "liveInterpolateMobjectStyle(",
   "liveInterpolateMobject(",
@@ -1073,8 +1076,13 @@ for (const retired of [
 const sceneStart = declarations.indexOf("export class CanonicalAuthoringSceneContext");
 const sceneEnd = declarations.indexOf("export class ", sceneStart + 1);
 const sceneSurface = declarations.slice(sceneStart, sceneEnd < 0 ? undefined : sceneEnd);
-for (const method of ["createManimText(", "createManimMarkupText(", "createManimTypst(", "createLatex("]) {
-  if (sceneStart < 0 || !sceneSurface.includes(method)) throw new Error(`Scene text ABI is missing ${method}`);
+for (const method of [
+  "createManimText(", "createManimMarkupText(", "createManimTypst(", "createLatex(",
+  "createFamily(", "editFamilyMembership(", "editObjectMembership(",
+  "prependFamilyMembers(", "prependObjectMembers(", "insertFamilyMember(", "insertObjectMember(",
+  "replaceFamilyMembers(", "replaceObjectMembers(", "invertFamilyMembers(",
+]) {
+  if (sceneStart < 0 || !sceneSurface.includes(method)) throw new Error(`Scene authoring ABI is missing ${method}`);
 }
 const objectStart = declarations.indexOf("export class WasmAuthoringMobjectHandle");
 const objectEnd = declarations.indexOf("export class ", objectStart + 1);
