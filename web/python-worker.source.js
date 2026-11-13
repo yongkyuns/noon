@@ -421,7 +421,7 @@ async function initializePyodide() {
   self.noonCodeLanguagesList = () => noonCodeLanguagesList();
   self.noonCreateAuthoringCodeHandle = (source, options, context) =>
     context == null ? authoringStore.createCode(source, options)
-      : context.liveCreateCode(source, options);
+      : context.createCode(source, options);
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
     context == null ? selection.highlightCell(column, red, green, blue, alpha, opacity)
@@ -485,7 +485,7 @@ async function initializePyodide() {
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Variable`);
     if (context == null) throw new Error("Variable requires a canonical Scene authoring context");
-    const handle = context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
+    const handle = context.createVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
     return {
       family: () => handle.family(),
       label: () => handle.label(),

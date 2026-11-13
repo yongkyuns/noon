@@ -212,6 +212,12 @@ class TableCellEdits(Scene):
         "requires an explicit native TeX compiler and BaKoMa font profile",
     )
     def test_numeric_scene_edits_preserve_text_size_and_rewind(self):
+        variable = ROOT / "web/python/examples/variable.py"
+        scene = asyncio.run(run_source(variable.read_text(), filename=str(variable)))
+        try:
+            self.assertEqual(scene.mobjects[0].value.get_value(), 12_345.6)
+        finally:
+            close_scene(scene)
         source = """from noon import *
 class Demo(Scene):
     async def construct(self):

@@ -4,8 +4,8 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveCreateCode)]
-    pub fn live_create_code(
+    #[wasm_bindgen(js_name = createCode)]
+    pub fn create_code(
         &mut self,
         source: &str,
         options: WasmCodeOptions,

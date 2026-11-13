@@ -86,7 +86,7 @@ class Variable(_compat.VGroup):
         from _manim_semantic_handles import (
             _attach_shared_family,
             _family_wrapper_key,
-            _live_constructor_context,
+            _path_authoring_context,
         )
 
         if _create_variable is None:
@@ -107,7 +107,7 @@ class Variable(_compat.VGroup):
             raise NotImplementedError(
                 "unsupported Variable option(s): " + ", ".join(sorted(kwargs))
             )
-        context = _live_constructor_context("Variable", allow_unstarted=True)
+        context = _path_authoring_context()
         if context is None:
             raise RuntimeError("Variable requires a canonical Scene authoring context")
         handle = engine_call(
