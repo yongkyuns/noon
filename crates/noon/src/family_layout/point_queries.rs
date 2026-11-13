@@ -72,8 +72,8 @@ mod tests {
         let expected = anchor.critical_point_3d(up).unwrap();
         assert_eq!(
             execution
-                .live()
-                .layout_critical_point_3d(&anchor, up)
+                .scene()
+                .effective_layout_critical_point_3d(&anchor, up)
                 .unwrap(),
             expected
         );
@@ -84,20 +84,20 @@ mod tests {
             .unwrap();
         let before = execution.session().publication_context();
         let actual = execution
-            .live()
-            .layout_critical_point_3d(&anchor, up)
+            .scene()
+            .effective_layout_critical_point_3d(&anchor, up)
             .unwrap();
         assert_eq!(actual.z, 3.125);
         assert_eq!(actual.xy(), anchor.layout().unwrap().center());
         assert_eq!(execution.session().publication_context(), before);
         let foreign = Scene::new().square(1.).unwrap();
         assert!(execution
-            .live()
-            .layout_critical_point_3d(&LayoutAnchor::from(&foreign), up)
+            .scene()
+            .effective_layout_critical_point_3d(&LayoutAnchor::from(&foreign), up)
             .is_err());
         assert!(execution
-            .live()
-            .layout_critical_point_3d(&anchor, SemanticVec3::new(0., 0., f64::NAN))
+            .scene()
+            .effective_layout_critical_point_3d(&anchor, SemanticVec3::new(0., 0., f64::NAN))
             .is_err());
         assert_eq!(execution.session().publication_context(), before);
     }

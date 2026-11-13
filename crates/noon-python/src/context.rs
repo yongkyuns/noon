@@ -2043,7 +2043,15 @@ impl Context {
         self.require_active()?;
         let dimension = dimension.try_into().map_err(engine_error)?;
         if self.has_execution() {
-            self.with_live(|live| live.dimension_length(&source.anchor, dimension))
+            self.scene
+                .effective_dimension_length(&source.anchor, dimension)
+                .map_err(|error| {
+                    if dimension == noon::LayoutDimension::Depth {
+                        engine_error(AuthoringFailure::from_scene_mutation(error, true))
+                    } else {
+                        engine_error(noon::LiveSessionError::from(error))
+                    }
+                })
         } else {
             source
                 .anchor
@@ -2186,7 +2194,9 @@ impl Context {
         self.require_active()?;
         let direction = noon::SemanticVec3::new(x, y, z);
         if self.has_execution() {
-            self.with_live(|live| live.layout_critical_point_3d(&anchor.anchor, direction))
+            self.scene
+                .effective_layout_critical_point_3d(&anchor.anchor, direction)
+                .map_err(|error| engine_error(noon::LiveSessionError::from(error)))
                 .map(|p| (p.x, p.y, p.z))
         } else {
             anchor
@@ -2777,7 +2787,9 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective_family_layout(&target.family))
+            self.scene
+                .effective_family_layout(&target.family)
+                .map_err(|error| engine_error(noon::LiveSessionError::from(error)))
                 .map(LayoutObservation::from_effective)
         } else {
             let layout = target.family.layout().map_err(engine_error)?;
@@ -2793,7 +2805,9 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective_layout(&target.handle))
+            self.scene
+                .effective_layout(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
                 .map(LayoutObservation::from_effective)
         } else {
             Ok(LayoutObservation {

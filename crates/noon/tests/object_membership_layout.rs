@@ -168,7 +168,7 @@ fn effective_root_layout_reads_each_current_descendant_pose_without_publication(
     for time in [1.0, 0.25, 1.5, 0.0, 1.0] {
         execution.seek(time).unwrap();
         let before = execution.session().publication_context();
-        let layout = execution.live().effective_layout(&root).unwrap();
+        let layout = execution.scene().effective_layout(&root).unwrap();
         assert_eq!(layout.width, 10.0 + 2.0 * time);
         assert_eq!(layout.center, (4.0 + time, 0.0));
         if time == 1.0 {
@@ -263,7 +263,7 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
     );
     assert_eq!(translation(&unrelated), (0.0, 0.0));
     assert_eq!(
-        execution.live().effective_layout(&root).unwrap().center,
+        execution.scene().effective_layout(&root).unwrap().center,
         (3.0, 2.0)
     );
 }
@@ -334,12 +334,12 @@ fn an_entirely_empty_root_scope_has_no_geometry_bounds_or_nonzero_center() {
     assert_eq!(root.layout_bounds().unwrap(), None);
     assert_eq!(root.center().unwrap(), (0.0, 0.0));
     assert_eq!(root.width().unwrap(), 0.0);
-    let mut execution = scene.execution_session().unwrap();
-    let before = execution.publication_context();
-    let effective = scene.live(&mut execution).effective_layout(&root).unwrap();
+    let execution = scene.into_execution().unwrap();
+    let before = execution.session().publication_context();
+    let effective = execution.scene().effective_layout(&root).unwrap();
     assert_eq!(effective.center, (0.0, 0.0));
     assert_eq!(effective.width, 0.0);
-    assert_eq!(execution.publication_context(), before);
+    assert_eq!(execution.session().publication_context(), before);
 }
 
 #[test]

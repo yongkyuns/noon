@@ -37,34 +37,41 @@ fn live_explicit_scale_pivots_publish_once_and_preserve_edge_anchor() {
     let mut scene = Scene::new();
     let line = scene.line((1.0, -2.0), (3.0, -2.0)).unwrap();
     scene.add(&line).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
 
-    let before_point = scene.revision();
+    let before_point = session.scene().revision();
     {
-        let mut live = scene.live(&mut session);
-        live.manim_scale_about_point(&line, 2.0, 0.5, 0.0, 0.0)
+        session
+            .live()
+            .manim_scale_about_point(&line, 2.0, 0.5, 0.0, 0.0)
             .unwrap();
-        let layout = live.effective_layout(&line).unwrap();
+        let layout = session.scene().effective_layout(&line).unwrap();
         assert!((layout.center.0 - 4.0).abs() < 1e-6);
         assert!((layout.center.1 + 1.0).abs() < 1e-6);
     }
-    assert_eq!(scene.revision(), before_point.checked_next().unwrap());
+    assert_eq!(
+        session.scene().revision(),
+        before_point.checked_next().unwrap()
+    );
 
-    let before_edge = scene.revision();
+    let before_edge = session.scene().revision();
     let right_before = {
-        let live = scene.live(&mut session);
-        let layout = live.effective_layout(&line).unwrap();
+        let layout = session.scene().effective_layout(&line).unwrap();
         layout.center.0 + layout.width * 0.5
     };
     {
-        let mut live = scene.live(&mut session);
-        live.manim_scale_about_edge(&line, 0.5, 1.0, 1.0, 0.0)
+        session
+            .live()
+            .manim_scale_about_edge(&line, 0.5, 1.0, 1.0, 0.0)
             .unwrap();
-        let layout = live.effective_layout(&line).unwrap();
+        let layout = session.scene().effective_layout(&line).unwrap();
         let right_after = layout.center.0 + layout.width * 0.5;
         assert!((right_after - right_before).abs() < 1e-6);
     }
-    assert_eq!(scene.revision(), before_edge.checked_next().unwrap());
+    assert_eq!(
+        session.scene().revision(),
+        before_edge.checked_next().unwrap()
+    );
 }
 
 #[test]

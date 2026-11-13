@@ -146,14 +146,15 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     for object in [&first, &second, &anchor] {
         scene.add(object).map_err(|error| error.to_string())?;
     }
-    let mut execution = scene.execution_session().map_err(|e| e.to_string())?;
+    let mut execution = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = scene.live(&mut execution);
-        let center = live
+        let center = execution
+            .scene()
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?
             .center;
-        let layout = live
+        let layout = execution
+            .scene()
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?;
         for (point, edge, mask) in [
@@ -164,29 +165,34 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 (0.0, 1.0),
             ),
         ] {
-            live.move_family_to(
-                &family,
-                crate::LiveLayoutTarget::Point(point.0, point.1),
-                edge,
-                mask,
-            )
-            .map_err(|e| e.to_string())?;
+            execution
+                .live()
+                .move_family_to(
+                    &family,
+                    crate::LiveLayoutTarget::Point(point.0, point.1),
+                    edge,
+                    mask,
+                )
+                .map_err(|e| e.to_string())?;
         }
-        live.align_family_on_frame(&family, (0.0, -1.0), 0.5)
+        execution
+            .live()
+            .align_family_on_frame(&family, (0.0, -1.0), 0.5)
             .map_err(|e| e.to_string())?;
-        let layout = live
+        let layout = execution
+            .scene()
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?;
         assert!((layout.center.1 - layout.height * 0.5 + 3.5).abs() < 1e-6);
-        live.move_family_to(
-            &family,
-            crate::LiveLayoutTarget::Point(center.0, center.1),
-            (0.0, 0.0),
-            (1.0, 1.0),
-        )
-        .map_err(|e| e.to_string())?;
+        execution
+            .live()
+            .move_family_to(
+                &family,
+                crate::LiveLayoutTarget::Point(center.0, center.1),
+                (0.0, 0.0),
+                (1.0, 1.0),
+            )
+            .map_err(|e| e.to_string())?;
     }
-    scene
-        .into_execution_with_session(execution)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }

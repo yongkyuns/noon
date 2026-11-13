@@ -220,7 +220,7 @@ fn fitting_xyz_matches_actual_ce_in_authored_owned_and_borrowed_execution() {
                             .dimension_length(&anchor, dim)
                             .unwrap()
                     } else if mode == 1 {
-                        scene.owned_live().dimension_length(&anchor, dim).unwrap()
+                        scene.effective_dimension_length(&anchor, dim).unwrap()
                     } else {
                         anchor.dimension_length(dim).unwrap()
                     };

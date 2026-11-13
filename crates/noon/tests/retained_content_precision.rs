@@ -159,8 +159,8 @@ fn retained_content_precision_matches_all_pinned_coordinates_without_query_publi
             for (index, query) in phase["queries"].as_array().unwrap().iter().enumerate() {
                 let actual = if let Some(execution) = execution.as_mut() {
                     execution
-                        .live()
-                        .layout_critical_point_3d(&source, direction(query))
+                        .scene()
+                        .effective_layout_critical_point_3d(&source, direction(query))
                         .unwrap()
                 } else {
                     source.critical_point_3d(direction(query)).unwrap()

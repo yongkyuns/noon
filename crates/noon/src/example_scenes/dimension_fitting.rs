@@ -40,25 +40,41 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
+    let mut session = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = scene.live(&mut session);
-        live.rescale_to_fit(&group, f64::INFINITY, Depth, true)
+        session
+            .live()
+            .rescale_to_fit(&group, f64::INFINITY, Depth, true)
             .map_err(|e| e.to_string())?;
-        live.match_dim_size(&source, &target, Depth, false)
+        session
+            .live()
+            .match_dim_size(&source, &target, Depth, false)
             .map_err(|e| e.to_string())?;
-        live.match_dim_size(&source, &target, Width, true)
+        session
+            .live()
+            .match_dim_size(&source, &target, Width, true)
             .map_err(|e| e.to_string())?;
-        live.rescale_to_fit(&group, 2.0, Height, false)
+        session
+            .live()
+            .rescale_to_fit(&group, 2.0, Height, false)
             .map_err(|e| e.to_string())?;
         assert!(
-            (live.effective_layout(&a).map_err(|e| e.to_string())?.width
-                - live.effective_layout(&b).map_err(|e| e.to_string())?.width)
+            (session
+                .scene()
+                .effective_layout(&a)
+                .map_err(|e| e.to_string())?
+                .width
+                - session
+                    .scene()
+                    .effective_layout(&b)
+                    .map_err(|e| e.to_string())?
+                    .width)
                 .abs()
                 < 1e-6
         );
         assert!(
-            (live
+            (session
+                .scene()
                 .effective_family_layout(&family)
                 .map_err(|e| e.to_string())?
                 .height
@@ -66,12 +82,18 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 .abs()
                 < 1e-6
         );
-        let wait = live.wait_segment(0.2).map_err(|e| e.to_string())?;
-        live.advance_segment_to(wait, wait.end_time())
+        let wait = session
+            .live()
+            .wait_segment(0.2)
             .map_err(|e| e.to_string())?;
-        live.complete_segment(wait).map_err(|e| e.to_string())?;
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .complete_segment(wait)
+            .map_err(|e| e.to_string())?;
     }
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(session)
 }

@@ -415,8 +415,8 @@ mod tests {
                 let target_anchor = crate::LayoutAnchor::from(&native.target);
                 let expected_width = native
                     .execution
-                    .live()
-                    .dimension_length(&target_anchor, crate::LayoutDimension::Width)
+                    .scene()
+                    .effective_dimension_length(&target_anchor, crate::LayoutDimension::Width)
                     .unwrap();
                 assert!(
                     (f64::from(actual.scale.x) * 6.5 - expected_width).abs() <= 1.0e-6,

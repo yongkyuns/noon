@@ -713,7 +713,7 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session.live().advance_segment_to(first, first.end_time())?;
         session.live().complete_segment(first)?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (2.0, -1.0)
         );
     }
@@ -725,14 +725,14 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session.live().advance_segment_to(wait, wait.end_time())?;
         session.live().complete_segment(wait)?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (2.0, -1.0)
         );
         session
             .scene_mut()
             .shift_3d(&circle, crate::SemanticVec3::new(1.0, 0.0, 0.0))?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (3.0, -1.0)
         );
     }
@@ -754,7 +754,7 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
             .advance_segment_to(second, second.end_time())?;
         session.live().complete_segment(second)?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (5.0, -1.0)
         );
         let authored = session.live().authored(&circle)?.transform.translation;
@@ -1355,7 +1355,6 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     0.5
                 );
                 let layout = scene
-                    .live()
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
                 assert!((layout.center.0 - 2.0).abs() < 1e-6);
@@ -2506,14 +2505,20 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
         )?;
         assert_eq!((segment.start_time(), segment.end_time()), (0.0, 2.0));
         session.live().advance_segment_to(segment, 1.0)?;
-        assert_eq!(session.live().effective_layout(&left)?.center, (-2.0, 0.5));
-        assert_eq!(session.live().effective_layout(&right)?.center, (2.0, -0.5));
+        assert_eq!(session.scene().effective_layout(&left)?.center, (-2.0, 0.5));
+        assert_eq!(
+            session.scene().effective_layout(&right)?.center,
+            (2.0, -0.5)
+        );
         session
             .live()
             .advance_segment_to(segment, segment.end_time())?;
         session.live().complete_segment(segment)?;
-        assert_eq!(session.live().effective_layout(&left)?.center, (-2.0, 1.0));
-        assert_eq!(session.live().effective_layout(&right)?.center, (2.0, -1.0));
+        assert_eq!(session.scene().effective_layout(&left)?.center, (-2.0, 1.0));
+        assert_eq!(
+            session.scene().effective_layout(&right)?.center,
+            (2.0, -1.0)
+        );
 
         let left_fill = session.scene_mut().target_editor(&left)?;
         session

@@ -124,11 +124,11 @@ fn live_alignment_uses_effective_target_bounds_and_one_local_publication() {
         before.checked_next().unwrap()
     );
     assert_eq!(
-        execution.live().effective_layout(&first).unwrap().center,
+        execution.scene().effective_layout(&first).unwrap().center,
         (7.75, 0.0)
     );
     assert_eq!(
-        execution.live().effective_layout(&second).unwrap().center,
+        execution.scene().effective_layout(&second).unwrap().center,
         (9.75, 0.0)
     );
     assert_eq!(target.center().unwrap(), (6.0, 0.0));
@@ -155,7 +155,7 @@ fn live_alignment_uses_effective_target_bounds_and_one_local_publication() {
         before
     );
     assert_eq!(
-        execution.live().effective_layout(&first).unwrap().center,
+        execution.scene().effective_layout(&first).unwrap().center,
         (7.75, 0.0)
     );
 }

@@ -121,9 +121,7 @@ impl Scene {
         object: &Mobject,
     ) -> Result<EffectiveMobjectLayout, AuthoringError> {
         self.require_object(object)?;
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::family_layout::effective_mobject_layout(self.integration_store(), execution, object)
     }
 }

@@ -773,7 +773,7 @@ impl<'a> LiveSession<'a> {
 
     /// Read layout from own content and unique descendants at their coherent
     /// effective transforms. Work stays within the addressed root's scope.
-    pub fn effective_layout(
+    pub(crate) fn effective_layout(
         &self,
         mobject: &Mobject,
     ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
@@ -2042,14 +2042,6 @@ impl<'a> LiveSession<'a> {
             angle,
             crate::ManimRotationPivot::Center,
         )
-    }
-
-    #[cfg(feature = "latex")]
-    pub fn latex_font_size(&self, parts: &crate::LatexParts) -> Result<f64, LiveSessionError> {
-        let layout = self.effective_family_layout(parts.family())?;
-        parts
-            .font_size_for_height(layout.height)
-            .map_err(LiveSessionError::from)
     }
 
     pub(crate) fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {

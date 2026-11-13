@@ -1,8 +1,8 @@
 //! Same-identity flagged `become` across a live continuation barrier.
 
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, ManimBecomeOptions,
-    ManimGeometryOptions, Mobject, MobjectTarget, Scene,
+    ContinuationStep, LiveContinuation, LiveProgram, ManimBecomeOptions, ManimGeometryOptions,
+    Mobject, MobjectTarget, Scene,
 };
 use std::rc::Rc;
 
@@ -80,10 +80,10 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
                         return Err("become admitted a detached target operand".into());
                     }
                 }
-                assert_layout(&scene.live(), &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
-                assert_layout(&scene.live(), &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
+                assert_layout(scene, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
+                assert_layout(scene, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
                 assert_layout(
-                    &scene.live(),
+                    scene,
                     &self.ellipse,
                     0.0,
                     -2.5,
@@ -111,10 +111,10 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
                     .map_err(|error| error.to_string())
             }
             2 => {
-                assert_layout(&scene.live(), &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
-                assert_layout(&scene.live(), &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
+                assert_layout(scene, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
+                assert_layout(scene, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
                 assert_layout(
-                    &scene.live(),
+                    scene,
                     &self.ellipse,
                     0.0,
                     -2.5,
@@ -130,14 +130,14 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
 }
 
 fn assert_layout(
-    live: &LiveSession<'_>,
+    scene: &Scene,
     object: &Mobject,
     center_x: f64,
     center_y: f64,
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let layout = live
+    let layout = scene
         .effective_layout(object)
         .map_err(|error| error.to_string())?;
     for (actual, expected, label) in [
