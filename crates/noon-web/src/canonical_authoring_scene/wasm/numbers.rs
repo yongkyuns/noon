@@ -62,7 +62,8 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_create_decimal_number(
+            .scene_mut()
+            .decimal_number(
                 compiler,
                 value,
                 noon::DecimalFormat {
@@ -75,6 +76,7 @@ impl CanonicalAuthoringSceneContext {
                 font_size,
             )
             .map(WasmDecimalNumberHandle::from_number)
+            .map_err(noon::integration::live_numeric_failure)
             .map_err(js_error)
     }
 }

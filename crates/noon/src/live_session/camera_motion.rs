@@ -6,16 +6,6 @@ use crate::AuthoringError;
 use noon_core::{CameraRotationAxis, SemanticMutationTransaction};
 
 impl LiveSession<'_> {
-    pub fn effective_camera_profile(
-        &self,
-        camera: &Mobject,
-    ) -> Result<(noon_core::ManimCamera3DProfile, f64, f64), LiveSessionError> {
-        self.require_mobject(camera)?;
-        self.session
-            .effective_camera_profile(camera.node_id())
-            .ok_or(AuthoringError::NonFiniteObjectState.into())
-    }
-
     pub fn begin_ambient_camera_rotation(
         &mut self,
         camera: &Mobject,

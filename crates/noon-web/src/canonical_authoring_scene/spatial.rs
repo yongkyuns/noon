@@ -48,9 +48,11 @@ impl CanonicalAuthoringScene {
     ) -> Result<noon::Mobject, crate::authoring_error::AuthoringFailure> {
         match &mut self.player_ownership {
             PlayerOwnership::Unstarted => self.scene.mesh(options).map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_mesh(options)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .mesh(options)
+                .map_err(|error| noon::LiveSessionError::from(error).into()),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -70,7 +72,9 @@ impl CanonicalAuthoringScene {
                 .map_err(Into::into),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_create_mesh_family_with_paths(options, paths),
+                .scene_mut()
+                .mesh_family_with_paths(options, paths)
+                .map_err(|error| noon::LiveSessionError::from(error).into()),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -126,7 +130,9 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Unstarted => object.world_transform().map_err(Into::into),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_effective_world_transform(object),
+                .scene_mut()
+                .effective_world_transform(object)
+                .map_err(|error| noon::LiveSessionError::from(error).into()),
             PlayerOwnership::Transferred(_) => {
                 Err("effective world state is owned by the transferred execution session".into())
             }
@@ -147,7 +153,9 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Unstarted => object.world_center().map_err(Into::into),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_effective_world_center(object),
+                .scene_mut()
+                .effective_world_center(object)
+                .map_err(|error| noon::LiveSessionError::from(error).into()),
             PlayerOwnership::Transferred(_) => {
                 Err("effective world state is owned by the transferred execution session".into())
             }
@@ -165,7 +173,9 @@ impl CanonicalAuthoringScene {
             PlayerOwnership::Unstarted => family.world_center().map_err(Into::into),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_effective_world_family_center(family),
+                .scene_mut()
+                .effective_world_family_center(family)
+                .map_err(|error| noon::LiveSessionError::from(error).into()),
             PlayerOwnership::Transferred(_) => {
                 Err("effective world state is owned by the transferred execution session".into())
             }
@@ -190,7 +200,9 @@ impl CanonicalAuthoringScene {
                 .map_err(Into::into),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_set_world_transform(object, transform),
+                .scene_mut()
+                .set_world_transform(object, transform)
+                .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, true)),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -217,14 +229,9 @@ impl CanonicalAuthoringScene {
         .map_err(crate::authoring_error::AuthoringFailure::from)?;
         match &mut self.player_ownership {
             PlayerOwnership::Unstarted => self.scene.world_affine(target, edit).map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => match target {
-                noon::MobjectTarget::Object(object) => self
-                    .active_live_player()?
-                    .live_world_affine_object(object, edit),
-                noon::MobjectTarget::Family(family) => self
-                    .active_live_player()?
-                    .live_world_affine_family(family, edit),
-            },
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                self.active_live_player()?.world_affine(target, edit)
+            }
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }

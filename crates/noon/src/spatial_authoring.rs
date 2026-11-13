@@ -428,7 +428,7 @@ fn validate_surface_options(options: SurfaceOptions) -> Result<(), AuthoringErro
     Ok(())
 }
 
-pub(crate) fn publish_mesh_creation(
+fn publish_mesh_creation(
     store: &mut noon_core::SemanticStore,
     options: MeshOptions,
     publish: impl FnOnce(
@@ -450,7 +450,7 @@ pub(crate) fn publish_mesh_creation(
     })
 }
 
-pub(crate) fn publish_mesh_family(
+fn publish_mesh_family(
     store: &mut noon_core::SemanticStore,
     options: Vec<MeshOptions>,
     publish: impl FnOnce(
@@ -461,7 +461,7 @@ pub(crate) fn publish_mesh_family(
     publish_meshes_and_paths_family(store, options, Vec::new(), publish)
 }
 
-pub(crate) fn publish_meshes_and_paths_family(
+fn publish_meshes_and_paths_family(
     store: &mut noon_core::SemanticStore,
     meshes: Vec<MeshOptions>,
     paths: Vec<SpatialPathOptions>,

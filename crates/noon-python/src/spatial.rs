@@ -1,6 +1,6 @@
 //! Native typed wrappers over the same bounded Rust mesh/surface inputs as WASM.
 use crate::engine_error;
-use noon::integration::spatial_input as input;
+use noon::integration::{spatial_input as input, AuthoringFailure};
 use pyo3::prelude::*;
 
 #[pyclass(unsendable, module = "_noon_native")]
@@ -328,12 +328,12 @@ pub(crate) fn create_mesh(
 ) -> PyResult<crate::mobject::MobjectHandle> {
     context.available()?;
     let options = candidate.take()?.into_options();
-    if context.has_execution() {
-        context.with_live(|live| live.create_mesh(options))
-    } else {
-        context.scene.mesh(options).map_err(engine_error)
-    }
-    .map(crate::mobject::MobjectHandle::from_semantic_mobject)
+    let running = context.has_execution();
+    context
+        .scene
+        .mesh(options)
+        .map(crate::mobject::MobjectHandle::from_semantic_mobject)
+        .map_err(|error| spatial_creation_error(error, running))
 }
 pub(crate) fn create_family(
     context: &mut crate::context::Context,
@@ -343,18 +343,23 @@ pub(crate) fn create_family(
     let candidate = candidate.take()?;
     let surface = candidate.has_surface_roles();
     let (meshes, paths) = candidate.into_parts().map_err(engine_error)?;
-    let family = if context.has_execution() {
-        context.with_live(|live| live.create_mesh_family_with_paths(meshes, paths))
-    } else {
-        context
-            .scene
-            .mesh_family_with_paths(meshes, paths)
-            .map_err(engine_error)
-    }?;
+    let running = context.has_execution();
+    let family = context
+        .scene
+        .mesh_family_with_paths(meshes, paths)
+        .map_err(|error| spatial_creation_error(error, running))?;
     if surface {
         noon::SurfaceFamily::from_family(family.clone()).map_err(engine_error)?;
     }
     Ok(crate::family::FamilyHandle { family })
+}
+
+fn spatial_creation_error(error: noon::AuthoringError, running: bool) -> PyErr {
+    if running {
+        engine_error(noon::LiveSessionError::from(error))
+    } else {
+        engine_error(error)
+    }
 }
 pub(crate) fn world_affine(
     context: &mut crate::context::Context,
@@ -362,14 +367,11 @@ pub(crate) fn world_affine(
     edit: noon::WorldAffineEdit,
 ) -> PyResult<()> {
     context.available()?;
-    if context.has_execution() {
-        context.with_live(|live| live.world_affine(target, edit))
-    } else {
-        context
-            .scene
-            .world_affine(target, edit)
-            .map_err(engine_error)
-    }
+    let running = context.has_execution();
+    context
+        .scene
+        .world_affine(target, edit)
+        .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
 }
 pub(crate) fn checkerboard(first: &[f64], second: &[f64]) -> PyResult<[noon::Color; 2]> {
     let color = |v: &[f64]| {

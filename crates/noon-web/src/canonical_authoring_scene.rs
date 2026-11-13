@@ -3946,8 +3946,7 @@ impl CanonicalAuthoringScene {
                     domain.apply_scene(&mut self.scene, &borrowed)?;
                 }
                 PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                    self.active_live_player()?
-                        .live_add_spatial_membership(&borrowed, domain)?;
+                    domain.apply_scene(self.active_live_player()?.scene_mut(), &borrowed)?;
                 }
                 PlayerOwnership::Unstarted => {
                     return Err(
@@ -4141,7 +4140,10 @@ impl CanonicalAuthoringScene {
         }
         let number = noon::DecimalNumber::from_mobject(target.clone())
             .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
-        self.active_live_player()?.live_decimal_value(&number)
+        self.active_live_player()?
+            .scene_mut()
+            .effective_decimal_value(&number)
+            .map_err(noon::integration::live_numeric_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -4150,7 +4152,10 @@ impl CanonicalAuthoringScene {
             return Err(noon::AuthoringError::ForeignStore.into());
         }
         let number = noon::DecimalNumber::from_mobject(target.clone())?;
-        self.active_live_player()?.live_decimal_font_size(&number)
+        self.active_live_player()?
+            .scene_mut()
+            .effective_decimal_font_size(&number)
+            .map_err(noon::integration::live_numeric_failure)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -10041,7 +10046,7 @@ mod wasm {
             candidate: crate::WasmCoordinateOptions,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             use crate::authoring_coordinates::CoordinateRequest;
-            use noon::integration::{live_coordinate_failure, live_polar_plane_creation_failure};
+            use noon::integration::{live_coordinate_failure, live_coordinate_publication_failure};
             let scene = self
                 .inner
                 .active_live_player()
@@ -10049,7 +10054,7 @@ mod wasm {
                 .map_err(typed_js_error)?
                 .scene_mut();
             let failure = if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
-                live_polar_plane_creation_failure
+                live_coordinate_publication_failure
             } else {
                 live_coordinate_failure
             };

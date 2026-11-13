@@ -776,24 +776,18 @@ impl SpatialMembershipPolicy {
         scene: &mut crate::Scene,
         targets: &[crate::MobjectTarget<'_>],
     ) -> Result<(), AuthoringFailure> {
+        let running = scene.running_execution().is_some();
         match self {
             Self::Assign(domain) => scene.add_all_in_spatial_composition_domain(targets, domain),
             Self::DefaultWorld => scene.add_all_world_mobjects(targets),
         }
         .map(|_| ())
-        .map_err(Into::into)
-    }
-    pub fn apply_live(
-        self,
-        live: &mut crate::LiveSession<'_>,
-        targets: &[crate::MobjectTarget<'_>],
-    ) -> Result<(), AuthoringFailure> {
-        match self {
-            Self::Assign(domain) => live.add_all_in_spatial_composition_domain(targets, domain),
-            Self::DefaultWorld => live.add_all_world_mobjects(targets),
-        }
-        .map(|_| ())
-        .map_err(Into::into)
+        .map_err(|error| match error {
+            crate::SpatialCompositionError::Authoring(
+                crate::AuthoringError::ExecutionPublication(error),
+            ) if running => crate::LiveSessionError::Publication(error).into(),
+            other => other.into(),
+        })
     }
 }
 
