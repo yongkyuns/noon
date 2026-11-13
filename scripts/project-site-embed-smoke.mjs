@@ -9,6 +9,7 @@ import { serveRepository } from './browser-test-server.mjs';
 import { playgroundLaunchOptions } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { captureStalledRenderStacks } from './noon-site-worker-stack.mjs';
+import { observeUnpromptedPlayback } from './project-site-autoplay-observer.mjs';
 
 // Real composed-host qualification. No stubbed main, editor, workers or canvas.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -163,19 +164,9 @@ try {
           return original.apply(this,args);
         };
       });
-      // Passive observation starts before any frame scripts, so a short scene
-      // finishing while its siblings load still proves that autoplay occurred.
-      await context.addInitScript(() => {
-        window.__noonSitePlayingObserved = false;
-        const observer = new MutationObserver(() => {
-          if (document.querySelector('#status')?.dataset.playbackPlaying === 'true') {
-            window.__noonSitePlayingObserved = true;
-            observer.disconnect();
-          }
-        });
-        observer.observe(document, {subtree:true,attributes:true,attributeFilter:['data-playback-playing']});
-        window.addEventListener('pagehide',()=>observer.disconnect(),{once:true});
-      });
+      // Observe genuine automatic playback before the iframe application runs.
+      // The fallback poll only reads status and is removed after first playback.
+      await context.addInitScript(observeUnpromptedPlayback);
       const page = await context.newPage();
       page.setDefaultTimeout(120000);
       const errors=[], workers=new Set(), consoleMessages=[], requestFailures=[];
@@ -240,7 +231,9 @@ try {
             mark('authored-frames',id);
             const initialGeneration = await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             assert.equal(initialGeneration,1,'exactly one canonical automatic initial Run');
-            assert.equal(await frame.evaluate(()=>window.__noonSitePlayingObserved),true,'the initial scene actually played without a gesture');
+            // Keep the exact no-gesture proof; wait for the passive observer
+            // to sample it instead of racing a Firefox mutation callback.
+            await frame.waitForFunction(()=>window.__noonSitePlayingObserved === true);
             assert.equal(await frame.locator('#auto-run').isChecked(),true);
             assert.equal(await frame.locator('button:visible').count(),2,'no playback/editor toolbar in View');
             const duration = await frame.locator('.playback-scrubber').evaluate(element=>Number(element.max));

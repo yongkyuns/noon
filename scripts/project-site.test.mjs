@@ -6,9 +6,67 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { playgroundRedirect } from "../web/site/site.js";
 import { buildProjectSite } from "./build-project-site.mjs";
+import { observeUnpromptedPlayback } from "./project-site-autoplay-observer.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = name => readFile(path.join(root, name), "utf8");
+
+test("autoplay observer captures a late inserted status without initiating playback", () => {
+  let state = null, poll = null, observe = null, onPageHide = null;
+  let disconnected = 0, cleared = 0, chosenInterval = null;
+  const doc = {querySelector: selector => selector === "#status" ? state : null};
+  const win = {
+    setInterval(callback, period) { poll = callback; chosenInterval = period; return 7; },
+    clearInterval(id) { assert.equal(id, 7); cleared += 1; },
+    addEventListener(name, callback) {
+      assert.equal(name, "pagehide");
+      onPageHide = callback;
+    },
+  };
+  class Observer {
+    constructor(callback) { observe = callback; }
+    observe(target, config) {
+      assert.equal(target, doc);
+      assert.equal(config.attributes, true);
+      assert.equal(config.childList, true);
+      assert.equal(config.subtree, true);
+    }
+    disconnect() { disconnected += 1; }
+  }
+  observeUnpromptedPlayback(win, doc, Observer);
+  assert.equal(win.__noonSitePlayingObserved, false);
+  assert.equal(chosenInterval, 100);
+  state = {dataset: {playbackPlaying: "false"}};
+  observe();
+  assert.equal(win.__noonSitePlayingObserved, false);
+  // A live insert already marked playing can be detected even without a
+  // subsequent attribute change. The observer is strictly read-only.
+  state = {dataset: {playbackPlaying: "true"}};
+  poll();
+  assert.equal(win.__noonSitePlayingObserved, true);
+  assert.equal(disconnected, 1);
+  assert.equal(cleared, 1);
+  onPageHide();
+  assert.equal(disconnected, 1);
+});
+
+test("autoplay observer retires when page leaves before playback", () => {
+  let onPageHide = null, pollsCleared = 0, disconnected = 0;
+  const win = {
+    setInterval() { return 11; },
+    clearInterval(id) { assert.equal(id, 11); pollsCleared += 1; },
+    addEventListener(_name, listener) { onPageHide = listener; },
+  };
+  class Observer {
+    observe() {}
+    disconnect() { disconnected += 1; }
+  }
+  observeUnpromptedPlayback(win, {querySelector: () => null}, Observer);
+  onPageHide();
+  assert.equal(win.__noonSitePlayingObserved, false);
+  assert.equal(disconnected, 1);
+  assert.equal(pollsCleared, 1);
+});
 
 test("website qualification uses the actual optimized Pages runtime without relaxing live browser coverage", async () => {
   const workflow = await read(".github/workflows/playground-project-site.yml");

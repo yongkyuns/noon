@@ -2,7 +2,39 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts,
+  freshProductRunSettled } from "./playground-product-fps.mjs";
+
+test("product Run waits for its own generation, not the previous applied patch", () => {
+  let runGeneration = 4, patchGeneration = "4", patchState = "applied", runInFlight = false;
+  let statusState = "ready";
+  const browser = {
+    __noonExampleGallery: {generationDiagnostics: {get runGeneration() { return runGeneration; }},
+      get runInFlight() { return runInFlight; }},
+    document: {querySelector(selector) {
+      if (selector === "#patch-status") return {dataset: {
+        get state() { return patchState; },
+        get runGeneration() { return patchGeneration; },
+      }};
+      if (selector === "#status") return {dataset: {get state() { return statusState; }}};
+      return null;
+    }},
+  };
+  assert.equal(freshProductRunSettled(4, browser), false);
+  runGeneration = 5; runInFlight = true;
+  assert.equal(freshProductRunSettled(4, browser), false, "old applied patch cannot admit the new Run");
+  patchGeneration = "5"; patchState = "running";
+  assert.equal(freshProductRunSettled(4, browser), false);
+  patchState = "applied";
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "the correct new patch is observable while the source continuation is still active");
+  patchState = "error";
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "a true same-generation source error must remain visible");
+  patchState = "running"; statusState = "error"; runInFlight = false;
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "startup failure before patch identity is still reported");
+});
 
 function sample({
   now = 0,
