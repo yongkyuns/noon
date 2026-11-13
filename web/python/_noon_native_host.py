@@ -102,6 +102,15 @@ if hasattr(_native, "FontFace"):
     def noonCreateAuthoringMarkupTextHandle(*args):
         return _arena().markup_text(*args)
 
+if hasattr(_native, "CodeOptions"):
+    noonCodeOptions = _native.CodeOptions
+    noonCodeFromFamily = _native.code_from_family
+    noonCodeStylesList = _native.code_styles_list
+    noonCodeLanguagesList = _native.code_languages_list
+
+    def noonCreateAuthoringCodeHandle(source, options, context):
+        return _native.create_code(_arena(), source, options, context)
+
 if hasattr(_native.Store, "typst"):
     def noonCreateAuthoringTypstHandle(*args):
         return _arena().typst(*args)

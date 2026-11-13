@@ -10,7 +10,7 @@ use std::{rc::Rc, sync::Arc};
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct FontFace {
-    face: noon::NativeFontFace,
+    pub(crate) face: noon::NativeFontFace,
 }
 #[pymethods]
 impl FontFace {

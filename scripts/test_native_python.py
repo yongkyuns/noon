@@ -16,6 +16,7 @@ class NativePythonTests(unittest.TestCase):
         self.assertIn(Path(_noon_native.__file__).suffix, {".so", ".pyd"})
         for name in ("ordinary_affine_play", "ordinary_composition_play",
                      "ordinary_text_write", "ordinary_fade_play", "shared_text", "raster_image",
+                     "showcase_code_blocks",
                      "glow_pulse", "ordered_effects", "composed_effects", "effect_restore",
                      "noise_dissolve",
                      "linear_gradient", "radial_gradient", "noise_paint", "hatch_paint",
@@ -69,6 +70,22 @@ class NativePythonTests(unittest.TestCase):
                 close_scene(scene)
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
+
+    def test_code_listing_constructed_during_playback_can_be_copied(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        self.add(Dot())
+        self.wait(0.125)
+        listing = Code(code_string="value = 1", language="python", add_line_numbers=False)
+        duplicate = listing.copy()
+        assert duplicate.code_string == listing.code_string == "value = 1"
+        assert duplicate.code_lines[0] is not listing.code_lines[0]
+        self.add(duplicate)
+        self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
 
     def test_native_shape_matching_gallery_replays_the_membership_swap(self):
         path = ROOT / "web/python/examples/showcase_shape_matching.py"
