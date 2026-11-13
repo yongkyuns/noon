@@ -214,8 +214,8 @@ scene.add(&circle)?;
 
 The script capability delegates these edits to its `Scene`. Validation and atomic
 publication stay in that shared operation path, including while execution is
-running. Borrowed `LiveSession` operations serve explicit external-session and
-callback integration.
+running. `SceneExecution::live` borrows execution controls for animation
+activation, segment progression, and completion.
 
 Families use the same scene capability for construction, membership, and layout.
 Objects can be grouped directly from an array of references. The group remains a
@@ -453,12 +453,10 @@ An authored primary click can run a restoring `Indicate` without a Python callba
 self.on_click(shape, Indicate(shape, run_time=0.4))
 ```
 
-The Rust equivalents publish the same semantic binding before or during live authoring:
+The Rust Scene method publishes the same semantic binding in setup and during playback.
 
 ```rust
 scene.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
-// Or, after execution starts:
-live.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
 ```
 
 The action uses restoring `there_and_back` timing. A click on an already active target is ignored. Clicks do not interrupt an active authored segment or signal/host driver. Input remains available after the introduction, including when playback is paused at its endpoint or its source program has completed; the runtime drives and settles the short effective animation without advancing authored time.
@@ -469,7 +467,7 @@ The selection gallery and native `pointer_selection` example also enable cursor-
 
 The crate root and `noon::prelude` expose ordinary authoring handles, values, live operations, completion, and typed errors. `noon::integration` is the explicit raw semantic/resource and host plumbing boundary; `noon::diagnostics` is opt-in debug/export access. Neither namespace creates another scene or runtime.
 
-After creating an execution session, `scene.live(&mut session)` applies supported persistent edits and animation/completion operations through the same staged semantic/execution publication path. Rust `Mobject` inspection reads authored/base state; live/effective queries read the latest coherent runtime state. Failed preparation leaves both authored and effective published state unchanged.
+Use `Scene::into_execution` to retain the authoring owner during playback. Use `execution.scene_mut()` for persistent edits and `execution.scene()` for current observations. Use `execution.live()` to activate, drive, and complete segments. `Scene::authored` reads the base declaration, and `Scene::effective` reads the latest coherent runtime state. Failed preparation leaves both states unchanged.
 
 Raw integration-store access is deliberately not a live-mutation shortcut: edits outside coherent publication can stale a session and must be handled explicitly. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for the public typed path and `docs/architecture.md` for the authored/effective and publication contracts.
 
