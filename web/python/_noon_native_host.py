@@ -134,6 +134,26 @@ if hasattr(_native, "prepare_latex"):
     def noonCreateAuthoringLatexHandle(source, *arguments):
         return noonCreateAuthoringLatexStringsHandle([source], *arguments)
 
+    noonMatrixFromFamily = _native.matrix_from_family
+
+    def noonCreateAuthoringMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_matrix(_arena(), rows, (v, h, bracket_h, bracket_v, stretch), context)
+
+    def noonCreateAuthoringIntegerMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_numeric_matrix(
+            _arena(), rows, (v, h, bracket_h, bracket_v, stretch), False, context,
+        )
+
+    def noonCreateAuthoringDecimalMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_numeric_matrix(
+            _arena(), rows, (v, h, bracket_h, bracket_v, stretch), True, context,
+        )
+
+    def noonCreateAuthoringMobjectMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_mobject_matrix(
+            _arena(), rows, (v, h, bracket_h, bracket_v, stretch), context,
+        )
+
     def noonCreateAuthoringDecimalNumberHandle(*arguments):
         return _native.create_decimal(_arena(), *arguments)
 

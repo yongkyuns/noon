@@ -16,3 +16,10 @@ class MatrixExample(Scene):
         assert len(symbols.get_columns()) == 2
         assert existing.get_entries()[0] is entries[0][0]
         self.add(symbols, integers, decimals, existing)
+
+        await self.wait(0.1)
+        assert len(symbols.copy().get_columns()) == 2
+        late = IntegerMatrix([[5]]).shift(UP * 2)
+        assert len(late.get_entries()) == 1
+        self.add(late)
+        await self.wait(0.1)

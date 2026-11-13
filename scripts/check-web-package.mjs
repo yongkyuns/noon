@@ -1059,6 +1059,7 @@ for (const retired of [
   "liveStartNewPath(", "liveStartNewPathWithStride(", "liveSubcurve(",
   "livePromoteFamilyOwnPoints(", "livePromoteMobjectOwnPoints(",
   "liveCreateCoordinates(", "liveSetAngleValue(",
+  "liveCreateMatrix(", "liveCreateIntegerMatrix(", "liveCreateDecimalMatrix(", "liveCreateMobjectMatrix(",
   "liveTableCell(", "liveHighlightTableCell(", "liveGetHighlightedTableCell(",
   "liveCreateTable(", "liveCreateTableWithLabels(", "liveCreateMathTable(",
   "liveCreateIntegerTable(", "liveCreateDecimalTable(", "liveCreateMobjectTableWithLabels(",

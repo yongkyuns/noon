@@ -23,6 +23,8 @@ mod geometry;
 mod image;
 #[cfg(feature = "latex")]
 mod latex;
+#[cfg(feature = "latex")]
+mod matrix;
 mod mobject;
 #[cfg(feature = "latex")]
 mod numbers;
@@ -78,6 +80,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "latex")]
     {
         latex::register(m)?;
+        matrix::register(m)?;
         numbers::register(m)?;
     }
     #[cfg(feature = "capture")]

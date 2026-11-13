@@ -8,8 +8,8 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveCreateMatrix)]
-    pub fn live_create_matrix(
+    #[wasm_bindgen(js_name = createMatrix)]
+    pub fn create_matrix(
         &mut self,
         rows: js_sys::Array,
         options: WasmMatrixOptions,
@@ -25,8 +25,8 @@ impl CanonicalAuthoringSceneContext {
         .map(WasmMatrixHandle::new)
         .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveCreateIntegerMatrix)]
-    pub fn live_create_integer_matrix(
+    #[wasm_bindgen(js_name = createIntegerMatrix)]
+    pub fn create_integer_matrix(
         &mut self,
         rows: js_sys::Array,
         options: WasmMatrixOptions,
@@ -42,8 +42,8 @@ impl CanonicalAuthoringSceneContext {
         .map(|value| WasmMatrixHandle::new(value.into_matrix()))
         .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveCreateDecimalMatrix)]
-    pub fn live_create_decimal_matrix(
+    #[wasm_bindgen(js_name = createDecimalMatrix)]
+    pub fn create_decimal_matrix(
         &mut self,
         rows: js_sys::Array,
         options: WasmMatrixOptions,
@@ -63,8 +63,8 @@ impl CanonicalAuthoringSceneContext {
         .map(|value| WasmMatrixHandle::new(value.into_matrix()))
         .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveCreateMobjectMatrix)]
-    pub fn live_create_mobject_matrix(
+    #[wasm_bindgen(js_name = createMobjectMatrix)]
+    pub fn create_mobject_matrix(
         &mut self,
         rows: &WasmCompositeRows,
         options: WasmMatrixOptions,

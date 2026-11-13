@@ -133,6 +133,13 @@ class Demo(Scene):
         "requires an explicit native TeX compiler and BaKoMa font profile",
     )
     def test_latex_gallery_and_retained_part_edits(self):
+        matrix = ROOT / "web/python/examples/matrix.py"
+        scene = asyncio.run(run_source(matrix.read_text(), filename=str(matrix)))
+        try:
+            self.assertEqual(len(scene.mobjects), 5)
+        finally:
+            close_scene(scene)
+
         for name, time in (("showcase_latex_create", 0.5), ("showcase_linear_algebra", 2.5)):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
