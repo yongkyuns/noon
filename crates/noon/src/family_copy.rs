@@ -133,6 +133,10 @@ impl PendingSemanticCopy {
         self.copied[&self.source_root]
     }
 
+    pub(crate) fn copied_token(&self, source: SemanticNodeId) -> SemanticLocalNodeToken {
+        self.copied[&source]
+    }
+
     pub(crate) fn resolve<R>(
         self,
         result: &SemanticMutationTransactionResult,
@@ -553,18 +557,45 @@ impl Mobject {
 impl Scene {
     /// Copy a family and its metadata from the Scene's authored or effective state.
     pub fn copy_family(&mut self, family: &MobjectFamily) -> Result<FamilyCopy, LiveSessionError> {
-        MobjectTarget::from(family).require_store(self.integration_store())?;
+        self.copy_family_with_references(family, &[])
+    }
+
+    pub fn copy_family_with_references(
+        &mut self,
+        family: &MobjectFamily,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<FamilyCopy, LiveSessionError> {
+        self.copy_target(family.into(), references, MobjectFamily::from_node)
+    }
+
+    pub fn copy_mobject(&mut self, object: &Mobject) -> Result<MobjectCopy, LiveSessionError> {
+        self.copy_mobject_with_references(object, &[])
+    }
+
+    pub fn copy_mobject_with_references(
+        &mut self,
+        object: &Mobject,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<MobjectCopy, LiveSessionError> {
+        self.copy_target(object.into(), references, Mobject::from_node)
+    }
+
+    /// Prepare one detached editing target with the Scene's current state.
+    pub fn target_editor(&mut self, object: &Mobject) -> Result<Mobject, LiveSessionError> {
+        self.copy_mobject(object).map(|copy| copy.root().clone())
+    }
+
+    fn copy_target<R>(
+        &mut self,
+        source: MobjectTarget<'_>,
+        references: &[MobjectTarget<'_>],
+        from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+    ) -> Result<SemanticCopy<R>, LiveSessionError> {
+        source.require_store(self.integration_store())?;
         if let Some((store, root, execution)) = crate::scene::host_execution::parts_mut(self) {
-            return publish_running_copy(
-                store,
-                root,
-                execution,
-                family.into(),
-                &[],
-                MobjectFamily::from_node,
-            );
+            return publish_running_copy(store, root, execution, source, references, from_node);
         }
-        family.copy_family().map_err(Into::into)
+        authored_copy(source, references, from_node).map_err(Into::into)
     }
 }
 
@@ -577,14 +608,30 @@ pub(crate) fn publish_running_copy<R>(
     from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
 ) -> Result<SemanticCopy<R>, LiveSessionError> {
     crate::effective_capture::require_target_capture(execution, &store.borrow())?;
-    let (transaction, pending) = crate::family_copy::prepare_semantic_copy(
+    let (transaction, pending) =
+        prepare_running_copy(store, execution, source, references, |_, _| {})?;
+    let result = Scene::publish_running_transaction(store, root, execution, transaction)?;
+    pending
+        .resolve(&result, from_node)
+        .map_err(LiveSessionError::from)
+}
+
+pub(crate) fn prepare_running_copy(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    mut observe: impl FnMut(&Mobject, &SemanticObjectState),
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), LiveSessionError> {
+    prepare_semantic_copy(
         source,
         references,
         |mobject, graph_row| {
-            crate::effective_capture::capture_mobject_state_with_graph_dependency(
+            let state = crate::effective_capture::capture_mobject_state_with_graph_dependency(
                 store, execution, mobject, graph_row,
-            )
-            .map_err(LiveSessionError::from)
+            )?;
+            observe(mobject, &state);
+            Ok(state)
         },
         |store, source, style| {
             crate::effective_capture::capture_family_style(store, execution, source, style)
@@ -600,11 +647,7 @@ pub(crate) fn publish_running_copy<R>(
             )
             .map_err(LiveSessionError::from)
         },
-    )?;
-    let result = Scene::publish_running_transaction(store, root, execution, transaction)?;
-    pending
-        .resolve(&result, from_node)
-        .map_err(LiveSessionError::from)
+    )
 }
 
 fn authored_copy<R>(
@@ -612,7 +655,16 @@ fn authored_copy<R>(
     references: &[MobjectTarget<'_>],
     from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
 ) -> Result<SemanticCopy<R>, AuthoringError> {
-    let (transaction, pending) = prepare_semantic_copy(
+    let (transaction, pending) = prepare_authored_copy(source, references)?;
+    let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
+    pending.resolve(&result, from_node)
+}
+
+pub(crate) fn prepare_authored_copy(
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
+    prepare_semantic_copy(
         source,
         references,
         |mobject, _| mobject.state(),
@@ -622,9 +674,7 @@ fn authored_copy<R>(
                 .copy_effects_into(source, target, transaction)
                 .map_err(AuthoringError::from)
         },
-    )?;
-    let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
-    pending.resolve(&result, from_node)
+    )
 }
 
 #[cfg(test)]

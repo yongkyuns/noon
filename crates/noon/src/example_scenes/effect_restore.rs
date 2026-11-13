@@ -25,63 +25,100 @@ impl EffectRestore {
 impl LiveContinuation for EffectRestore {
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {}
             1 => {
                 self.saved_leaf = Some(
-                    live.copy_mobject(&self.leaf)
+                    scene
+                        .copy_mobject(&self.leaf)
                         .map_err(message)?
                         .root()
                         .clone(),
                 );
                 self.saved_group = Some(
-                    live.copy_family(&self.group)
+                    scene
+                        .copy_family(&self.group)
                         .map_err(message)?
                         .root()
                         .clone(),
                 );
-                live.set_effect(
-                    &self.leaf,
-                    "soften",
-                    EffectUpdate::default().radius(Pixels(3.0)),
-                )
-                .map_err(message)?;
-                live.set_effect(&self.leaf, "halo", EffectUpdate::default().intensity(1.0))
+                scene
+                    .live()
+                    .set_effect(
+                        &self.leaf,
+                        "soften",
+                        EffectUpdate::default().radius(Pixels(3.0)),
+                    )
                     .map_err(message)?;
-                live.set_effect(
-                    &self.group,
-                    "soften",
-                    EffectUpdate::default().radius(Pixels(4.0)),
-                )
-                .map_err(message)?;
-                live.set_family_object_opacity(&self.group, 0.25)
+                scene
+                    .live()
+                    .set_effect(&self.leaf, "halo", EffectUpdate::default().intensity(1.0))
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .set_effect(
+                        &self.group,
+                        "soften",
+                        EffectUpdate::default().radius(Pixels(4.0)),
+                    )
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .set_family_object_opacity(&self.group, 0.25)
                     .map_err(message)?;
             }
             2 => {
-                live.remove_effect(&self.leaf, "soften").map_err(message)?;
-                live.remove_effect(&self.leaf, "halo").map_err(message)?;
-                live.remove_effect(&self.group, "soften").map_err(message)?;
+                scene
+                    .live()
+                    .remove_effect(&self.leaf, "soften")
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .remove_effect(&self.leaf, "halo")
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .remove_effect(&self.group, "soften")
+                    .map_err(message)?;
             }
             3 | 5 => {
                 let (leaf, group) = self.saved()?;
-                live.become_mobject(&self.leaf, leaf, Default::default())
+                scene
+                    .live()
+                    .become_mobject(&self.leaf, leaf, Default::default())
                     .map_err(message)?;
-                live.become_family(&self.group, group, Default::default())
+                scene
+                    .live()
+                    .become_family(&self.group, group, Default::default())
                     .map_err(message)?;
             }
             4 => {
                 let (leaf, group) = self.saved()?;
-                live.set_effect(leaf, "halo", EffectUpdate::default().intensity(0.0))
+                scene
+                    .live()
+                    .set_effect(leaf, "halo", EffectUpdate::default().intensity(0.0))
                     .map_err(message)?;
-                live.set_family_object_opacity(group, 0.0)
+                scene
+                    .live()
+                    .set_family_object_opacity(group, 0.0)
                     .map_err(message)?;
             }
             6 => {
-                live.remove_effect(&self.leaf, "soften").map_err(message)?;
-                live.remove_effect(&self.leaf, "halo").map_err(message)?;
-                live.remove_effect(&self.group, "soften").map_err(message)?;
-                live.set_family_object_opacity(&self.group, 1.0)
+                scene
+                    .live()
+                    .remove_effect(&self.leaf, "soften")
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .remove_effect(&self.leaf, "halo")
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .remove_effect(&self.group, "soften")
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .set_family_object_opacity(&self.group, 1.0)
                     .map_err(message)?;
             }
             7 => return Ok(ContinuationStep::Finished),
@@ -89,7 +126,7 @@ impl LiveContinuation for EffectRestore {
         }
         self.stage += 1;
         Ok(ContinuationStep::Await(
-            live.wait_segment(0.5).map_err(message)?,
+            scene.live().wait_segment(0.5).map_err(message)?,
         ))
     }
 }

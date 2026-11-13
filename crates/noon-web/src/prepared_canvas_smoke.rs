@@ -216,24 +216,23 @@ impl LiveContinuation for CooperativeScene {
         &mut self,
         scene: &mut noon::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let stage = self.calls.get();
         self.calls.set(stage + 1);
         if stage == self.fail_at {
-            return live.wait_segment(-1.0).map(ContinuationStep::Await);
+            return scene.live().wait_segment(-1.0).map(ContinuationStep::Await);
         }
         if stage == 0 {
-            return Ok(ContinuationStep::Await(live.wait_segment(1.0)?));
+            return Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?));
         }
         if stage > self.steps {
             return Ok(ContinuationStep::Finished);
         }
         let x = -2.0 + f64::from(stage % 8) * 0.25;
         if self.animated {
-            let target = live.target_editor(&self.marker)?;
-            live.set_translation(&target, x, 2.0)?;
+            let target = scene.target_editor(&self.marker)?;
+            scene.live().set_translation(&target, x, 2.0)?;
             return Ok(ContinuationStep::Await(
-                live.declare_and_activate_transform_to(
+                scene.live().declare_and_activate_transform_to(
                     &self.marker,
                     &target,
                     AnimationOptions::new()
@@ -242,8 +241,8 @@ impl LiveContinuation for CooperativeScene {
                 )?,
             ));
         }
-        live.set_translation(&self.marker, x, 2.0)?;
-        Ok(ContinuationStep::Await(live.wait_segment(0.25)?))
+        scene.live().set_translation(&self.marker, x, 2.0)?;
+        Ok(ContinuationStep::Await(scene.live().wait_segment(0.25)?))
     }
 }
 #[wasm_bindgen]

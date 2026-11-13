@@ -40,7 +40,7 @@ impl LiveContinuation for RadialSurface {
         let segment = match self.stage {
             0 => scene.live().wait_segment(0.5),
             1 | 3 | 5 => {
-                let target = scene.live().target_editor(&self.panel).map_err(message)?;
+                let target = scene.target_editor(&self.panel).map_err(message)?;
                 match self.stage {
                     1 => {
                         scene

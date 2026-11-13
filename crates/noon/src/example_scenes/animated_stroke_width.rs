@@ -13,7 +13,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         scene.add(&shape)?;
         let mut session = scene.into_execution()?;
         for width in [0.2, 0.02] {
-            let target = session.live().target_editor(&shape)?;
+            let target = session.scene_mut().target_editor(&shape)?;
             session.scene_mut().set_style(
                 &target,
                 crate::StyleUpdate {

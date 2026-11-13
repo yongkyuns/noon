@@ -82,9 +82,8 @@ impl LiveContinuation for ShaderSweep {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 | 2 | 4 => live.wait_segment(0.5),
+            0 | 2 | 4 => scene.live().wait_segment(0.5),
             1 | 3 => {
                 if let Some(introduction) = self.deferred.take() {
                     if let Some(camera) = self.camera.take() {
@@ -93,14 +92,16 @@ impl LiveContinuation for ShaderSweep {
                             camera.node_id(),
                             noon_core::ViewColorProfile::Compatibility,
                         );
-                        live.apply(transaction).map_err(message)?;
+                        scene.live().apply(transaction).map_err(message)?;
                     }
                     let pending = match introduction {
                         Introduction::Membership => {
                             let members = self.panels.each_ref().map(crate::MobjectTarget::from);
-                            live.prepare_membership(crate::SceneMembershipRequest::Add(&members))
+                            scene
+                                .live()
+                                .prepare_membership(crate::SceneMembershipRequest::Add(&members))
                         }
-                        Introduction::Fade => live.prepare_composition(
+                        Introduction::Fade => scene.live().prepare_composition(
                             &AnimationCompositionRequest::Composition {
                                 kind: SemanticAnimationCompositionKind::Parallel,
                                 children: self
@@ -129,26 +130,30 @@ impl LiveContinuation for ShaderSweep {
                 let targets = self
                     .panels
                     .each_ref()
-                    .map(|panel| live.target_editor(panel));
+                    .map(|panel| scene.target_editor(panel));
                 let [left, right] = targets.map(|target| target.map_err(message));
                 let targets = [left?, right?];
                 for (i, target) in targets.iter().enumerate() {
-                    live.set_rotation(target, if outward { 0.35 } else { 0.0 })
+                    scene
+                        .live()
+                        .set_rotation(target, if outward { 0.35 } else { 0.0 })
                         .map_err(message)?;
-                    live.set_effect(
-                        target,
-                        "stripes",
-                        EffectUpdate::default().shader_parameter(
-                            &self.phase[i],
-                            ShaderValue::Scalar(if outward { 0.65 } else { 0.0 }),
-                        ),
-                    )
-                    .map_err(message)?;
+                    scene
+                        .live()
+                        .set_effect(
+                            target,
+                            "stripes",
+                            EffectUpdate::default().shader_parameter(
+                                &self.phase[i],
+                                ShaderValue::Scalar(if outward { 0.65 } else { 0.0 }),
+                            ),
+                        )
+                        .map_err(message)?;
                 }
                 let options = AnimationOptions::new()
                     .run_time(2.0)
                     .rate_func(RateFunction::Smooth);
-                live.declare_and_activate_animation_composition(
+                scene.live().declare_and_activate_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     &[
                         AnimationCompositionRequest::TransformTo(
@@ -166,9 +171,12 @@ impl LiveContinuation for ShaderSweep {
             }
             5 if self.retire => {
                 for panel in &self.panels {
-                    live.remove_effect(panel, "stripes").map_err(message)?;
+                    scene
+                        .live()
+                        .remove_effect(panel, "stripes")
+                        .map_err(message)?;
                 }
-                live.wait_segment(0.5)
+                scene.live().wait_segment(0.5)
             }
             5 | 6 => return Ok(ContinuationStep::Finished),
             _ => return Err("shader sweep resumed after completion".into()),

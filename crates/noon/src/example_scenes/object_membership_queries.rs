@@ -52,21 +52,24 @@ impl LiveContinuation for ObjectMembershipQueries {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         if self.stage == 2 {
             return Ok(ContinuationStep::Finished);
         }
         let step = (|| -> Result<_, LiveSessionError> {
             if self.stage == 0 {
-                assert_depth(live, &self.root, 1.125, -3.5, 4.75)?;
+                assert_depth(&mut scene.live(), &self.root, 1.125, -3.5, 4.75)?;
             }
             if self.stage == 1 {
-                live.replace_members((&self.root).into(), &[(&self.a).into(), (&self.b).into()])?;
-                live.shift_3d(&self.root, noon_core::SemanticVec3::new(0., 0., 0.5))?;
-                assert_depth(live, &self.root, 1.625, -3., 2.75)?;
-                assert_depth(live, &self.c, 4.75, 4.75, 4.75)?;
+                scene
+                    .live()
+                    .replace_members((&self.root).into(), &[(&self.a).into(), (&self.b).into()])?;
+                scene
+                    .live()
+                    .shift_3d(&self.root, noon_core::SemanticVec3::new(0., 0., 0.5))?;
+                assert_depth(&mut scene.live(), &self.root, 1.625, -3., 2.75)?;
+                assert_depth(&mut scene.live(), &self.c, 4.75, 4.75, 4.75)?;
                 // The Python metadata alias points to the same copied child.
-                let copied = live.copy_mobject_with_references(&self.root, &[(&self.b).into()])?;
+                let copied = scene.copy_mobject_with_references(&self.root, &[(&self.b).into()])?;
                 let copied_root = copied.root();
                 let copied_alias = copied.mobject(&self.b)?;
                 assert_ne!(copied_root.node_id(), self.root.node_id());
@@ -79,16 +82,16 @@ impl LiveContinuation for ObjectMembershipQueries {
                     copied_root.member_at(0)?.unwrap().as_target().node_id(),
                     self.a.node_id()
                 );
-                live.shift(copied_root, 0.0, -1.0)?;
+                scene.live().shift(copied_root, 0.0, -1.0)?;
                 assert_eq!(
                     split_ids(&self.root)?,
                     [self.root.node_id(), self.a.node_id(), self.b.node_id()]
                 );
-                live.add(copied_root)?;
-                assert_depth(live, copied_root, 1.625, -3., 2.75)?;
+                scene.live().add(copied_root)?;
+                assert_depth(&mut scene.live(), copied_root, 1.625, -3., 2.75)?;
             }
             self.stage += 1;
-            live.wait_segment(0.25).map(ContinuationStep::Await)
+            scene.live().wait_segment(0.25).map(ContinuationStep::Await)
         })();
         step.map_err(|error| error.to_string())
     }

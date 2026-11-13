@@ -1407,15 +1407,6 @@ impl SemanticExecutionPlayer {
             .map_err(Self::live_placement_error)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_copy_family(
-        &mut self,
-        source: &noon::MobjectFamily,
-        references: &[noon::MobjectTarget<'_>],
-    ) -> Result<noon::FamilyCopy, AuthoringFailure> {
-        self.with_live_session(|live| live.copy_family_with_references(source, references))
-    }
-
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_promote_own_points(
         &mut self,
@@ -1426,31 +1417,12 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_copy_mobject_family(
-        &mut self,
-        source: &noon::Mobject,
-        references: &[noon::MobjectTarget<'_>],
-    ) -> Result<noon::MobjectCopy, AuthoringFailure> {
-        self.with_live_session(|live| live.copy_mobject_with_references(source, references))
-    }
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_replace_members(
         &mut self,
         root: noon::MobjectTarget<'_>,
         members: &[noon::MobjectTarget<'_>],
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.replace_members(root, members))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_cyclic_replace_target(
-        &mut self,
-        source: &noon::MobjectFamily,
-        references: &[noon::MobjectTarget<'_>],
-    ) -> Result<noon::FamilyCopy, AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.cyclic_replace_target_with_references(source, references)
-        })
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2445,20 +2417,6 @@ impl SemanticExecutionPlayer {
             tracker,
         )
         .map_err(AuthoringFailure::from)
-    }
-
-    /// Create a detached target through the retained session so its semantic
-    /// publication remains coherent with this runtime. Detached target rows do
-    /// not create execution objects or frame work.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_target_editor(
-        &mut self,
-        source: &noon::Mobject,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .target_editor(source)
-            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

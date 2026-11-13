@@ -754,7 +754,6 @@ impl LiveContinuation for OrdinaryAffineContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let linear = |duration| {
             AnimationOptions::new()
                 .run_time(duration)
@@ -763,32 +762,42 @@ impl LiveContinuation for OrdinaryAffineContinuation {
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_transform_to(
-                    &self.circle,
-                    &self.first_target,
-                    linear(2.0),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.circle,
+                        &self.first_target,
+                        linear(2.0),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
                 self.stage = 2;
-                live.wait_segment(1.0)
+                scene
+                    .live()
+                    .wait_segment(1.0)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             2 => {
                 // This resumes after the wait's no-op endpoint. It proves that
                 // authored edits and late targets keep using the one live session.
-                live.shift(&self.circle, 1.0, 0.0)
+                scene
+                    .live()
+                    .shift(&self.circle, 1.0, 0.0)
                     .map_err(|error| error.to_string())?;
-                let late_target = live
+                let late_target = scene
                     .target_editor(&self.circle)
                     .map_err(|error| error.to_string())?;
-                live.set_translation(&late_target, 5.0, -1.0)
+                scene
+                    .live()
+                    .set_translation(&late_target, 5.0, -1.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 3;
-                live.declare_and_activate_transform_to(&self.circle, &late_target, linear(1.0))
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.circle, &late_target, linear(1.0))
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -1073,14 +1082,12 @@ impl LiveContinuation for OrdinaryCompositionContinuation {
             }
             1 => {
                 let left_fill = scene
-                    .live()
                     .target_editor(&self.left)
                     .map_err(|error| error.to_string())?;
                 scene
                     .set_fill_rgb(&left_fill, 1.0, 0.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
                 let right_fill = scene
-                    .live()
                     .target_editor(&self.right)
                     .map_err(|error| error.to_string())?;
                 scene
@@ -1273,7 +1280,6 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 // Captured callback alpha must survive RGB edits; absolute
                 // opacity edits must not multiply its intrinsic alpha again.
                 let copied = scene
-                    .live()
                     .target_editor(&self.circle)
                     .map_err(|error| error.to_string())?;
                 scene
@@ -2432,11 +2438,11 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
         assert_eq!(session.live().effective_layout(&left)?.center, (-2.0, 1.0));
         assert_eq!(session.live().effective_layout(&right)?.center, (2.0, -1.0));
 
-        let left_fill = session.live().target_editor(&left)?;
+        let left_fill = session.scene_mut().target_editor(&left)?;
         session
             .scene_mut()
             .set_fill_rgb(&left_fill, 1.0, 0.0, 0.0, 1.0)?;
-        let right_fill = session.live().target_editor(&right)?;
+        let right_fill = session.scene_mut().target_editor(&right)?;
         session
             .scene_mut()
             .set_fill_rgb(&right_fill, 0.0, 0.0, 1.0, 1.0)?;
@@ -2498,7 +2504,7 @@ pub fn ordinary_style_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
 
     let mut session = scene.into_execution()?;
     {
-        let target = session.live().target_editor(&circle)?;
+        let target = session.scene_mut().target_editor(&circle)?;
         session
             .scene_mut()
             .set_fill_rgb(&target, 1.0, 0.0, 0.0, 0.4)?;
@@ -2581,7 +2587,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         assert_eq!(paint_opacity.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.2)));
         assert_eq!(paint_opacity.opacity, 1.0);
 
-        let independent_target = session.live().target_editor(&circle)?;
+        let independent_target = session.scene_mut().target_editor(&circle)?;
         session
             .scene_mut()
             .set_fill_rgb(&independent_target, 1.0, 0.25, 0.75, 0.8)?;
@@ -2628,7 +2634,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session
             .scene_mut()
             .set_stroke(&circle, 1.0, 1.0, 1.0, 1.0)?;
-        let target = session.live().target_editor(&circle)?;
+        let target = session.scene_mut().target_editor(&circle)?;
         session
             .scene_mut()
             .set_color_rgba(&target, 1.0, 0.0, 0.0, 1.0)?;

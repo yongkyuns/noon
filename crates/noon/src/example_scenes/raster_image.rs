@@ -48,7 +48,7 @@ impl LiveContinuation for RasterImage {
                     .set_translation(&second, 2.0, 0.0)
                     .map_err(message)?;
                 scene.live().add(&second).map_err(message)?;
-                let target = scene.live().target_editor(&self.image).map_err(message)?;
+                let target = scene.target_editor(&self.image).map_err(message)?;
                 scene
                     .live()
                     .set_translation(&target, 0.0, 0.0)

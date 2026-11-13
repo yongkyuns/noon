@@ -795,18 +795,18 @@ mod tests {
             &mut self,
             scene: &mut ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
-            let live = &mut scene.live();
             use crate::effects::{
                 ShaderCoordinates, ShaderDependencies, ShaderEffect, ShaderProfile, ShaderSchema,
                 WgslEffectProgram,
             };
             if self.1 {
                 // Ordinary controls and detached animation targets must still work.
-                let target = live.target_editor(&self.0[0])?;
-                live.set_translation(&target, 1.0, 0.0)?;
+                let target = scene.target_editor(&self.0[0])?;
+                scene.live().set_translation(&target, 1.0, 0.0)?;
                 let definition = target.get_effect("stripes")?.authored_definition()?;
-                let detached =
-                    live.prepare_effect_attachments([(&target, definition, "detached")])?;
+                let detached = scene
+                    .live()
+                    .prepare_effect_attachments([(&target, definition, "detached")])?;
                 assert!(
                     detached.programs().is_empty(),
                     "detached authoring needs no GPU work"
@@ -819,21 +819,25 @@ mod tests {
                 parameters: Box::new([]),
             }, "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return input.color; }").unwrap();
             assert!(matches!(
-                live.add_effect(&self.0[0], ShaderEffect::new(material.clone()), "stripes"),
+                scene
+                    .live()
+                    .add_effect(&self.0[0], ShaderEffect::new(material.clone()), "stripes"),
                 Err(crate::LiveSessionError::Publication(
                     crate::ExecutionSessionPublicationError::ExternalEffectPreparationRequired
                 ))
             ));
             self.1 = true;
-            Ok(ContinuationStep::Publish(live.prepare_effect_attachments(
-                self.0.iter().map(|object| {
-                    (
-                        object,
-                        ShaderEffect::new(material.clone()).into(),
-                        "stripes",
-                    )
-                }),
-            )?))
+            Ok(ContinuationStep::Publish(
+                scene
+                    .live()
+                    .prepare_effect_attachments(self.0.iter().map(|object| {
+                        (
+                            object,
+                            ShaderEffect::new(material.clone()).into(),
+                            "stripes",
+                        )
+                    }))?,
+            ))
         }
     }
 

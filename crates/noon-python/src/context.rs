@@ -2480,10 +2480,13 @@ impl Context {
         if references.kind != "add" {
             return Err(engine_error("family copy references require an add batch"));
         }
-        self.with_live(|live| {
-            live.copy_family_with_references(&target.family, &references.targets())
-        })
-        .map(|copied| crate::family::FamilyCopy { copied })
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .copy_family_with_references(&target.family, &references.targets())
+            .map(|copied| crate::family::FamilyCopy { copied })
+            .map_err(engine_error)
     }
     #[pyo3(name = "liveEditFamilyMembership")]
     fn edit_family(
@@ -2652,8 +2655,13 @@ impl Context {
     #[pyo3(name = "liveTargetEditor")]
     fn target(&mut self, source: &MobjectHandle) -> PyResult<MobjectHandle> {
         self.available()?;
-        self.with_live(|live| live.target_editor(&source.handle))
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .target_editor(&source.handle)
             .map(MobjectHandle::from_semantic_mobject)
+            .map_err(engine_error)
     }
     #[pyo3(name = "liveCreateManimGeometry")]
     fn geometry(&mut self, options: &GeometryOptions) -> PyResult<MobjectHandle> {

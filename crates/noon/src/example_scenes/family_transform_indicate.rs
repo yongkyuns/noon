@@ -22,10 +22,10 @@ impl LiveContinuation for FamilyTransformIndicate {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_family_transform_to(
                         &self.source,
                         &self.target,
@@ -40,8 +40,9 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             1 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(live, -1.0, 1.0)?;
-                let segment = live
+                self.require_positions(&mut scene.live(), -1.0, 1.0)?;
+                let segment = scene
+                    .live()
                     .declare_and_activate_family_indicate(
                         &self.source,
                         IndicateOptions::default(),
@@ -56,14 +57,16 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             2 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(live, -1.0, 1.0)?;
+                self.require_positions(&mut scene.live(), -1.0, 1.0)?;
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             3 => {
-                let copied = live
+                let copied = scene
                     .copy_family_with_references(&self.source, &[(&self.saved_left).into()])
                     .map_err(|e| e.to_string())?;
                 if copied
@@ -78,22 +81,28 @@ impl LiveContinuation for FamilyTransformIndicate {
                 let left_target = copied
                     .mobject(&self.left)
                     .map_err(|error| error.to_string())?;
-                live.shift(&left_target, 1.0, 0.0)
+                scene
+                    .live()
+                    .shift(&left_target, 1.0, 0.0)
                     .map_err(|e| e.to_string())?;
-                live.become_mobject(
-                    &self.left,
-                    &left_target,
-                    crate::ManimBecomeOptions::default(),
-                )
-                .map_err(|e| e.to_string())?;
+                scene
+                    .live()
+                    .become_mobject(
+                        &self.left,
+                        &left_target,
+                        crate::ManimBecomeOptions::default(),
+                    )
+                    .map_err(|e| e.to_string())?;
                 self.stage = 4;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             4 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(live, 0.0, 1.0)?;
+                self.require_positions(&mut scene.live(), 0.0, 1.0)?;
                 self.stage = 5;
                 Ok(ContinuationStep::Finished)
             }
