@@ -9184,17 +9184,16 @@ mod wasm {
         }
 
         /// Promote own points through one coherent copy/clear/member publication.
-        #[wasm_bindgen(js_name = livePromoteFamilyOwnPoints)]
-        pub fn live_promote_family_own_points(
+        #[wasm_bindgen(js_name = promoteFamilyOwnPoints)]
+        pub fn promote_family_own_points(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             let source = source.semantic_family()?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .promote_own_points(
                     (&source).into(),
                     &references.copy_references().map_err(typed_js_error)?,
@@ -9203,16 +9202,15 @@ mod wasm {
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = livePromoteMobjectOwnPoints)]
-        pub fn live_promote_mobject_own_points(
+        #[wasm_bindgen(js_name = promoteMobjectOwnPoints)]
+        pub fn promote_mobject_own_points(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .promote_own_points(
                     source.semantic_mobject().into(),
                     &references.copy_references().map_err(typed_js_error)?,

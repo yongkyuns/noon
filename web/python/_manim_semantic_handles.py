@@ -3565,7 +3565,7 @@ def _group_target_context(value: object, *, include_setup=False) -> object | Non
 def _group_copy_operation(
     self: _base.Mobject, *, cyclic_replace: bool, promote_own_points: bool = False
 ) -> _base.Mobject:
-    context = _group_target_context(self, include_setup=not promote_own_points)
+    context = _group_target_context(self, include_setup=True)
 
     def excluded_fields(value):
         excluded = {
@@ -3591,7 +3591,7 @@ def _group_copy_operation(
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
     if promote_own_points:
         copied = _membership_call(
-            self, context, "livePromoteFamilyOwnPoints", "livePromoteMobjectOwnPoints",
+            self, context, "promoteFamilyOwnPoints", "promoteMobjectOwnPoints",
             "promoteOwnPoints", references,
         )
     elif cyclic_replace:
