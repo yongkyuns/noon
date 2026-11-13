@@ -40,7 +40,7 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             1 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(&mut scene.live(), -1.0, 1.0)?;
+                self.require_positions(&scene.live(), -1.0, 1.0)?;
                 let segment = scene
                     .live()
                     .declare_and_activate_family_indicate(
@@ -57,7 +57,7 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             2 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(&mut scene.live(), -1.0, 1.0)?;
+                self.require_positions(&scene.live(), -1.0, 1.0)?;
                 self.stage = 3;
                 scene
                     .live()
@@ -102,7 +102,7 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             4 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(&mut scene.live(), 0.0, 1.0)?;
+                self.require_positions(&scene.live(), 0.0, 1.0)?;
                 self.stage = 5;
                 Ok(ContinuationStep::Finished)
             }

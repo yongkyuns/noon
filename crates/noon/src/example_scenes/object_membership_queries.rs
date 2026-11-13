@@ -57,7 +57,7 @@ impl LiveContinuation for ObjectMembershipQueries {
         }
         let step = (|| -> Result<_, LiveSessionError> {
             if self.stage == 0 {
-                assert_depth(&mut scene.live(), &self.root, 1.125, -3.5, 4.75)?;
+                assert_depth(&scene.live(), &self.root, 1.125, -3.5, 4.75)?;
             }
             if self.stage == 1 {
                 scene
@@ -66,8 +66,8 @@ impl LiveContinuation for ObjectMembershipQueries {
                 scene
                     .live()
                     .shift_3d(&self.root, noon_core::SemanticVec3::new(0., 0., 0.5))?;
-                assert_depth(&mut scene.live(), &self.root, 1.625, -3., 2.75)?;
-                assert_depth(&mut scene.live(), &self.c, 4.75, 4.75, 4.75)?;
+                assert_depth(&scene.live(), &self.root, 1.625, -3., 2.75)?;
+                assert_depth(&scene.live(), &self.c, 4.75, 4.75, 4.75)?;
                 // The Python metadata alias points to the same copied child.
                 let copied = scene.copy_mobject_with_references(&self.root, &[(&self.b).into()])?;
                 let copied_root = copied.root();
@@ -88,7 +88,7 @@ impl LiveContinuation for ObjectMembershipQueries {
                     [self.root.node_id(), self.a.node_id(), self.b.node_id()]
                 );
                 scene.live().add(copied_root)?;
-                assert_depth(&mut scene.live(), copied_root, 1.625, -3., 2.75)?;
+                assert_depth(&scene.live(), copied_root, 1.625, -3., 2.75)?;
             }
             self.stage += 1;
             scene.live().wait_segment(0.25).map(ContinuationStep::Await)
