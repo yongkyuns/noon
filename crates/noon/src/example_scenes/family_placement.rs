@@ -193,6 +193,47 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 (1.0, 1.0),
             )
             .map_err(|e| e.to_string())?;
+        let before = execution
+            .scene()
+            .effective_layout(&first)
+            .map_err(|e| e.to_string())?
+            .center;
+        let target_center = execution
+            .scene()
+            .effective_family_layout(&target)
+            .map_err(|e| e.to_string())?
+            .center;
+        for (mask, expected_x) in [(0.0, before.0), (1.0, target_center.0)] {
+            execution
+                .scene_mut()
+                .move_to(
+                    &first,
+                    crate::LiveLayoutTarget::Anchor(&target_anchor),
+                    (0.0, 0.0),
+                    (mask, 0.0),
+                )
+                .map_err(|e| e.to_string())?;
+            let after = execution
+                .scene()
+                .effective_layout(&first)
+                .map_err(|e| e.to_string())?
+                .center;
+            assert!((after.0 - expected_x).abs() < 1e-6);
+            assert!((after.1 - before.1).abs() < 1e-6);
+        }
+        execution
+            .scene_mut()
+            .align_mobject_on_frame(&first, (0.0, 1.0), 0.5)
+            .map_err(|e| e.to_string())?;
+        let layout = execution
+            .scene()
+            .effective_layout(&first)
+            .map_err(|e| e.to_string())?;
+        assert!((layout.center.1 + layout.height * 0.5 - 3.5).abs() < 1e-6);
+        execution
+            .scene_mut()
+            .move_to_point(&first, before.0, before.1)
+            .map_err(|e| e.to_string())?;
     }
     Ok(execution)
 }

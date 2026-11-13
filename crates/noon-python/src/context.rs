@@ -4306,6 +4306,39 @@ impl Context {
             )
         })
     }
+    #[pyo3(name = "liveMoveToLayout")]
+    fn move_to_layout(
+        &mut self,
+        source: &MobjectHandle,
+        target: &LayoutAnchor,
+        edge_x: f64,
+        edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.move_to(
+                &source.handle,
+                noon::LiveLayoutTarget::Anchor(&target.anchor),
+                (edge_x, edge_y),
+                (mask_x, mask_y),
+            )
+        })
+    }
+    #[pyo3(name = "liveAlignMobjectOnFrame")]
+    fn align_mobject_on_frame(
+        &mut self,
+        source: &MobjectHandle,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.align_mobject_on_frame(&source.handle, (direction_x, direction_y), buff)
+        })
+    }
     #[pyo3(name = "liveMoveToMobject")]
     fn move_to_mobject(
         &mut self,
