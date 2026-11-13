@@ -2,8 +2,7 @@
 use crate::{
     context::{Context, Store},
     engine_error,
-    family::{entry_handle, FamilyHandle},
-    mobject::MobjectHandle,
+    family::{entry_handle, read_entry, FamilyHandle},
 };
 use noon::{CompositeEntryHandle, DecimalFormat, Matrix, MatrixOptions};
 use pyo3::prelude::*;
@@ -120,15 +119,6 @@ fn create_mobject_matrix(
         .map(|value| MatrixHandle(value.into_matrix()))
         .map_err(engine_error)
     })
-}
-
-fn read_entry(value: &Bound<'_, PyAny>) -> PyResult<CompositeEntryHandle> {
-    if let Ok(value) = value.cast::<MobjectHandle>() {
-        return Ok(CompositeEntryHandle::Mobject(value.borrow().handle.clone()));
-    }
-    Ok(CompositeEntryHandle::Family(
-        value.cast::<FamilyHandle>()?.borrow().family.clone(),
-    ))
 }
 
 fn matrix_options(

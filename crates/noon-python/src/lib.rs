@@ -37,6 +37,8 @@ mod shaders;
 mod signals;
 mod spatial;
 mod svg;
+#[cfg(feature = "latex")]
+mod table;
 #[cfg(feature = "native-text")]
 mod text;
 #[cfg(feature = "typst")]
@@ -82,6 +84,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         latex::register(m)?;
         matrix::register(m)?;
         numbers::register(m)?;
+        table::register(m)?;
     }
     #[cfg(feature = "capture")]
     {

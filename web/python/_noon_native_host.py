@@ -154,6 +154,48 @@ if hasattr(_native, "prepare_latex"):
             _arena(), rows, (v, h, bracket_h, bracket_v, stretch), context,
         )
 
+    noonTableFromFamily = _native.table_from_family
+    noonTableCell = _native.table_cell
+
+    def noonIsAuthoringFamilyHandle(handle):
+        return isinstance(handle, _native.FamilyHandle)
+
+    def _table_options(values):
+        return (values[:4], values[4:8], values[8:12], values[12:])
+
+    def noonCreateAuthoringTableHandle(rows, *values):
+        return noonCreateAuthoringTableWithLabelsHandle(rows, None, None, [], *values)
+
+    def noonCreateAuthoringTableWithLabelsHandle(rows, row_labels, column_labels, corner, *values):
+        return _native.create_text_table(
+            _arena(), rows, row_labels, column_labels, next(iter(corner), None),
+            _table_options(values[:-1]), values[-1],
+        )
+
+    def noonCreateAuthoringMobjectTableHandle(rows, row_labels, column_labels, corner, *values):
+        return _native.create_mobject_table(
+            _arena(), rows, row_labels, column_labels, next(iter(corner), None),
+            _table_options(values[:-1]), values[-1],
+        )
+
+    def noonCreateAuthoringMathTableHandle(rows, *values):
+        return _native.create_math_table(_arena(), rows, _table_options(values[:-1]), values[-1])
+
+    def noonCreateAuthoringIntegerTableHandle(rows, *values):
+        return _native.create_numeric_table(_arena(), rows, None, _table_options(values[:-1]), values[-1])
+
+    def noonCreateAuthoringDecimalTableHandle(rows, places, sign, commas, ellipsis, unit, *values):
+        return _native.create_numeric_table(
+            _arena(), rows, (places, sign, commas, ellipsis, unit),
+            _table_options(values[:-1]), values[-1],
+        )
+
+    def noonGetHighlightedTableCell(context, selection, column, red, green, blue, alpha, opacity):
+        return _native.highlighted_cell(context, selection, column, (red, green, blue, alpha), opacity, False)
+
+    def noonHighlightTableCell(context, selection, column, red, green, blue, alpha, opacity):
+        return _native.highlighted_cell(context, selection, column, (red, green, blue, alpha), opacity, True)
+
     def noonCreateAuthoringDecimalNumberHandle(*arguments):
         return _native.create_decimal(_arena(), *arguments)
 
