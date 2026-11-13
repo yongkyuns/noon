@@ -87,16 +87,6 @@ fn require_running_object(
     object.validate()
 }
 
-fn require_running_family(
-    store: &Rc<RefCell<SemanticStore>>,
-    family: &MobjectFamily,
-) -> Result<(), AuthoringError> {
-    if !Rc::ptr_eq(store, family.integration_store()) {
-        return Err(AuthoringError::ForeignStore);
-    }
-    family.validate()
-}
-
 /// Capture, prepare and publish one ordinary running path edit.
 ///
 /// Resource admission remains before effective capture, preserving the existing
@@ -116,176 +106,6 @@ pub(crate) fn publish_running_object_edit(
         return Ok(());
     };
     drop(store_ref);
-    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
-}
-
-/// Apply one matrix edit from the current coherent effective object state.
-pub(crate) fn publish_running_apply_matrix(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    object: &Mobject,
-    values: &[f64],
-    dimensions: (usize, usize),
-    about: (f64, f64),
-) -> Result<(), AuthoringError> {
-    require_running_object(store, object)?;
-    let captured = crate::effective_capture::capture_mobject_state(store, execution, object)?;
-    let prepared = {
-        let store = store.borrow();
-        crate::matrix_authoring::prepare_apply_matrix(
-            &store,
-            object.node_id(),
-            captured,
-            values,
-            dimensions.0,
-            dimensions.1,
-            about,
-        )?
-    };
-    let Some(prepared) = prepared else {
-        return Ok(());
-    };
-    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
-}
-
-/// Capture the source and replace one destination with its selected path interval.
-pub(crate) fn publish_running_pointwise_partial(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    object: &Mobject,
-    source: &Mobject,
-    a: f64,
-    b: f64,
-) -> Result<(), AuthoringError> {
-    require_running_object(store, source)?;
-    let (a, b) = partial_interval(a, b)?;
-    let source = crate::effective_capture::capture_mobject_state(store, execution, source)?;
-    publish_running_object_edit(
-        store,
-        root,
-        execution,
-        object,
-        PathEdit::Partial {
-            source: &source,
-            a,
-            b,
-        },
-    )
-}
-
-/// Append a source vector object's current effective path to one destination.
-pub(crate) fn publish_running_append_vectorized_mobject(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    object: &Mobject,
-    source: &Mobject,
-) -> Result<(), AuthoringError> {
-    publish_running_append_vectorized_mobject_with_stride(store, root, execution, object, source, 4)
-}
-
-/// Append a vector object's current effective raw points, classifying a
-/// pending destination anchor with the destination's mutable Manim stride.
-pub(crate) fn publish_running_append_vectorized_mobject_with_stride(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    object: &Mobject,
-    source: &Mobject,
-    stride: i32,
-) -> Result<(), AuthoringError> {
-    require_running_object(store, source)?;
-    let source = crate::effective_capture::capture_mobject_state(store, execution, source)?;
-    publish_running_object_edit(
-        store,
-        root,
-        execution,
-        object,
-        PathEdit::AppendVectorizedWithStride {
-            source: &source,
-            stride,
-        },
-    )
-}
-
-/// Change every authoritative family leaf between smooth and jagged anchors.
-pub(crate) fn publish_running_family_anchor_mode(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    family: &MobjectFamily,
-    smooth: bool,
-) -> Result<(), AuthoringError> {
-    require_running_family(store, family)?;
-    require_running_path_resource_admission(store, root, execution)?;
-    let nodes = store
-        .borrow()
-        .ordered_leaf_nodes(family.node_id())
-        .map_err(AuthoringError::from)?;
-    let states = nodes
-        .into_iter()
-        .map(|node| {
-            let object = Mobject::from_node(Rc::clone(store), node)?;
-            Ok((
-                node,
-                crate::effective_capture::capture_mobject_state(store, execution, &object)?,
-            ))
-        })
-        .collect::<Result<Vec<_>, AuthoringError>>()?;
-    let prepared = {
-        let store = store.borrow();
-        crate::path_smoothing::prepare_anchor_edits(&store, states, smooth)?
-    };
-    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
-}
-
-/// Reverse point order for every supported geometry leaf in one authoritative
-/// family transaction. Text and image resources have no shared vector-point
-/// payload in Noon and are left unchanged.
-pub(crate) fn publish_running_family_reverse_points(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    family: &MobjectFamily,
-) -> Result<(), AuthoringError> {
-    require_running_family(store, family)?;
-    require_running_path_resource_admission(store, root, execution)?;
-    let nodes = store
-        .borrow()
-        .ordered_last_occurrence_leaf_nodes(family.node_id())
-        .map_err(AuthoringError::from)?;
-    let states = nodes
-        .into_iter()
-        .map(|node| {
-            let object = Mobject::from_node(Rc::clone(store), node)?;
-            Ok((
-                node,
-                crate::effective_capture::capture_mobject_state(store, execution, &object)?,
-            ))
-        })
-        .collect::<Result<Vec<_>, AuthoringError>>()?;
-    let prepared = {
-        let store = store.borrow();
-        prepare_family_reverse_points(&store, states)?
-    };
-    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
-}
-
-pub(crate) fn publish_running_object_reverse_points(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    object: &Mobject,
-) -> Result<(), AuthoringError> {
-    require_running_object(store, object)?;
-    require_running_path_resource_admission(store, root, execution)?;
-    let state = crate::effective_capture::capture_mobject_state(store, execution, object)?;
-    let prepared = {
-        let store = store.borrow();
-        prepare_family_reverse_points(&store, [(object.node_id(), state)])?
-    };
     publish_running_path_edits(store, root, execution, prepared).map(|_| ())
 }
 
@@ -378,59 +198,6 @@ fn prepare_family_repeat_points(
     PreparedPathEdits::prepare_preserving_transform(store, replacements)
 }
 
-pub(crate) fn publish_running_family_repeat_points(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    family: &MobjectFamily,
-    count: usize,
-) -> Result<(), AuthoringError> {
-    require_running_family(store, family)?;
-    require_running_path_resource_admission(store, root, execution)?;
-    if count == 0 {
-        return Ok(());
-    }
-    let nodes = store
-        .borrow()
-        .ordered_last_occurrence_leaf_nodes(family.node_id())
-        .map_err(AuthoringError::from)?;
-    let states = nodes
-        .into_iter()
-        .map(|node| {
-            let object = Mobject::from_node(Rc::clone(store), node)?;
-            Ok((
-                node,
-                crate::effective_capture::capture_mobject_state(store, execution, &object)?,
-            ))
-        })
-        .collect::<Result<Vec<_>, AuthoringError>>()?;
-    let prepared = {
-        let store = store.borrow();
-        prepare_family_repeat_points(&store, states, count)?
-    };
-    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
-}
-
-pub(crate) fn publish_running_object_repeat_points(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    object: &Mobject,
-    count: usize,
-) -> Result<(), AuthoringError> {
-    require_running_object(store, object)?;
-    require_running_path_resource_admission(store, root, execution)?;
-    if count == 0 {
-        return Ok(());
-    }
-    let state = crate::effective_capture::capture_mobject_state(store, execution, object)?;
-    let prepared = {
-        let store = store.borrow();
-        prepare_family_repeat_points(&store, [(object.node_id(), state)], count)?
-    };
-    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
-}
-
 impl MobjectFamily {
     /// Reverse the stored point order of each supported geometry leaf while
     /// retaining the family's membership, paint, and member transforms.
@@ -511,7 +278,27 @@ impl Mobject {
 }
 
 impl crate::Scene {
-    /// Apply a pointwise matrix through this Scene's running publication authority.
+    pub(crate) fn edit_object_path(
+        &mut self,
+        object: &Mobject,
+        edit: PathEdit<'_>,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        self.require_resource_admission()?;
+        let state = self.capture_mobject_state(object)?;
+        let prepared = prepare_object_edit(
+            &self.integration_store().borrow(),
+            object.node_id(),
+            state,
+            edit,
+        )?;
+        if let Some(prepared) = prepared {
+            self.publish_path_edits(prepared)?;
+        }
+        Ok(())
+    }
+
+    /// Apply a pointwise matrix to the object's world path.
     pub fn apply_matrix(
         &mut self,
         object: &Mobject,
@@ -521,17 +308,21 @@ impl crate::Scene {
         about_x: f64,
         about_y: f64,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_apply_matrix(
-                store,
-                root,
-                execution,
-                object,
-                values,
-                (rows, columns),
-                (about_x, about_y),
-            )
-        })
+        self.require_object(object)?;
+        let state = self.capture_mobject_state(object)?;
+        let prepared = crate::matrix_authoring::prepare_apply_matrix(
+            &self.integration_store().borrow(),
+            object.node_id(),
+            state,
+            values,
+            rows,
+            columns,
+            (about_x, about_y),
+        )?;
+        if let Some(prepared) = prepared {
+            self.publish_path_edits(prepared)?;
+        }
+        Ok(())
     }
 
     pub fn set_points(&mut self, object: &Mobject, points: &[Vec2]) -> Result<(), AuthoringError> {
@@ -551,9 +342,7 @@ impl crate::Scene {
         object: &Mobject,
         points: &[(f64, f64)],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::RawPoints(points))
-        })
+        self.edit_object_path(object, PathEdit::RawPoints(points))
     }
 
     pub fn append_points_f64(
@@ -561,15 +350,7 @@ impl crate::Scene {
         object: &Mobject,
         points: &[(f64, f64)],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::AppendRawPoints(points),
-            )
-        })
+        self.edit_object_path(object, PathEdit::AppendRawPoints(points))
     }
 
     pub fn set_points_smoothly(
@@ -577,15 +358,7 @@ impl crate::Scene {
         object: &Mobject,
         points: &[Vec2],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::SmoothCorners(points),
-            )
-        })
+        self.edit_object_path(object, PathEdit::SmoothCorners(points))
     }
 
     pub fn make_smooth(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
@@ -601,15 +374,7 @@ impl crate::Scene {
         object: &Mobject,
         smooth: bool,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::AnchorMode(smooth),
-            )
-        })
+        self.edit_object_path(object, PathEdit::AnchorMode(smooth))
     }
 
     pub fn scale_handle_to_anchor_distances(
@@ -617,15 +382,7 @@ impl crate::Scene {
         object: &Mobject,
         factor: f64,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::ScaleHandles(factor),
-            )
-        })
+        self.edit_object_path(object, PathEdit::ScaleHandles(factor))
     }
 
     pub fn set_points_as_corners(
@@ -633,9 +390,7 @@ impl crate::Scene {
         object: &Mobject,
         points: &[Vec2],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Corners(points))
-        })
+        self.edit_object_path(object, PathEdit::Corners(points))
     }
 
     pub fn set_points_as_corners_with_samples(
@@ -644,18 +399,13 @@ impl crate::Scene {
         points: &[Vec2],
         bezier_t_values: &[f64; 4],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::CornersWithSamples {
-                    points,
-                    bezier_t_values,
-                },
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::CornersWithSamples {
+                points,
+                bezier_t_values,
+            },
+        )
     }
 
     pub fn set_cubic_bezier_curves(
@@ -663,27 +413,11 @@ impl crate::Scene {
         object: &Mobject,
         curves: &[[Vec2; 4]],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::SetCubicCurves(curves),
-            )
-        })
+        self.edit_object_path(object, PathEdit::SetCubicCurves(curves))
     }
 
     pub fn start_new_path(&mut self, object: &Mobject, point: Vec2) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Start { point, stride: 4 },
-            )
-        })
+        self.edit_object_path(object, PathEdit::Start { point, stride: 4 })
     }
 
     pub fn start_new_path_with_stride(
@@ -692,21 +426,11 @@ impl crate::Scene {
         point: Vec2,
         stride: i32,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Start { point, stride },
-            )
-        })
+        self.edit_object_path(object, PathEdit::Start { point, stride })
     }
 
     pub fn add_line_to(&mut self, object: &Mobject, point: Vec2) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Line(point))
-        })
+        self.edit_object_path(object, PathEdit::Line(point))
     }
 
     pub fn add_line_to_with_stride(
@@ -715,15 +439,7 @@ impl crate::Scene {
         point: Vec2,
         stride: i32,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::LineWithStride(point, stride),
-            )
-        })
+        self.edit_object_path(object, PathEdit::LineWithStride(point, stride))
     }
 
     pub fn add_line_to_with_stride_and_samples(
@@ -733,19 +449,14 @@ impl crate::Scene {
         stride: i32,
         bezier_t_values: &[f64; 4],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::LineWithSamples {
-                    point,
-                    stride,
-                    bezier_t_values,
-                },
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::LineWithSamples {
+                point,
+                stride,
+                bezier_t_values,
+            },
+        )
     }
 
     pub fn add_quadratic_bezier_curve_to(
@@ -778,21 +489,14 @@ impl crate::Scene {
         anchor: (f64, f64),
         stride: i32,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::QuadraticWithStride(control, anchor, stride),
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::QuadraticWithStride(control, anchor, stride),
+        )
     }
 
     pub fn clear_points(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Clear)
-        })
+        self.edit_object_path(object, PathEdit::Clear)
     }
 
     pub fn add_cubic_bezier_curve_to(
@@ -802,15 +506,7 @@ impl crate::Scene {
         c2: Vec2,
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Cubic(c1, c2, anchor),
-            )
-        })
+        self.edit_object_path(object, PathEdit::Cubic(c1, c2, anchor))
     }
 
     pub fn add_cubic_bezier_curve_to_with_stride(
@@ -821,15 +517,10 @@ impl crate::Scene {
         anchor: Vec2,
         stride: i32,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::CubicWithStride(control1, control2, anchor, stride),
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::CubicWithStride(control1, control2, anchor, stride),
+        )
     }
 
     pub fn add_smooth_curve_to(
@@ -838,15 +529,7 @@ impl crate::Scene {
         handle2: Option<Vec2>,
         anchor: Vec2,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::SmoothCurve { handle2, anchor },
-            )
-        })
+        self.edit_object_path(object, PathEdit::SmoothCurve { handle2, anchor })
     }
 
     pub fn add_smooth_curve_to_with_stride(
@@ -856,19 +539,14 @@ impl crate::Scene {
         anchor: Vec2,
         stride: i32,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::SmoothCurveWithStride {
-                    handle2,
-                    anchor,
-                    stride,
-                },
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::SmoothCurveWithStride {
+                handle2,
+                anchor,
+                stride,
+            },
+        )
     }
 
     pub fn add_cubic_bezier_curve(
@@ -879,15 +557,10 @@ impl crate::Scene {
         handle2: Vec2,
         anchor2: Vec2,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2),
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::CubicCurve(anchor1, handle1, handle2, anchor2),
+        )
     }
 
     pub fn add_cubic_bezier_curves(
@@ -895,15 +568,7 @@ impl crate::Scene {
         object: &Mobject,
         curves: &[[Vec2; 4]],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::CubicCurves(curves),
-            )
-        })
+        self.edit_object_path(object, PathEdit::CubicCurves(curves))
     }
 
     pub fn add_points_as_corners(
@@ -911,15 +576,7 @@ impl crate::Scene {
         object: &Mobject,
         points: &[Vec2],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::AppendCorners(points),
-            )
-        })
+        self.edit_object_path(object, PathEdit::AppendCorners(points))
     }
 
     pub fn add_points_as_corners_with_stride(
@@ -929,19 +586,14 @@ impl crate::Scene {
         stride: i32,
         bezier_t_values: &[f64],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::AppendCornersWithStride {
-                    points,
-                    stride,
-                    bezier_t_values,
-                },
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::AppendCornersWithStride {
+                points,
+                stride,
+                bezier_t_values,
+            },
+        )
     }
 
     pub fn append_vectorized_mobject(
@@ -949,9 +601,7 @@ impl crate::Scene {
         object: &Mobject,
         source: &Mobject,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_append_vectorized_mobject(store, root, execution, object, source)
-        })
+        self.append_vectorized_mobject_with_stride(object, source, 4)
     }
 
     /// Append another vector object's points using the mutable destination stride.
@@ -961,17 +611,19 @@ impl crate::Scene {
         source: &Mobject,
         stride: i32,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_append_vectorized_mobject_with_stride(
-                store, root, execution, object, source, stride,
-            )
-        })
+        self.require_object(source)?;
+        let source = self.capture_mobject_state(source)?;
+        self.edit_object_path(
+            object,
+            PathEdit::AppendVectorizedWithStride {
+                source: &source,
+                stride,
+            },
+        )
     }
 
     pub fn close_path(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Close)
-        })
+        self.edit_object_path(object, PathEdit::Close)
     }
 
     pub fn close_path_with_stride(
@@ -981,19 +633,14 @@ impl crate::Scene {
         tolerance: f64,
         bezier_t_values: &[f64],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::CloseWithStride {
-                    stride,
-                    tolerance,
-                    bezier_t_values,
-                },
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::CloseWithStride {
+                stride,
+                tolerance,
+                bezier_t_values,
+            },
+        )
     }
 
     pub fn insert_n_curves(
@@ -1001,21 +648,11 @@ impl crate::Scene {
         object: &Mobject,
         additional: usize,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Subdivide(additional),
-            )
-        })
+        self.edit_object_path(object, PathEdit::Subdivide(additional))
     }
 
     pub fn reverse_direction(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Reverse)
-        })
+        self.edit_object_path(object, PathEdit::Reverse)
     }
 
     pub fn pointwise_become_partial(
@@ -1025,9 +662,17 @@ impl crate::Scene {
         a: f64,
         b: f64,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_pointwise_partial(store, root, execution, object, source, a, b)
-        })
+        self.require_object(source)?;
+        let (a, b) = partial_interval(a, b)?;
+        let source = self.capture_mobject_state(source)?;
+        self.edit_object_path(
+            object,
+            PathEdit::Partial {
+                source: &source,
+                a,
+                b,
+            },
+        )
     }
 
     pub fn make_family_smooth(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
@@ -1043,21 +688,42 @@ impl crate::Scene {
         family: &MobjectFamily,
         smooth: bool,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_family_anchor_mode(store, root, execution, family, smooth)
-        })
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        self.require_resource_admission()?;
+        let nodes = self
+            .integration_store()
+            .borrow()
+            .ordered_leaf_nodes(family.node_id())?;
+        let states = self.capture_path_leaves(nodes)?;
+        let prepared = crate::path_smoothing::prepare_anchor_edits(
+            &self.integration_store().borrow(),
+            states,
+            smooth,
+        )?;
+        self.publish_path_edits(prepared).map(|_| ())
     }
 
     pub fn reverse_family_points(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_family_reverse_points(store, root, execution, family)
-        })
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        self.require_resource_admission()?;
+        let nodes = self
+            .integration_store()
+            .borrow()
+            .ordered_last_occurrence_leaf_nodes(family.node_id())?;
+        let states = self.capture_path_leaves(nodes)?;
+        let prepared = prepare_family_reverse_points(&self.integration_store().borrow(), states)?;
+        self.publish_path_edits(prepared).map(|_| ())
     }
 
     pub fn reverse_points(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_reverse_points(store, root, execution, object)
-        })
+        self.require_object(object)?;
+        self.require_resource_admission()?;
+        let state = self.capture_mobject_state(object)?;
+        let prepared = prepare_family_reverse_points(
+            &self.integration_store().borrow(),
+            [(object.node_id(), state)],
+        )?;
+        self.publish_path_edits(prepared).map(|_| ())
     }
 
     pub fn repeat_family_points(
@@ -1065,15 +731,48 @@ impl crate::Scene {
         family: &MobjectFamily,
         count: usize,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_family_repeat_points(store, root, execution, family, count)
-        })
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        self.require_resource_admission()?;
+        if count == 0 {
+            return Ok(());
+        }
+        let nodes = self
+            .integration_store()
+            .borrow()
+            .ordered_last_occurrence_leaf_nodes(family.node_id())?;
+        let states = self.capture_path_leaves(nodes)?;
+        let prepared =
+            prepare_family_repeat_points(&self.integration_store().borrow(), states, count)?;
+        self.publish_path_edits(prepared).map(|_| ())
     }
 
     pub fn repeat_points(&mut self, object: &Mobject, count: usize) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_repeat_points(store, root, execution, object, count)
-        })
+        self.require_object(object)?;
+        self.require_resource_admission()?;
+        if count == 0 {
+            return Ok(());
+        }
+        let state = self.capture_mobject_state(object)?;
+        let prepared = prepare_family_repeat_points(
+            &self.integration_store().borrow(),
+            [(object.node_id(), state)],
+            count,
+        )?;
+        self.publish_path_edits(prepared).map(|_| ())
+    }
+
+    fn capture_path_leaves(
+        &self,
+        nodes: Vec<SemanticNodeId>,
+    ) -> Result<Vec<(SemanticNodeId, SemanticObjectState)>, AuthoringError> {
+        let store = self.integration_store();
+        nodes
+            .into_iter()
+            .map(|node| {
+                let object = Mobject::from_node(Rc::clone(store), node)?;
+                Ok((node, self.capture_mobject_state(&object)?))
+            })
+            .collect()
     }
 }
 
@@ -1715,7 +1414,7 @@ pub(crate) fn partial_interval(a: f64, b: f64) -> Result<(f32, f32), AuthoringEr
     Ok((a as f32, b as f32))
 }
 
-pub(crate) fn prepare_subcurve(
+fn prepare_subcurve(
     store: &SemanticStore,
     state: &SemanticObjectState,
     a: f64,
@@ -1750,53 +1449,34 @@ pub(crate) fn prepare_subcurve(
     Ok((path_replacement_state(state.clone())?, Some(selected)))
 }
 
-pub(crate) fn subcurve_creation(state: SemanticObjectState) -> SemanticMutationTransaction {
-    let mut transaction = SemanticMutationTransaction::new();
-    transaction.add_node(noon_core::SemanticNodeCreation::object(state));
-    transaction
-}
-
-pub(crate) fn created_subcurve_id(
-    result: &noon_core::SemanticMutationTransactionResult,
-) -> noon_core::SemanticNodeId {
-    let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-        unreachable!("one subcurve has one semantic creation")
-    };
-    *node
-}
-
-pub(crate) fn publish_running_subcurve(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    source: &Mobject,
+pub(crate) fn publish_subcurve(
+    store: &mut SemanticStore,
+    state: SemanticObjectState,
     a: f64,
     b: f64,
-) -> Result<Mobject, AuthoringError> {
-    if !Rc::ptr_eq(store, source.integration_store()) {
-        return Err(AuthoringError::ForeignStore);
-    }
-    source.validate()?;
-    require_running_path_resource_admission(store, root, execution)?;
-    let captured = crate::effective_capture::capture_mobject_state(store, execution, source)?;
-    let mut store_mut = store.borrow_mut();
-    let (mut state, path) = prepare_subcurve(&store_mut, &captured, a, b)?;
-    let mut publish = |store: &mut SemanticStore, state| {
-        execution
-            .apply_semantic_transaction_at_root(store, root, subcurve_creation(state))
-            .map_err(AuthoringError::from)
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, AuthoringError> {
+    let (mut state, path) = prepare_subcurve(store, &state, a, b)?;
+    let create = |store: &mut SemanticStore, state| {
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(noon_core::SemanticNodeCreation::object(state));
+        publish(store, transaction)
     };
     let result = if let Some(path) = path {
-        store_mut.with_geometry_path(path, |store, handle| {
+        store.with_geometry_path(path, |store, handle| {
             state.content = StoredGeometry::Resource(handle).into();
-            publish(store, state)
+            create(store, state)
         })?
     } else {
-        publish(&mut store_mut, state)?
+        create(store, state)?
     };
-    let id = created_subcurve_id(&result);
-    drop(store_mut);
-    Mobject::from_node(Rc::clone(store), id)
+    let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+        unreachable!("one subcurve has one semantic creation");
+    };
+    Ok(*node)
 }
 
 impl Mobject {
@@ -1805,21 +1485,15 @@ impl Mobject {
     /// an ordered interval. Source identity, geometry and membership are untouched.
     pub fn subcurve(&self, a: f64, b: f64) -> Result<Self, AuthoringError> {
         let state = self.state()?;
-        let mut store = self.integration_store().borrow_mut();
-        let (mut state, path) = prepare_subcurve(&store, &state, a, b)?;
-        let result = if let Some(path) = path {
-            store.with_geometry_path(path, |store, handle| {
-                state.content = StoredGeometry::Resource(handle).into();
-                subcurve_creation(state)
-                    .apply(store)
-                    .map_err(AuthoringError::from)
-            })?
-        } else {
-            subcurve_creation(state).apply(&mut store)?
-        };
-        let id = created_subcurve_id(&result);
-        drop(store);
-        Self::from_node(std::rc::Rc::clone(self.integration_store()), id)
+        let store = self.integration_store();
+        let node = publish_subcurve(
+            &mut store.borrow_mut(),
+            state,
+            a,
+            b,
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
+        Self::from_node(Rc::clone(store), node)
     }
 
     /// Replace this path with the exact Manim-style world-space point array.

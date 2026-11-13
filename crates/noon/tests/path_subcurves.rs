@@ -11,24 +11,27 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         source.set_stroke_color(1., 0., 0., 0.5).unwrap();
         scene.add(&source).unwrap();
         let before = source.state().unwrap();
-        let mut running = scene.into_execution().unwrap();
-        let selected = if live_mode {
-            let copy = running.scene_mut().subcurve(&source, 0.25, 0.75).unwrap();
-            assert!(!running.scene_mut().contains_direct(&copy).unwrap());
-            running.scene_mut().add(&copy).unwrap();
-            assert_eq!(
-                running
-                    .scene()
-                    .effective_path_query(&copy)
-                    .unwrap()
-                    .start()
-                    .unwrap(),
-                (4., 3.)
-            );
-            copy
+        let (mut running, selected, full) = if live_mode {
+            let mut running = scene.into_execution().unwrap();
+            let selected = running.scene_mut().subcurve(&source, 0.25, 0.75).unwrap();
+            let full = running.scene_mut().subcurve(&source, 0., 1.).unwrap();
+            (running, selected, full)
         } else {
-            source.subcurve(0.25, 0.75).unwrap()
+            let selected = scene.subcurve(&source, 0.25, 0.75).unwrap();
+            let full = scene.subcurve(&source, 0., 1.).unwrap();
+            (scene.into_execution().unwrap(), selected, full)
         };
+        assert!(!running.scene().contains_direct(&selected).unwrap());
+        running.scene_mut().add(&selected).unwrap();
+        assert_eq!(
+            running
+                .scene()
+                .effective_path_query(&selected)
+                .unwrap()
+                .start()
+                .unwrap(),
+            (4., 3.)
+        );
         assert_ne!(selected.node_id(), source.node_id());
         assert_eq!(selected.path_query().unwrap().end().unwrap(), (8., 3.));
         assert_eq!(selected.state().unwrap().style, before.style);
@@ -37,11 +40,6 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
             before.presentation().z_index
         );
         assert_eq!(source.state().unwrap(), before);
-        let full = if live_mode {
-            running.scene_mut().subcurve(&source, 0., 1.).unwrap()
-        } else {
-            source.subcurve(0., 1.).unwrap()
-        };
         assert_eq!(full.state().unwrap().content, before.content);
     }
 }

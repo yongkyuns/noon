@@ -249,11 +249,9 @@ impl Scene {
                 },
             )?
         };
-        self.with_running_execution(|store, root, execution| {
-            crate::path_editing::publish_running_path_edits(store, root, execution, prepared)
-        })
-        .map(|_| ())
-        .map_err(Into::into)
+        self.publish_path_edits(prepared)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 }
 
