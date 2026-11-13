@@ -111,20 +111,14 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
     let animation = scene
         .declare_transform_to(&source, &target, options())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    let current = row(&session, &source).fill_paint.clone().unwrap();
-    let effective = scene.live(&mut session).effective(&source).unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 0.5).unwrap();
+    let current = row(running.session(), &source).fill_paint.clone().unwrap();
+    let effective = running.live().effective(&source).unwrap();
     assert_eq!(effective.fill_paint.as_ref(), Some(&current));
     assert!(
-        scene
-            .live(&mut session)
-            .effective_fill_color(&source)
-            .is_err(),
+        running.scene().effective_fill_color(&source).is_err(),
         "continuous paint has no single RGB color"
     );
     assert_eq!(
@@ -135,26 +129,23 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
             .unwrap(),
         [0.5, 0.25, 0.25, 1.0]
     );
-    let source_style = scene.live(&mut session).authored(&source).unwrap().style;
+    let source_style = running.live().authored(&source).unwrap().style;
     assert_eq!(
         source_style
-            .capture_effective_fill(row(&session, &source).style.fill, Some(&current))
+            .capture_effective_fill(row(running.session(), &source).style.fill, Some(&current))
             .0,
         Some(current.as_ref().clone())
     );
     // Creating an authored target observes the ordinary segment completion barrier.
-    assert!(scene.live(&mut session).target_editor(&source).is_err());
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    let current = row(&session, &source).fill_paint.clone().unwrap();
-    let captured = scene.live(&mut session).target_editor(&source).unwrap();
-    let state = scene.live(&mut session).authored(&captured).unwrap();
+    assert!(running.live().target_editor(&source).is_err());
+    running.live().advance_segment_to(segment, 1.0).unwrap();
+    running.live().complete_segment(segment).unwrap();
+    let current = row(running.session(), &source).fill_paint.clone().unwrap();
+    let captured = running.live().target_editor(&source).unwrap();
+    let state = running.live().authored(&captured).unwrap();
     assert_eq!(state.style.fill, Some(current.as_ref().clone()));
     assert_eq!(
-        session.frame().objects.len(),
+        running.session().frame().objects.len(),
         1,
         "detached targets have no execution row"
     );
@@ -264,13 +255,10 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
         let animation = scene
             .declare_transform_to(&source, &target, options())
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 0.5)
-            .unwrap();
-        let state = row(&session, &source);
+        let mut running = scene.into_execution().unwrap();
+        let segment = running.live().play_animation(&animation).unwrap();
+        running.live().advance_segment_to(segment, 0.5).unwrap();
+        let state = row(running.session(), &source);
         assert!(
             (crate::effect_authoring::only_effect(state.effects.as_ref().unwrap())
                 .definition
@@ -292,22 +280,24 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
                 .start(),
             [0.25, 0.25]
         );
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 1.0)
-            .unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
-        scene
-            .live(&mut session)
+        running.live().advance_segment_to(segment, 1.0).unwrap();
+        running.live().complete_segment(segment).unwrap();
+        running
+            .scene_mut()
             .set_fill_gradient(&source, gradient(false), None)
             .unwrap();
-        assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.75);
         assert_eq!(
-            crate::effect_authoring::only_effect(row(&session, &source).effects.as_ref().unwrap())
-                .definition
-                .as_glow()
-                .unwrap()
-                .intensity(),
+            row(running.session(), &source).style.fill.unwrap().alpha,
+            0.75
+        );
+        assert_eq!(
+            crate::effect_authoring::only_effect(
+                row(running.session(), &source).effects.as_ref().unwrap()
+            )
+            .definition
+            .as_glow()
+            .unwrap()
+            .intensity(),
             1.4
         );
     }

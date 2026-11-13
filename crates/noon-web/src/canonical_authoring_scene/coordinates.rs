@@ -30,7 +30,10 @@ impl CanonicalAuthoringScene {
         &mut self,
         paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?.live_create_path_family(paths)
+        self.active_live_player()?
+            .scene_mut()
+            .path_family(paths)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -111,18 +111,17 @@ impl LiveContinuation for Pure {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         Ok(match step {
-            0 => ContinuationStep::Await(live.wait_segment(0.0)?),
-            1 => ContinuationStep::Await(live.wait_segment(1.0)?),
+            0 => ContinuationStep::Await(scene.live().wait_segment(0.0)?),
+            1 => ContinuationStep::Await(scene.live().wait_segment(1.0)?),
             2 => {
                 if self.fail {
-                    return live.wait_segment(-1.0).map(ContinuationStep::Await);
+                    return scene.live().wait_segment(-1.0).map(ContinuationStep::Await);
                 }
-                live.set_fill(&self.target, 1.0, 0.0, 0.0, 1.0)?;
-                ContinuationStep::Await(live.wait_segment(1.0)?)
+                scene.set_fill_rgb(&self.target, 1.0, 0.0, 0.0, 1.0)?;
+                ContinuationStep::Await(scene.live().wait_segment(1.0)?)
             }
             3 => ContinuationStep::Finished,
             _ => panic!("source was restarted"),

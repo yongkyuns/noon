@@ -60,11 +60,20 @@ fn missing_native_fonts_do_not_mutate_resources_or_identity() {
     let mut scene = Scene::new();
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let revision = scene.integration_store().borrow().scene_revision();
-    let stats = scene.integration_store().borrow().text_resources().stats();
+    let mut running = scene.into_execution().unwrap();
+    let revision = running
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
+    let stats = running
+        .scene()
+        .integration_store()
+        .borrow()
+        .text_resources()
+        .stats();
     assert!(matches!(
-        scene.text("No font"),
+        running.scene_mut().text("No font"),
         Err(TextAuthoringError::FontUnavailable(_))
     ));
     // Selecting a family after an explicit face deliberately clears the override.
@@ -73,26 +82,48 @@ fn missing_native_fonts_do_not_mutate_resources_or_identity() {
         .with_font_face(face)
         .with_font("Missing");
     assert!(matches!(
-        scene.text(text),
+        running.scene_mut().text(text),
         Err(TextAuthoringError::FontUnavailable(_))
     ));
     assert_eq!(
-        scene.integration_store().borrow().scene_revision(),
+        running
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
         revision
     );
     assert_eq!(
-        scene.integration_store().borrow().text_resources().stats(),
+        running
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats(),
         stats
     );
-    let mut live = scene.live(&mut session);
-    assert!(live.create_text(noon::Text::new("No font")).is_err());
-    live.set_translation(&circle, 3.0, 0.0).unwrap();
+    assert!(running
+        .scene_mut()
+        .text(noon::Text::new("No font"))
+        .is_err());
+    running.live().set_translation(&circle, 3.0, 0.0).unwrap();
     assert_eq!(
-        live.effective(&circle).unwrap().transform.translation.x,
+        running
+            .scene()
+            .effective(&circle)
+            .unwrap()
+            .transform
+            .translation
+            .x,
         3.0
     );
     assert_eq!(
-        scene.integration_store().borrow().text_resources().stats(),
+        running
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats(),
         stats
     );
 }
@@ -149,25 +180,45 @@ fn unavailable_typst_fonts_leave_the_live_session_usable() {
     let mut scene = Scene::new();
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let revision = scene.integration_store().borrow().scene_revision();
+    let mut running = scene.into_execution().unwrap();
+    let revision = running
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
     assert_eq!(
-        scene.typst(noon::Typst::new("Noon")).unwrap_err(),
+        running
+            .scene_mut()
+            .typst(noon::Typst::new("Noon"))
+            .unwrap_err(),
         TextAuthoringError::Typst(noon::TypstBackendError::FontsUnavailable)
     );
     assert_eq!(
-        scene.integration_store().borrow().scene_revision(),
+        running
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
         revision
     );
-    let mut live = scene.live(&mut session);
-    assert!(live.create_typst(noon::Typst::new("Noon")).is_err());
-    assert!(live.create_math_typst(noon::MathTypst::new("x")).is_err());
-    live.set_translation(&circle, 3.0, 0.0).unwrap();
+    assert!(running.scene_mut().typst(noon::Typst::new("Noon")).is_err());
+    assert!(running
+        .scene_mut()
+        .math_typst(noon::MathTypst::new("x"))
+        .is_err());
+    running.live().set_translation(&circle, 3.0, 0.0).unwrap();
     assert_eq!(
-        live.effective(&circle).unwrap().transform.translation.x,
+        running
+            .scene()
+            .effective(&circle)
+            .unwrap()
+            .transform
+            .translation
+            .x,
         3.0
     );
-    assert!(scene
+    assert!(running
+        .scene()
         .integration_store()
         .borrow()
         .text_resources()

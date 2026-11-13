@@ -154,7 +154,7 @@ impl LayoutAnchor {
 }
 
 /// Align root paths through one existing coherent execution/resource publication.
-pub fn publish_root_alignment(
+pub(super) fn publish_root_alignment(
     store: &Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
     execution: &mut ExecutionSession,
@@ -251,27 +251,32 @@ mod tests {
         scene
             .add_many(&[(&family).into(), (&other).into()])
             .unwrap();
-        let mut execution = scene.execution_session().unwrap();
-        let revision = scene.revision();
-        scene
-            .live(&mut execution)
+        let empty = scene.family(&[]).unwrap();
+        let mut running = scene.into_execution().unwrap();
+        let revision = running.scene().revision();
+        running
+            .scene_mut()
             .align_path_points(&LayoutAnchor::from(&other), &LayoutAnchor::from(&family))
             .unwrap();
-        assert_eq!(scene.revision(), revision.checked_next().unwrap());
-        assert!(family
-            .effective_own_path_query(&execution)
+        assert_eq!(running.scene().revision(), revision.checked_next().unwrap());
+        assert!(running
+            .scene()
+            .effective_family_own_path_query(&family)
             .unwrap()
             .points()
             .unwrap()
             .iter()
             .all(|p| *p == (3.0, 2.0)));
-        let empty = scene.family(&[]).unwrap(); // Deliberately stale execution.
-        let context = execution.publication_context();
-        assert!(scene
-            .live(&mut execution)
+        // An authored handle edit deliberately invalidates the retained publication.
+        empty
+            .set_draw_enabled(!empty.draw_enabled().unwrap())
+            .unwrap();
+        let context = running.session().publication_context();
+        assert!(running
+            .scene_mut()
             .align_path_points(&LayoutAnchor::from(&empty), &LayoutAnchor::from(&empty),)
             .is_err());
-        assert_eq!(execution.publication_context(), context);
+        assert_eq!(running.session().publication_context(), context);
         assert!(empty.own_object().unwrap().is_none());
     }
 

@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    integration::{publish_borrowed_path_edit, BorrowedPathEdit},
-    Scene,
-};
+use crate::Scene;
 
 const PREFIX: [SemanticVec3; 4] = [
     SemanticVec3::new(0.125, 0.25, 0.123456789012345),
@@ -17,7 +14,7 @@ const SUFFIX: [SemanticVec3; 2] = [
 
 #[test]
 fn raw_xyz_appends_preserve_world_prefix_and_identity_in_all_execution_modes() {
-    for mode in 0..3 {
+    for mode in 0..2 {
         let mut scene = Scene::new();
         let mut object = scene
             .path(
@@ -41,32 +38,15 @@ fn raw_xyz_appends_preserve_world_prefix_and_identity_in_all_execution_modes() {
         expected.extend(SUFFIX);
         let id = object.node_id();
         let nodes = scene.integration_store().borrow().len();
-        let mut borrowed = None;
         match mode {
             0 => object.append_points_3d(&SUFFIX).unwrap(),
-            1 => {
+            _ => {
                 let execution = scene.execution_session().unwrap();
                 scene.install_execution(execution);
                 scene.append_points_3d(&object, &SUFFIX).unwrap();
             }
-            _ => {
-                let mut execution = scene.execution_session().unwrap();
-                publish_borrowed_path_edit(
-                    scene.integration_store(),
-                    scene.root(),
-                    &mut execution,
-                    BorrowedPathEdit::AppendRawPoints3d {
-                        object: &object,
-                        points: &SUFFIX,
-                    },
-                )
-                .unwrap();
-                borrowed = Some(execution);
-            }
         }
-        let actual = if let Some(execution) =
-            borrowed.as_ref().or_else(|| scene.running_execution())
-        {
+        let actual = if let Some(execution) = scene.running_execution() {
             crate::path_queries::effective_path_query(scene.integration_store(), execution, &object)
                 .unwrap()
         } else {
@@ -106,10 +86,11 @@ fn invalid_xyz_inputs_do_not_publish_or_admit_resources() {
         )
         .unwrap();
     scene.add(&object).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let context = execution.publication_context();
-    let revision = scene.revision();
-    let resources = scene
+    let mut running = scene.into_execution().unwrap();
+    let context = running.session().publication_context();
+    let revision = running.scene().revision();
+    let resources = running
+        .scene()
         .integration_store()
         .borrow()
         .geometry_resources()
@@ -119,31 +100,20 @@ fn invalid_xyz_inputs_do_not_publish_or_admit_resources() {
         &[SemanticVec3::new(1.0, 2.0, f64::INFINITY)][..],
     ] {
         for replacing in [false, true] {
-            let edit = if replacing {
-                BorrowedPathEdit::RawPoints3d {
-                    object: &object,
-                    points,
-                }
+            let result = if replacing {
+                running.scene_mut().set_points_3d(&object, points)
             } else {
-                BorrowedPathEdit::AppendRawPoints3d {
-                    object: &object,
-                    points,
-                }
+                running.scene_mut().append_points_3d(&object, points)
             };
-            assert!(publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut execution,
-                edit
-            )
-            .is_err());
+            assert!(result.is_err());
         }
     }
     assert_eq!(object.path_query().unwrap().points_3d().unwrap(), PREFIX);
-    assert_eq!(execution.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(running.session().publication_context(), context);
+    assert_eq!(running.scene().revision(), revision);
     assert_eq!(
-        scene
+        running
+            .scene()
             .integration_store()
             .borrow()
             .geometry_resources()

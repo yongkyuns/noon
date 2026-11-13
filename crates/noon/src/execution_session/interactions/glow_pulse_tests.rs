@@ -13,10 +13,15 @@ struct Fixture {
 
 impl Fixture {
     fn new(persistent: Option<EffectUpdate>) -> Self {
+        Self::with_first(persistent, |_| {})
+    }
+
+    fn with_first(persistent: Option<EffectUpdate>, configure: impl FnOnce(&mut Mobject)) -> Self {
         let mut scene = Scene::new();
         let mut first = scene.circle(0.75).unwrap();
         first.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
         first.disable_stroke().unwrap();
+        configure(&mut first);
         if let Some(update) = persistent {
             first.set_glow(update).unwrap();
         }
@@ -189,7 +194,6 @@ fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
     use std::sync::Arc;
 
     for persistent in [false, true] {
-        let mut f = Fixture::new(persistent.then(|| EffectUpdate::default().intensity(0.35)));
         let gradient = LinearGradient::new(
             [0.0, 0.5],
             [1.0, 0.5],
@@ -199,10 +203,10 @@ fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
             ],
         )
         .unwrap();
-        f.scene
-            .live(&mut f.session)
-            .set_fill_gradient(&f.targets[0], gradient, Some(0.6))
-            .unwrap();
+        let mut f = Fixture::with_first(
+            persistent.then(|| EffectUpdate::default().intensity(0.35)),
+            |first| first.set_fill_gradient(gradient, Some(0.6)).unwrap(),
+        );
         let paint = Arc::clone(f.session.frame().objects[0].fill_paint.as_ref().unwrap());
         let style = f.session.frame().objects[0].style;
         let original = f.glow(0);

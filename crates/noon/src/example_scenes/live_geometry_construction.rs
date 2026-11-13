@@ -22,11 +22,12 @@ impl LiveContinuation for LiveGeometryConstruction {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(1.0)
+                scene
+                    .live()
+                    .wait_segment(1.0)
                     .map(ContinuationStep::Await)
                     .map_err(|e| e.to_string())
             }
@@ -40,9 +41,7 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .set_fill(0.0, 1.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
                 rectangle.disable_stroke();
-                let rectangle = live
-                    .create_manim_geometry(rectangle)
-                    .map_err(|e| e.to_string())?;
+                let rectangle = scene.geometry(rectangle).map_err(|e| e.to_string())?;
                 let mut line = ManimGeometryOptions::line(-1.0, -0.5, 1.0, 0.5)
                     .map_err(|error| error.to_string())?;
                 line.set_scale(1.5, 0.75)
@@ -64,9 +63,7 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .map_err(|error| error.to_string())?;
                 line.set_stroke_width(0.04)
                     .map_err(|error| error.to_string())?;
-                let line = live
-                    .create_manim_geometry(line)
-                    .map_err(|e| e.to_string())?;
+                let line = scene.geometry(line).map_err(|e| e.to_string())?;
                 assert_endpoints(
                     line.manim_line_endpoints()
                         .map_err(|error| error.to_string())?,
@@ -92,20 +89,29 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .set_fill(0.0, 1.0, 1.0, 1.0)
                     .map_err(|error| error.to_string())?;
                 late_path.disable_stroke();
-                let late_path = live
-                    .create_manim_geometry(late_path)
+                let late_path = scene.geometry(late_path).map_err(|e| e.to_string())?;
+                scene
+                    .add_many(&[
+                        MobjectTarget::Object(&rectangle),
+                        MobjectTarget::Object(&line),
+                        MobjectTarget::Object(&late_path),
+                    ])
                     .map_err(|e| e.to_string())?;
-                live.add_many(&[
-                    MobjectTarget::Object(&rectangle),
-                    MobjectTarget::Object(&line),
-                    MobjectTarget::Object(&late_path),
-                ])
-                .map_err(|e| e.to_string())?;
-                let target = live.target_editor(&rectangle).map_err(|e| e.to_string())?;
-                live.set_translation(&target, 2.0, 1.0)
+                let target = scene
+                    .live()
+                    .target_editor(&rectangle)
                     .map_err(|e| e.to_string())?;
-                let line_target = live.target_editor(&line).map_err(|e| e.to_string())?;
-                live.set_translation(&line_target, 0.0, -1.0)
+                scene
+                    .live()
+                    .set_translation(&target, 2.0, 1.0)
+                    .map_err(|e| e.to_string())?;
+                let line_target = scene
+                    .live()
+                    .target_editor(&line)
+                    .map_err(|e| e.to_string())?;
+                scene
+                    .live()
+                    .set_translation(&line_target, 0.0, -1.0)
                     .map_err(|e| e.to_string())?;
                 self.rectangle = Some(rectangle.clone());
                 self.line = Some(line.clone());
@@ -113,34 +119,39 @@ impl LiveContinuation for LiveGeometryConstruction {
                 let options = AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear);
-                live.declare_and_activate_animation_composition(
-                    SemanticAnimationCompositionKind::Parallel,
-                    &[
-                        AnimationCompositionRequest::TransformTo(TransformToRequest::new(
-                            &rectangle, &target, options,
-                        )),
-                        AnimationCompositionRequest::TransformTo(TransformToRequest::new(
-                            &line,
-                            &line_target,
-                            options,
-                        )),
-                    ],
-                    options,
-                    AnimationOptions::new(),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|e| e.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        SemanticAnimationCompositionKind::Parallel,
+                        &[
+                            AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                                &rectangle, &target, options,
+                            )),
+                            AnimationCompositionRequest::TransformTo(TransformToRequest::new(
+                                &line,
+                                &line_target,
+                                options,
+                            )),
+                        ],
+                        options,
+                        AnimationOptions::new(),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|e| e.to_string())
             }
             2 => {
                 let line = self.line.as_ref().ok_or("missing live line")?;
                 assert_endpoints(
-                    live.effective_line_endpoints(line)
+                    scene
+                        .live()
+                        .effective_line_endpoints(line)
                         .map_err(|error| error.to_string())?,
                     (LINE_START.0, LINE_START.1 + 1.0),
                     (LINE_END.0, LINE_END.1 + 1.0),
                 )?;
                 assert_color(
-                    live.effective_manim_color(line)
+                    scene
+                        .effective_manim_color(line)
                         .map_err(|error| error.to_string())?,
                     Color::rgb(1.0, 1.0, 0.0),
                 )?;
@@ -148,16 +159,14 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .map_err(|error| error.to_string())?;
                 dot.set_color(1.0, 0.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
-                let dot = live.create_manim_geometry(dot).map_err(|e| e.to_string())?;
+                let dot = scene.geometry(dot).map_err(|e| e.to_string())?;
                 let mut annulus = ManimGeometryOptions::annulus(0.25, 0.5, 9, 4.0, -1.5)
                     .map_err(|error| error.to_string())?;
                 annulus
                     .set_color(1.0, 1.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
-                let annulus = live
-                    .create_manim_geometry(annulus)
-                    .map_err(|e| e.to_string())?;
-                let layout = live
+                let annulus = scene.geometry(annulus).map_err(|e| e.to_string())?;
+                let layout = scene
                     .effective_layout(self.rectangle.as_ref().ok_or("missing live rectangle")?)
                     .map_err(|e| e.to_string())?;
                 let bounds = noon_core::Bounds2D64 {
@@ -172,15 +181,14 @@ impl LiveContinuation for LiveGeometryConstruction {
                 underline
                     .set_stroke_width(0.08)
                     .map_err(|error| error.to_string())?;
-                let underline = live
-                    .create_manim_geometry(underline)
+                let underline = scene.geometry(underline).map_err(|e| e.to_string())?;
+                scene
+                    .add_many(&[
+                        MobjectTarget::Object(&dot),
+                        MobjectTarget::Object(&annulus),
+                        MobjectTarget::Object(&underline),
+                    ])
                     .map_err(|e| e.to_string())?;
-                live.add_many(&[
-                    MobjectTarget::Object(&dot),
-                    MobjectTarget::Object(&annulus),
-                    MobjectTarget::Object(&underline),
-                ])
-                .map_err(|e| e.to_string())?;
                 self.stage = 3;
                 Ok(ContinuationStep::Finished)
             }

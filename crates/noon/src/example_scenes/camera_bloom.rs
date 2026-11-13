@@ -14,40 +14,44 @@ pub struct CameraBloom {
 impl LiveContinuation for CameraBloom {
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 | 2 => live.wait_segment(0.5).map_err(message)?,
+            0 | 2 => scene.live().wait_segment(0.5).map_err(message)?,
             1 | 3 => {
                 let bright = self.stage == 1;
-                let panel = live.target_editor(&self.panel).map_err(message)?;
-                let camera = live.target_editor(&self.camera).map_err(message)?;
-                live.set_emission(&panel, if bright { 7.0 } else { 0.0 })
+                let panel = scene.live().target_editor(&self.panel).map_err(message)?;
+                let camera = scene.live().target_editor(&self.camera).map_err(message)?;
+                scene
+                    .set_emission(&panel, if bright { 7.0 } else { 0.0 })
                     .map_err(message)?;
-                live.set_effect(
-                    &camera,
-                    "bloom",
-                    EffectUpdate::default().intensity(if bright { 3.0 } else { 0.0 }),
-                )
-                .map_err(message)?;
+                scene
+                    .live()
+                    .set_effect(
+                        &camera,
+                        "bloom",
+                        EffectUpdate::default().intensity(if bright { 3.0 } else { 0.0 }),
+                    )
+                    .map_err(message)?;
                 let options = AnimationOptions::new()
                     .run_time(2.0)
                     .rate_func(RateFunction::Linear);
-                live.declare_and_activate_animation_composition(
-                    SemanticAnimationCompositionKind::Parallel,
-                    &[
-                        AnimationCompositionRequest::TransformTo(
-                            crate::TransformToRequest::new(&self.panel, &panel, options)
-                                .method_target(),
-                        ),
-                        AnimationCompositionRequest::TransformTo(
-                            crate::TransformToRequest::new(&self.camera, &camera, options)
-                                .method_target(),
-                        ),
-                    ],
-                    AnimationOptions::new(),
-                    AnimationOptions::new(),
-                )
-                .map_err(message)?
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        SemanticAnimationCompositionKind::Parallel,
+                        &[
+                            AnimationCompositionRequest::TransformTo(
+                                crate::TransformToRequest::new(&self.panel, &panel, options)
+                                    .method_target(),
+                            ),
+                            AnimationCompositionRequest::TransformTo(
+                                crate::TransformToRequest::new(&self.camera, &camera, options)
+                                    .method_target(),
+                            ),
+                        ],
+                        AnimationOptions::new(),
+                        AnimationOptions::new(),
+                    )
+                    .map_err(message)?
             }
             4 => return Ok(ContinuationStep::Finished),
             _ => return Err("camera Bloom resumed after completion".into()),

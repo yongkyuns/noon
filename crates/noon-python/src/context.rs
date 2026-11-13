@@ -395,6 +395,7 @@ impl Context {
         &mut self,
         operation: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<()> {
+        self.require_active()?;
         if !self.has_execution() {
             return Err(engine_error("no execution session"));
         }
@@ -404,17 +405,29 @@ impl Context {
             .map_err(engine_error)
     }
 
-    fn publish_path_edit(
+    fn edit_live_style(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+    ) -> PyResult<()> {
+        self.require_active()?;
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        edit(&mut self.scene)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+    }
+
+    fn edit_path(
         &mut self,
         target: &MobjectHandle,
-        edit: noon::integration::BorrowedPathEdit<'_>,
+        edit: impl FnOnce(&mut Scene, &noon::Mobject) -> Result<(), noon::AuthoringError>,
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_borrowed_path_edit(store, root, execution, edit)
-            .map_err(engine_error)
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        edit(&mut self.scene, &target.handle).map_err(engine_error)
     }
     fn publish(&mut self, transaction: SemanticMutationTransaction) -> PyResult<()> {
         self.require_active()?;
@@ -525,7 +538,7 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.with_live(|live| live.set_style(&source.handle, update).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_style(&source.handle, update))
     }
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="liveSetFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
@@ -789,13 +802,10 @@ impl Context {
         let surface =
             noon::SurfaceFamily::from_family(target.family.clone()).map_err(engine_error)?;
         let colors = crate::spatial::checkerboard(&first, &second)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_surface_checkerboard(&surface, colors, opacity))
-        } else {
-            self.scene
-                .set_surface_checkerboard(&surface, colors, opacity)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_surface_checkerboard(&surface, colors, opacity)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "shiftWorld")]
     fn shift_world(&mut self, target: &MobjectHandle, x: f64, y: f64, z: f64) -> PyResult<()> {
@@ -1366,19 +1376,16 @@ impl Context {
         self.available()?;
         self.same_store(target)?;
         let value = noon::integration::camera_color_profile(value).map_err(engine_error)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_view_color_profile(&target.handle, value))
-        } else {
-            self.scene
-                .set_view_color_profile(&target.handle, value)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_view_color_profile(&target.handle, value)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "liveSetEmission")]
     fn emission(&mut self, target: &MobjectHandle, value: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.set_emission(&target.handle, value).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_emission(&target.handle, value))
     }
     #[pyo3(name = "liveSetFamilyEmission")]
     fn family_emission(
@@ -1674,7 +1681,10 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.get_num_points(&target.handle))
+            self.scene
+                .effective_mobject_point_count(&target.handle)
+                .map_err(noon::LiveSessionError::from)
+                .map_err(engine_error)
         } else {
             target.handle.get_num_points().map_err(engine_error)
         }
@@ -1685,12 +1695,8 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_point_array(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
+        let value = if self.has_execution() {
+            self.scene.effective_point_array(target)
         } else {
             target.point_array()
         };
@@ -1706,12 +1712,8 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_point_array(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
+        let value = if self.has_execution() {
+            self.scene.effective_point_array(target)
         } else {
             target.point_array()
         };
@@ -1765,10 +1767,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_gradient(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.set_fill_gradient(&target.handle, paint.value.clone(), opacity))
     }
 
     #[pyo3(name="liveSetFillRadialGradient", signature=(target,paint,opacity))]
@@ -1780,9 +1779,8 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_radial_gradient(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
+        self.place(|scene| {
+            scene.set_fill_radial_gradient(&target.handle, paint.value.clone(), opacity)
         })
     }
 
@@ -1795,10 +1793,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_noise(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.set_fill_noise(&target.handle, paint.value.clone(), opacity))
     }
 
     #[pyo3(name="liveSetFillHatch", signature=(target,paint,opacity))]
@@ -1810,10 +1805,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_hatch(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.set_fill_hatch(&target.handle, paint.value.clone(), opacity))
     }
 
     #[pyo3(name = "liveSetGlow")]
@@ -2430,7 +2422,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.has_execution() {
-            self.with_live(|live| live.effective_manim_color(&target.handle))?
+            self.scene
+                .effective_manim_color(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
         } else {
             target.handle.manim_color().map_err(engine_error)?
         };
@@ -2664,8 +2658,13 @@ impl Context {
     #[pyo3(name = "liveCreateManimGeometry")]
     fn geometry(&mut self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
         self.available()?;
-        self.with_live(|live| live.create_manim_geometry(options.options.clone()))
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .geometry(options.options.clone())
             .map(MobjectHandle::from_semantic_mobject)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
     #[pyo3(name = "liveCreateImage")]
     fn image(
@@ -2688,13 +2687,9 @@ impl Context {
     }
     #[pyo3(name = "liveChangeAnchorMode")]
     fn change_anchor_mode(&mut self, target: &MobjectHandle, smooth: bool) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AnchorMode {
-                object: &target.handle,
-                smooth,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.change_anchor_mode(object, smooth)
+        })
     }
     #[pyo3(name = "liveChangeFamilyAnchorMode")]
     fn change_family_anchor_mode(
@@ -2704,18 +2699,12 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_borrowed_path_edit(
-            store,
-            root,
-            execution,
-            noon::integration::BorrowedPathEdit::FamilyAnchorMode {
-                family: &target.family,
-                smooth,
-            },
-        )
-        .map_err(engine_error)
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .change_family_anchor_mode(&target.family, smooth)
+            .map_err(engine_error)
     }
     #[pyo3(name = "queryFamilyOwnPath")]
     fn family_own_path(
@@ -2724,8 +2713,8 @@ impl Context {
     ) -> PyResult<crate::path_query::PathQuery> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            target.family.effective_own_path_query(execution)
+        let value = if self.has_execution() {
+            self.scene.effective_family_own_path_query(&target.family)
         } else {
             target.family.own_path_query()
         };
@@ -2759,14 +2748,9 @@ impl Context {
     #[pyo3(name="liveStartNewPath", signature=(target ,x,y,z))]
     fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64, z: f64) -> PyResult<()> {
         let point = crate::path_input::point_3d(x, y, z)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Start3dWithStride {
-                object: &target.handle,
-                point,
-                stride: 4,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.start_new_path_3d(object, point)
+        })
     }
     #[pyo3(name="liveStartNewPathWithStride", signature=(target ,x,y,z,stride))]
     fn start_new_path_stride(
@@ -2778,14 +2762,9 @@ impl Context {
         stride: i32,
     ) -> PyResult<()> {
         let point = crate::path_input::point_3d(x, y, z)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Start3dWithStride {
-                object: &target.handle,
-                point,
-                stride,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.start_new_path_3d_with_stride(object, point, stride)
+        })
     }
     #[pyo3(name="liveAddLineTo", signature=(target ,x,y,z,stride=None))]
     fn add_line_to(
@@ -2797,14 +2776,9 @@ impl Context {
         stride: Option<i32>,
     ) -> PyResult<()> {
         let point = crate::path_input::point_3d(x, y, z)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Line3dWithStride {
-                object: &target.handle,
-                point,
-                stride: stride.unwrap_or(4),
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.add_line_to_3d_with_stride(object, point, stride.unwrap_or(4))
+        })
     }
     #[pyo3(name="liveAddLineToWithSamples", signature=(target ,x,y,z,stride,samples))]
     fn add_line_samples(
@@ -2820,114 +2794,70 @@ impl Context {
         let samples: [f64; 4] = samples.try_into().map_err(|_| {
             engine_error("add_line_to requires four constructor interpolation samples")
         })?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Line3dWithSamples {
-                object: &target.handle,
-                point,
-                stride,
-                bezier_t_values: &samples,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.add_line_to_3d_with_stride_and_samples(object, point, stride, &samples)
+        })
     }
     #[pyo3(name="liveSetPoints", signature=(target ,values))]
     fn set_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_f64(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::RawPoints {
-                object: &target.handle,
-                points: &points,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.set_points_f64(object, &points)
+        })
     }
     #[pyo3(name="liveSetPoints3D", signature=(target ,values))]
     fn set_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::RawPoints3d {
-                object: &target.handle,
-                points: &points,
-            },
-        )
+        self.edit_path(target, |scene, object| scene.set_points_3d(object, &points))
     }
     #[pyo3(name="liveAppendPoints", signature=(target ,values))]
     fn append_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_f64(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AppendRawPoints {
-                object: &target.handle,
-                points: &points,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.append_points_f64(object, &points)
+        })
     }
     #[pyo3(name="liveAppendPoints3D", signature=(target ,values))]
     fn append_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AppendRawPoints3d {
-                object: &target.handle,
-                points: &points,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.append_points_3d(object, &points)
+        })
     }
     #[pyo3(name="liveSetPointsAsCorners", signature=(target ,values))]
     fn corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Corners3d {
-                object: &target.handle,
-                points: &points,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.set_points_as_corners_3d(object, &points)
+        })
     }
     #[pyo3(name="liveAddPointsAsCorners", signature=(target ,values))]
     fn append_corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AppendCorners3d {
-                object: &target.handle,
-                points: &points,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.add_points_as_corners_3d(object, &points)
+        })
     }
     #[pyo3(name="liveAddCubicBezierCurves", signature=(target ,values))]
     fn cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let curves = crate::path_input::cubic_curves_3d(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::CubicCurves3d {
-                object: &target.handle,
-                curves: &curves,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.add_cubic_bezier_curves_3d(object, &curves)
+        })
     }
     #[pyo3(name="liveSetCubicBezierCurves", signature=(target ,values))]
     fn set_cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let curves = crate::path_input::cubic_curves_3d(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::SetCubicCurves3d {
-                object: &target.handle,
-                curves: &curves,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.set_cubic_bezier_curves_3d(object, &curves)
+        })
     }
     #[pyo3(name="liveSetPointsSmoothly", signature=(target ,values))]
     fn smooth_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::SmoothCorners {
-                object: &target.handle,
-                points: &points,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.set_points_smoothly(object, &points)
+        })
     }
     #[pyo3(name="liveSetPointsAsCornersWithSamples", signature=(target ,values,samples))]
     fn corners_samples(
@@ -2940,14 +2870,9 @@ impl Context {
         let samples: [f64; 4] = samples.try_into().map_err(|_| {
             pyo3::exceptions::PyTypeError::new_err("set_points_as_corners requires four samples")
         })?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Corners3dWithSamples {
-                object: &target.handle,
-                points: &points,
-                bezier_t_values: &samples,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.set_points_as_corners_3d_with_samples(object, &points, &samples)
+        })
     }
     #[pyo3(name="liveAddPointsAsCornersWithStride", signature=(target ,values,stride,samples))]
     fn append_corners_stride(
@@ -2958,101 +2883,53 @@ impl Context {
         samples: Vec<f64>,
     ) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AppendCorners3dWithStride {
-                object: &target.handle,
-                points: &points,
-                stride,
-                bezier_t_values: &samples,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.add_points_as_corners_3d_with_stride(object, &points, stride, &samples)
+        })
     }
     #[pyo3(name="liveClearPoints", signature=(target))]
     fn clear_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Clear {
-                object: &target.handle,
-            },
-        )
+        self.edit_path(target, |scene, object| scene.clear_points(object))
     }
     #[pyo3(name="liveClosePath", signature=(target))]
     fn close_path(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Close {
-                object: &target.handle,
-            },
-        )
+        self.edit_path(target, |scene, object| scene.close_path(object))
     }
     #[pyo3(name="liveReverseDirection", signature=(target))]
     fn reverse_direction(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Reverse {
-                object: &target.handle,
-            },
-        )
+        self.edit_path(target, |scene, object| scene.reverse_direction(object))
     }
     #[pyo3(name="liveReversePoints", signature=(target))]
     fn reverse_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::ReversePoints {
-                object: &target.handle,
-            },
-        )
+        self.edit_path(target, |scene, object| scene.reverse_points(object))
     }
     #[pyo3(name="liveMakeSmooth", signature=(target))]
     fn make_smooth(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AnchorMode {
-                object: &target.handle,
-                smooth: true,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.change_anchor_mode(object, true)
+        })
     }
     #[pyo3(name="liveMakeJagged", signature=(target))]
     fn make_jagged(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AnchorMode {
-                object: &target.handle,
-                smooth: false,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.change_anchor_mode(object, false)
+        })
     }
     #[pyo3(name="liveRepeatPoints", signature=(target ,count))]
     fn repeat_points(&mut self, target: &MobjectHandle, count: usize) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::RepeatPoints {
-                object: &target.handle,
-                count,
-            },
-        )
+        self.edit_path(target, |scene, object| scene.repeat_points(object, count))
     }
     #[pyo3(name="liveInsertNCurves", signature=(target ,additional))]
     fn insert_curves(&mut self, target: &MobjectHandle, additional: usize) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Subdivide {
-                object: &target.handle,
-                additional,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.insert_n_curves(object, additional)
+        })
     }
     #[pyo3(name="liveScaleHandleToAnchorDistances", signature=(target ,factor))]
     fn scale_handles(&mut self, target: &MobjectHandle, factor: f64) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::ScaleHandles {
-                object: &target.handle,
-                factor,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.scale_handle_to_anchor_distances(object, factor)
+        })
     }
     #[pyo3(name="liveClosePathWithStride", signature=(target ,stride,tolerance,samples))]
     fn close_path_stride(
@@ -3062,15 +2939,9 @@ impl Context {
         tolerance: f64,
         samples: Vec<f64>,
     ) -> PyResult<()> {
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::CloseWithStride {
-                object: &target.handle,
-                stride,
-                tolerance,
-                bezier_t_values: &samples,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.close_path_with_stride(object, stride, tolerance, &samples)
+        })
     }
     #[pyo3(name="livePointwiseBecomePartial", signature=(target ,source,a,b))]
     fn partial(
@@ -3081,26 +2952,16 @@ impl Context {
         b: f64,
     ) -> PyResult<()> {
         self.same_store(source)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Partial {
-                object: &target.handle,
-                source: &source.handle,
-                a,
-                b,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.pointwise_become_partial(object, &source.handle, a, b)
+        })
     }
     #[pyo3(name="liveAppendVectorizedMobject", signature=(target ,source))]
     fn append_vector(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
         self.same_store(source)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AppendVectorized {
-                object: &target.handle,
-                source: &source.handle,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.append_vectorized_mobject(object, &source.handle)
+        })
     }
     #[pyo3(name="liveAppendVectorizedMobjectWithStride", signature=(target ,source,stride))]
     fn append_vector_stride(
@@ -3110,14 +2971,9 @@ impl Context {
         stride: i32,
     ) -> PyResult<()> {
         self.same_store(source)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::AppendVectorizedWithStride {
-                object: &target.handle,
-                source: &source.handle,
-                stride,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.append_vectorized_mobject_with_stride(object, &source.handle, stride)
+        })
     }
     #[pyo3(name="liveAddQuadraticBezierCurveTo", signature=(target ,control_x,control_y,control_z,anchor_x,anchor_y,anchor_z,stride=None))]
     fn path_quadratic(
@@ -3133,15 +2989,14 @@ impl Context {
     ) -> PyResult<()> {
         let control = crate::path_input::point_3d(control_x, control_y, control_z)?;
         let anchor = crate::path_input::point_3d(anchor_x, anchor_y, anchor_z)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Quadratic3dWithStride {
-                object: &target.handle,
+        self.edit_path(target, |scene, object| {
+            scene.add_quadratic_bezier_curve_to_3d_with_stride(
+                object,
                 control,
                 anchor,
-                stride: stride.unwrap_or(4),
-            },
-        )
+                stride.unwrap_or(4),
+            )
+        })
     }
     #[pyo3(name="liveAddCubicBezierCurveTo", signature=(target ,control1_x,control1_y,control1_z,control2_x,control2_y,control2_z,anchor_x,anchor_y,anchor_z,stride=None))]
     fn path_cubic(
@@ -3161,16 +3016,15 @@ impl Context {
         let control1 = crate::path_input::point_3d(control1_x, control1_y, control1_z)?;
         let control2 = crate::path_input::point_3d(control2_x, control2_y, control2_z)?;
         let anchor = crate::path_input::point_3d(anchor_x, anchor_y, anchor_z)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::Cubic3dWithStride {
-                object: &target.handle,
+        self.edit_path(target, |scene, object| {
+            scene.add_cubic_bezier_curve_to_3d_with_stride(
+                object,
                 control1,
                 control2,
                 anchor,
-                stride: stride.unwrap_or(4),
-            },
-        )
+                stride.unwrap_or(4),
+            )
+        })
     }
     #[pyo3(name="liveAddCubicBezierCurve", signature=(target ,anchor1_x,anchor1_y,anchor1_z,handle1_x,handle1_y,handle1_z,handle2_x,handle2_y,handle2_z,anchor2_x,anchor2_y,anchor2_z))]
     fn path_curve(
@@ -3193,16 +3047,9 @@ impl Context {
         let handle1 = crate::path_input::point_3d(handle1_x, handle1_y, handle1_z)?;
         let handle2 = crate::path_input::point_3d(handle2_x, handle2_y, handle2_z)?;
         let anchor2 = crate::path_input::point_3d(anchor2_x, anchor2_y, anchor2_z)?;
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::CubicCurve3d {
-                object: &target.handle,
-                anchor1,
-                handle1,
-                handle2,
-                anchor2,
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.add_cubic_bezier_curve_3d(object, anchor1, handle1, handle2, anchor2)
+        })
     }
     #[pyo3(name="liveAddSmoothCurveTo", signature=(target ,values,stride=None))]
     fn smooth_curve(
@@ -3221,15 +3068,9 @@ impl Context {
                 ))
             }
         };
-        self.publish_path_edit(
-            target,
-            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
-                object: &target.handle,
-                handle2,
-                anchor,
-                stride: stride.unwrap_or(4),
-            },
-        )
+        self.edit_path(target, |scene, object| {
+            scene.add_smooth_curve_to_with_stride(object, handle2, anchor, stride.unwrap_or(4))
+        })
     }
     #[pyo3(name = "liveSetFamilyPoints3D")]
     fn set_family_points_3d(
@@ -3239,7 +3080,7 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let values = crate::path_input::points_3d(&values)?;
-        self.with_live(|live| live.set_family_points_3d(&target.family, &values))
+        self.place(|scene| scene.set_family_points_3d(&target.family, &values))
     }
     #[pyo3(name = "liveAppendFamilyPoints3D")]
     fn append_family_points_3d(
@@ -3249,12 +3090,12 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let values = crate::path_input::points_3d(&values)?;
-        self.with_live(|live| live.append_family_points_3d(&target.family, &values))
+        self.place(|scene| scene.append_family_points_3d(&target.family, &values))
     }
     #[pyo3(name = "liveClearFamilyPoints")]
     fn clear_family_points(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
         self.same_family_store(target)?;
-        self.with_live(|live| live.clear_family_points(&target.family))
+        self.place(|scene| scene.clear_family_points(&target.family))
     }
     #[pyo3(name = "liveSetFamilyEmptyPointArray")]
     fn empty_family_array(
@@ -3264,34 +3105,36 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let shape = crate::path_input::point_array_shape(&values)?;
-        self.with_live(|live| live.set_empty_point_array((&target.family).into(), shape))
+        self.place(|scene| scene.set_empty_point_array((&target.family).into(), shape))
     }
     #[pyo3(name = "liveSetEmptyPointArray")]
     fn empty_point_array(&mut self, target: &MobjectHandle, dimensions: Vec<f64>) -> PyResult<()> {
         self.same_store(target)?;
         let shape = crate::path_input::point_array_shape(&dimensions)?;
-        self.with_live(|live| live.set_empty_point_array((&target.handle).into(), shape))
+        self.place(|scene| scene.set_empty_point_array((&target.handle).into(), shape))
     }
     #[pyo3(name = "liveSubcurve")]
     fn subcurve(&mut self, target: &MobjectHandle, a: f64, b: f64) -> PyResult<MobjectHandle> {
         self.same_store(target)?;
-        self.with_live(|live| live.subcurve(&target.handle, a, b))
+        self.require_active()?;
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .subcurve(&target.handle, a, b)
             .map(MobjectHandle::from_semantic_mobject)
+            .map_err(noon::LiveSessionError::from)
+            .map_err(engine_error)
     }
     #[pyo3(name = "liveAlignRootPoints")]
     fn align_root_points(&mut self, left: &LayoutAnchor, right: &LayoutAnchor) -> PyResult<()> {
-        self.with_live(|live| live.align_path_points(&left.anchor, &right.anchor))
+        self.place(|scene| scene.align_path_points(&left.anchor, &right.anchor))
     }
     #[pyo3(name = "liveAlignPoints")]
     fn align_points(&mut self, left: &MobjectHandle, right: &MobjectHandle) -> PyResult<()> {
         self.same_store(left)?;
         self.same_store(right)?;
-        self.with_live(|live| {
-            live.align_path_points(
-                &noon::LayoutAnchor::from(&left.handle),
-                &noon::LayoutAnchor::from(&right.handle),
-            )
-        })
+        self.place(|scene| scene.align_points(&left.handle, &right.handle))
     }
     #[pyo3(name = "liveApplyMatrix")]
     #[allow(clippy::too_many_arguments)]
@@ -3305,7 +3148,7 @@ impl Context {
         y: f64,
     ) -> PyResult<()> {
         self.same_store(target)?;
-        self.with_live(|live| live.apply_matrix(&target.handle, &values, rows, columns, x, y))
+        self.place(|scene| scene.apply_matrix(&target.handle, &values, rows, columns, x, y))
     }
     #[pyo3(name = "liveShift")]
     fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
@@ -3321,7 +3164,7 @@ impl Context {
     #[pyo3(name = "liveSetFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_fill(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetFillColor")]
     fn fill_color(
@@ -3333,27 +3176,27 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_fill_color(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetFillOpacity")]
     fn fill_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_fill_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_fill_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveSetColor")]
     fn color(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_color(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetOpacity")]
     fn opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveSetObjectOpacity")]
     fn object_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_object_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_object_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveZIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
@@ -4018,7 +3861,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.has_execution() {
-            self.with_live(|live| live.effective_fill_color(&target.handle))?
+            self.scene
+                .effective_fill_color(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
         } else {
             target.handle.fill_color().map_err(engine_error)?
         };
@@ -4035,7 +3880,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.has_execution() {
-            self.with_live(|live| live.effective_stroke_color(&target.handle))?
+            self.scene
+                .effective_stroke_color(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
         } else {
             target.handle.stroke_color().map_err(engine_error)?
         };
@@ -4065,7 +3912,10 @@ impl Context {
     fn query_stroke_width(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective_stroke_width(&target.handle))
+            self.require_active()?;
+            self.scene
+                .effective_stroke_width(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
         } else {
             target.handle.stroke_width().map_err(engine_error)
         }
@@ -4128,7 +3978,7 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_stroke(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_stroke(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetStrokeColor")]
     fn set_stroke_color(
@@ -4140,15 +3990,12 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.set_stroke_color(&target.handle, r, g, b, a)
-                .map(|_| ())
-        })
+        self.edit_live_style(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetStrokeOpacity")]
     fn set_stroke_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_stroke_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_stroke_opacity(&target.handle, a))
     }
     fn metrics(&self) -> (u64, u64, u64) {
         (self.frames, self.segments, self.callback_regions)

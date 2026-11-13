@@ -412,19 +412,16 @@ fn live_graph_construction_keeps_independent_authoritative_ids() {
     let mut scene = Scene::new();
     let sentinel = scene.circle(0.25).unwrap();
     scene.add(&sentinel).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let store = std::rc::Rc::clone(scene.integration_store());
-    let root = scene.root();
-    let mut live = crate::LiveSession::new(&store, root, &mut execution);
+    let mut running = scene.into_execution().unwrap();
 
-    let first = Graph::new_live(
-        &mut live,
+    let first = Graph::new(
+        running.scene_mut(),
         [(1_u32, (-1.0, 0.0)), (2, (1.0, 0.0))],
         [(1_u32, 2_u32)],
     )
     .unwrap();
-    let second = Graph::new_live(
-        &mut live,
+    let second = Graph::new(
+        running.scene_mut(),
         [(1_u32, (-1.0, 0.0)), (2, (1.0, 0.0))],
         [(1_u32, 2_u32)],
     )
@@ -787,16 +784,19 @@ fn digraph_live_copy_preserves_arrow_style_and_remaps_endpoint_dependencies() {
     scene
         .add_many(&[crate::MobjectTarget::Family(graph.family())])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = crate::LiveSession::new(scene.integration_store(), scene.root(), &mut session);
+    let mut session = scene.into_execution().unwrap();
     let source_arrow = graph.edge(&1, &2).unwrap().arrow().unwrap();
-    live.set_fill(source_arrow.end_tip(), 1.0, 0.0, 0.0, 0.4)
+    session
+        .scene_mut()
+        .set_fill_rgb(source_arrow.end_tip(), 1.0, 0.0, 0.0, 0.4)
         .unwrap();
-    live.set_stroke(source_arrow.shaft(), 1.0, 1.0, 0.0, 0.12)
+    session
+        .scene_mut()
+        .set_stroke(source_arrow.shaft(), 1.0, 1.0, 0.0, 0.12)
         .unwrap();
     let source_shaft_transform = source_arrow.shaft().state().unwrap().transform;
     let source_tip_transform = source_arrow.end_tip().state().unwrap().transform;
-    let copied = graph.copy_live(&mut live).unwrap();
+    let copied = graph.copy_in_scene(session.scene_mut()).unwrap();
     let copied_arrow = copied.edge(&1, &2).unwrap().arrow().unwrap();
     assert_ne!(
         source_arrow.shaft().node_id(),
@@ -828,13 +828,18 @@ fn digraph_live_copy_preserves_arrow_style_and_remaps_endpoint_dependencies() {
         Some(copied.vertex(&1).unwrap().node_id())
     );
     drop(declaration);
-    live.add_many(&[crate::MobjectTarget::Family(copied.family())])
+    session
+        .live()
+        .add_many(&[crate::MobjectTarget::Family(copied.family())])
         .unwrap();
-    let store = scene.integration_store();
-    let source_path =
-        crate::path_queries::effective_path_query(store, &session, source_arrow.shaft()).unwrap();
-    let copied_path =
-        crate::path_queries::effective_path_query(store, &session, copied_arrow.shaft()).unwrap();
+    let source_path = session
+        .scene()
+        .effective_path_query(source_arrow.shaft())
+        .unwrap();
+    let copied_path = session
+        .scene()
+        .effective_path_query(copied_arrow.shaft())
+        .unwrap();
     assert_eq!(source_path.start().unwrap(), copied_path.start().unwrap());
     assert_eq!(source_path.end().unwrap(), copied_path.end().unwrap());
 }
@@ -911,58 +916,60 @@ fn late_graph_admission_and_topology_edits_keep_endpoint_dependencies_live() {
     graph
         .change_layout_positions(&mut scene, &[(-1.0, 1.0), (1.0, -1.0)])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let store = std::rc::Rc::clone(scene.integration_store());
-    let root = scene.root();
+    let mut running = scene.into_execution().unwrap();
+    let store = std::rc::Rc::clone(running.scene().integration_store());
 
     {
-        let mut live = crate::LiveSession::new(&store, root, &mut session);
-        live.add_many(&[crate::MobjectTarget::Family(graph.family())])
+        running
+            .scene_mut()
+            .add_many(&[crate::MobjectTarget::Family(graph.family())])
             .unwrap();
     }
     let shaft = graph.edge(&1, &2).unwrap().arrow().unwrap().shaft().clone();
-    let admitted = session
+    let admitted = running
+        .session()
         .effective_semantic_object(&store.borrow(), shaft.node_id())
         .unwrap();
     assert!(admitted.render_transform.is_some());
     let admitted_transform = admitted.render_transform.unwrap();
 
     {
-        let mut live = crate::LiveSession::new(&store, root, &mut session);
         graph
-            .change_layout_positions_live(&mut live, &[(0.0, 2.0), (3.0, 0.0)])
+            .change_layout_positions(running.scene_mut(), &[(0.0, 2.0), (3.0, 0.0)])
             .unwrap();
         graph
-            .add_vertices_live(&mut live, [(3, (-3.0, 0.0))])
+            .add_vertices(running.scene_mut(), [(3, (-3.0, 0.0))])
             .unwrap();
-        graph.add_edges_live(&mut live, [(2, 3)]).unwrap();
+        graph.add_edges(running.scene_mut(), [(2, 3)]).unwrap();
     }
-    let moved = session
+    let moved = running
+        .session()
         .effective_semantic_object(&store.borrow(), shaft.node_id())
         .unwrap();
     assert_ne!(moved.render_transform.unwrap(), admitted_transform);
     let added_shaft = graph.edge(&2, &3).unwrap().arrow().unwrap().shaft().clone();
-    assert!(session
+    assert!(running
+        .session()
         .effective_semantic_object(&store.borrow(), added_shaft.node_id())
         .unwrap()
         .render_transform
         .is_some());
 
-    let removed = {
-        let mut live = crate::LiveSession::new(&store, root, &mut session);
-        graph.remove_edges_live(&mut live, [(2, 3)]).unwrap()
-    };
+    let removed = { graph.remove_edges(running.scene_mut(), [(2, 3)]).unwrap() };
     assert_eq!(removed.removed_edges.len(), 1);
-    assert!(session
+    assert!(running
+        .session()
         .effective_semantic_object(&store.borrow(), added_shaft.node_id())
         .is_err());
 
     {
-        let mut live = crate::LiveSession::new(&store, root, &mut session);
-        live.remove_many(&[crate::MobjectTarget::Family(graph.family())])
+        running
+            .scene_mut()
+            .remove_many(&[crate::MobjectTarget::Family(graph.family())])
             .unwrap();
     }
-    assert!(session
+    assert!(running
+        .session()
         .effective_semantic_object(&store.borrow(), shaft.node_id())
         .is_err());
 }

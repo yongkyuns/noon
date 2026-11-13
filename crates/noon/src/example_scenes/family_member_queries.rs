@@ -39,7 +39,6 @@ impl LiveContinuation for FamilyMemberQueries {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         if self.stage == 3 {
             return Ok(ContinuationStep::Finished);
         }
@@ -50,10 +49,10 @@ impl LiveContinuation for FamilyMemberQueries {
                     let first = self.root.split_at(0)?.expect("three current children");
                     let second = self.root.split_at(1)?.expect("three current children");
                     assert_eq!([&first, &second], [&self.children[0], &self.children[1]]);
-                    self.show(live, vec![first, second])?;
+                    self.show(&mut scene.live(), vec![first, second])?;
                 }
                 2 => {
-                    live.set_family_points_f64(&self.root, &self.points)?;
+                    scene.set_family_points_f64(&self.root, &self.points)?;
                     let own = CompositeEntryHandle::Family(self.root.clone());
                     assert_eq!(self.root.get_num_points()?, 16);
                     assert_eq!(self.root.split_count()?, 4);
@@ -61,12 +60,12 @@ impl LiveContinuation for FamilyMemberQueries {
                     expected.extend(self.children.iter().cloned());
                     assert_eq!(self.root.split_members()?, expected);
                     assert_eq!(self.root.split_at(0)?, Some(own.clone()));
-                    self.show(live, vec![own])?;
+                    self.show(&mut scene.live(), vec![own])?;
                 }
                 _ => unreachable!("three held query selections"),
             }
             self.stage += 1;
-            live.wait_segment(0.25).map(ContinuationStep::Await)
+            scene.live().wait_segment(0.25).map(ContinuationStep::Await)
         })();
         step.map_err(|error| error.to_string())
     }

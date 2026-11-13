@@ -3563,7 +3563,9 @@ impl CanonicalAuthoringScene {
         match &mut self.player_ownership {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_create_manim_geometry(options),
+                .scene_mut()
+                .geometry(options)
+                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
             PlayerOwnership::Unstarted => {
                 Err("live primitive construction requires an active canonical session".into())
             }
@@ -3579,9 +3581,11 @@ impl CanonicalAuthoringScene {
         options: noon::ManimArrowOptions,
     ) -> Result<noon::ManimArrow, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_manim_arrow(options)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .manim_arrow(options)
+                .map_err(|error| noon::LiveSessionError::from(error).into()),
             PlayerOwnership::Unstarted => {
                 Err("live Arrow construction requires an active canonical session".into())
             }
@@ -3614,9 +3618,11 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_text(text)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .text(text)
+                .map_err(noon::integration::live_text_failure),
             PlayerOwnership::Unstarted => {
                 Err("live Text construction requires an active canonical session".into())
             }
@@ -3629,9 +3635,11 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_typst(text)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .typst(text)
+                .map_err(noon::integration::live_text_failure),
             PlayerOwnership::Unstarted => {
                 Err("live Typst construction requires an active canonical session".into())
             }
@@ -3647,9 +3655,11 @@ impl CanonicalAuthoringScene {
         text: noon::MathTypst,
     ) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_math_typst(text)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .math_typst(text)
+                .map_err(noon::integration::live_text_failure),
             PlayerOwnership::Unstarted => {
                 Err("live MathTypst construction requires an active canonical session".into())
             }
@@ -9303,7 +9313,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_family_points(&source.semantic_family()?, &points)
+                .scene_mut()
+                .set_family_points_f64(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
 
@@ -9317,10 +9328,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_empty_point_array(
-                    noon::MobjectTarget::from(&source.semantic_family()?),
-                    shape,
-                )
+                .scene_mut()
+                .set_empty_point_array(noon::MobjectTarget::from(&source.semantic_family()?), shape)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -9334,7 +9344,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_family_points_3d(&source.semantic_family()?, &points)
+                .scene_mut()
+                .set_family_points_3d(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
 
@@ -9348,7 +9359,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_append_family_points(&source.semantic_family()?, &points)
+                .scene_mut()
+                .append_family_points_f64(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
 
@@ -9362,7 +9374,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_append_family_points_3d(&source.semantic_family()?, &points)
+                .scene_mut()
+                .append_family_points_3d(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
 
@@ -9374,7 +9387,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_clear_family_points(&source.semantic_family()?)
+                .scene_mut()
+                .clear_family_points(&source.semantic_family()?)
                 .map_err(typed_js_error)
         }
 
@@ -9388,7 +9402,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_points(source.semantic_mobject(), &points)
+                .scene_mut()
+                .set_points_f64(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
@@ -9402,10 +9417,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_empty_point_array(
-                    noon::MobjectTarget::from(source.semantic_mobject()),
-                    shape,
-                )
+                .scene_mut()
+                .set_empty_point_array(noon::MobjectTarget::from(source.semantic_mobject()), shape)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -9419,7 +9433,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_points_3d(source.semantic_mobject(), &points)
+                .scene_mut()
+                .set_points_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
@@ -9433,7 +9448,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_append_points(source.semantic_mobject(), &points)
+                .scene_mut()
+                .append_points_f64(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
@@ -9447,7 +9463,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_append_points_3d(source.semantic_mobject(), &points)
+                .scene_mut()
+                .append_points_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
@@ -9461,7 +9478,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_points_as_corners(source.semantic_mobject(), &points)
+                .scene_mut()
+                .set_points_as_corners_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
@@ -9481,7 +9499,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_points_as_corners_with_samples(
+                .scene_mut()
+                .set_points_as_corners_3d_with_samples(
                     source.semantic_mobject(),
                     &points,
                     &sample_values,
@@ -9497,7 +9516,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_clear_points(source.semantic_mobject())
+                .scene_mut()
+                .clear_points(source.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -9513,7 +9533,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_start_new_path(source.semantic_mobject(), point)
+                .scene_mut()
+                .start_new_path_3d(source.semantic_mobject(), point)
                 .map_err(typed_js_error)
         }
 
@@ -9530,7 +9551,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_start_new_path_with_stride(source.semantic_mobject(), point, stride)
+                .scene_mut()
+                .start_new_path_3d_with_stride(source.semantic_mobject(), point, stride)
                 .map_err(typed_js_error)
         }
 
@@ -9547,7 +9569,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_line_to(source.semantic_mobject(), point, stride.unwrap_or(4))
+                .scene_mut()
+                .add_line_to_3d_with_stride(source.semantic_mobject(), point, stride.unwrap_or(4))
                 .map_err(typed_js_error)
         }
 
@@ -9568,7 +9591,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_line_to_with_samples(
+                .scene_mut()
+                .add_line_to_3d_with_stride_and_samples(
                     source.semantic_mobject(),
                     point,
                     stride,
@@ -9594,7 +9618,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_quadratic_bezier_curve_to(
+                .scene_mut()
+                .add_quadratic_bezier_curve_to_3d_with_stride(
                     source.semantic_mobject(),
                     control,
                     anchor,
@@ -9624,7 +9649,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_cubic_bezier_curve_to(
+                .scene_mut()
+                .add_cubic_bezier_curve_to_3d_with_stride(
                     source.semantic_mobject(),
                     control1,
                     control2,
@@ -9654,7 +9680,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_smooth_curve_to(
+                .scene_mut()
+                .add_smooth_curve_to_with_stride(
                     source.semantic_mobject(),
                     handle2,
                     anchor,
@@ -9672,7 +9699,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_scale_handle_to_anchor_distances(source.semantic_mobject(), factor)
+                .scene_mut()
+                .scale_handle_to_anchor_distances(source.semantic_mobject(), factor)
                 .map_err(typed_js_error)
         }
 
@@ -9700,7 +9728,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_cubic_bezier_curve(
+                .scene_mut()
+                .add_cubic_bezier_curve_3d(
                     source.semantic_mobject(),
                     anchor1,
                     handle1,
@@ -9720,7 +9749,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_cubic_bezier_curves(source.semantic_mobject(), &curves)
+                .scene_mut()
+                .add_cubic_bezier_curves_3d(source.semantic_mobject(), &curves)
                 .map_err(typed_js_error)
         }
 
@@ -9734,7 +9764,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_cubic_bezier_curves(source.semantic_mobject(), &curves)
+                .scene_mut()
+                .set_cubic_bezier_curves_3d(source.semantic_mobject(), &curves)
                 .map_err(typed_js_error)
         }
 
@@ -9748,7 +9779,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_points_as_corners(source.semantic_mobject(), &points)
+                .scene_mut()
+                .add_points_as_corners_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
@@ -9764,7 +9796,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_add_points_as_corners_with_stride(
+                .scene_mut()
+                .add_points_as_corners_3d_with_stride(
                     source.semantic_mobject(),
                     &points,
                     stride,
@@ -9782,10 +9815,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_append_vectorized_mobject(
-                    object.semantic_mobject(),
-                    source.semantic_mobject(),
-                )
+                .scene_mut()
+                .append_vectorized_mobject(object.semantic_mobject(), source.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -9799,7 +9830,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_append_vectorized_mobject_with_stride(
+                .scene_mut()
+                .append_vectorized_mobject_with_stride(
                     object.semantic_mobject(),
                     source.semantic_mobject(),
                     stride,
@@ -9816,7 +9848,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_points_smoothly(
+                .scene_mut()
+                .set_points_smoothly(
                     object.semantic_mobject(),
                     &crate::authoring_geometry::points(&coordinates)?,
                 )
@@ -9831,7 +9864,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_change_anchor_mode(object.semantic_mobject(), smooth)
+                .scene_mut()
+                .change_anchor_mode(object.semantic_mobject(), smooth)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveChangeFamilyAnchorMode)]
@@ -9843,7 +9877,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_change_family_anchor_mode(&family.semantic_family()?, smooth)
+                .scene_mut()
+                .change_family_anchor_mode(&family.semantic_family()?, smooth)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveReverseFamilyPoints)]
@@ -9854,7 +9889,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_reverse_family_points(&family.semantic_family()?)
+                .scene_mut()
+                .reverse_family_points(&family.semantic_family()?)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveRepeatFamilyPoints)]
@@ -9866,7 +9902,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_repeat_family_points(&family.semantic_family()?, count as usize)
+                .scene_mut()
+                .repeat_family_points(&family.semantic_family()?, count as usize)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveInsertNCurves)]
@@ -9878,7 +9915,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_insert_n_curves(object.semantic_mobject(), additional as usize)
+                .scene_mut()
+                .insert_n_curves(object.semantic_mobject(), additional as usize)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveReverseDirection)]
@@ -9889,7 +9927,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_reverse_direction(object.semantic_mobject())
+                .scene_mut()
+                .reverse_direction(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveReversePoints)]
@@ -9900,7 +9939,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_reverse_points(object.semantic_mobject())
+                .scene_mut()
+                .reverse_points(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveRepeatPoints)]
@@ -9912,7 +9952,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_repeat_points(object.semantic_mobject(), count as usize)
+                .scene_mut()
+                .repeat_points(object.semantic_mobject(), count as usize)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveSubcurve)]
@@ -9925,8 +9966,10 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_subcurve(source.semantic_mobject(), a, b)
+                .scene_mut()
+                .subcurve(source.semantic_mobject(), a, b)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = liveAlignPoints)]
@@ -9938,7 +9981,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_align_points(left.semantic_mobject(), right.semantic_mobject())
+                .scene_mut()
+                .align_points(left.semantic_mobject(), right.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -9951,7 +9995,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_align_root_points(&left.anchor, &right.anchor)
+                .scene_mut()
+                .align_path_points(&left.anchor, &right.anchor)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -9966,7 +10012,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_pointwise_become_partial(
+                .scene_mut()
+                .pointwise_become_partial(
                     object.semantic_mobject(),
                     source.semantic_mobject(),
                     a,
@@ -9983,7 +10030,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_close_path(source.semantic_mobject())
+                .scene_mut()
+                .close_path(source.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -9998,7 +10046,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_close_path_with_stride(
+                .scene_mut()
+                .close_path_with_stride(
                     source.semantic_mobject(),
                     stride,
                     tolerance,
@@ -10016,7 +10065,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_match_points(source.semantic_mobject(), target.semantic_mobject())
+                .scene_mut()
+                .match_points(source.semantic_mobject(), target.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
@@ -10207,11 +10257,22 @@ mod wasm {
             options: crate::WasmLatexOptions,
             compiler: &mut crate::WasmLatexCompiler,
         ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
-            self.inner
+            let scene = self
+                .inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_create_latex(options.text, compiler)
+                .scene_mut();
+            let parts = match options.text {
+                crate::authoring_latex::AuthoredLatex::Text(text) => {
+                    scene.tex_parts(text, compiler)
+                }
+                crate::authoring_latex::AuthoredLatex::Math(text) => {
+                    scene.math_tex_parts(text, compiler)
+                }
+            };
+            parts
                 .map(crate::WasmLatexPartsHandle::new)
+                .map_err(noon::integration::live_text_failure)
                 .map_err(typed_js_error)
         }
 
@@ -10640,7 +10701,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
+                .scene_mut()
+                .set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -10658,7 +10721,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .scene_mut()
+                .set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -10676,11 +10741,13 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_radial_gradient(
+                .scene_mut()
+                .set_fill_radial_gradient(
                     handle.semantic_mobject(),
                     gradient.value.clone(),
                     opacity,
                 )
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -10698,7 +10765,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_gradient(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .scene_mut()
+                .set_fill_gradient(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -10718,8 +10787,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_rgb(handle.semantic_mobject(), red, green, blue, opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetFillColor)]
@@ -10738,8 +10808,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveDisableFill)]
@@ -10754,8 +10825,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_disable_fill(handle.semantic_mobject())
-                .map_err(typed_js_error)
+                .scene_mut()
+                .disable_fill(handle.semantic_mobject())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetFillOpacity)]
@@ -10771,8 +10843,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetImageSampling)]
@@ -10807,8 +10880,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_color_rgba(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetUpdatingSuspended)]
@@ -10844,8 +10918,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeColor)]
@@ -10864,8 +10939,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveDisableStroke)]
@@ -10880,8 +10956,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_disable_stroke(handle.semantic_mobject())
-                .map_err(typed_js_error)
+                .scene_mut()
+                .disable_stroke(handle.semantic_mobject())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeOpacity)]
@@ -10897,8 +10974,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeCap)]
@@ -10914,8 +10992,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke_cap(handle.semantic_mobject(), cap)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke_cap(handle.semantic_mobject(), cap)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetOpacity)]
@@ -10931,8 +11010,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveFade)]
@@ -10948,8 +11028,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_fade(handle.semantic_mobject(), darkness)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .fade(handle.semantic_mobject(), darkness)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveFadeTo)]
@@ -10969,12 +11050,13 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_fade_to(
+                .scene_mut()
+                .fade_to(
                     handle.semantic_mobject(),
                     noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
                     amount,
                 )
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetEmission)]
@@ -10990,8 +11072,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_emission(handle.semantic_mobject(), strength)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_emission(handle.semantic_mobject(), strength)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetObjectOpacity)]
@@ -11007,8 +11090,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_object_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_object_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveAdd)]
@@ -11439,8 +11523,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_style(&source.semantic_mobject(), update)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_style(&source.semantic_mobject(), update)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveInterpolateMobjectStyle)]
@@ -12191,7 +12276,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_apply_matrix(
+                .scene_mut()
+                .apply_matrix(
                     handle.semantic_mobject(),
                     &values,
                     rows as usize,
@@ -12199,6 +12285,7 @@ mod wasm {
                     about_x,
                     about_y,
                 )
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -13700,7 +13787,8 @@ mod tests {
             context
                 .active_live_player()
                 .unwrap()
-                .live_clear_family_points(&family)
+                .scene_mut()
+                .clear_family_points(&family)
                 .unwrap();
             assert_eq!(context.scene.revision(), revision);
             assert!(family.own_object().unwrap().is_none());
@@ -13708,7 +13796,8 @@ mod tests {
             context
                 .active_live_player()
                 .unwrap()
-                .live_set_family_points(&family, &points)
+                .scene_mut()
+                .set_family_points_f64(&family, &points)
                 .unwrap();
             assert_eq!(
                 context
@@ -13727,7 +13816,8 @@ mod tests {
             context
                 .active_live_player()
                 .unwrap()
-                .live_clear_family_points(&family)
+                .scene_mut()
+                .clear_family_points(&family)
                 .unwrap();
             assert_eq!(
                 context

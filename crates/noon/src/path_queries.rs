@@ -4,8 +4,9 @@ mod point_arrays;
 mod point_counts;
 mod point_values;
 pub use boundary_profiles::effective_requires_content_boundary;
-pub use point_arrays::{effective_point_array, PointArrayObservation};
-pub use point_counts::effective_mobject_point_count;
+use point_arrays::effective_point_array;
+pub use point_arrays::PointArrayObservation;
+pub(crate) use point_counts::effective_mobject_point_count;
 pub use point_values::{
     effective_all_points_3d, effective_critical_point_3d, effective_path_boundary_points_3d,
     effective_vector_boundary_points_3d,

@@ -88,10 +88,10 @@ fn session_capture_resolves_camera_bloom_and_switches_working_profiles() {
     panel.set_fill(1.0, 1.0, 1.0, 0.5).unwrap();
     panel.disable_stroke().unwrap();
     scene.add(&panel).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     let mut options = CaptureOptions::new(SIZE, SIZE);
     options.background = [0.25, 0.5, 0.75];
-    let mut capture = SessionCapture::new(&session, options).unwrap();
+    let mut capture = SessionCapture::new(execution.session(), options).unwrap();
     let root = std::env::var_os("NOON_EXPORT_VIEW_BLOOM_ARTIFACTS").map(std::path::PathBuf::from);
     if let Some(root) = &root {
         std::fs::create_dir_all(root).unwrap();
@@ -101,12 +101,12 @@ fn session_capture_resolves_camera_bloom_and_switches_working_profiles() {
     let mut maximum = 0;
     for phase in 0..6 {
         match phase {
-            1 => scene
-                .live(&mut session)
+            1 => execution
+                .live()
                 .set_effect(&camera, "bloom", EffectUpdate::default().intensity(0.0))
                 .unwrap(),
-            2 => scene
-                .live(&mut session)
+            2 => execution
+                .live()
                 .set_effect(
                     &camera,
                     "bloom",
@@ -116,21 +116,18 @@ fn session_capture_resolves_camera_bloom_and_switches_working_profiles() {
                         .intensity(3.0),
                 )
                 .unwrap(),
-            3 => scene
-                .live(&mut session)
-                .remove_effect(&camera, "bloom")
-                .unwrap(),
-            4 => scene
-                .live(&mut session)
+            3 => execution.live().remove_effect(&camera, "bloom").unwrap(),
+            4 => execution
+                .scene_mut()
                 .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
                 .unwrap(),
-            5 => scene
-                .live(&mut session)
+            5 => execution
+                .scene_mut()
                 .set_view_color_profile(&camera, ViewColorProfile::LinearHdr)
                 .unwrap(),
             _ => {}
         }
-        let frame = capture.capture(&mut session).unwrap();
+        let frame = capture.capture(execution.session_mut()).unwrap();
         let expected = match phase {
             0 => reference(1.25, 0.25, 1.0),
             2 => reference(3.0, 0.0, 3.0),
@@ -161,7 +158,7 @@ fn session_capture_resolves_camera_bloom_and_switches_working_profiles() {
             );
         }
         let raw = frame.rgba.to_vec();
-        let clean = capture.capture(&mut session).unwrap();
+        let clean = capture.capture(execution.session_mut()).unwrap();
         assert_eq!(clean.rgba, raw);
         if let Some(root) = &root {
             std::fs::write(root.join(format!("{phase}.rgba8")), &raw).unwrap();

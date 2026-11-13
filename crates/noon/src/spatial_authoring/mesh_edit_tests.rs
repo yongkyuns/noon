@@ -1,5 +1,5 @@
 use super::*;
-use crate::{MeshOptions, Scene};
+use crate::{ExecutionSegment, ExecutionSession};
 use noon_core::{
     AnimationOptions, GeometryRef, GeometryResource, GeometryResourceLookup, MeshResource,
     RateFunction, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D, SemanticVec3,
@@ -7,7 +7,7 @@ use noon_core::{
 };
 use std::sync::Arc;
 
-fn fixture() -> (Scene, Vec<Mobject>, ExecutionSession, ExecutionSegment) {
+fn fixture() -> (Scene, Vec<Mobject>, ExecutionSegment) {
     let mut scene = Scene::new();
     scene
         .camera_3d(
@@ -58,7 +58,8 @@ fn fixture() -> (Scene, Vec<Mobject>, ExecutionSession, ExecutionSegment) {
         )
         .unwrap();
     execution.advance_to(0.5).unwrap();
-    (scene, objects, execution, segment)
+    scene.install_execution(execution);
+    (scene, objects, segment)
 }
 
 fn mesh_handle(object: &Mobject) -> noon_core::GeometryResourceHandle {
@@ -83,7 +84,8 @@ fn execution_mesh(
 
 #[test]
 fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
-    let (scene, objects, mut execution, segment) = fixture();
+    let (mut scene, objects, segment) = fixture();
+    let execution = scene.owned_execution();
     let target = &objects[0];
     let authored_world_before = target.world_transform().unwrap();
     let execution_id = execution.execution_object_id(target.node_id()).unwrap();
@@ -99,10 +101,10 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
     assert_ne!(effective_before, authored_world_before);
 
     let original_handles = objects.iter().map(mesh_handle).collect::<Vec<_>>();
-    let prior_runtime_mesh = execution_mesh(&execution, original_handles[0]);
+    let prior_runtime_mesh = execution_mesh(execution, original_handles[0]);
     let other_snapshot_meshes = original_handles[1..]
         .iter()
-        .map(|&handle| execution_mesh(&execution, handle))
+        .map(|&handle| execution_mesh(execution, handle))
         .collect::<Vec<_>>();
     let execution_ids = objects
         .iter()
@@ -110,8 +112,8 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
         .collect::<Vec<_>>();
     let old_positions = prior_runtime_mesh.positions().to_vec();
     let midpoint_frame = execution.frame().clone();
-    execution.take_frame_changes();
-    let midpoint_context = execution.publication_context();
+    scene.owned_execution_mut().take_frame_changes();
+    let midpoint_context = scene.owned_execution().publication_context();
     let midpoint_resource_stats = scene
         .integration_store()
         .borrow()
@@ -120,12 +122,10 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
 
     // An active ordinary animation segment retains the existing completion barrier.
     let replacement = noon_geometry::cube_mesh(2.25).unwrap();
-    {
-        let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
-        assert!(live
-            .replace_mesh_geometry(target, replacement.clone())
-            .is_err());
-    }
+    assert!(scene
+        .replace_mesh_geometry(target, replacement.clone())
+        .is_err());
+    let execution = scene.owned_execution();
     assert_eq!(execution.frame(), &midpoint_frame);
     assert_eq!(execution.publication_context(), midpoint_context);
     assert_eq!(
@@ -137,18 +137,20 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
         midpoint_resource_stats
     );
 
-    execution.advance_to(segment.end_time()).unwrap();
+    scene
+        .owned_execution_mut()
+        .advance_to(segment.end_time())
+        .unwrap();
     {
-        let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
-        live.complete_segment(segment).unwrap();
-        let effective_at_barrier = live.session.frame().objects[target_frame_index]
+        scene.owned_live().complete_segment(segment).unwrap();
+        let effective_at_barrier = scene.owned_execution().frame().objects[target_frame_index]
             .world_transform()
             .unwrap();
         let authored_at_barrier = target.world_transform().unwrap();
         assert_eq!(effective_at_barrier, authored_at_barrier);
         let authored_state_at_barrier = target.state().unwrap();
-        let context_at_barrier = live.session.publication_context();
-        live.replace_mesh_geometry(target, replacement).unwrap();
+        let context_at_barrier = scene.owned_execution().publication_context();
+        scene.replace_mesh_geometry(target, replacement).unwrap();
 
         let authored_after = target.state().unwrap();
         assert_eq!(target.world_transform().unwrap(), authored_at_barrier);
@@ -158,19 +160,26 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
         );
         assert_eq!(authored_after.style, authored_state_at_barrier.style);
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
             context_at_barrier.scene_revision().checked_next().unwrap()
         );
         assert_eq!(
-            live.session.frame().objects[target_frame_index].world_transform(),
+            scene.owned_execution().frame().objects[target_frame_index].world_transform(),
             Some(effective_at_barrier)
         );
     }
 
     assert_eq!(
-        execution.take_frame_changes().object_indices(),
+        scene
+            .owned_execution_mut()
+            .take_frame_changes()
+            .object_indices(),
         &[target_frame_index]
     );
+    let execution = scene.owned_execution();
     let frame_geometry_id = match execution.frame().objects[target_frame_index]
         .content
         .geometry()
@@ -191,7 +200,7 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
         );
     }
     for (mesh, &handle) in other_snapshot_meshes.iter().zip(&original_handles[1..]) {
-        assert!(Arc::ptr_eq(mesh, &execution_mesh(&execution, handle)));
+        assert!(Arc::ptr_eq(mesh, &execution_mesh(execution, handle)));
     }
     assert_ne!(mesh_handle(target), original_handles[0]);
 
@@ -212,30 +221,32 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
 
 #[test]
 fn replacing_non_mesh_geometry_fails_without_resource_or_publication_changes() {
-    let (mut scene, _objects, _execution, _segment) = fixture();
+    let mut scene = Scene::new();
     let path = scene.circle(0.25).unwrap();
     scene.add(&path).unwrap();
     // Bring execution to the same semantic revision through ordinary publication.
-    let mut execution = scene.execution_session().unwrap();
-    let before_context = execution.publication_context();
-    let before_frame = execution.frame().clone();
-    let before_resources = scene
+    let mut execution = scene.into_execution().unwrap();
+    let before_context = execution.session().publication_context();
+    let before_frame = execution.session().frame().clone();
+    let before_resources = execution
+        .scene()
         .integration_store()
         .borrow()
         .geometry_resources()
         .stats();
     let before_state = path.state().unwrap();
 
-    let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
-    assert!(live
+    assert!(execution
+        .scene_mut()
         .replace_mesh_geometry(&path, noon_geometry::cube_mesh(1.0).unwrap())
         .is_err());
 
     assert_eq!(path.state().unwrap(), before_state);
-    assert_eq!(live.session.publication_context(), before_context);
-    assert_eq!(live.session.frame(), &before_frame);
+    assert_eq!(execution.session().publication_context(), before_context);
+    assert_eq!(execution.session().frame(), &before_frame);
     assert_eq!(
-        scene
+        execution
+            .scene()
             .integration_store()
             .borrow()
             .geometry_resources()

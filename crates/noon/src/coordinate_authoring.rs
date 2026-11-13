@@ -836,7 +836,7 @@ impl Scene {
         let paths = self
             .effective_riemann_plan(axes, graph, options)?
             .paths(None, None)?;
-        crate::scene::publish_path_family(self, paths).map_err(Into::into)
+        self.path_family(paths).map_err(Into::into)
     }
 
     /// Immutable effective source snapshot for exact scalar callback evaluation.

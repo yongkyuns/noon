@@ -38,7 +38,7 @@ pub(crate) fn prepare_match_points(
     Ok(transaction)
 }
 
-pub fn publish_match_points(
+pub(crate) fn publish_match_points(
     store: &Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
     execution: &mut ExecutionSession,

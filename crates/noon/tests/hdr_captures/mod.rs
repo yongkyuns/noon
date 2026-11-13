@@ -252,10 +252,10 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
         scene
             .add_many(&[(&group).into(), (&unrelated).into()])
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
         let mut tx = SemanticMutationTransaction::new();
         tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-        scene.live(&mut session).apply(tx).unwrap();
+        session.live().apply(tx).unwrap();
         let mut surface = Surface::new(&device, &queue);
         let mut bloom = HdrBloomFilter::new(&adapter, &device);
         let mut bloom_scope = HdrBloomScope::default();
@@ -277,22 +277,22 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
                 _ => unreachable!(),
             };
             if phase > 0 {
-                scene
-                    .live(&mut session)
+                session
+                    .live()
                     .set_effect(
                         &group,
                         "soften",
                         EffectUpdate::default().radius(Pixels(sigma)),
                     )
                     .unwrap();
-                scene
-                    .live(&mut session)
+                session
+                    .live()
                     .set_family_object_opacity(&group, opacity)
                     .unwrap();
             }
             if ordered && phase > 0 {
-                scene
-                    .live(&mut session)
+                session
+                    .live()
                     .set_effect(
                         &group,
                         "polish",
@@ -305,18 +305,18 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
                     .unwrap();
             }
             if phase == 3 {
-                scene
-                    .live(&mut session)
-                    .set_color(&unrelated, 1.0, 0.0, 0.0, 1.0)
+                session
+                    .scene_mut()
+                    .set_color_rgba(&unrelated, 1.0, 0.0, 0.0, 1.0)
                     .unwrap();
             }
             if phase == 7 || phase == 8 {
-                scene
-                    .live(&mut session)
+                session
+                    .scene_mut()
                     .set_object_opacity(&a, child_opacity)
                     .unwrap();
             }
-            let (raw, stats) = surface.render(&device, &queue, &mut session);
+            let (raw, stats) = surface.render(&device, &queue, session.session_mut());
             let expect = expected(mixed, ordered, sigma, opacity, child_opacity);
             let actual = decode(&raw);
             for (at, (a, e)) in actual.iter().zip(expect.iter().flatten()).enumerate() {
@@ -336,7 +336,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
                 assert_eq!(stats.source_passes, 0);
                 assert_eq!(stats.blur_passes, 0);
             }
-            let (clean, clean_stats) = surface.render(&device, &queue, &mut session);
+            let (clean, clean_stats) = surface.render(&device, &queue, session.session_mut());
             assert_eq!(clean, raw);
             assert_eq!(
                 (
@@ -347,7 +347,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
                 (0, 0, 0)
             );
             let mut fresh = Surface::new(&device, &queue);
-            let (fresh_pixels, _) = fresh.render(&device, &queue, &mut session);
+            let (fresh_pixels, _) = fresh.render(&device, &queue, session.session_mut());
             assert_eq!(fresh_pixels, raw, "fresh/incremental phase={phase}");
             bloom
                 .prepare(

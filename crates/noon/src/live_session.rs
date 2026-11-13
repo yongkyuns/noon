@@ -6,31 +6,24 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
-mod arrow;
 mod brace;
 mod camera_motion;
 mod family_layout;
 mod path_editing;
 mod point_promotion;
-mod spatial;
 pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
 use crate::effective_capture::target_style_from_effective;
-use crate::execution_session::{EffectiveSemanticObject, NativePointerInputToken};
+use crate::execution_session::NativePointerInputToken;
 use crate::{
-    semantic_mobject::authoring_render_f64,
-    semantic_mobject::{
-        edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fill, edit_fill_color,
-        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-        edit_stroke_opacity,
-    },
-    state_replacement::prepare_become,
-    DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
-    ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
-    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
-    ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
-    SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
+    semantic_mobject::authoring_render_f64, semantic_mobject::edit_color,
+    state_replacement::prepare_become, DeclaredAnimation, ExecutionSegment,
+    ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError, ExecutionSegmentError,
+    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    ExecutionSessionPublicationError, ManimBecomeOptions, ManimLineEndpoints, Mobject,
+    MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError,
+    TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
@@ -858,38 +851,14 @@ impl<'a> LiveSession<'a> {
             crate::MobjectTarget::Object(mobject) => self.require_mobject(mobject)?,
             crate::MobjectTarget::Family(family) => self.require_family(family)?,
         }
-        self.require_target_capture()?;
-        let (transaction, pending) = crate::family_copy::prepare_semantic_copy(
+        crate::family_copy::publish_running_copy(
+            self.store,
+            self.root,
+            self.session,
             source,
             references,
-            |mobject, graph_row| {
-                crate::effective_capture::capture_mobject_state_with_graph_dependency(
-                    self.store,
-                    self.session,
-                    mobject,
-                    graph_row,
-                )
-                .map_err(LiveSessionError::from)
-            },
-            |store, source, style| {
-                crate::effective_capture::capture_family_style(store, self.session, source, style)
-                    .map_err(LiveSessionError::from)
-            },
-            |store, source, target, transaction| {
-                crate::effective_capture::stage_effect_copy(
-                    store,
-                    self.session,
-                    source,
-                    target,
-                    transaction,
-                )
-                .map_err(LiveSessionError::from)
-            },
-        )?;
-        let result = self.apply(transaction)?;
-        pending
-            .resolve(&result, from_node)
-            .map_err(LiveSessionError::from)
+            from_node,
+        )
     }
 
     /// Capture one flat family at the current publication and cyclically move
@@ -1112,283 +1081,10 @@ impl<'a> LiveSession<'a> {
         Ok((self.stage_effect_publication(transaction)?, changed))
     }
 
-    /// Publish one fully validated detached Manim geometry object through this
-    /// explicitly borrowed execution session.
-    ///
-    /// Normal durable construction belongs to [`crate::Scene::geometry`]. This
-    /// narrow entry point remains for integrations whose existing
-    /// `ExecutionSession` is deliberately paired with a store/root outside a
-    /// `Scene` owner, including callback-time creation. The new identity has no
-    /// root membership, execution slot, or frame work until [`Self::add`] admits
-    /// it.
-    pub fn create_manim_geometry(
-        &mut self,
-        options: crate::ManimGeometryOptions,
-    ) -> Result<Mobject, LiveSessionError> {
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let node = {
-            let mut store = self.store.borrow_mut();
-            crate::scene::publish_geometry_options(options, &mut store, |store, transaction| {
-                self.session
-                    .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map_err(crate::AuthoringError::from)
-            })
-        }
-        .map_err(|error| match error {
-            crate::AuthoringError::ExecutionPublication(error) => {
-                LiveSessionError::Publication(error)
-            }
-            error => LiveSessionError::from(error),
-        })?;
-        Mobject::from_node(Rc::clone(self.store), node).map_err(LiveSessionError::from)
-    }
-
-    /// Publish a detached family of prepared ordinary paths in the current
-    /// borrowed execution publication. Geometry admission and every family leaf
-    /// share one transaction and rollback scope.
-    pub fn create_path_family(
-        &mut self,
-        paths: Vec<(noon_core::VectorPath, noon_core::SemanticStyle)>,
-    ) -> Result<MobjectFamily, LiveSessionError> {
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let family = crate::family_authoring::publish_path_family_with(
-            &mut self.store.borrow_mut(),
-            paths,
-            |store, transaction| {
-                self.session
-                    .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map_err(crate::AuthoringError::from)
-            },
-        )
-        .map_err(|error| match error {
-            crate::AuthoringError::ExecutionPublication(error) => {
-                LiveSessionError::Publication(error)
-            }
-            error => LiveSessionError::from(error),
-        })?;
-        MobjectFamily::from_node(Rc::clone(self.store), family).map_err(LiveSessionError::from)
-    }
-
-    /// Shape and publish one detached plain Text object through this live session.
-    ///
-    /// The object receives semantic identity and immutable text resources, but no
-    /// scene membership or execution row until a later Add, FadeIn, or Create.
-    #[cfg(feature = "native-text")]
-    pub fn create_text(&mut self, text: crate::Text) -> Result<Mobject, LiveSessionError> {
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let admission =
-            crate::text_authoring::prepare_native_text(text).map_err(LiveSessionError::Text)?;
-        let result = {
-            let mut store = self.store.borrow_mut();
-            admission.publish(&mut store, |store, transaction| {
-                self.session
-                    .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map_err(|error| {
-                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
-                    })
-            })
-        }
-        .map_err(|error| match error {
-            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
-                error,
-            )) => LiveSessionError::Publication(error),
-            error => LiveSessionError::Text(error),
-        })?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one detached native text admission creates one semantic node")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
-    }
-
-    /// Compile and publish one detached TeX object through this live session.
-    #[cfg(feature = "latex")]
-    pub fn create_tex(
-        &mut self,
-        text: crate::Tex,
-        backend: &mut impl crate::LatexBackend,
-    ) -> Result<Mobject, LiveSessionError> {
-        self.create_latex(
-            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
-        )
-    }
-
-    /// Compile and publish one detached display-math object through this live session.
-    #[cfg(feature = "latex")]
-    pub fn create_math_tex(
-        &mut self,
-        text: crate::MathTex,
-        backend: &mut impl crate::LatexBackend,
-    ) -> Result<Mobject, LiveSessionError> {
-        self.create_latex(
-            crate::latex_authoring::prepare_math_tex(text, backend)
-                .map_err(LiveSessionError::Text)?,
-        )
-    }
-
-    #[cfg(feature = "latex")]
-    pub fn create_math_tex_parts(
-        &mut self,
-        text: crate::MathTex,
-        backend: &mut impl crate::LatexBackend,
-    ) -> Result<crate::LatexParts, LiveSessionError> {
-        self.create_latex_parts(
-            crate::latex_authoring::prepare_math_tex(text, backend)
-                .map_err(LiveSessionError::Text)?,
-        )
-    }
-
-    #[cfg(feature = "latex")]
-    pub fn create_tex_parts(
-        &mut self,
-        text: crate::Tex,
-        backend: &mut impl crate::LatexBackend,
-    ) -> Result<crate::LatexParts, LiveSessionError> {
-        self.create_latex_parts(
-            crate::latex_authoring::prepare_tex(text, backend).map_err(LiveSessionError::Text)?,
-        )
-    }
-
-    #[cfg(feature = "latex")]
-    fn create_latex_parts(
-        &mut self,
-        admission: crate::latex_authoring::LatexAdmission,
-    ) -> Result<crate::LatexParts, LiveSessionError> {
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let (result, family, members, source, parts, _font_size) = {
-            let mut store = self.store.borrow_mut();
-            admission.publish_parts(&mut store, |store, transaction| {
-                self.session
-                    .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map_err(crate::AuthoringError::from)
-                    .map_err(crate::TextAuthoringError::Semantic)
-            })
-        }
-        .map_err(|error| match error {
-            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
-                error,
-            )) => LiveSessionError::Publication(error),
-            error => LiveSessionError::Text(error),
-        })?;
-        crate::latex_authoring::finish_latex_parts(
-            std::rc::Rc::clone(self.store),
-            &result,
-            family,
-            members,
-            source,
-            parts,
-        )
-        .map_err(LiveSessionError::Text)
-    }
-
-    #[cfg(feature = "latex")]
-    fn create_latex(
-        &mut self,
-        admission: crate::latex_authoring::LatexAdmission,
-    ) -> Result<Mobject, LiveSessionError> {
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        let result = {
-            let mut store = self.store.borrow_mut();
-            admission.publish(&mut store, |store, transaction| {
-                self.session
-                    .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map_err(|error| {
-                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
-                    })
-            })
-        }
-        .map_err(|error| match error {
-            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
-                error,
-            )) => LiveSessionError::Publication(error),
-            error => LiveSessionError::Text(error),
-        })?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one LaTeX admission creates one detached semantic node")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
-    }
-
-    /// Compile and publish one detached Typst object through this live session.
-    #[cfg(feature = "typst")]
-    pub fn create_typst(&mut self, text: crate::Typst) -> Result<Mobject, LiveSessionError> {
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        self.create_compiled_text(
-            crate::text_authoring::prepare_typst(text).map_err(LiveSessionError::Text)?,
-        )
-    }
-
-    /// Compile and publish one detached MathTypst object through this live session.
-    #[cfg(feature = "typst")]
-    pub fn create_math_typst(
-        &mut self,
-        text: crate::MathTypst,
-    ) -> Result<Mobject, LiveSessionError> {
-        self.session
-            .require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        self.create_compiled_text(
-            crate::text_authoring::prepare_math_typst(text).map_err(LiveSessionError::Text)?,
-        )
-    }
-
-    #[cfg(feature = "typst")]
-    fn create_compiled_text(
-        &mut self,
-        admission: crate::text_authoring::TypstAdmission,
-    ) -> Result<Mobject, LiveSessionError> {
-        let result = {
-            let mut store = self.store.borrow_mut();
-            admission.publish(&mut store, |store, transaction| {
-                self.session
-                    .apply_semantic_transaction_at_root(store, self.root, transaction)
-                    .map_err(|error| {
-                        crate::TextAuthoringError::Semantic(crate::AuthoringError::from(error))
-                    })
-            })
-        }
-        .map_err(|error| match error {
-            crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(
-                error,
-            )) => LiveSessionError::Publication(error),
-            error => LiveSessionError::Text(error),
-        })?;
-        let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-            unreachable!("one Typst admission creates one detached semantic node")
-        };
-        Mobject::from_node(Rc::clone(self.store), *node).map_err(LiveSessionError::from)
-    }
-
     /// Read the current effective runtime value at the session's publication.
     pub fn effective(&self, mobject: &Mobject) -> Result<EffectiveMobjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
-        let store = self.store.borrow();
-        let EffectiveSemanticObject {
-            object,
-            publication,
-            ..
-        } = self
-            .session
-            .effective_semantic_object(&store, mobject.node_id())?;
-        Ok(EffectiveMobjectState {
-            fill_paint: object.fill_paint.clone(),
-            z_index: object.z_index,
-            transform: object.transform,
-            style: object.style,
-            appearance: object.appearance,
-            publication,
-        })
-    }
-
-    /// Count the addressed object's own points in the current publication.
-    pub fn get_num_points(&self, mobject: &Mobject) -> Result<usize, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        crate::path_queries::effective_mobject_point_count(self.store, self.session, mobject)
-            .map_err(Into::into)
+        crate::Scene::observe_effective(self.store, self.session, mobject).map_err(Into::into)
     }
 
     /// Capture full-coordinate owned points and ordered child occurrences from
@@ -1398,14 +1094,6 @@ impl<'a> LiveSession<'a> {
         target: MobjectTarget<'_>,
     ) -> Result<crate::PointReductionTree, LiveSessionError> {
         crate::path_queries::effective_point_reduction_tree(self.store, self.session, target)
-            .map_err(Into::into)
-    }
-
-    pub fn point_array(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<crate::PointArrayObservation, LiveSessionError> {
-        crate::path_queries::effective_point_array(self.store, self.session, target)
             .map_err(Into::into)
     }
 
@@ -1489,81 +1177,6 @@ impl<'a> LiveSession<'a> {
         mobject
             .manim_line_endpoints_at(transform)
             .map_err(LiveSessionError::from)
-    }
-
-    pub fn effective_fill_color(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<Option<Color>, LiveSessionError> {
-        let effective = self.effective(mobject)?;
-        if effective.fill_paint.is_some()
-            || matches!(
-                mobject.state()?.style.fill,
-                Some(noon_core::SemanticPaint::Image(_))
-            )
-        {
-            return Err(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
-            )
-            .into());
-        }
-        Ok(effective
-            .style
-            .fill
-            .map(crate::semantic_mobject::opaque_paint_color))
-    }
-
-    pub fn effective_stroke_color(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<Option<Color>, LiveSessionError> {
-        mobject.stroke_color().map_err(LiveSessionError::from)?;
-        Ok(self
-            .effective(mobject)?
-            .style
-            .stroke
-            .map(crate::semantic_mobject::opaque_paint_color))
-    }
-
-    pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, LiveSessionError> {
-        Ok(f64::from(self.effective(mobject)?.style.stroke_width))
-    }
-
-    pub fn effective_stroke_cap(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<noon_core::StrokeCap, LiveSessionError> {
-        Ok(self.effective(mobject)?.style.stroke_cap)
-    }
-
-    /// Read visible fill RGB, falling back to stroke RGB, at the current publication.
-    pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
-        // Resource paints do not have a scalar Manim color representation. Check
-        // the selected authored channel before observing its lowered runtime style.
-        let effective = self.effective(mobject)?;
-        if effective.fill_paint.is_some()
-            && effective.style.fill.is_some_and(|color| color.alpha > 0.0)
-        {
-            return Err(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
-            )
-            .into());
-        }
-        if !matches!(
-            mobject.state()?.style.fill,
-            Some(
-                noon_core::SemanticPaint::LinearGradient(_)
-                    | noon_core::SemanticPaint::RadialGradient(_)
-                    | noon_core::SemanticPaint::Noise(_)
-                    | noon_core::SemanticPaint::Hatch(_)
-                    | noon_core::SemanticPaint::Image(_)
-            )
-        ) {
-            mobject.manim_color().map_err(LiveSessionError::from)?;
-        }
-        Ok(crate::semantic_mobject::manim_color_from_effective(
-            &effective.style,
-        ))
     }
 
     /// Activate one predeclared animation in this session.
@@ -3007,118 +2620,8 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
-    /// Set immutable stripes or crosshatching through the shared style publication.
-    pub fn set_fill_hatch(
-        &mut self,
-        mobject: &Mobject,
-        paint: impl Into<std::sync::Arc<noon_core::HatchPaint>>,
-        opacity: Option<f64>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let state = crate::semantic_mobject::prepare_fill_paint_value(
-            &self.store.borrow(),
-            mobject.node_id(),
-            mobject.state()?,
-            noon_core::SemanticPaint::Hatch(paint.into()),
-            opacity,
-        )?;
-        self.replace_style(mobject, state.style)
-    }
-
-    /// Set a seeded local noise fill through the shared style publication.
-    pub fn set_fill_noise(
-        &mut self,
-        mobject: &Mobject,
-        paint: impl Into<std::sync::Arc<noon_core::NoisePaint>>,
-        opacity: Option<f64>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let state = crate::semantic_mobject::prepare_fill_paint_value(
-            &self.store.borrow(),
-            mobject.node_id(),
-            mobject.state()?,
-            noon_core::SemanticPaint::Noise(paint.into()),
-            opacity,
-        )?;
-        self.replace_style(mobject, state.style)
-    }
-
-    /// Set an elliptical radial fill through the ordinary shared style operation.
-    pub fn set_fill_radial_gradient(
-        &mut self,
-        mobject: &Mobject,
-        gradient: impl Into<std::sync::Arc<noon_core::RadialGradient>>,
-        opacity: Option<f64>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let state = crate::semantic_mobject::prepare_fill_paint_value(
-            &self.store.borrow(),
-            mobject.node_id(),
-            mobject.state()?,
-            noon_core::SemanticPaint::RadialGradient(gradient.into()),
-            opacity,
-        )?;
-        self.replace_style(mobject, state.style)
-    }
-
-    /// Set an immutable linear gradient and optional fill opacity in one publication.
-    pub fn set_fill_gradient(
-        &mut self,
-        mobject: &Mobject,
-        gradient: impl Into<std::sync::Arc<noon_core::LinearGradient>>,
-        opacity: Option<f64>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let state =
-            crate::semantic_mobject::prepare_fill_gradient(mobject, gradient.into(), opacity)?;
-        self.replace_style(mobject, state.style)
-    }
-
-    /// Set fill color and fill opacity through one authoritative style publication.
-    pub fn set_fill(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_fill(style, red, green, blue, opacity))
-    }
-
-    pub fn set_fill_color(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_fill_color(style, red, green, blue, alpha)
-        })
-    }
-
-    pub fn disable_fill(
-        &mut self,
-        mobject: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_disable_fill(style);
-            Ok(())
-        })
-    }
-
-    pub fn set_fill_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_fill_opacity(style, opacity))
-    }
-
     /// Recolor the currently enabled fill and stroke without changing their opacity.
-    pub fn set_color(
+    fn set_color(
         &mut self,
         mobject: &Mobject,
         red: f64,
@@ -3127,145 +2630,6 @@ impl<'a> LiveSession<'a> {
         alpha: f64,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
         self.edit_style(mobject, |style| edit_color(style, red, green, blue, alpha))
-    }
-
-    /// Capture the donor's coherent effective RGB before the recipient mutation.
-    pub fn match_color(
-        &mut self,
-        mobject: &Mobject,
-        donor: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let color = self.effective_manim_color(donor)?;
-        self.set_color(
-            mobject,
-            color.red.into(),
-            color.green.into(),
-            color.blue.into(),
-            1.0,
-        )
-    }
-
-    /// Set stroke color and opacity through one authoritative style publication.
-    pub fn set_stroke(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_stroke(style, red, green, blue, opacity)
-        })
-    }
-
-    pub fn set_stroke_color(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_stroke_color(style, red, green, blue, alpha)
-        })
-    }
-
-    pub fn disable_stroke(
-        &mut self,
-        mobject: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_disable_stroke(style);
-            Ok(())
-        })
-    }
-
-    pub fn set_stroke_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_stroke_opacity(style, opacity))
-    }
-
-    pub fn set_stroke_cap(
-        &mut self,
-        mobject: &Mobject,
-        cap: &str,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
-        self.edit_style(mobject, |style| {
-            style.stroke_cap = cap;
-            Ok(())
-        })
-    }
-
-    /// Apply Manim's paint-opacity operation to the currently enabled paint channels.
-    pub fn set_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_manim_opacity(style, opacity))
-    }
-
-    /// Publish one validated fade of an object's authored fill/stroke channels.
-    pub fn fade(
-        &mut self,
-        mobject: &Mobject,
-        darkness: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_fade(style, darkness))
-    }
-
-    /// Publish one validated color interpolation for an object.
-    pub fn fade_to(
-        &mut self,
-        mobject: &Mobject,
-        target: Color,
-        amount: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        if !mobject.has_fade_to_points()? {
-            return self.replace_style(mobject, mobject.state()?.style);
-        }
-        self.edit_style(mobject, |style| {
-            crate::semantic_mobject::edit_fade_to(style, target, amount)
-        })
-    }
-
-    /// Set checked linear material radiance without changing coverage or opacity.
-    pub fn set_emission(
-        &mut self,
-        mobject: &Mobject,
-        strength: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            style.emission =
-                noon_core::Emission::new(strength).map_err(crate::AuthoringError::Emission)?;
-            Ok(())
-        })
-    }
-
-    /// Set the independent object-composite opacity domain.
-    pub fn set_object_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
-    }
-
-    /// Update supplied paint fields through one semantic publication.
-    pub fn set_style(
-        &mut self,
-        object: &Mobject,
-        update: crate::StyleUpdate,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(object, |style| update.apply(style))
     }
 
     pub fn set_family_style(
@@ -3581,7 +2945,8 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         donor: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let color = self.effective_manim_color(donor)?;
+        let color =
+            crate::scene::object_edits::effective_manim_color(donor, self.effective(donor)?)?;
         self.set_family_color(
             family,
             color.red.into(),
@@ -3804,20 +3169,19 @@ mod tests {
         assert_eq!(object.fill_opacity().unwrap(), 0.4);
         assert_eq!(object.stroke_opacity().unwrap(), 0.25);
         scene.add(&object).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.fade(&object, 0.5).unwrap();
-        let observed = live.effective(&object).unwrap();
+        let mut session = scene.into_execution().unwrap();
+        session.scene_mut().fade(&object, 0.5).unwrap();
+        let observed = session.live().effective(&object).unwrap();
         assert_eq!(observed.fill_opacity(), f64::from(0.2_f32));
         assert_eq!(observed.stroke_opacity(), 0.125);
         assert_eq!(observed.style.opacity, 0.3);
-        let authored = live.authored(&object).unwrap();
-        let publication = live.session.publication_context();
+        let authored = session.live().authored(&object).unwrap();
+        let publication = session.live().session.publication_context();
         for darkness in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
-            assert!(live.fade(&object, darkness).is_err());
-            assert_eq!(live.authored(&object).unwrap(), authored);
-            assert_eq!(live.session.publication_context(), publication);
-            assert_eq!(live.effective(&object).unwrap(), observed);
+            assert!(session.scene_mut().fade(&object, darkness).is_err());
+            assert_eq!(session.live().authored(&object).unwrap(), authored);
+            assert_eq!(session.live().session.publication_context(), publication);
+            assert_eq!(session.live().effective(&object).unwrap(), observed);
         }
     }
 
@@ -3938,18 +3302,31 @@ mod tests {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let target = live.target_editor(&circle).unwrap();
-        let before = live.session.publication_context().scene_revision();
+        let mut session = scene.into_execution().unwrap();
+        let target = session.live().target_editor(&circle).unwrap();
+        let before = session
+            .live()
+            .session
+            .publication_context()
+            .scene_revision();
 
-        live.set_fill(&target, 1.0, 0.0, 0.0, 0.4).unwrap();
+        session
+            .scene_mut()
+            .set_fill_rgb(&target, 1.0, 0.0, 0.0, 0.4)
+            .unwrap();
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             before.checked_next().unwrap()
         );
-        live.set_object_opacity(&target, 0.5).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session
+            .scene_mut()
+            .set_object_opacity(&target, 0.5)
+            .unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(
             style.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
@@ -3957,15 +3334,21 @@ mod tests {
         assert_eq!(style.fill_opacity, 0.4);
         assert_eq!(style.object_opacity, 0.5);
 
-        live.disable_fill(&target).unwrap();
-        live.set_fill_opacity(&target, 0.25).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session.scene_mut().disable_fill(&target).unwrap();
+        session.scene_mut().set_fill_opacity(&target, 0.25).unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::WHITE)));
         assert_eq!(style.fill_opacity, 0.25);
 
-        live.set_stroke(&target, 0.0, 0.0, 1.0, 0.7).unwrap();
-        live.set_color(&target, 0.0, 1.0, 0.0, 1.0).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session
+            .scene_mut()
+            .set_stroke(&target, 0.0, 0.0, 1.0, 0.7)
+            .unwrap();
+        session
+            .scene_mut()
+            .set_color_rgba(&target, 0.0, 1.0, 0.0, 1.0)
+            .unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(
             style.fill,
             Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
@@ -3977,8 +3360,8 @@ mod tests {
         assert_eq!(style.fill_opacity, 0.25);
         assert_eq!(style.stroke_opacity, 0.7);
 
-        live.set_opacity(&target, 0.5).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session.scene_mut().set_opacity(&target, 0.5).unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(style.fill_opacity, 0.5);
         assert_eq!(style.stroke_opacity, 0.5);
         assert_eq!(style.object_opacity, 0.5);
@@ -4217,10 +3600,9 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let segment = live.play_animation(&animation).unwrap();
-        live.advance_segment_to(segment, 1.0).unwrap();
+        let mut running = scene.into_execution().unwrap();
+        let segment = running.live().play_animation(&animation).unwrap();
+        running.live().advance_segment_to(segment, 1.0).unwrap();
 
         assert_eq!(
             line.manim_line_endpoints().unwrap(),
@@ -4230,7 +3612,7 @@ mod tests {
             }
         );
         assert_eq!(
-            live.effective_line_endpoints(&line).unwrap(),
+            running.live().effective_line_endpoints(&line).unwrap(),
             ManimLineEndpoints {
                 start: (-1.0, 1.0),
                 end: (1.0, 1.0),
@@ -4238,10 +3620,10 @@ mod tests {
         );
         assert_eq!(line.manim_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
         assert_eq!(
-            live.effective_manim_color(&line).unwrap(),
+            running.scene().effective_manim_color(&line).unwrap(),
             Color::rgb(0.5, 0.0, 0.5)
         );
-        let effective = live.effective(&line).unwrap();
+        let effective = running.live().effective(&line).unwrap();
         assert_eq!(effective.fill_opacity(), 0.0);
         assert_eq!(effective.stroke_opacity(), 0.5);
         assert_eq!(line.stroke_opacity().unwrap(), 0.25);
@@ -4251,18 +3633,22 @@ mod tests {
     fn live_line_endpoints_reject_active_content_overrides() {
         let mut scene = Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.declare_and_activate_create(
-            &line,
-            AnimationOptions::new()
-                .run_time(1.0)
-                .rate_func(RateFunction::Linear),
-        )
-        .unwrap();
+        let mut running = scene.into_execution().unwrap();
+        running
+            .live()
+            .declare_and_activate_create(
+                &line,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
 
-        assert!(live.effective_line_endpoints(&line).is_err());
-        assert_eq!(live.effective_manim_color(&line).unwrap(), Color::WHITE);
+        assert!(running.live().effective_line_endpoints(&line).is_err());
+        assert_eq!(
+            running.scene().effective_manim_color(&line).unwrap(),
+            Color::WHITE
+        );
     }
 
     #[test]
@@ -4452,54 +3838,6 @@ mod tests {
     }
 
     #[test]
-    fn live_geometry_creation_is_detached_atomic_and_admits_locally() {
-        let mut scene = Scene::new();
-        let anchor = scene.circle(0.5).unwrap();
-        scene.add(&anchor).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let before = live.session.publication_context();
-        live.session.take_frame_changes();
-
-        let mut invalid = crate::ManimGeometryOptions::circle(0.25).unwrap();
-        assert!(invalid.set_stroke_width(-0.1).is_err());
-        assert_eq!(live.session.publication_context(), before);
-        assert!(live.session.take_frame_changes().is_empty());
-
-        let mut options = crate::ManimGeometryOptions::circle(0.25).unwrap();
-        options.set_translation(2.0, -1.0).unwrap();
-        options.set_fill(0.0, 0.4, 1.0, 0.6).unwrap();
-        let circle = live.create_manim_geometry(options).unwrap();
-        assert_eq!(
-            live.session.publication_context().scene_revision(),
-            before.scene_revision().checked_next().unwrap()
-        );
-        let authored = live.authored(&circle).unwrap();
-        assert_eq!(
-            authored.transform.translation,
-            SemanticVec3::new(2.0, -1.0, 0.0)
-        );
-        assert_eq!(authored.style.fill_opacity, 0.6);
-        assert!(matches!(
-            live.effective(&circle),
-            Err(LiveSessionError::Publication(
-                ExecutionSessionPublicationError::UnknownObject(_)
-            ))
-        ));
-        assert_eq!(live.session.frame().objects.len(), 1);
-        assert!(live.session.take_frame_changes().is_empty());
-
-        live.set_translation(&circle, 2.0, -1.0).unwrap();
-        assert!(live.session.take_frame_changes().is_empty());
-        live.add(&circle).unwrap();
-        assert_eq!(live.session.frame().objects.len(), 2);
-        assert_eq!(
-            live.effective(&circle).unwrap().transform.translation.x,
-            2.0
-        );
-    }
-
-    #[test]
     fn live_self_become_preserves_precise_authored_state_without_publication() {
         let mut scene = Scene::new();
         let mut source = scene.circle(0.5).unwrap();
@@ -4521,43 +3859,6 @@ mod tests {
         assert_eq!(source.state().unwrap(), before_state);
         assert_eq!(live.session.publication_context(), before_publication);
         assert!(live.session.take_frame_changes().is_empty());
-    }
-
-    #[test]
-    fn stale_live_geometry_rejects_before_importing_path_resources() {
-        use noon_core::{Vec2, VectorPath};
-        let mut scene = Scene::new();
-        let anchor = scene.circle(0.5).unwrap();
-        scene.add(&anchor).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let before_resources = scene
-            .integration_store()
-            .borrow()
-            .geometry_resources()
-            .len();
-        let path = crate::ManimGeometryOptions::path(
-            VectorPath::new()
-                .move_to(Vec2::ZERO)
-                .line_to(Vec2::new(1.0, 1.0)),
-        )
-        .unwrap();
-
-        Mobject::manim_circle(Rc::clone(scene.integration_store()), 0.1).unwrap();
-        let mut live = scene.live(&mut session);
-        assert!(matches!(
-            live.create_manim_geometry(path),
-            Err(LiveSessionError::Publication(
-                ExecutionSessionPublicationError::StaleSceneRevision { .. }
-            ))
-        ));
-        assert_eq!(
-            scene
-                .integration_store()
-                .borrow()
-                .geometry_resources()
-                .len(),
-            before_resources
-        );
     }
 
     #[test]

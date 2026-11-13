@@ -3,17 +3,11 @@
 mod audio;
 #[cfg(target_arch = "wasm32")]
 mod brace;
-#[cfg(any(target_arch = "wasm32", test))]
-mod camera_profile;
 #[cfg(target_arch = "wasm32")]
 mod code;
 #[cfg(any(target_arch = "wasm32", test))]
-mod coordinates;
-#[cfg(any(target_arch = "wasm32", test))]
 mod effects;
 mod export;
-#[cfg(any(target_arch = "wasm32", test))]
-mod graph;
 #[cfg(test)]
 mod image_paint_tests;
 #[cfg(target_arch = "wasm32")]
@@ -836,604 +830,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_set_family_points(
-        &mut self,
-        family: &noon::MobjectFamily,
-        points: &[(f64, f64)],
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_family_points(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            family,
-            points,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_family_points_3d(
-        &mut self,
-        family: &noon::MobjectFamily,
-        points: &[noon_core::SemanticVec3],
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_family_points_3d(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            family,
-            points,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_append_family_points(
-        &mut self,
-        family: &noon::MobjectFamily,
-        points: &[(f64, f64)],
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_append_family_points(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            family,
-            points,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_append_family_points_3d(
-        &mut self,
-        family: &noon::MobjectFamily,
-        points: &[noon_core::SemanticVec3],
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_append_family_points_3d(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            family,
-            points,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_clear_family_points(
-        &mut self,
-        family: &noon::MobjectFamily,
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_clear_family_points(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            family,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_points(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[(f64, f64)],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RawPoints {
-            object: source,
-            points,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_points_3d(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[noon_core::SemanticVec3],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RawPoints3d {
-            object: source,
-            points,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_append_points(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[(f64, f64)],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendRawPoints {
-            object: source,
-            points,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_append_points_3d(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[noon_core::SemanticVec3],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendRawPoints3d {
-            object: source,
-            points,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_points_as_corners(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[noon_core::SemanticVec3],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Corners3d {
-            object: source,
-            points,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_points_as_corners_with_samples(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[noon_core::SemanticVec3],
-        bezier_t_values: &[f64; 4],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Corners3dWithSamples {
-            object: source,
-            points,
-            bezier_t_values,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_clear_points(
-        &mut self,
-        source: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Clear {
-            object: source,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn publish_borrowed_path_edit(
-        &mut self,
-        edit: noon::integration::BorrowedPathEdit<'_>,
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        let root = self.source.scene().root();
-        noon::integration::publish_borrowed_path_edit(
-            &semantics,
-            root,
-            self.source.session_mut(),
-            edit,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_start_new_path(
-        &mut self,
-        source: &noon::Mobject,
-        point: noon_core::SemanticVec3,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Start3dWithStride {
-            object: source,
-            point,
-            stride: 4,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_start_new_path_with_stride(
-        &mut self,
-        source: &noon::Mobject,
-        point: noon_core::SemanticVec3,
-        stride: i32,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Start3dWithStride {
-            object: source,
-            point,
-            stride,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_line_to(
-        &mut self,
-        source: &noon::Mobject,
-        point: noon_core::SemanticVec3,
-        stride: i32,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Line3dWithStride {
-            object: source,
-            point,
-            stride,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_line_to_with_samples(
-        &mut self,
-        source: &noon::Mobject,
-        point: noon_core::SemanticVec3,
-        stride: i32,
-        bezier_t_values: &[f64; 4],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Line3dWithSamples {
-            object: source,
-            point,
-            stride,
-            bezier_t_values,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_quadratic_bezier_curve_to(
-        &mut self,
-        source: &noon::Mobject,
-        control: noon_core::SemanticVec3,
-        anchor: noon_core::SemanticVec3,
-        stride: i32,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(
-            noon::integration::BorrowedPathEdit::Quadratic3dWithStride {
-                object: source,
-                control,
-                anchor,
-                stride,
-            },
-        )
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_cubic_bezier_curve_to(
-        &mut self,
-        source: &noon::Mobject,
-        control1: noon_core::SemanticVec3,
-        control2: noon_core::SemanticVec3,
-        anchor: noon_core::SemanticVec3,
-        stride: i32,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Cubic3dWithStride {
-            object: source,
-            control1,
-            control2,
-            anchor,
-            stride,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_smooth_curve_to(
-        &mut self,
-        source: &noon::Mobject,
-        handle2: Option<noon_core::Vec2>,
-        anchor: noon_core::Vec2,
-        stride: i32,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(
-            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
-                object: source,
-                handle2,
-                anchor,
-                stride,
-            },
-        )
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_scale_handle_to_anchor_distances(
-        &mut self,
-        source: &noon::Mobject,
-        factor: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::ScaleHandles {
-            object: source,
-            factor,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_cubic_bezier_curve(
-        &mut self,
-        source: &noon::Mobject,
-        anchor1: noon_core::SemanticVec3,
-        handle1: noon_core::SemanticVec3,
-        handle2: noon_core::SemanticVec3,
-        anchor2: noon_core::SemanticVec3,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurve3d {
-            object: source,
-            anchor1,
-            handle1,
-            handle2,
-            anchor2,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_cubic_bezier_curves(
-        &mut self,
-        source: &noon::Mobject,
-        curves: &[[noon_core::SemanticVec3; 4]],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CubicCurves3d {
-            object: source,
-            curves,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_cubic_bezier_curves(
-        &mut self,
-        source: &noon::Mobject,
-        curves: &[[noon_core::SemanticVec3; 4]],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SetCubicCurves3d {
-            object: source,
-            curves,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_points_as_corners(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[noon_core::SemanticVec3],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendCorners3d {
-            object: source,
-            points,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_add_points_as_corners_with_stride(
-        &mut self,
-        source: &noon::Mobject,
-        points: &[noon_core::SemanticVec3],
-        stride: i32,
-        bezier_t_values: &[f64],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(
-            noon::integration::BorrowedPathEdit::AppendCorners3dWithStride {
-                object: source,
-                points,
-                stride,
-                bezier_t_values,
-            },
-        )
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_append_vectorized_mobject(
-        &mut self,
-        object: &noon::Mobject,
-        source: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AppendVectorized {
-            object,
-            source,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_append_vectorized_mobject_with_stride(
-        &mut self,
-        object: &noon::Mobject,
-        source: &noon::Mobject,
-        stride: i32,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(
-            noon::integration::BorrowedPathEdit::AppendVectorizedWithStride {
-                object,
-                source,
-                stride,
-            },
-        )
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_points_smoothly(
-        &mut self,
-        object: &noon::Mobject,
-        points: &[noon_core::Vec2],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::SmoothCorners {
-            object,
-            points,
-        })
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_change_anchor_mode(
-        &mut self,
-        object: &noon::Mobject,
-        smooth: bool,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::AnchorMode {
-            object,
-            smooth,
-        })
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_change_family_anchor_mode(
-        &mut self,
-        family: &noon::MobjectFamily,
-        smooth: bool,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyAnchorMode {
-            family,
-            smooth,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_reverse_family_points(
-        &mut self,
-        family: &noon::MobjectFamily,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyReversePoints {
-            family,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_reverse_points(
-        &mut self,
-        object: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::ReversePoints {
-            object,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_repeat_family_points(
-        &mut self,
-        family: &noon::MobjectFamily,
-        count: usize,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::FamilyRepeatPoints {
-            family,
-            count,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_repeat_points(
-        &mut self,
-        object: &noon::Mobject,
-        count: usize,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::RepeatPoints {
-            object,
-            count,
-        })
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_insert_n_curves(
-        &mut self,
-        object: &noon::Mobject,
-        additional: usize,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Subdivide {
-            object,
-            additional,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_reverse_direction(
-        &mut self,
-        object: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Reverse { object })
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_subcurve(
-        &mut self,
-        source: &noon::Mobject,
-        a: f64,
-        b: f64,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.with_live_session(|live| live.subcurve(source, a, b))
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_align_points(
-        &mut self,
-        left: &noon::Mobject,
-        right: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        let root = self.source.scene().root();
-        noon::integration::publish_alignment(
-            &semantics,
-            root,
-            self.source.session_mut(),
-            left,
-            right,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_align_root_points(
-        &mut self,
-        left: &noon::LayoutAnchor,
-        right: &noon::LayoutAnchor,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.align_path_points(left, right))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_pointwise_become_partial(
-        &mut self,
-        object: &noon::Mobject,
-        source: &noon::Mobject,
-        a: f64,
-        b: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Partial {
-            object,
-            source,
-            a,
-            b,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_close_path(
-        &mut self,
-        source: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::Close {
-            object: source,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_close_path_with_stride(
-        &mut self,
-        source: &noon::Mobject,
-        stride: i32,
-        tolerance: f64,
-        bezier_t_values: &[f64],
-    ) -> Result<(), AuthoringFailure> {
-        self.publish_borrowed_path_edit(noon::integration::BorrowedPathEdit::CloseWithStride {
-            object: source,
-            stride,
-            tolerance,
-            bezier_t_values,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_match_points(
-        &mut self,
-        source: &noon::Mobject,
-        target: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        let root = self.source.scene().root();
-        noon::integration::publish_match_points(
-            &semantics,
-            root,
-            self.source.session_mut(),
-            source,
-            target,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_become_mobject(
         &mut self,
         target: &noon::Mobject,
@@ -1445,66 +841,6 @@ impl SemanticExecutionPlayer {
             .become_mobject(target, other, options)
             .map(|_| ())
             .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_manim_geometry(
-        &mut self,
-        options: noon::ManimGeometryOptions,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_manim_geometry(options)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_text(
-        &mut self,
-        text: noon::Text,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_text(text)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_typst(
-        &mut self,
-        text: noon::Typst,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_typst(text)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_math_typst(
-        &mut self,
-        text: noon::MathTypst,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_math_typst(text)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_latex(
-        &mut self,
-        text: crate::authoring_latex::AuthoredLatex,
-        compiler: &mut crate::WasmLatexCompiler,
-    ) -> Result<noon::LatexParts, AuthoringFailure> {
-        self.with_live_session(|live| match text {
-            crate::authoring_latex::AuthoredLatex::Text(text) => {
-                live.create_tex_parts(text, compiler)
-            }
-            crate::authoring_latex::AuthoredLatex::Math(text) => {
-                live.create_math_tex_parts(text, compiler)
-            }
-        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1558,21 +894,30 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_fill_color(target))
+        self.source
+            .scene()
+            .effective_fill_color(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_stroke_color(
         &mut self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_stroke_color(target))
+        self.source
+            .scene()
+            .effective_stroke_color(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_stroke_width(
         &mut self,
         target: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_stroke_width(target))
+        self.source
+            .scene()
+            .effective_stroke_width(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_background_stroke_color(
@@ -1621,25 +966,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
     ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_stroke_cap(target))
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke_cap(
-        &mut self,
-        target: &noon::Mobject,
-        cap: &str,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke_cap(target, cap))
-            .map(|_| ())
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_style(
-        &mut self,
-        source: &noon::Mobject,
-        update: noon::StyleUpdate,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_style(source, update))
-            .map(|_| ())
+        self.source
+            .scene()
+            .effective_stroke_cap(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_interpolate_manim_style(
@@ -1894,204 +1224,6 @@ impl SemanticExecutionPlayer {
         amount: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.fade_to_family(family, color, amount))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_hatch(
-        &mut self,
-        mobject: &noon::Mobject,
-        paint: std::sync::Arc<noon::HatchPaint>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_hatch(mobject, paint, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_noise(
-        &mut self,
-        mobject: &noon::Mobject,
-        gradient: std::sync::Arc<noon::NoisePaint>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_noise(mobject, gradient, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_radial_gradient(
-        &mut self,
-        mobject: &noon::Mobject,
-        gradient: std::sync::Arc<noon::RadialGradient>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_radial_gradient(mobject, gradient, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_gradient(
-        &mut self,
-        mobject: &noon::Mobject,
-        gradient: std::sync::Arc<noon::LinearGradient>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_gradient(mobject, gradient, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill(mobject, red, green, blue, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_color(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_color(mobject, red, green, blue, alpha))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_fill(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.disable_fill(mobject))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_opacity(mobject, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_color(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_color(mobject, red, green, blue, alpha))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke(mobject, red, green, blue, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke_color(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke_color(mobject, red, green, blue, alpha))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_stroke(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.disable_stroke(mobject))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke_opacity(mobject, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_opacity(mobject, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_fade(
-        &mut self,
-        mobject: &noon::Mobject,
-        darkness: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.fade(mobject, darkness))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_fade_to(
-        &mut self,
-        mobject: &noon::Mobject,
-        color: noon::Color,
-        amount: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.fade_to(mobject, color, amount))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_emission(
-        &mut self,
-        mobject: &noon::Mobject,
-        strength: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_emission(mobject, strength))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_object_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_object_opacity(mobject, opacity))
             .map(|_| ())
     }
 
@@ -2417,37 +1549,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_apply_matrix(
-        &mut self,
-        mobject: &noon::Mobject,
-        values: &[f64],
-        rows: usize,
-        columns: usize,
-        about_x: f64,
-        about_y: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.source
-            .live()
-            .apply_matrix(mobject, values, rows, columns, about_x, about_y)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_apply_matrix_to_family(
-        &mut self,
-        family: &noon::MobjectFamily,
-        values: &[f64],
-        rows: usize,
-        columns: usize,
-        about_x: f64,
-        about_y: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.apply_matrix_to_family(family, values, rows, columns, about_x, about_y)
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_scale(
         &mut self,
         mobject: &noon::Mobject,
@@ -2593,8 +1694,9 @@ impl SemanticExecutionPlayer {
         &mut self,
         mobject: &noon::Mobject,
     ) -> Result<usize, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_mobject_point_count(&semantics, self.source.session(), mobject)
+        self.source
+            .scene()
+            .effective_mobject_point_count(mobject)
             .map_err(AuthoringFailure::from)
     }
 
@@ -2603,8 +1705,9 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        family
-            .effective_own_path_query(self.source.session())
+        self.source
+            .scene()
+            .effective_family_own_path_query(family)
             .map_err(AuthoringFailure::from)
     }
 
@@ -2635,16 +1738,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: noon::MobjectTarget<'_>,
     ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
-        self.with_live_session(|live| live.point_array(target))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_empty_point_array(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-        shape: noon_core::PointArrayShape,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_empty_point_array(target, shape))
+        self.source
+            .scene()
+            .effective_point_array(target)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2838,9 +1935,9 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
     ) -> Result<noon_core::Color, AuthoringFailure> {
         self.source
-            .live()
+            .scene()
             .effective_manim_color(mobject)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     /// Publish one already validated scene-membership batch through the active

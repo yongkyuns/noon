@@ -24,7 +24,6 @@
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
-mod path_edits;
 mod pixel_readback;
 pub mod spatial_input;
 
@@ -38,7 +37,6 @@ pub use forward_sample::{
     ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,
 };
 pub use frame_grid::{FrameGrid, FrameGridError, FrameRate, FrameSample};
-pub use path_edits::{publish_borrowed_path_edit, BorrowedPathEdit};
 pub use pixel_readback::{
     PixelChannelOrder, PixelReadbackError, PixelRowOrder, Rgba8ReadbackLayout,
 };
@@ -67,24 +65,17 @@ pub use crate::execution_session::{
 };
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
-pub use crate::family_points::{
-    publish_append_family_points, publish_append_family_points_3d, publish_clear_family_points,
-    publish_empty_family_point_array, publish_family_points, publish_family_points_3d,
-};
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fade, effective_style_with_fade_to,
     effective_style_with_fill, effective_style_with_fill_color, effective_style_with_fill_opacity,
     effective_style_with_paint_opacity, effective_style_with_stroke_color,
     rotate_effective_transform_about_point,
 };
-pub use crate::path_alignment::{publish_alignment, publish_root_alignment};
 pub use crate::path_queries::{
-    effective_all_points_3d, effective_critical_point_3d, effective_mobject_point_count,
-    effective_path_boundary_points_3d, effective_point_array, effective_point_reduction_tree,
-    effective_requires_content_boundary, effective_vector_boundary_points,
-    effective_vector_boundary_points_3d,
+    effective_all_points_3d, effective_critical_point_3d, effective_path_boundary_points_3d,
+    effective_point_reduction_tree, effective_requires_content_boundary,
+    effective_vector_boundary_points, effective_vector_boundary_points_3d,
 };
-pub use crate::point_matching::publish_match_points;
 pub use crate::scene::host_execution as scene_execution;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
 #[cfg(feature = "native-text")]
@@ -330,6 +321,18 @@ pub fn publish_family_align_to(
 
 mod vector_path;
 pub use crate::binding_error::AuthoringFailure;
+
+/// Preserve typed live resource and compiler diagnostics at the language boundary.
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
+pub fn live_text_failure(error: crate::TextAuthoringError) -> AuthoringFailure {
+    match error {
+        crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(error)) => {
+            crate::LiveSessionError::Publication(error)
+        }
+        other => crate::LiveSessionError::Text(other),
+    }
+    .into()
+}
 
 /// Preserve the language host's live numeric errors when Scene owns publication.
 #[cfg(feature = "latex")]

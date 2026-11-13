@@ -11,26 +11,28 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
     let mut anchor = scene.circle(0.2).unwrap();
     anchor.shift(-2.5, 0.0).unwrap();
     scene.add(&anchor).unwrap();
-    let mut source = scene.execution_session().unwrap();
-    source
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(0.5).unwrap();
-    observe(&mut source);
-    source.advance_to(1.0).unwrap();
-    let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+    let boundary = execution.session_mut().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(0.5).unwrap();
+    observe(execution.session_mut());
+    execution.session_mut().advance_to(1.0).unwrap();
+    let (mut publisher, mut reader) = execution
+        .session()
+        .create_prepared_prefix(boundary)
+        .unwrap();
     reader.seek(0.5).unwrap();
     let baseline = reader.frame().clone();
     let publication = reader.publication_context();
-    let text = scene
-        .live(&mut source)
-        .create_math_typst(
-            MathTypst::new("integral_0^1 x^2 dif x = frac(1, 3)").with_font_size(36.0),
-        )
+    let text = execution
+        .scene_mut()
+        .math_typst(MathTypst::new("integral_0^1 x^2 dif x = frac(1, 3)").with_font_size(36.0))
         .unwrap();
-    scene
-        .live(&mut source)
+    execution
+        .live()
         .set_glow(
             &text,
             EffectUpdate::default()
@@ -46,24 +48,25 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
             .reverse_rate_function(reverse)
             .introducer(!reverse)
             .remover(reverse);
-        let segment = scene
-            .live(&mut source)
+        let segment = execution
+            .live()
             .declare_and_activate_text_write(&text, reverse, options)
             .unwrap();
         for fraction in [0.0, 0.25, 0.75] {
-            scene
-                .live(&mut source)
+            execution
+                .live()
                 .advance_segment_to(segment, segment.start_time() + fraction)
                 .unwrap();
-            observe(&mut source);
+            observe(execution.session_mut());
         }
         {
-            let mut live = scene.live(&mut source);
+            let mut live = execution.live();
             live.advance_segment_to(segment, segment.end_time())
                 .unwrap();
             live.complete_segment(segment).unwrap();
         }
-        let batch = source
+        let batch = execution
+            .session()
             .publish_prepared_prefix(segment, &mut publisher)
             .unwrap();
         assert_eq!(
@@ -84,11 +87,15 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
         );
         assert_eq!(reader.publication_context(), publication);
     }
-    let boundary = source.wait_segment(0.5).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
-    observe(&mut source);
-    source.seal_replay().unwrap();
-    let batch = source
+    let boundary = execution.session_mut().wait_segment(0.5).unwrap();
+    execution
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
+    observe(execution.session_mut());
+    execution.session_mut().seal_replay().unwrap();
+    let batch = execution
+        .session()
         .finish_prepared_prefix(boundary, &mut publisher)
         .unwrap();
     reader.reserve_append_capacity(&batch).unwrap();

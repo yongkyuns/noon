@@ -14,7 +14,7 @@ const SUFFIX: [SemanticVec3; 2] = [
 
 #[test]
 fn root_xyz_appends_preserve_children_identity_and_presentation_in_all_hosts() {
-    for mode in 0..4 {
+    for mode in 0..2 {
         for materialized in [false, true] {
             for attached in [false, true] {
                 for drawing in [false, true] {
@@ -36,41 +36,24 @@ fn root_xyz_appends_preserve_children_identity_and_presentation_in_all_hosts() {
                     let before = family.own_path_query().unwrap();
                     let mut expected = before.points_3d().unwrap();
                     expected.extend(SUFFIX);
-                    let mut borrowed = if mode >= 2 {
-                        Some(scene.execution_session().unwrap())
-                    } else {
-                        None
-                    };
-                    if mode == 1 {
-                        let execution = scene.execution_session().unwrap();
-                        scene.install_execution(execution);
-                    }
-                    match mode {
-                        0 => family.append_points_3d(&SUFFIX).unwrap(),
-                        1 => scene.append_family_points_3d(&family, &SUFFIX).unwrap(),
-                        2 => publish_append_family_points_3d(
-                            scene.integration_store(),
-                            scene.root(),
-                            borrowed.as_mut().unwrap(),
-                            &family,
-                            &SUFFIX,
-                        )
-                        .unwrap(),
-                        _ => scene
-                            .live(borrowed.as_mut().unwrap())
-                            .append_family_points_3d(&family, &SUFFIX)
-                            .unwrap(),
-                    }
-                    let actual = if let Some(execution) =
-                        borrowed.as_ref().or_else(|| scene.running_execution())
-                    {
-                        family.effective_own_path_query(execution).unwrap()
-                    } else {
+                    let observed = if mode == 0 {
+                        family.append_points_3d(&SUFFIX).unwrap();
                         family.own_path_query().unwrap()
+                    } else {
+                        let mut running = scene.into_execution().unwrap();
+                        running
+                            .scene_mut()
+                            .append_family_points_3d(&family, &SUFFIX)
+                            .unwrap();
+                        running
+                            .scene()
+                            .effective_family_own_path_query(&family)
+                            .unwrap()
                     };
-                    assert_eq!(actual.points_3d().unwrap(), expected, "mode={mode}, materialized={materialized}, attached={attached}, drawing={drawing}");
+                    let points = observed.points_3d().unwrap();
+                    assert_eq!(points, expected, "mode={mode}, materialized={materialized}, attached={attached}, drawing={drawing}");
                     assert_eq!(family.node_id(), id);
-                    assert_eq!(scene.integration_store().borrow().len(), count);
+                    assert_eq!(family.integration_store().borrow().len(), count);
                     assert_eq!(child.state().unwrap(), before_child);
                     assert_eq!(family.member_count().unwrap(), 1);
                     assert_eq!(family.draw_enabled().unwrap(), drawing);

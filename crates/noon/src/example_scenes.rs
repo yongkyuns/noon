@@ -841,11 +841,12 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(1.0)
+                scene
+                    .live()
+                    .wait_segment(1.0)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -867,13 +868,17 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                 circle_options
                     .set_stroke_opacity(0.9)
                     .map_err(|error| error.to_string())?;
-                let circle = live
-                    .create_manim_geometry(circle_options)
+                let circle = scene
+                    .geometry(circle_options)
                     .map_err(|error| error.to_string())?;
-                if live.contains(&circle).map_err(|error| error.to_string())? {
+                if scene
+                    .live()
+                    .contains(&circle)
+                    .map_err(|error| error.to_string())?
+                {
                     return Err("new live Circle must be detached before admission".into());
                 }
-                live.add(&circle).map_err(|error| error.to_string())?;
+                scene.add(&circle).map_err(|error| error.to_string())?;
 
                 let mut square_options =
                     crate::ManimGeometryOptions::square(0.5).map_err(|error| error.to_string())?;
@@ -892,13 +897,17 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                 square_options
                     .set_object_opacity(0.75)
                     .map_err(|error| error.to_string())?;
-                let square = live
-                    .create_manim_geometry(square_options)
+                let square = scene
+                    .geometry(square_options)
                     .map_err(|error| error.to_string())?;
-                if live.contains(&square).map_err(|error| error.to_string())? {
+                if scene
+                    .live()
+                    .contains(&square)
+                    .map_err(|error| error.to_string())?
+                {
                     return Err("new live Square must be detached before admission".into());
                 }
-                live.add(&square).map_err(|error| error.to_string())?;
+                scene.add(&square).map_err(|error| error.to_string())?;
 
                 self.stage = 2;
                 Ok(crate::ContinuationStep::Finished)
@@ -1037,7 +1046,6 @@ impl LiveContinuation for OrdinaryCompositionContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let linear = |duration| {
             AnimationOptions::new()
                 .run_time(duration)
@@ -1050,47 +1058,56 @@ impl LiveContinuation for OrdinaryCompositionContinuation {
                     TransformToRequest::new(&self.left, &self.left_position, linear(2.0)),
                     TransformToRequest::new(&self.right, &self.right_position, linear(2.0)),
                 ];
-                live.declare_and_activate_transform_composition(
-                    SemanticAnimationCompositionKind::Parallel,
-                    &requests,
-                    AnimationOptions::new()
-                        .lag_ratio(0.0)
-                        .rate_func(RateFunction::Linear),
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_composition(
+                        SemanticAnimationCompositionKind::Parallel,
+                        &requests,
+                        AnimationOptions::new()
+                            .lag_ratio(0.0)
+                            .rate_func(RateFunction::Linear),
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let left_fill = live
+                let left_fill = scene
+                    .live()
                     .target_editor(&self.left)
                     .map_err(|error| error.to_string())?;
-                live.set_fill(&left_fill, 1.0, 0.0, 0.0, 1.0)
+                scene
+                    .set_fill_rgb(&left_fill, 1.0, 0.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
-                let right_fill = live
+                let right_fill = scene
+                    .live()
                     .target_editor(&self.right)
                     .map_err(|error| error.to_string())?;
-                live.set_fill(&right_fill, 0.0, 0.0, 1.0, 1.0)
+                scene
+                    .set_fill_rgb(&right_fill, 0.0, 0.0, 1.0, 1.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 2;
                 let requests = [
                     TransformToRequest::new(&self.left, &left_fill, linear(1.0)),
                     TransformToRequest::new(&self.right, &right_fill, linear(1.0)),
                 ];
-                live.declare_and_activate_transform_composition(
-                    SemanticAnimationCompositionKind::Sequence,
-                    &requests,
-                    AnimationOptions::new()
-                        .lag_ratio(1.0)
-                        .rate_func(RateFunction::Linear),
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_composition(
+                        SemanticAnimationCompositionKind::Sequence,
+                        &requests,
+                        AnimationOptions::new()
+                            .lag_ratio(1.0)
+                            .rate_func(RateFunction::Linear),
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
                 self.stage = 3;
-                live.set_fill(&self.left, 0.0, 1.0, 0.0, 1.0)
+                scene
+                    .set_fill_rgb(&self.left, 0.0, 1.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
                 Ok(crate::ContinuationStep::Finished)
             }
@@ -1232,50 +1249,56 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_transform_to(
-                    &self.circle,
-                    &self.target,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.circle,
+                        &self.target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let paint = live
+                let paint = scene
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(paint.fill_opacity(), 0.75);
                 assert_eq!(paint.stroke_opacity(), 1.0);
                 // Captured callback alpha must survive RGB edits; absolute
                 // opacity edits must not multiply its intrinsic alpha again.
-                let copied = live
+                let copied = scene
+                    .live()
                     .target_editor(&self.circle)
                     .map_err(|error| error.to_string())?;
-                live.set_color(&copied, 1.0, 0.0, 0.0, 1.0)
+                scene
+                    .set_color_rgba(&copied, 1.0, 0.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.fill_opacity().map_err(|error| error.to_string())?,
                     0.75
                 );
-                live.set_fill_opacity(&copied, 0.5)
+                scene
+                    .set_fill_opacity(&copied, 0.5)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.fill_opacity().map_err(|error| error.to_string())?,
                     0.5
                 );
-                live.set_stroke_opacity(&copied, 0.25)
+                scene
+                    .set_stroke_opacity(&copied, 0.25)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.stroke_opacity().map_err(|error| error.to_string())?,
                     0.25
                 );
-                live.set_opacity(&copied, 0.4)
+                scene
+                    .set_opacity(&copied, 0.4)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.fill_opacity().map_err(|error| error.to_string())?,
@@ -1293,15 +1316,16 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                         .object_opacity,
                     0.5
                 );
-                let layout = live
+                let layout = scene
+                    .live()
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
                 assert!((layout.center.0 - 2.0).abs() < 1e-6);
                 assert!((layout.center.1 - 1.0).abs() < 1e-6);
                 assert!((layout.width - 0.8).abs() < 1e-6);
                 assert!((layout.height - 0.8).abs() < 1e-6);
-                let probe = live
-                    .create_manim_geometry(
+                let probe = scene
+                    .geometry(
                         crate::ManimGeometryOptions::square(0.2)
                             .map_err(|error| error.to_string())?,
                     )
@@ -1313,21 +1337,24 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     aligned_edge: (0.0, 0.0),
                     mask: (1.0, 1.0),
                 };
-                live.next_layout_to_aligned(
-                    &source,
-                    crate::LiveLayoutTarget::Mobject(&self.circle),
-                    &source,
-                    args,
-                )
-                .map_err(|error| error.to_string())?;
+                scene
+                    .live()
+                    .next_layout_to_aligned(
+                        &source,
+                        crate::LiveLayoutTarget::Mobject(&self.circle),
+                        &source,
+                        args,
+                    )
+                    .map_err(|error| error.to_string())?;
                 let center = probe.center().map_err(|error| error.to_string())?;
                 assert!((center.0 - 2.6).abs() < 1e-6);
                 assert!((center.1 - 1.0).abs() < 1e-6);
-                let before = live
+                let before = scene
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
                 let source = crate::LayoutAnchor::from(&self.circle);
-                let error = live
+                let error = scene
+                    .live()
                     .next_layout_to_aligned(
                         &source,
                         crate::LiveLayoutTarget::Mobject(&probe),
@@ -1342,7 +1369,8 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     ))
                 ));
                 assert_eq!(
-                    live.effective(&self.circle)
+                    scene
+                        .effective(&self.circle)
                         .map_err(|error| error.to_string())?,
                     before
                 );
@@ -2379,14 +2407,13 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
             .rate_func(RateFunction::Linear)
     };
 
-    let mut session = scene.execution_session()?;
+    let mut session = scene.into_execution()?;
     {
-        let mut live = scene.live(&mut session);
         let parallel = [
             TransformToRequest::new(&left, &left_position, linear(2.0)),
             TransformToRequest::new(&right, &right_position, linear(2.0)),
         ];
-        let segment = live.declare_and_activate_transform_composition(
+        let segment = session.live().declare_and_activate_transform_composition(
             SemanticAnimationCompositionKind::Parallel,
             &parallel,
             AnimationOptions::new()
@@ -2395,23 +2422,29 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
             AnimationOptions::new().rate_func(RateFunction::Linear),
         )?;
         assert_eq!((segment.start_time(), segment.end_time()), (0.0, 2.0));
-        live.advance_segment_to(segment, 1.0)?;
-        assert_eq!(live.effective_layout(&left)?.center, (-2.0, 0.5));
-        assert_eq!(live.effective_layout(&right)?.center, (2.0, -0.5));
-        live.advance_segment_to(segment, segment.end_time())?;
-        live.complete_segment(segment)?;
-        assert_eq!(live.effective_layout(&left)?.center, (-2.0, 1.0));
-        assert_eq!(live.effective_layout(&right)?.center, (2.0, -1.0));
+        session.live().advance_segment_to(segment, 1.0)?;
+        assert_eq!(session.live().effective_layout(&left)?.center, (-2.0, 0.5));
+        assert_eq!(session.live().effective_layout(&right)?.center, (2.0, -0.5));
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())?;
+        session.live().complete_segment(segment)?;
+        assert_eq!(session.live().effective_layout(&left)?.center, (-2.0, 1.0));
+        assert_eq!(session.live().effective_layout(&right)?.center, (2.0, -1.0));
 
-        let left_fill = live.target_editor(&left)?;
-        live.set_fill(&left_fill, 1.0, 0.0, 0.0, 1.0)?;
-        let right_fill = live.target_editor(&right)?;
-        live.set_fill(&right_fill, 0.0, 0.0, 1.0, 1.0)?;
+        let left_fill = session.live().target_editor(&left)?;
+        session
+            .scene_mut()
+            .set_fill_rgb(&left_fill, 1.0, 0.0, 0.0, 1.0)?;
+        let right_fill = session.live().target_editor(&right)?;
+        session
+            .scene_mut()
+            .set_fill_rgb(&right_fill, 0.0, 0.0, 1.0, 1.0)?;
         let sequence = [
             TransformToRequest::new(&left, &left_fill, linear(1.0)),
             TransformToRequest::new(&right, &right_fill, linear(1.0)),
         ];
-        let segment = live.declare_and_activate_transform_composition(
+        let segment = session.live().declare_and_activate_transform_composition(
             SemanticAnimationCompositionKind::Sequence,
             &sequence,
             AnimationOptions::new()
@@ -2420,31 +2453,35 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
             AnimationOptions::new().rate_func(RateFunction::Linear),
         )?;
         assert_eq!((segment.start_time(), segment.end_time()), (2.0, 4.0));
-        live.advance_segment_to(segment, 3.0)?;
+        session.live().advance_segment_to(segment, 3.0)?;
         assert_eq!(
-            live.effective(&left)?.style.fill,
+            session.live().effective(&left)?.style.fill,
             Some(Color::rgb(1.0, 0.0, 0.0))
         );
         assert_eq!(
-            live.effective(&right)?.style.fill,
+            session.live().effective(&right)?.style.fill,
             Some(Color::rgb(1.0, 1.0, 1.0))
         );
-        live.advance_segment_to(segment, segment.end_time())?;
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())?;
         assert_eq!(
-            live.effective(&right)?.style.fill,
+            session.live().effective(&right)?.style.fill,
             Some(Color::rgb(0.0, 0.0, 1.0))
         );
-        live.complete_segment(segment)?;
+        session.live().complete_segment(segment)?;
 
         // An ordinary edit after root completion proves every mapped driver was released.
-        live.set_fill(&left, 0.0, 1.0, 0.0, 1.0)?;
+        session
+            .scene_mut()
+            .set_fill_rgb(&left, 0.0, 1.0, 0.0, 1.0)?;
         assert_eq!(
-            live.effective(&left)?.style.fill,
+            session.live().effective(&left)?.style.fill,
             Some(Color::rgb(0.0, 1.0, 0.0))
         );
     }
-    assert_eq!(session.frame().time, 4.0);
-    Ok(scene.into_execution_with_session(session)?)
+    assert_eq!(session.session().frame().time, 4.0);
+    Ok(session)
 }
 
 /// Execute one ordinary style play and a following authored style edit.
@@ -2459,23 +2496,24 @@ pub fn ordinary_style_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
     circle.set_object_opacity(1.0)?;
     scene.add(&circle).map_err(|error| error.to_string())?;
 
-    let mut session = scene.execution_session()?;
+    let mut session = scene.into_execution()?;
     {
-        let mut live = scene.live(&mut session);
-        let target = live.target_editor(&circle)?;
-        live.set_fill(&target, 1.0, 0.0, 0.0, 0.4)?;
-        live.set_object_opacity(&target, 0.5)?;
-        let target_style = live.authored(&target)?.style;
+        let target = session.live().target_editor(&circle)?;
+        session
+            .scene_mut()
+            .set_fill_rgb(&target, 1.0, 0.0, 0.0, 0.4)?;
+        session.scene_mut().set_object_opacity(&target, 0.5)?;
+        let target_style = session.live().authored(&target)?.style;
 
-        let segment = live.declare_and_activate_transform_to(
+        let segment = session.live().declare_and_activate_transform_to(
             &circle,
             &target,
             AnimationOptions::new()
                 .run_time(2.0)
                 .rate_func(RateFunction::Linear),
         )?;
-        live.advance_segment_to(segment, 1.0)?;
-        let midpoint = live.effective(&circle)?.style;
+        session.live().advance_segment_to(segment, 1.0)?;
+        let midpoint = session.live().effective(&circle)?.style;
         let midpoint_fill = midpoint.fill.expect("the style play retains its fill");
         assert!((midpoint_fill.red - 0.5).abs() < 1e-6);
         assert!((midpoint_fill.green - 0.2).abs() < 1e-6);
@@ -2483,28 +2521,32 @@ pub fn ordinary_style_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         assert!((midpoint_fill.alpha - 0.7).abs() < 1e-6);
         assert!((midpoint.opacity - 0.75).abs() < 1e-6);
 
-        live.advance_segment_to(segment, segment.end_time())?;
-        let endpoint = live.effective(&circle)?.style;
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())?;
+        let endpoint = session.live().effective(&circle)?.style;
         assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
         assert!((endpoint.opacity - 0.5).abs() < 1e-6);
-        live.complete_segment(segment)?;
-        assert_eq!(live.authored(&circle)?.style, target_style);
+        session.live().complete_segment(segment)?;
+        assert_eq!(session.live().authored(&circle)?.style, target_style);
 
-        live.set_fill(&circle, 0.0, 1.0, 0.0, 1.0)?;
-        live.set_object_opacity(&circle, 1.0)?;
-        let final_style = live.authored(&circle)?.style;
+        session
+            .scene_mut()
+            .set_fill_rgb(&circle, 0.0, 1.0, 0.0, 1.0)?;
+        session.scene_mut().set_object_opacity(&circle, 1.0)?;
+        let final_style = session.live().authored(&circle)?.style;
         assert_eq!(
             final_style.fill,
             Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
         );
         assert_eq!(final_style.fill_opacity, 1.0);
         assert_eq!(final_style.object_opacity, 1.0);
-        let effective = live.effective(&circle)?.style;
+        let effective = session.live().effective(&circle)?.style;
         assert_eq!(effective.fill, Some(Color::rgb(0.0, 1.0, 0.0)));
         assert_eq!(effective.opacity, 1.0);
     }
-    assert_eq!(session.frame().time, 2.0);
-    Ok(scene.into_execution_with_session(session)?)
+    assert_eq!(session.session().frame().time, 2.0);
+    Ok(session)
 }
 
 /// Execute ordinary Manim paint animations and a following authored edit.
@@ -2519,36 +2561,44 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
     circle.set_stroke_color(1.0, 1.0, 1.0, 1.0)?;
     scene.add(&circle).map_err(|error| error.to_string())?;
 
-    let mut session = scene.execution_session()?;
+    let mut session = scene.into_execution()?;
     {
-        let mut live = scene.live(&mut session);
-
-        live.set_fill(&circle, 0.0, 0.0, 1.0, 0.75)?;
-        let fill_only = live.effective(&circle)?.style;
+        session
+            .scene_mut()
+            .set_fill_rgb(&circle, 0.0, 0.0, 1.0, 0.75)?;
+        let fill_only = session.live().effective(&circle)?.style;
         assert_eq!(fill_only.fill, Some(Color::rgba(0.0, 0.0, 1.0, 0.75)));
         assert_eq!(fill_only.stroke, Some(Color::rgb(1.0, 1.0, 1.0)));
-        live.set_stroke(&circle, 1.0, 1.0, 1.0, 0.4)?;
-        let stroke_only = live.effective(&circle)?.style;
+        session
+            .scene_mut()
+            .set_stroke(&circle, 1.0, 1.0, 1.0, 0.4)?;
+        let stroke_only = session.live().effective(&circle)?.style;
         assert_eq!(stroke_only.fill, fill_only.fill);
         assert_eq!(stroke_only.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.4)));
-        live.set_opacity(&circle, 0.2)?;
-        let paint_opacity = live.effective(&circle)?.style;
+        session.scene_mut().set_opacity(&circle, 0.2)?;
+        let paint_opacity = session.live().effective(&circle)?.style;
         assert_eq!(paint_opacity.fill, Some(Color::rgba(0.0, 0.0, 1.0, 0.2)));
         assert_eq!(paint_opacity.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.2)));
         assert_eq!(paint_opacity.opacity, 1.0);
 
-        let independent_target = live.target_editor(&circle)?;
-        live.set_fill(&independent_target, 1.0, 0.25, 0.75, 0.8)?;
-        live.set_stroke(&independent_target, 0.1, 0.8, 0.2, 0.3)?;
-        let independent = live.declare_and_activate_transform_to(
+        let independent_target = session.live().target_editor(&circle)?;
+        session
+            .scene_mut()
+            .set_fill_rgb(&independent_target, 1.0, 0.25, 0.75, 0.8)?;
+        session
+            .scene_mut()
+            .set_stroke(&independent_target, 0.1, 0.8, 0.2, 0.3)?;
+        let independent = session.live().declare_and_activate_transform_to(
             &circle,
             &independent_target,
             AnimationOptions::new()
                 .run_time(0.4)
                 .rate_func(RateFunction::Linear),
         )?;
-        live.advance_segment_to(independent, independent.end_time())?;
-        let independent_endpoint = live.effective(&circle)?.style;
+        session
+            .live()
+            .advance_segment_to(independent, independent.end_time())?;
+        let independent_endpoint = session.live().effective(&circle)?.style;
         assert_eq!(
             independent_endpoint.fill,
             Some(Color::rgba(1.0, 0.25, 0.75, 0.8))
@@ -2558,8 +2608,8 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
             Some(Color::rgba(0.1, 0.8, 0.2, 0.3))
         );
         assert_eq!(independent_endpoint.opacity, 1.0);
-        live.complete_segment(independent)?;
-        let independent_authored = live.authored(&circle)?.style;
+        session.live().complete_segment(independent)?;
+        let independent_authored = session.live().authored(&circle)?.style;
         assert_eq!(
             independent_authored.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 0.25, 0.75)))
@@ -2572,35 +2622,45 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         assert_eq!(independent_authored.stroke_opacity, 0.3);
         assert_eq!(independent_authored.object_opacity, 1.0);
 
-        live.set_fill(&circle, 0.0, 0.0, 1.0, 1.0)?;
-        live.set_stroke(&circle, 1.0, 1.0, 1.0, 1.0)?;
-        let target = live.target_editor(&circle)?;
-        live.set_color(&target, 1.0, 0.0, 0.0, 1.0)?;
-        live.set_opacity(&target, 0.5)?;
+        session
+            .scene_mut()
+            .set_fill_rgb(&circle, 0.0, 0.0, 1.0, 1.0)?;
+        session
+            .scene_mut()
+            .set_stroke(&circle, 1.0, 1.0, 1.0, 1.0)?;
+        let target = session.live().target_editor(&circle)?;
+        session
+            .scene_mut()
+            .set_color_rgba(&target, 1.0, 0.0, 0.0, 1.0)?;
+        session.scene_mut().set_opacity(&target, 0.5)?;
 
-        let segment = live.declare_and_activate_transform_to(
+        let segment = session.live().declare_and_activate_transform_to(
             &circle,
             &target,
             AnimationOptions::new()
                 .run_time(2.0)
                 .rate_func(RateFunction::Linear),
         )?;
-        live.advance_segment_to(segment, 1.4)?;
-        let midpoint = live.effective(&circle)?.style;
+        session.live().advance_segment_to(segment, 1.4)?;
+        let midpoint = session.live().effective(&circle)?.style;
         assert_eq!(midpoint.fill, Some(Color::rgba(0.5, 0.0, 0.5, 0.75)));
         assert_eq!(midpoint.stroke, Some(Color::rgba(1.0, 0.5, 0.5, 0.75)));
         assert_eq!(midpoint.opacity, 1.0);
 
-        live.advance_segment_to(segment, segment.end_time())?;
-        let endpoint = live.effective(&circle)?.style;
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())?;
+        let endpoint = session.live().effective(&circle)?.style;
         assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.5)));
         assert_eq!(endpoint.stroke, Some(Color::rgba(1.0, 0.0, 0.0, 0.5)));
         assert_eq!(endpoint.opacity, 1.0);
-        live.complete_segment(segment)?;
+        session.live().complete_segment(segment)?;
 
-        live.set_color(&circle, 1.0, 1.0, 0.0, 1.0)?;
-        live.set_opacity(&circle, 1.0)?;
-        let final_style = live.authored(&circle)?.style;
+        session
+            .scene_mut()
+            .set_color_rgba(&circle, 1.0, 1.0, 0.0, 1.0)?;
+        session.scene_mut().set_opacity(&circle, 1.0)?;
+        let final_style = session.live().authored(&circle)?.style;
         assert_eq!(
             final_style.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 1.0, 0.0)))
@@ -2612,13 +2672,13 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         assert_eq!(final_style.fill_opacity, 1.0);
         assert_eq!(final_style.stroke_opacity, 1.0);
         assert_eq!(final_style.object_opacity, 1.0);
-        let effective = live.effective(&circle)?.style;
+        let effective = session.live().effective(&circle)?.style;
         assert_eq!(effective.fill, Some(Color::rgb(1.0, 1.0, 0.0)));
         assert_eq!(effective.stroke, Some(Color::rgb(1.0, 1.0, 0.0)));
         assert_eq!(effective.opacity, 1.0);
     }
-    assert_eq!(session.frame().time, 2.4);
-    Ok(scene.into_execution_with_session(session)?)
+    assert_eq!(session.session().frame().time, 2.4);
+    Ok(session)
 }
 
 /// Build a canonical scene whose native sources lower into one execution session.
