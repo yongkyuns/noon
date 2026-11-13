@@ -1,8 +1,8 @@
 //! Resource-backed DecimalNumber and Integer over shared MathTex semantics.
 
 use crate::{
-    format_decimal, AuthoringError, DecimalFormat, LatexBackend, MathTex, Mobject,
-    NumericFormatError, Scene, TextAuthoringError, ValueTracker,
+    format_decimal, AuthoringError, DecimalFormat, ExecutionSession, LatexBackend, MathTex,
+    Mobject, NumericFormatError, Scene, TextAuthoringError, ValueTracker,
 };
 use noon_core::{
     compose_numeric_text_resource as compose_numeric_resource, numeric_text_layout,
@@ -70,17 +70,6 @@ impl From<crate::AuthoringError> for NumericAuthoringError {
     }
 }
 
-pub(crate) fn numeric_live_error(error: NumericAuthoringError) -> crate::LiveSessionError {
-    match error {
-        NumericAuthoringError::Text(TextAuthoringError::Semantic(
-            crate::AuthoringError::ExecutionPublication(error),
-        )) => crate::LiveSessionError::Publication(error),
-        NumericAuthoringError::Text(error) => crate::LiveSessionError::Text(error),
-        NumericAuthoringError::Semantic(error) => crate::LiveSessionError::from(error),
-        other => crate::LiveSessionError::Mobject(other.to_string()),
-    }
-}
-
 impl Scene {
     /// Construct a detached numeric label through this Scene's publication owner.
     pub fn decimal_number(
@@ -91,27 +80,82 @@ impl Scene {
         font_size: f32,
     ) -> Result<DecimalNumber, NumericAuthoringError> {
         let store = Rc::clone(self.integration_store());
-        let root = self.root();
-        let Some(execution) = self.running_execution_mut() else {
-            return DecimalNumber::with_font_size(store, backend, value, format, font_size);
-        };
-        execution
-            .require_resource_creation_at_root(&store.borrow(), root)
-            .map_err(AuthoringError::from)
-            .map_err(TextAuthoringError::Semantic)?;
+        let execution = self.numeric_execution()?;
         DecimalNumber::construct_with(
             store,
             backend,
             value,
             format,
             font_size,
-            |store, transaction| {
-                execution
-                    .apply_semantic_transaction_at_root(store, root, transaction)
-                    .map_err(AuthoringError::from)
-                    .map_err(TextAuthoringError::Semantic)
-            },
+            numeric_publisher(execution),
         )
+    }
+
+    /// Replace the authored value while preserving the current text presentation.
+    pub fn set_decimal_value(
+        &mut self,
+        number: &DecimalNumber,
+        backend: &mut impl LatexBackend,
+        value: f64,
+    ) -> Result<(), NumericAuthoringError> {
+        self.require_object(number.mobject())?;
+        let store = Rc::clone(self.integration_store());
+        let execution = self.numeric_execution()?;
+        let authored = number.mobject().state()?;
+        let effective = match &execution {
+            Some((execution, _)) => crate::effective_capture::capture_mobject_state(
+                &store,
+                execution,
+                number.mobject(),
+            )?,
+            None => authored.clone(),
+        };
+        number.set_value_with(
+            backend,
+            value,
+            authored,
+            effective,
+            numeric_publisher(execution),
+        )
+    }
+
+    /// Increment the authored value through the same resource publication as replacement.
+    pub fn increment_decimal_value(
+        &mut self,
+        number: &DecimalNumber,
+        backend: &mut impl LatexBackend,
+        delta: f64,
+    ) -> Result<(), NumericAuthoringError> {
+        self.set_decimal_value(number, backend, number.value()? + delta)
+    }
+
+    /// Bind a number to a tracker, publishing its glyph dependencies and metadata together.
+    pub fn bind_decimal_to_tracker(
+        &mut self,
+        number: &DecimalNumber,
+        backend: &mut impl LatexBackend,
+        tracker: &ValueTracker,
+    ) -> Result<(), NumericAuthoringError> {
+        self.require_object(number.mobject())?;
+        tracker.require_store(self.integration_store())?;
+        let execution = self.numeric_execution()?;
+        number.bind_to_tracker_with(backend, tracker, numeric_publisher(execution))
+    }
+
+    fn numeric_execution(
+        &mut self,
+    ) -> Result<Option<(&mut ExecutionSession, noon_core::SemanticNodeId)>, TextAuthoringError>
+    {
+        let root = self.root();
+        if let Some(execution) = self.running_execution() {
+            execution
+                .require_resource_creation_at_root(&self.integration_store().borrow(), root)
+                .map_err(AuthoringError::from)
+                .map_err(TextAuthoringError::Semantic)?;
+        }
+        Ok(self
+            .running_execution_mut()
+            .map(|execution| (execution, root)))
     }
 
     /// Read the current tracker value, or the base value for an unbound number.
@@ -141,6 +185,24 @@ impl Scene {
             number.mobject(),
         )?;
         number.font_size_at(&state)
+    }
+}
+
+fn numeric_publisher(
+    execution: Option<(&mut ExecutionSession, noon_core::SemanticNodeId)>,
+) -> impl FnOnce(
+    &mut SemanticStore,
+    SemanticMutationTransaction,
+) -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>
+       + '_ {
+    move |store, transaction| {
+        match execution {
+            Some((execution, root)) => execution
+                .apply_semantic_transaction_at_root(store, root, transaction)
+                .map_err(AuthoringError::from),
+            None => transaction.apply(store).map_err(AuthoringError::from),
+        }
+        .map_err(TextAuthoringError::Semantic)
     }
 }
 
@@ -211,12 +273,7 @@ impl DecimalNumber {
             value,
             format,
             font_size,
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map_err(crate::AuthoringError::from)
-                    .map_err(TextAuthoringError::Semantic)
-            },
+            numeric_publisher(None),
         )
     }
 
@@ -271,7 +328,7 @@ impl DecimalNumber {
             .ok_or(NumericAuthoringError::NotDecimalNumber)
     }
     /// Read the retained authored/base value. A tracker binding never mutates this
-    /// declaration; use the live-session query for the current runtime value.
+    /// declaration; use [`Scene::effective_decimal_value`] for the current runtime value.
     pub fn value(&self) -> Result<f64, NumericAuthoringError> {
         Ok(self.metadata()?.value())
     }
@@ -330,16 +387,12 @@ impl DecimalNumber {
         value: f64,
     ) -> Result<&mut Self, NumericAuthoringError> {
         let authored = self.object.state()?;
-        self.publish_value(
-            self.prepare_value(backend, value)?,
+        self.set_value_with(
+            backend,
+            value,
             authored.clone(),
             authored,
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map_err(crate::AuthoringError::from)
-                    .map_err(TextAuthoringError::Semantic)
-            },
+            numeric_publisher(None),
         )?;
         Ok(self)
     }
@@ -361,26 +414,8 @@ impl DecimalNumber {
         backend: &mut impl LatexBackend,
         tracker: &ValueTracker,
     ) -> Result<&mut Self, NumericAuthoringError> {
-        self.bind_to_tracker_with(backend, tracker, |store, transaction| {
-            transaction
-                .apply(store)
-                .map_err(crate::AuthoringError::from)
-                .map_err(TextAuthoringError::Semantic)
-        })?;
+        self.bind_to_tracker_with(backend, tracker, numeric_publisher(None))?;
         Ok(self)
-    }
-
-    pub(crate) fn bind_to_tracker_live(
-        &self,
-        backend: &mut impl LatexBackend,
-        tracker: &ValueTracker,
-        publish: impl FnOnce(
-            &mut SemanticStore,
-            SemanticMutationTransaction,
-        )
-            -> Result<noon_core::SemanticMutationTransactionResult, TextAuthoringError>,
-    ) -> Result<(), NumericAuthoringError> {
-        self.bind_to_tracker_with(backend, tracker, publish)
     }
 
     fn bind_to_tracker_with(
@@ -428,7 +463,7 @@ impl DecimalNumber {
         Ok(())
     }
 
-    pub(crate) fn set_value_live(
+    fn set_value_with(
         &self,
         backend: &mut impl LatexBackend,
         value: f64,
@@ -1228,6 +1263,50 @@ mod tests {
     }
 
     #[test]
+    fn scene_decimal_replacement_rolls_back_failed_glyph_compilation() {
+        let mut backend = RuleBackend;
+        let mut scene = Scene::new().into_execution().unwrap();
+        let number = scene
+            .scene_mut()
+            .decimal_number(&mut backend, 12.5, DecimalFormat::default(), 32.0)
+            .unwrap();
+        scene.scene_mut().add(number.mobject()).unwrap();
+        let before = scene.session().publication_context();
+        let resources = scene
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats();
+        let object = &scene.session().frame().objects[0];
+        let (id, text) = (object.id, object.text());
+
+        assert!(scene
+            .scene_mut()
+            .set_decimal_value(&number, &mut FailOnFourthCompile(3), 99.5)
+            .is_err());
+        assert_eq!(scene.session().publication_context(), before);
+        assert_eq!(
+            scene
+                .scene()
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .stats(),
+            resources
+        );
+        assert_eq!(scene.session().frame().objects[0].text(), text);
+        assert_eq!(number.value().unwrap(), 12.5);
+
+        scene
+            .scene_mut()
+            .increment_decimal_value(&number, &mut backend, 1.25)
+            .unwrap();
+        assert_eq!(number.text().unwrap(), "13.75");
+        assert_eq!(scene.session().frame().objects[0].id, id);
+    }
+
+    #[test]
     fn live_decimal_value_reads_bound_signal_without_mutating_authored_metadata() {
         let mut backend = RuleBackend;
         let mut scene = crate::Scene::new();
@@ -1683,44 +1762,80 @@ mod tests {
         )
         .unwrap();
         scene.add(number.mobject()).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut execution = scene.into_execution().unwrap();
 
-        scene
-            .live(&mut session)
+        execution
+            .scene_mut()
             .bind_decimal_to_tracker(&number, &mut backend, &tracker)
             .unwrap();
-        let bound = session.frame().objects[0].text().unwrap();
+        let bound = execution.session().frame().objects[0].text().unwrap();
         assert_eq!(
-            session.text_resources().get(bound).unwrap().source.as_ref(),
+            execution
+                .session()
+                .text_resources()
+                .get(bound)
+                .unwrap()
+                .source
+                .as_ref(),
             "1.25"
         );
-        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
-        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
+        assert_eq!(
+            execution
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
+            1
+        );
+        assert_eq!(
+            execution.session().effective_text_resource_slot_capacity(),
+            1
+        );
 
-        session
+        execution
+            .session_mut()
             .set_reactive_input(tracker.node_id(), 7.5_f32)
             .unwrap();
         assert_eq!(
-            session
+            execution
+                .session()
                 .text_resources()
-                .get(session.frame().objects[0].text().unwrap())
+                .get(execution.session().frame().objects[0].text().unwrap())
                 .unwrap()
                 .source
                 .as_ref(),
             "7.50"
         );
 
-        scene.live(&mut session).remove(number.mobject()).unwrap();
-        assert_eq!(session.effective_text_resource_stats().live_resources, 0);
-        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
-
-        scene.live(&mut session).add(number.mobject()).unwrap();
-        assert_eq!(session.effective_text_resource_stats().live_resources, 1);
-        assert_eq!(session.effective_text_resource_slot_capacity(), 1);
+        execution.scene_mut().remove(number.mobject()).unwrap();
         assert_eq!(
-            session
+            execution
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
+            0
+        );
+        assert_eq!(
+            execution.session().effective_text_resource_slot_capacity(),
+            1
+        );
+
+        execution.scene_mut().add(number.mobject()).unwrap();
+        assert_eq!(
+            execution
+                .session()
+                .effective_text_resource_stats()
+                .live_resources,
+            1
+        );
+        assert_eq!(
+            execution.session().effective_text_resource_slot_capacity(),
+            1
+        );
+        assert_eq!(
+            execution
+                .session()
                 .text_resources()
-                .get(session.frame().objects[0].text().unwrap())
+                .get(execution.session().frame().objects[0].text().unwrap())
                 .unwrap()
                 .source
                 .as_ref(),

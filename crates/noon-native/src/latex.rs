@@ -467,7 +467,7 @@ mod tests {
         let companion_id = session.execution_object_id(companion.node_id()).unwrap();
 
         scene
-            .live()
+            .scene_mut()
             .set_decimal_value(&number, &mut backend, 98.76)
             .unwrap();
 
@@ -518,7 +518,7 @@ mod tests {
 
         let mut failing_backend = FailingLatexBackend;
         let error = scene
-            .live()
+            .scene_mut()
             .set_decimal_value(&number, &mut failing_backend, 98.76)
             .unwrap_err();
         assert!(error

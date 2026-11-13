@@ -4117,7 +4117,9 @@ impl CanonicalAuthoringScene {
         let number = noon::DecimalNumber::from_mobject(target.clone())
             .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
         self.active_live_player()?
-            .live_set_decimal_value(&number, compiler, value)
+            .scene_mut()
+            .set_decimal_value(&number, compiler, value)
+            .map_err(noon::integration::live_numeric_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -4130,7 +4132,9 @@ impl CanonicalAuthoringScene {
         let number = noon::DecimalNumber::from_mobject(target.clone())
             .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
         self.active_live_player()?
-            .live_increment_decimal_value(&number, compiler, delta)
+            .scene_mut()
+            .increment_decimal_value(&number, compiler, delta)
+            .map_err(noon::integration::live_numeric_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
