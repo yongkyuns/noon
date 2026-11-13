@@ -9514,9 +9514,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_family_points_f64(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
@@ -9529,9 +9528,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let shape = crate::authoring_geometry::point_array_shape(&dimensions)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_empty_point_array(noon::MobjectTarget::from(&source.semantic_family()?), shape)
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
@@ -9545,9 +9543,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_family_points_3d(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
@@ -9560,9 +9557,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_family_points_f64(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
@@ -9575,9 +9571,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_family_points_3d(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
@@ -9588,9 +9583,8 @@ mod wasm {
             source: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .clear_family_points(&source.semantic_family()?)
                 .map_err(typed_js_error)
         }
@@ -9603,9 +9597,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_f64(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
@@ -9618,9 +9611,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let shape = crate::authoring_geometry::point_array_shape(&dimensions)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_empty_point_array(noon::MobjectTarget::from(source.semantic_mobject()), shape)
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
@@ -9634,9 +9626,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
@@ -9649,9 +9640,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_f64(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_points_f64(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
@@ -9664,9 +9654,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_points_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
@@ -9679,9 +9668,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_as_corners_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
@@ -9700,9 +9688,8 @@ mod wasm {
                 ))
             })?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_as_corners_3d_with_samples(
                     source.semantic_mobject(),
                     &points,
@@ -9717,9 +9704,8 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .clear_points(source.semantic_mobject())
                 .map_err(typed_js_error)
         }
@@ -9734,9 +9720,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .start_new_path_3d(source.semantic_mobject(), point)
                 .map_err(typed_js_error)
         }
@@ -9752,9 +9737,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .start_new_path_3d_with_stride(source.semantic_mobject(), point, stride)
                 .map_err(typed_js_error)
         }
@@ -9770,9 +9754,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_line_to_3d_with_stride(source.semantic_mobject(), point, stride.unwrap_or(4))
                 .map_err(typed_js_error)
         }
@@ -9792,9 +9775,8 @@ mod wasm {
                 JsValue::from_str("add_line_to requires four constructor interpolation samples")
             })?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_line_to_3d_with_stride_and_samples(
                     source.semantic_mobject(),
                     point,
@@ -9819,9 +9801,8 @@ mod wasm {
             let control = crate::authoring_geometry::point_3d(control_x, control_y, control_z)?;
             let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_quadratic_bezier_curve_to_3d_with_stride(
                     source.semantic_mobject(),
                     control,
@@ -9850,9 +9831,8 @@ mod wasm {
             let control2 = crate::authoring_geometry::point_3d(control2_x, control2_y, control2_z)?;
             let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_cubic_bezier_curve_to_3d_with_stride(
                     source.semantic_mobject(),
                     control1,
@@ -9881,9 +9861,8 @@ mod wasm {
                 }
             };
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_smooth_curve_to_with_stride(
                     source.semantic_mobject(),
                     handle2,
@@ -9900,9 +9879,8 @@ mod wasm {
             factor: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .scale_handle_to_anchor_distances(source.semantic_mobject(), factor)
                 .map_err(typed_js_error)
         }
@@ -9929,9 +9907,8 @@ mod wasm {
             let handle2 = crate::authoring_geometry::point_3d(handle2_x, handle2_y, handle2_z)?;
             let anchor2 = crate::authoring_geometry::point_3d(anchor2_x, anchor2_y, anchor2_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_cubic_bezier_curve_3d(
                     source.semantic_mobject(),
                     anchor1,
@@ -9950,9 +9927,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_cubic_bezier_curves_3d(source.semantic_mobject(), &curves)
                 .map_err(typed_js_error)
         }
@@ -9965,9 +9941,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_cubic_bezier_curves_3d(source.semantic_mobject(), &curves)
                 .map_err(typed_js_error)
         }
@@ -9980,9 +9955,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_points_as_corners_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
@@ -9997,9 +9971,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_points_as_corners_3d_with_stride(
                     source.semantic_mobject(),
                     &points,
@@ -10016,9 +9989,8 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_vectorized_mobject(object.semantic_mobject(), source.semantic_mobject())
                 .map_err(typed_js_error)
         }
@@ -10031,9 +10003,8 @@ mod wasm {
             stride: i32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_vectorized_mobject_with_stride(
                     object.semantic_mobject(),
                     source.semantic_mobject(),
@@ -10049,9 +10020,8 @@ mod wasm {
             coordinates: Vec<f64>,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_smoothly(
                     object.semantic_mobject(),
                     &crate::authoring_geometry::points(&coordinates)?,
@@ -10065,9 +10035,8 @@ mod wasm {
             smooth: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .change_anchor_mode(object.semantic_mobject(), smooth)
                 .map_err(typed_js_error)
         }
@@ -10078,9 +10047,8 @@ mod wasm {
             smooth: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .change_family_anchor_mode(&family.semantic_family()?, smooth)
                 .map_err(typed_js_error)
         }
@@ -10090,9 +10058,8 @@ mod wasm {
             family: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .reverse_family_points(&family.semantic_family()?)
                 .map_err(typed_js_error)
         }
@@ -10103,9 +10070,8 @@ mod wasm {
             count: u32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .repeat_family_points(&family.semantic_family()?, count as usize)
                 .map_err(typed_js_error)
         }
@@ -10116,9 +10082,8 @@ mod wasm {
             additional: u32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .insert_n_curves(object.semantic_mobject(), additional as usize)
                 .map_err(typed_js_error)
         }
@@ -10128,9 +10093,8 @@ mod wasm {
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .reverse_direction(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
@@ -10140,9 +10104,8 @@ mod wasm {
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .reverse_points(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
@@ -10153,9 +10116,8 @@ mod wasm {
             count: u32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .repeat_points(object.semantic_mobject(), count as usize)
                 .map_err(typed_js_error)
         }
@@ -10167,9 +10129,8 @@ mod wasm {
             b: f64,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .subcurve(source.semantic_mobject(), a, b)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(noon::LiveSessionError::from)
@@ -10182,9 +10143,8 @@ mod wasm {
             right: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .align_points(left.semantic_mobject(), right.semantic_mobject())
                 .map_err(typed_js_error)
         }
@@ -10196,9 +10156,8 @@ mod wasm {
             right: &crate::WasmLayoutAnchor,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .align_path_points(&left.anchor, &right.anchor)
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
@@ -10213,9 +10172,8 @@ mod wasm {
             b: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .pointwise_become_partial(
                     object.semantic_mobject(),
                     source.semantic_mobject(),
@@ -10231,9 +10189,8 @@ mod wasm {
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .close_path(source.semantic_mobject())
                 .map_err(typed_js_error)
         }
@@ -10247,9 +10204,8 @@ mod wasm {
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .close_path_with_stride(
                     source.semantic_mobject(),
                     stride,
@@ -10266,9 +10222,8 @@ mod wasm {
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .match_points(source.semantic_mobject(), target.semantic_mobject())
                 .map_err(typed_js_error)
         }

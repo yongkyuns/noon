@@ -70,6 +70,29 @@ class NativePythonTests(unittest.TestCase):
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
 
+    def test_scene_path_edits_match_during_setup_and_playback(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        path = VMobject()
+        target = VMobject().set_points_as_corners([(1, 2, 0), (3, 2, 0)])
+        family = VGroup(VMobject().set_points_as_corners([(0, 0, 0), (0, 1, 0)]))
+        self.add(path, target, family)
+        for _ in range(2):
+            path.match_points(target)
+            assert list(path.get_start()) == [1, 2]
+            assert list(path.get_subcurve(0.25, 0.75).get_start()) == [1.5, 2]
+            child = family[0]
+            family.reverse_points()
+            assert list(child.get_start()) == [0, 1]
+            family.reverse_points()
+            path.clear_points()
+            assert path.get_num_points() == 0
+            self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_native_style_edits_preserve_replay(self):
         source = """from noon import *
 class Demo(Scene):

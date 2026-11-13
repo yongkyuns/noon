@@ -239,11 +239,8 @@ def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
         raise NotImplementedError(
             "match_points requires opaque shared semantic vector handles"
         )
-    from _manim_semantic_handles import _live_mutation_context, _live_constructor_context
-    context = (
-        _live_mutation_context(self) or _live_mutation_context(mobject)
-        or _live_constructor_context("match_points")
-    )
+    from _manim_semantic_handles import _path_authoring_context
+    context = _path_authoring_context(self, mobject)
     if context is None:
         engine_call(source_handle.matchPoints, target_handle, operation="VMobject.match_points")
     else:

@@ -27,13 +27,13 @@ class ManimApplyOverAttrArraysTests(unittest.TestCase):
              patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
             self.assertIs(apply_over_attr_arrays(value, translate), value)
 
-        mapped = edit.call_args.args[3]
+        mapped = edit.call_args.args[2]
         self.assertEqual(
             [[float(component) for component in point] for point in mapped],
             [[6.0, 0.0, 1.25], [8.0, 2.0, 1.75]],
         )
         edit.assert_called_once_with(
-            value, "setPoints", "liveSetPoints", mapped, array=True
+            value, "setPoints", mapped, array=True
         )
         query.free.assert_called_once_with()
 

@@ -541,10 +541,21 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         edit(&mut self.scene, &target.handle).map_err(engine_error)
+    }
+    fn publish_path_edit(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+    ) -> PyResult<()> {
+        self.require_active()?;
+        let running = self.has_execution();
+        edit(&mut self.scene).map_err(|error| {
+            if running {
+                engine_error(noon::LiveSessionError::from(error))
+            } else {
+                engine_error(error)
+            }
+        })
     }
     fn publish(&mut self, transaction: SemanticMutationTransaction) -> PyResult<()> {
         self.require_active()?;
@@ -2936,9 +2947,6 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .change_family_anchor_mode(&target.family, smooth)
             .map_err(engine_error)
@@ -3317,7 +3325,7 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let values = crate::path_input::points_3d(&values)?;
-        self.place(|scene| scene.set_family_points_3d(&target.family, &values))
+        self.publish_path_edit(|scene| scene.set_family_points_3d(&target.family, &values))
     }
     #[pyo3(name = "liveAppendFamilyPoints3D")]
     fn append_family_points_3d(
@@ -3327,12 +3335,12 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let values = crate::path_input::points_3d(&values)?;
-        self.place(|scene| scene.append_family_points_3d(&target.family, &values))
+        self.publish_path_edit(|scene| scene.append_family_points_3d(&target.family, &values))
     }
     #[pyo3(name = "liveClearFamilyPoints")]
     fn clear_family_points(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
         self.same_family_store(target)?;
-        self.place(|scene| scene.clear_family_points(&target.family))
+        self.publish_path_edit(|scene| scene.clear_family_points(&target.family))
     }
     #[pyo3(name = "liveSetFamilyEmptyPointArray")]
     fn empty_family_array(
@@ -3342,21 +3350,18 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let shape = crate::path_input::point_array_shape(&values)?;
-        self.place(|scene| scene.set_empty_point_array((&target.family).into(), shape))
+        self.publish_path_edit(|scene| scene.set_empty_point_array((&target.family).into(), shape))
     }
     #[pyo3(name = "liveSetEmptyPointArray")]
     fn empty_point_array(&mut self, target: &MobjectHandle, dimensions: Vec<f64>) -> PyResult<()> {
         self.same_store(target)?;
         let shape = crate::path_input::point_array_shape(&dimensions)?;
-        self.place(|scene| scene.set_empty_point_array((&target.handle).into(), shape))
+        self.publish_path_edit(|scene| scene.set_empty_point_array((&target.handle).into(), shape))
     }
     #[pyo3(name = "liveSubcurve")]
     fn subcurve(&mut self, target: &MobjectHandle, a: f64, b: f64) -> PyResult<MobjectHandle> {
         self.same_store(target)?;
         self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .subcurve(&target.handle, a, b)
             .map(MobjectHandle::from_semantic_mobject)
@@ -3365,13 +3370,37 @@ impl Context {
     }
     #[pyo3(name = "liveAlignRootPoints")]
     fn align_root_points(&mut self, left: &LayoutAnchor, right: &LayoutAnchor) -> PyResult<()> {
-        self.place(|scene| scene.align_path_points(&left.anchor, &right.anchor))
+        self.publish_path_edit(|scene| scene.align_path_points(&left.anchor, &right.anchor))
     }
     #[pyo3(name = "liveAlignPoints")]
     fn align_points(&mut self, left: &MobjectHandle, right: &MobjectHandle) -> PyResult<()> {
         self.same_store(left)?;
         self.same_store(right)?;
-        self.place(|scene| scene.align_points(&left.handle, &right.handle))
+        self.publish_path_edit(|scene| scene.align_points(&left.handle, &right.handle))
+    }
+    #[pyo3(name = "liveMatchPoints")]
+    fn match_points(&mut self, source: &MobjectHandle, target: &MobjectHandle) -> PyResult<()> {
+        self.edit_path(source, |scene, source| {
+            scene.match_points(source, &target.handle)
+        })
+    }
+    #[pyo3(name = "liveReverseFamilyPoints")]
+    fn reverse_family_points(&mut self, family: &crate::family::FamilyHandle) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .reverse_family_points(&family.family)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "liveRepeatFamilyPoints")]
+    fn repeat_family_points(
+        &mut self,
+        family: &crate::family::FamilyHandle,
+        count: usize,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .repeat_family_points(&family.family, count)
+            .map_err(engine_error)
     }
     #[pyo3(name = "liveApplyMatrix")]
     #[allow(clippy::too_many_arguments)]
