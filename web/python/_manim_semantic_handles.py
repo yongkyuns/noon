@@ -1890,8 +1890,7 @@ def _set_style(
         if background_stroke_opacity is None
         else _compat._opacity("background stroke opacity", background_stroke_opacity),
     )
-    resolve = _style_target if own_family_style else _paint_authoring_target
-    handle, context, suffix = resolve(self)
+    handle, context, suffix = _paint_authoring_target(self)
     if handle is None:
         raise RuntimeError("style updates require the shared Rust authoring host")
     if root_background_stroke is not None and context is None:
@@ -1904,7 +1903,7 @@ def _set_style(
         )
     elif root_background_stroke is not None:
         engine_call(
-            context.liveSetFamilyOwnStyleWithBackgroundStroke,
+            context.setFamilyOwnStyleWithBackgroundStroke,
             handle,
             *arguments,
             *_family_color_arguments(root_background_stroke[0]),
@@ -1915,7 +1914,7 @@ def _set_style(
         if context is None:
             engine_call(handle.setOwnStyle, *arguments)
         else:
-            engine_call(context.liveSetFamilyOwnStyle, handle, *arguments)
+            engine_call(context.setFamilyOwnStyle, handle, *arguments)
     elif context is None:
         engine_call(handle.setStyle, *arguments, *background_arguments)
     else:
@@ -2073,23 +2072,23 @@ def _set_sheen(self, factor, direction=None, family=True):
 
 def _set_cap_style(self, cap_style):
     cap = _ir._stroke_cap(cap_style)
-    target, context, suffix = _style_target(self)
+    target, context, suffix = _paint_authoring_target(self)
     if target is None:
         raise RuntimeError("cap styles require the shared Rust authoring host")
     if suffix == "Family":
         if context is None:
             engine_call(target.setStrokeCap, cap)
         else:
-            engine_call(context.liveSetFamilyOwnStrokeCap, target, cap)
+            engine_call(context.setFamilyOwnStrokeCap, target, cap)
     elif context is None:
         engine_call(target.setStrokeCap, cap)
     else:
-        engine_call(context.liveSetStrokeCap, target, cap)
+        engine_call(context.setStrokeCap, target, cap)
     return self
 
 
 def _get_cap_style(self):
-    target, context, suffix = _style_target(self)
+    target, context, suffix = _paint_authoring_target(self)
     if target is None:
         raise RuntimeError("cap styles require the shared Rust authoring host")
     if suffix == "Family":
@@ -2373,19 +2372,16 @@ def _group_paint(self, operation, arguments):
     if phase is not None:
         if operation == "OwnColor":
             raise NotImplementedError("callback root-only Group color requires shared family metadata writes")
-        if operation in {"OwnFill", "OwnStroke", "OwnOpacity"}:
+        if operation in {"OwnStyle", "OwnOpacity"}:
             raise NotImplementedError("callback root-only Group paint requires staged family style writes")
         phase.paint_family(handle, operation, arguments)
         return self
-    root_only_channels = operation in {"OwnFill", "OwnStroke", "OwnOpacity"}
-    context = (_group_target_context(self) if root_only_channels
-               else _paint_authoring_target(self)[1])
-    prefix = "liveSetFamily" if root_only_channels else "setFamily"
+    context = _paint_authoring_target(self)[1]
     try:
         if context is None:
             engine_call(getattr(handle, f"set{operation}"), *arguments)
         else:
-            engine_call(getattr(context, f"{prefix}{operation}"), handle, *arguments)
+            engine_call(getattr(context, f"setFamily{operation}"), handle, *arguments)
     except Exception as error:
         raise_engine_error(error)
     return self
@@ -2406,17 +2402,19 @@ def _group_set_color(self, color, family=True):
 
 def _group_set_fill(self, color=None, opacity=None, family=True):
     alpha = None if opacity is None else _compat._opacity("fill opacity", opacity)
-    operation = "Fill" if family else "OwnFill"
-    return _group_paint(self, operation, (*_family_color_arguments(color), alpha))
+    arguments = (*_family_color_arguments(color), alpha)
+    if family:
+        return _group_paint(self, "Fill", arguments)
+    return _group_paint(self, "OwnStyle", (*arguments, *_family_color_arguments(None), None, None))
 
 
 def _group_set_stroke(self, color=None, width=None, opacity=None, family=True):
     stroke_width = None if width is None else _compat._manim_stroke_width(width)
     alpha = None if opacity is None else _compat._opacity("stroke opacity", opacity)
-    operation = "Stroke" if family else "OwnStroke"
-    return _group_paint(
-        self, operation, (*_family_color_arguments(color), stroke_width, alpha)
-    )
+    arguments = (*_family_color_arguments(color), stroke_width, alpha)
+    if family:
+        return _group_paint(self, "Stroke", arguments)
+    return _group_paint(self, "OwnStyle", (*_family_color_arguments(None), None, *arguments))
 
 
 def _group_set_opacity(self, opacity, family=True):
@@ -2442,14 +2440,14 @@ def _fade(self, darkness=0.5, family=True):
             raise NotImplementedError(
                 "root-only VGroup fade is unavailable inside staged callbacks"
             )
-        handle, context, _suffix = _style_target(self)
+        handle, context, _suffix = _paint_authoring_target(self)
         if handle is None:
             raise RuntimeError("VGroup fade requires the shared Rust authoring host")
         if context is None:
             engine_call(handle.fadeOwn, darkness, operation="VMobject.fade")
         else:
             engine_call(
-                context.liveFadeFamilyOwn,
+                context.fadeFamilyOwn,
                 handle,
                 darkness,
                 operation="VMobject.fade",
