@@ -409,8 +409,7 @@ impl Context {
     }
 
     pub(crate) fn live_session(&mut self) -> Option<noon::LiveSession<'_>> {
-        let (store, root, session) = scene_execution::parts_mut(&mut self.scene)?;
-        Some(noon::LiveSession::new(store, root, session))
+        scene_execution::live(&mut self.scene)
     }
 
     pub(crate) fn with_live<T>(
@@ -521,6 +520,20 @@ impl Context {
             .map_err(engine_error)
     }
 
+    fn point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+        target: MobjectTarget<'_>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        self.require_active()?;
+        let tree = if self.has_execution() {
+            self.scene.effective_point_reduction_tree(target)
+        } else {
+            target.point_reduction_tree()
+        };
+        crate::path_input::point_reduction_tree(py, tree.map_err(engine_error)?)
+    }
+
     fn edit_path(
         &mut self,
         target: &MobjectHandle,
@@ -535,14 +548,10 @@ impl Context {
     }
     fn publish(&mut self, transaction: SemanticMutationTransaction) -> PyResult<()> {
         self.require_active()?;
-        if self.has_execution() {
-            self.with_live(|live| live.apply(transaction).map(|_| ()))
-        } else {
-            transaction
-                .apply(&mut self.scene.integration_store().borrow_mut())
-                .map(|_| ())
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        scene_execution::publish(&mut self.scene, transaction)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 }
 #[pymethods]
@@ -1754,6 +1763,39 @@ impl Context {
             .map(crate::path_input::flat_points_3d)
             .map_err(engine_error)
     }
+    #[pyo3(name = "prepareFamilySubsetDisplay")]
+    fn prepare_family_subset_display(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.scene
+            .prepare_family_subset_display(&target.family)
+            .map(|_| ())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "queryMobjectPointReductionTree")]
+    fn mobject_point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+        target: &MobjectHandle,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        self.same_store(target)?;
+        self.point_reduction_tree(py, (&target.handle).into())
+    }
+
+    #[pyo3(name = "queryFamilyPointReductionTree")]
+    fn family_point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        self.same_family_store(target)?;
+        self.point_reduction_tree(py, (&target.family).into())
+    }
+
     #[pyo3(name = "queryMobjectPointCount")]
     fn point_count(&mut self, target: &MobjectHandle) -> PyResult<usize> {
         self.require_active()?;

@@ -2147,9 +2147,7 @@ impl SemanticExecutionPlayer {
     ) -> Result<(), String> {
         self.require_completed_live_segment()
             .map_err(|error| error.to_string())?;
-        self.source
-            .live()
-            .apply(transaction)
+        noon::integration::scene_execution::publish(self.source.scene_mut(), transaction)
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
@@ -2413,10 +2411,9 @@ impl SemanticExecutionPlayer {
         self.require_completed_live_segment()
             .map_err(|error| error.to_string())?;
         self.source
-            .live()
+            .scene_mut()
             .prepare_family_subset_display(family)
             .map(|_| ())
-            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

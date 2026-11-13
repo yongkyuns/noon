@@ -724,8 +724,7 @@ impl CanonicalAuthoringScene {
         if let Some(player) = self.player_ownership.local_mut() {
             return player.live_edit_updaters(transaction);
         }
-        transaction
-            .apply(&mut self.scene.integration_store().borrow_mut())
+        noon::integration::scene_execution::publish(&mut self.scene, transaction)
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
@@ -3558,7 +3557,9 @@ impl CanonicalAuthoringScene {
             return Err("subset-display family belongs to another authoring store".into());
         }
         match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => family.prepare_subset_display(),
+            PlayerOwnership::Unstarted => {
+                self.scene.prepare_family_subset_display(family).map(|_| ())
+            }
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
                 .prepare_family_subset_display(family),

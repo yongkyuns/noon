@@ -417,6 +417,17 @@ impl MobjectHandle {
         ))
     }
 
+    #[pyo3(name = "pointReductionTree")]
+    fn point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let tree = noon::MobjectTarget::from(&self.handle)
+            .point_reduction_tree()
+            .map_err(engine_error)?;
+        crate::path_input::point_reduction_tree(py, tree)
+    }
+
     #[pyo3(name = "pointArray")]
     fn point_array(&self) -> PyResult<(Vec<f64>, Vec<usize>)> {
         noon::MobjectTarget::from(&self.handle)
