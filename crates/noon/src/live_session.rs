@@ -17,13 +17,11 @@ pub use family_layout::LiveLayoutTarget;
 use crate::effective_capture::target_style_from_effective;
 use crate::execution_session::NativePointerInputToken;
 use crate::{
-    semantic_mobject::authoring_render_f64, semantic_mobject::edit_color,
-    state_replacement::prepare_become, DeclaredAnimation, ExecutionSegment,
-    ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError, ExecutionSegmentError,
-    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionPublicationError, ManimBecomeOptions, ManimLineEndpoints, Mobject,
-    MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError,
-    TranslationDragReceipt, ValueTracker,
+    semantic_mobject::authoring_render_f64, semantic_mobject::edit_color, DeclaredAnimation,
+    ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError,
+    ExecutionSegmentError, ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    ExecutionSessionPublicationError, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
+    SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
@@ -708,21 +706,6 @@ impl<'a> LiveSession<'a> {
         crate::scene::contains_direct(self.store, self.root, mobject).map_err(Into::into)
     }
 
-    /// Replace one live object's content with content already authored in this store.
-    /// Transform, style, semantic identity, and family membership stay unchanged.
-    pub fn replace_content(
-        &mut self,
-        target: &Mobject,
-        source: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(target)?;
-        self.require_mobject(source)?;
-        let content = source.state().map_err(LiveSessionError::from)?.content;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.replace_content(target.node_id(), content);
-        self.apply(transaction)
-    }
-
     /// Inspect authored/base state explicitly, separate from [`Self::effective`].
     pub fn authored(&self, mobject: &Mobject) -> Result<SemanticObjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
@@ -731,52 +714,6 @@ impl<'a> LiveSession<'a> {
 
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
         crate::effective_capture::require_target_capture(self.session, &self.store.borrow())
-    }
-
-    /// Replace one object's presentation with another object's effective state while
-    /// retaining the target identity and scene membership.
-    pub fn become_mobject(
-        &mut self,
-        target: &Mobject,
-        other: &Mobject,
-        options: ManimBecomeOptions,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(target)?;
-        self.require_mobject(other)?;
-        self.require_target_capture()?;
-        let source = self.capture_mobject_state(target)?;
-        let candidate = self.capture_mobject_state(other)?;
-        let prepared = prepare_become(
-            &self.store.borrow(),
-            target.node_id(),
-            other.node_id(),
-            &source,
-            candidate,
-            options,
-            Some(self.session),
-        )?;
-        self.publish_path_edits(prepared)
-    }
-
-    /// Replace a matching family's presentation from one coherent capture.
-    /// Existing member identities/order survive, and all edits publish together.
-    pub fn become_family(
-        &mut self,
-        source: &MobjectFamily,
-        target: &MobjectFamily,
-        options: ManimBecomeOptions,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(source)?;
-        self.require_family(target)?;
-        self.require_target_capture()?;
-        let prepared = crate::state_replacement::prepare_family_become(
-            source,
-            target,
-            options,
-            Some(self.session),
-            |object| self.capture_mobject_state(object),
-        )?;
-        self.publish_path_edits(prepared)
     }
 
     pub(crate) fn capture_mobject_state(
@@ -3617,18 +3554,22 @@ mod tests {
         source.set_fill_opacity(0.345_678_901_234).unwrap();
         source.set_object_opacity(0.456_789_012_345).unwrap();
         scene.add(&source).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
         let before_state = source.state().unwrap();
-        let before_publication = session.publication_context();
-        let mut live = scene.live(&mut session);
+        let before_publication = session.session().publication_context();
 
-        live.become_mobject(&source, &source, crate::ManimBecomeOptions::default())
+        session
+            .scene_mut()
+            .become_mobject(&source, &source, crate::ManimBecomeOptions::default())
             .unwrap();
 
         assert_eq!(source.state().unwrap(), before_state);
-        assert_eq!(live.session.publication_context(), before_publication);
-        assert!(live.session.take_frame_changes().is_empty());
+        assert_eq!(
+            session.live().session.publication_context(),
+            before_publication
+        );
+        assert!(session.live().session.take_frame_changes().is_empty());
     }
 
     #[test]

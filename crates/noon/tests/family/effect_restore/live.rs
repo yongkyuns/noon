@@ -50,7 +50,7 @@ fn live_family_restore_is_one_local_publication_and_pending_failure_preserves_ha
     let revision = session.scene().revision();
 
     session
-        .live()
+        .scene_mut()
         .become_family(&source, saved.root(), Default::default())
         .unwrap();
 
@@ -129,7 +129,7 @@ fn live_family_restore_is_one_local_publication_and_pending_failure_preserves_ha
     let frame = session.session().frame().clone();
     let bindings = snapshot(session.scene(), source.node_id());
     assert!(session
-        .live()
+        .scene_mut()
         .become_family(&source, saved.root(), Default::default())
         .is_err());
     assert_eq!(session.session().publication_context(), context);
@@ -169,9 +169,9 @@ fn live_family_become_captures_effective_opacity_and_effects_for_both_topology_p
         scene
             .add_many(&[(&driven).into(), (&receiver).into()])
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let segment = scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let segment = session
+            .live()
             .declare_and_activate_family_transform_to(
                 &driven,
                 endpoint.root(),
@@ -180,13 +180,13 @@ fn live_family_become_captures_effective_opacity_and_effects_for_both_topology_p
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        session.advance_segment_to(segment, 1.0).unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        session.live().advance_segment_to(segment, 1.0).unwrap();
+        session.live().complete_segment(segment).unwrap();
         session.seek(0.5).unwrap();
         let target_effect = driven.get_effect("soften").unwrap();
 
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .become_family(&receiver, &driven, Default::default())
             .unwrap();
 
@@ -202,8 +202,12 @@ fn live_family_become_captures_effective_opacity_and_effects_for_both_topology_p
                 .value(),
             4.0
         );
-        let id = session.execution_object_id(receiver.node_id()).unwrap();
+        let id = session
+            .session()
+            .execution_object_id(receiver.node_id())
+            .unwrap();
         let row = session
+            .session()
             .frame()
             .objects
             .iter()
@@ -257,20 +261,24 @@ fn maximum_ordered_stack_restore_validates_final_eight_bindings_without_old_gene
         )
         .unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let old = snapshot(&scene, source.node_id());
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let old = snapshot(session.scene(), source.node_id());
+    session
+        .scene_mut()
         .become_mobject(&source, &saved, Default::default())
         .unwrap();
-    let new = snapshot(&scene, source.node_id());
+    let new = snapshot(session.scene(), source.node_id());
     assert_eq!(new.len(), noon_core::MAX_EFFECT_STACK_LEN);
     assert_eq!(
         appearance(&new),
-        appearance(&snapshot(&scene, saved.node_id()))
+        appearance(&snapshot(session.scene(), saved.node_id()))
     );
-    let id = session.execution_object_id(source.node_id()).unwrap();
+    let id = session
+        .session()
+        .execution_object_id(source.node_id())
+        .unwrap();
     let row = session
+        .session()
         .frame()
         .objects
         .iter()
@@ -283,7 +291,8 @@ fn maximum_ordered_stack_restore_validates_final_eight_bindings_without_old_gene
             .collect::<Vec<_>>()
     );
     for effect in old {
-        assert!(scene
+        assert!(session
+            .scene()
             .integration_store()
             .borrow()
             .semantic_effect_state(effect.attachment)
@@ -304,27 +313,27 @@ fn late_invalid_group_isolation_preserves_old_effects_and_entire_publication() {
         .add_effect(target.root(), Blur::default(), "soften")
         .unwrap();
     scene.add_many(&[(&source).into(), (&b).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut priorities = noon_core::SemanticMutationTransaction::new();
     priorities
         .set_z_index(b.node_id(), 1.0)
         .set_z_index(c.node_id(), 2.0);
-    scene.live(&mut session).apply(priorities).unwrap();
+    session.live().apply(priorities).unwrap();
     let old = a.get_effect("glow").unwrap();
-    let frame = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    let nodes = scene.integration_store().borrow().len();
-    let bindings = snapshot(&scene, a.node_id());
-    assert!(scene
-        .live(&mut session)
+    let frame = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    let nodes = session.scene().integration_store().borrow().len();
+    let bindings = snapshot(session.scene(), a.node_id());
+    assert!(session
+        .scene_mut()
         .become_family(&source, target.root(), Default::default())
         .is_err());
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
-    assert_eq!(scene.integration_store().borrow().len(), nodes);
-    assert_eq!(snapshot(&scene, a.node_id()), bindings);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
+    assert_eq!(session.scene().integration_store().borrow().len(), nodes);
+    assert_eq!(snapshot(session.scene(), a.node_id()), bindings);
     assert!(old.authored_definition().is_ok());
     assert!(source.get_effect("soften").is_err());
 }
@@ -386,19 +395,19 @@ fn repeated_live_restore_reuses_semantic_slots_and_keeps_only_current_generation
     source.add_effect(Blur::default(), "soften").unwrap();
     let saved = source.target_editor().unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let live_nodes = scene.integration_store().borrow().len();
+    let mut session = scene.into_execution().unwrap();
+    let live_nodes = session.scene().integration_store().borrow().len();
     let mut warmed_capacity = None;
     for cycle in 0..32 {
         let old = source.get_effect("soften").unwrap();
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .become_mobject(&source, &saved, Default::default())
             .unwrap();
         let current = source.get_effect("soften").unwrap();
         assert_ne!(old.node_id(), current.node_id());
         assert!(old.authored_definition().is_err());
-        let store = scene.integration_store().borrow();
+        let store = session.scene().integration_store().borrow();
         assert_eq!(
             store.len(),
             live_nodes,

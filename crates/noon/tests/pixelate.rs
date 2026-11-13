@@ -114,7 +114,7 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.scene().revision(), revision);
     session
-        .live()
+        .scene_mut()
         .become_mobject(&source, saved.root(), Default::default())
         .unwrap();
     assert!(replacement.authored_definition().is_err());

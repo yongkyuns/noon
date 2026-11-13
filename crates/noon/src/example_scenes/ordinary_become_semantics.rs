@@ -34,7 +34,6 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
             }
             1 => {
                 scene
-                    .live()
                     .become_mobject(
                         &self.fitted,
                         &self.fitted_target,
@@ -47,7 +46,6 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
                     )
                     .map_err(|error| error.to_string())?;
                 scene
-                    .live()
                     .become_mobject(
                         &self.stretched,
                         &self.stretched_target,
@@ -60,7 +58,6 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
                     )
                     .map_err(|error| error.to_string())?;
                 scene
-                    .live()
                     .become_mobject(
                         &self.ellipse,
                         &self.ellipse_target,

@@ -825,8 +825,11 @@ impl SemanticExecutionPlayer {
         target: &noon::MobjectFamily,
         options: noon::ManimBecomeOptions,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.become_family(source, target, options))
+        self.source
+            .scene_mut()
+            .become_family(source, target, options)
             .map(|_| ())
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -837,7 +840,7 @@ impl SemanticExecutionPlayer {
         options: noon::ManimBecomeOptions,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .become_mobject(target, other, options)
             .map(|_| ())
             .map_err(AuthoringFailure::from)
@@ -1253,10 +1256,9 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .replace_content(target, source)
-            .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

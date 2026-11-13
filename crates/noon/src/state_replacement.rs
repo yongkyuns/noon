@@ -9,7 +9,7 @@ use crate::{
         layout_for_content, scale_state_about_center, stage_state_changes, state_center,
         validate_content,
     },
-    AuthoringError, Mobject, MobjectFamily,
+    AuthoringError, LiveSessionError, Mobject, MobjectFamily, MobjectTarget, Scene,
 };
 use noon_core::{
     Bounds2D64, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId,
@@ -661,7 +661,7 @@ fn prepare_persistent_family_reconcile<E: From<AuthoringError>>(
 
 impl MobjectFamily {
     /// Persistently become another family while preserving receiver ownership.
-    /// Uses authored state; live execution uses `LiveSession::become_family`.
+    /// Uses authored state. Use `Scene::become_family` to capture the current presentation.
     /// Matching topology preserves existing identities. Unequal topology is
     /// reconciled atomically: compatible receiver identities are reused, new
     /// receiver-owned nodes get fresh IDs at commit, and target IDs never transfer.
@@ -679,6 +679,101 @@ impl MobjectFamily {
                     .map_err(AuthoringError::from)
             },
         )
+    }
+}
+
+impl Scene {
+    /// Replace content while preserving the receiver's transform, style and membership.
+    pub fn replace_content(
+        &mut self,
+        target: &Mobject,
+        source: &Mobject,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(target)?;
+        self.require_object(source)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_content(target.node_id(), source.state()?.content);
+        self.apply_semantic_transaction(transaction)?;
+        Ok(())
+    }
+
+    /// Make an object match another object's current presentation, preserving receiver identity.
+    pub fn become_mobject(
+        &mut self,
+        object: &Mobject,
+        other: &Mobject,
+        options: ManimBecomeOptions,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, LiveSessionError> {
+        self.require_object(object)?;
+        self.require_object(other)?;
+        let execution = self.running_execution();
+        if let Some(execution) = execution {
+            crate::effective_capture::require_target_capture(
+                execution,
+                &self.integration_store().borrow(),
+            )?;
+        }
+        let source = self.capture_become_state(object, execution)?;
+        let candidate = self.capture_become_state(other, execution)?;
+        let prepared = prepare_become(
+            &self.integration_store().borrow(),
+            object.node_id(),
+            other.node_id(),
+            &source,
+            candidate,
+            options,
+            execution,
+        )?;
+        self.publish_become(prepared)
+    }
+
+    /// Reconcile another family's presentation in one publication, reusing compatible members.
+    pub fn become_family(
+        &mut self,
+        receiver: &MobjectFamily,
+        other: &MobjectFamily,
+        options: ManimBecomeOptions,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, LiveSessionError> {
+        MobjectTarget::from(receiver).require_store(self.integration_store())?;
+        MobjectTarget::from(other).require_store(self.integration_store())?;
+        let execution = self.running_execution();
+        if let Some(execution) = execution {
+            crate::effective_capture::require_target_capture(
+                execution,
+                &self.integration_store().borrow(),
+            )?;
+        }
+        let prepared = prepare_family_become(receiver, other, options, execution, |object| {
+            self.capture_become_state(object, execution)
+        })?;
+        self.publish_become(prepared)
+    }
+
+    fn capture_become_state(
+        &self,
+        object: &Mobject,
+        execution: Option<&crate::ExecutionSession>,
+    ) -> Result<SemanticObjectState, AuthoringError> {
+        if let Some(execution) = execution {
+            crate::effective_capture::capture_mobject_state(
+                self.integration_store(),
+                execution,
+                object,
+            )
+        } else {
+            object.state()
+        }
+    }
+
+    fn publish_become(
+        &mut self,
+        prepared: crate::path_editing::PreparedPathEdits,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, LiveSessionError> {
+        if prepared.creates_resources() {
+            self.require_resource_admission()?;
+        }
+        self.with_semantic_publication(|store, publish| prepared.publish(store, publish))
+            .map_err(Into::into)
     }
 }
 

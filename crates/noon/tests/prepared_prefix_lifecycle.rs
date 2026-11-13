@@ -204,7 +204,7 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
     let second_handle = b.state().unwrap().content.image().unwrap().resource();
     assert_ne!(first_handle, second_handle);
     execution
-        .live()
+        .scene_mut()
         .become_mobject(&a, &b, ManimBecomeOptions::default())
         .unwrap();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
@@ -306,7 +306,7 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
             match step {
                 2 => {
                     execution
-                        .live()
+                        .scene_mut()
                         .become_mobject(&a, &b, ManimBecomeOptions::default())
                         .unwrap();
                 }

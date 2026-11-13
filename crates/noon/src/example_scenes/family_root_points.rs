@@ -40,14 +40,8 @@ impl LiveContinuation for FamilyRootPoints {
                 2 => {
                     // Replay the same authored data and child presentation;
                     // clearing the roots did not undo their family transforms.
-                    scene
-                        .live()
-                        .become_mobject(&self.left, &self.left_seed, Default::default())?;
-                    scene.live().become_mobject(
-                        &self.right,
-                        &self.right_seed,
-                        Default::default(),
-                    )?;
+                    scene.become_mobject(&self.left, &self.left_seed, Default::default())?;
+                    scene.become_mobject(&self.right, &self.right_seed, Default::default())?;
                     self.left_points.clone_from(&self.left_source_points);
                     scene.set_family_points_3d(&self.group, &self.left_points)?;
                     scene.live().stretch(

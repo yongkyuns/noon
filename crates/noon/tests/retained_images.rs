@@ -474,27 +474,27 @@ fn stable_slot_cross_kind_replacement_keeps_unrelated_image_resident() {
     scene
         .add_many(&[(&target).into(), (&sibling).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     upload(
-        &mut session,
+        session.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
         &queue,
         &mut text,
     );
-    let slot = session.execution_slot_for_frame_index(0).unwrap();
-    let sibling_before = session.frame().objects[1].clone();
+    let slot = session.session().execution_slot_for_frame_index(0).unwrap();
+    let sibling_before = session.session().frame().objects[1].clone();
     for replacement in [&image, &geometry] {
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .replace_content(&target, replacement)
             .unwrap();
-        let publication = session.take_renderer_publication();
+        let publication = session.session_mut().take_renderer_publication();
         assert_eq!(publication.changes().object_indices(), &[0]);
         let prepared = preparer
             .prepare_publication(
@@ -504,10 +504,13 @@ fn stable_slot_cross_kind_replacement_keeps_unrelated_image_resident() {
             )
             .unwrap();
         let stats = renderer.upload_retained(&device, &queue, &prepared, &mut text);
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(slot));
-        assert_eq!(session.frame().objects[1], sibling_before);
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(slot)
+        );
+        assert_eq!(session.session().frame().objects[1], sibling_before);
         assert!(stats.bytes_uploaded() > 0);
     }
-    assert!(session.frame().objects[0].geometry().is_some());
+    assert!(session.session().frame().objects[0].geometry().is_some());
     assert_eq!(renderer.image_residency_stats().objects, 1);
 }
