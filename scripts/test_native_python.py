@@ -645,7 +645,10 @@ class Demo(Scene):
         self.wait(1)
         assert tuple(title.get_center()) == tuple(family.get_center()) == expected
         self.next_section("Math")
-        self.add(MathTypst("frac(x, 2)", color=BLUE).shift(RIGHT))
+        label = Text("Fraction", color=YELLOW, t2c={"Frac": BLUE}).shift(UP)
+        markup = MarkupText("<b>Numerator</b>").shift(DOWN)
+        assert label.width > 0 and markup.width > 0
+        self.add(label, markup, MathTypst("frac(x, 2)", color=BLUE).shift(RIGHT))
         self.wait(1)
 """
         scene = asyncio.run(run_source(source, retain_history=True))

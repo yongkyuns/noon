@@ -370,14 +370,14 @@ async function initializePyodide() {
     const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
     options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
-      : context.liveCreateLatex(options, latexCompiler);
+      : context.createLatex(options, latexCompiler);
   };
   self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Tex or MathTex`);
     const options = WasmLatexOptions.fromStrings(strings, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
     options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
-      : context.liveCreateLatex(options, latexCompiler);
+      : context.createLatex(options, latexCompiler);
   };
   const numericHandle = (handle) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalNumber`);

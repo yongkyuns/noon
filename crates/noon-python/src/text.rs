@@ -164,7 +164,7 @@ pub(crate) fn authored(
         .map_err(engine_error)
 }
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn live(
+pub(crate) fn in_scene(
     context: &mut Context,
     source: &str,
     family: &str,
@@ -189,11 +189,9 @@ pub(crate) fn live(
         .text(text)
         .map(MobjectHandle::from_semantic_mobject)
         .map_err(|error| {
-            if running {
-                engine_error(noon::integration::live_text_failure(error))
-            } else {
-                engine_error(error)
-            }
+            engine_error(noon::integration::AuthoringFailure::from_scene_text(
+                error, running,
+            ))
         })
 }
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

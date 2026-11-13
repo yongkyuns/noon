@@ -178,6 +178,22 @@ impl AuthoringFailure {
         }
     }
 
+    /// Preserve resource and compiler diagnostics for Scene text publication.
+    #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
+    pub fn from_scene_text(error: crate::TextAuthoringError, running: bool) -> Self {
+        use crate::TextAuthoringError;
+        if !running {
+            return error.into();
+        }
+        match error {
+            TextAuthoringError::Semantic(AuthoringError::ExecutionPublication(error)) => {
+                LiveSessionError::Publication(error)
+            }
+            other => LiveSessionError::Text(other),
+        }
+        .into()
+    }
+
     /// Project a Scene mutation through the host's existing running error codes.
     pub fn from_scene_mutation(error: AuthoringError, running: bool) -> Self {
         if !running {

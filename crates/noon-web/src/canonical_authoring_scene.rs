@@ -3687,57 +3687,13 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .text(text)
-                .map_err(noon::integration::live_text_failure),
-            PlayerOwnership::Unstarted => {
-                Err("live Text construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .typst(text)
-                .map_err(noon::integration::live_text_failure),
-            PlayerOwnership::Unstarted => {
-                Err("live Typst construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_math_typst(
+    fn author_text<T>(
         &mut self,
-        text: noon::MathTypst,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .math_typst(text)
-                .map_err(noon::integration::live_text_failure),
-            PlayerOwnership::Unstarted => {
-                Err("live MathTypst construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        publish: impl FnOnce(&mut noon::Scene) -> Result<T, noon::TextAuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        publish(self.local_authoring_scene()?)
+            .map_err(|error| AuthoringFailure::from_scene_text(error, running))
     }
 
     fn validate_membership_bindings(
@@ -10218,7 +10174,7 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        /// Publish a fully configured image through the current live session.
+        /// Publish a fully configured image through its Scene.
         #[wasm_bindgen(js_name = createImage)]
         pub fn create_image(
             &mut self,
@@ -10230,11 +10186,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        /// Shape and publish one detached plain Text object through the current
-        /// retained session. The object has no root membership or execution row
-        /// until a later lifecycle operation admits it.
-        #[wasm_bindgen(js_name = liveCreateManimText)]
-        pub fn live_create_manim_text(
+        /// Shape and publish one detached plain Text object through its Scene.
+        #[wasm_bindgen(js_name = createManimText)]
+        pub fn create_manim_text(
             &mut self,
             source: &str,
             font_family: &str,
@@ -10265,13 +10219,13 @@ mod wasm {
             .set_opacity(checked_f32("text opacity", opacity)?)
             .with_text2color(colors.map_or_else(Vec::new, |batch| batch.colors));
             self.inner
-                .live_create_text(text)
+                .author_text(|scene| scene.text(text))
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveCreateManimMarkupText)]
-        pub fn live_create_manim_markup_text(
+        #[wasm_bindgen(js_name = createManimMarkupText)]
+        pub fn create_manim_markup_text(
             &mut self,
             source: &str,
             font_family: &str,
@@ -10300,39 +10254,26 @@ mod wasm {
             ))
             .set_opacity(checked_f32("text opacity", opacity)?);
             self.inner
-                .live_create_text(text)
+                .author_text(|scene| scene.text(text))
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
-        /// Compile and publish one detached Typst or MathTypst object through
-        /// the current retained session.
-        #[wasm_bindgen(js_name = liveCreateLatex)]
-        pub fn live_create_latex(
+        /// Compile and publish detached LaTeX parts through their Scene.
+        #[wasm_bindgen(js_name = createLatex)]
+        pub fn create_latex(
             &mut self,
             options: crate::WasmLatexOptions,
             compiler: &mut crate::WasmLatexCompiler,
         ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
-            let running = !self.inner.player_ownership.is_unstarted();
-            options
-                .text
-                .publish(
-                    self.inner.local_authoring_scene().map_err(typed_js_error)?,
-                    compiler,
-                )
+            self.inner
+                .author_text(|scene| options.text.publish(scene, compiler))
                 .map(crate::WasmLatexPartsHandle::new)
-                .map_err(|error| {
-                    if running {
-                        noon::integration::live_text_failure(error)
-                    } else {
-                        error.into()
-                    }
-                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetLatexMemberColors)]
-        pub fn live_set_latex_member_colors(
+        #[wasm_bindgen(js_name = setLatexMemberColors)]
+        pub fn set_latex_member_colors(
             &mut self,
             handle: &crate::WasmLatexPartsHandle,
             values: &[f64],
@@ -10349,8 +10290,8 @@ mod wasm {
                 })
         }
 
-        #[wasm_bindgen(js_name = liveLatexFontSize)]
-        pub fn live_latex_font_size(
+        #[wasm_bindgen(js_name = latexFontSize)]
+        pub fn latex_font_size(
             &mut self,
             handle: &crate::WasmLatexPartsHandle,
         ) -> Result<f64, JsValue> {
@@ -10368,8 +10309,8 @@ mod wasm {
                 })
         }
 
-        #[wasm_bindgen(js_name = liveCreateManimTypst)]
-        pub fn live_create_manim_typst(
+        #[wasm_bindgen(js_name = createManimTypst)]
+        pub fn create_manim_typst(
             &mut self,
             source: &str,
             math: bool,
@@ -10389,22 +10330,24 @@ mod wasm {
                 checked_f32("text alpha", alpha)?,
             );
             let opacity = checked_f32("text opacity", opacity)?;
-            let result = if math {
-                self.inner.live_create_math_typst(
-                    noon::MathTypst::new(source)
-                        .with_font_size(font_size)
-                        .color(color)
-                        .set_opacity(opacity),
-                )
-            } else {
-                self.inner.live_create_typst(
-                    noon::Typst::new(source)
-                        .with_font_size(font_size)
-                        .color(color)
-                        .set_opacity(opacity),
-                )
-            };
-            result
+            self.inner
+                .author_text(|scene| {
+                    if math {
+                        scene.math_typst(
+                            noon::MathTypst::new(source)
+                                .with_font_size(font_size)
+                                .color(color)
+                                .set_opacity(opacity),
+                        )
+                    } else {
+                        scene.typst(
+                            noon::Typst::new(source)
+                                .with_font_size(font_size)
+                                .color(color)
+                                .set_opacity(opacity),
+                        )
+                    }
+                })
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
@@ -16706,8 +16649,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_wait_then_live_text_fade_reuses_one_returned_player() {
+    fn scene_text_admission_in_setup_and_after_wait_reuses_the_returned_player() {
         let mut context = CanonicalAuthoringScene::default();
+        let setup = context
+            .author_text(|scene| scene.text(noon::Text::new("Setup")))
+            .unwrap();
+        assert!(!context.contains_direct_mobject(&setup).unwrap());
         assert_eq!(context.begin_ordinary_wait(0.5).unwrap(), 0.5);
         let mut player = context.take_execution_player(1.0, 17).unwrap();
         assert!(player.live_advance_segment_to(0.5).unwrap());
@@ -16716,11 +16663,13 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
 
         let label = context
-            .live_create_text(
-                noon::Text::new("Late")
-                    .with_font_size(36.0)
-                    .color(Color::rgba(0.2, 0.4, 0.8, 1.0)),
-            )
+            .author_text(|scene| {
+                scene.text(
+                    noon::Text::new("Late")
+                        .with_font_size(36.0)
+                        .color(Color::rgba(0.2, 0.4, 0.8, 1.0)),
+                )
+            })
             .unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
         assert!(!context
@@ -16730,10 +16679,10 @@ mod tests {
             .contains_direct(&label)
             .unwrap());
         let typst = context
-            .live_create_typst(noon::Typst::new("#circle(radius: 1em)"))
+            .author_text(|scene| scene.typst(noon::Typst::new("#circle(radius: 1em)")))
             .unwrap();
         let math = context
-            .live_create_math_typst(noon::MathTypst::new("x^2"))
+            .author_text(|scene| scene.math_typst(noon::MathTypst::new("x^2")))
             .unwrap();
         assert_ne!(typst.node_id(), math.node_id());
         assert!(!context
@@ -16770,45 +16719,17 @@ mod tests {
         );
 
         let leased = context.take_execution_player(end, 18).unwrap();
-        {
-            let error = context
-                .live_create_text(noon::Text::new("Rejected"))
-                .unwrap_err();
-            assert_eq!(
-                (error.category, error.code),
-                ("unclassified", "unclassified")
-            );
-            assert_eq!(
-                error.message,
-                "live execution session is running in the semantic engine"
-            );
-        }
-        {
-            let error = context
-                .live_create_typst(noon::Typst::new("Rejected"))
-                .unwrap_err();
-            assert_eq!(
-                (error.category, error.code),
-                ("unclassified", "unclassified")
-            );
-            assert_eq!(
-                error.message,
-                "live execution session is running in the semantic engine"
-            );
-        }
-        {
-            let error = context
-                .live_create_math_typst(noon::MathTypst::new("Rejected"))
-                .unwrap_err();
-            assert_eq!(
-                (error.category, error.code),
-                ("unclassified", "unclassified")
-            );
-            assert_eq!(
-                error.message,
-                "live execution session is running in the semantic engine"
-            );
-        }
+        let error = context
+            .author_text::<()>(|_| panic!("a transferred Scene must reject before compiling text"))
+            .unwrap_err();
+        assert_eq!(
+            (error.category, error.code),
+            ("unclassified", "unclassified")
+        );
+        assert_eq!(
+            error.message,
+            "live execution session is running in the semantic engine"
+        );
         context.return_execution_player(leased).unwrap();
     }
 

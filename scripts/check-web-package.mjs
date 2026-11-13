@@ -114,7 +114,8 @@ const expectedJavascriptSurface = [
   "export class WasmLatexOptions",
   "export class WasmLatexPartsHandle",
   "createLatex(",
-  "liveCreateLatex(",
+  "setLatexMemberColors(",
+  "latexFontSize(",
   "textSource(",
   "textSourcePartsFor(",
   "textParts(",
@@ -283,8 +284,6 @@ const expectedJavascriptSurface = [
   "stretch(",
   "liveArrangeFamily(",
   "liveCreateManimArrow(",
-  "liveCreateManimText(",
-  "liveCreateManimTypst(",
   "liveMoveToPoint(",
   "liveScale(",
   "liveRotateLayout(",
@@ -388,7 +387,8 @@ const expectedTypeSurface = [
   "export class WasmTextColorBatch",
   "createManimTypst(source: string, math: boolean, font_size: number): WasmAuthoringMobjectHandle",
   "createLatex(options: WasmLatexOptions, compiler: WasmLatexCompiler): WasmLatexPartsHandle",
-  "liveCreateLatex(options: WasmLatexOptions, compiler: WasmLatexCompiler): WasmLatexPartsHandle",
+  "setLatexMemberColors(handle: WasmLatexPartsHandle, values: Float64Array): void",
+  "latexFontSize(handle: WasmLatexPartsHandle): number",
   "textSource(): string",
   "textSourcePartsFor(needle: string): WasmTextPartList",
   "textParts(): WasmTextPartList",
@@ -567,8 +567,6 @@ const expectedTypeSurface = [
   "shift(x: number, y: number, z?: number | null): void",
   "liveArrangeFamily(handle: WasmAuthoringFamilyHandle, options: WasmFamilyArrangeOptions): void",
   "liveCreateManimArrow(",
-  "liveCreateManimText(",
-  "liveCreateManimTypst(",
   "liveMoveToPoint(",
   "liveScale(",
   "liveRotateLayout(",
@@ -1041,6 +1039,8 @@ for (const retired of [
   "liveSetFamilyFade(",
   "liveSetFamilyFadeTo(",
   "liveCreateManimGeometry(", "liveCreateImage(", "liveSetImageSampling(",
+  "liveCreateManimText(", "liveCreateManimMarkupText(", "liveCreateManimTypst(",
+  "liveCreateLatex(", "liveSetLatexMemberColors(", "liveLatexFontSize(",
   "liveMatchStyle(",
   "liveInterpolateMobjectStyle(",
   "liveInterpolateMobject(",
@@ -1070,6 +1070,12 @@ for (const retired of [
   }
 }
 // Check the owning class: family-only methods must not mask a stale object ABI.
+const sceneStart = declarations.indexOf("export class CanonicalAuthoringSceneContext");
+const sceneEnd = declarations.indexOf("export class ", sceneStart + 1);
+const sceneSurface = declarations.slice(sceneStart, sceneEnd < 0 ? undefined : sceneEnd);
+for (const method of ["createManimText(", "createManimMarkupText(", "createManimTypst(", "createLatex("]) {
+  if (sceneStart < 0 || !sceneSurface.includes(method)) throw new Error(`Scene text ABI is missing ${method}`);
+}
 const objectStart = declarations.indexOf("export class WasmAuthoringMobjectHandle");
 const objectEnd = declarations.indexOf("export class ", objectStart + 1);
 const objectSurface = declarations.slice(objectStart, objectEnd < 0 ? undefined : objectEnd);
