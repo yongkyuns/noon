@@ -400,12 +400,12 @@ fn stale_live_creation_rolls_back_resources_then_valid_creation_stays_detached()
     scene.circle(0.1).unwrap();
     let revision = scene.revision();
     let before = counts(&scene);
-    assert!(Code::in_live_session(&mut session.live(), "one\n    two", plain()).is_err());
+    assert!(Code::new(session.scene_mut(), "one\n    two", plain()).is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(counts(&scene), before);
 
     let mut session = scene.into_execution().unwrap();
-    let code = Code::in_live_session(&mut session.live(), "one\n    two", plain()).unwrap();
+    let code = Code::new(session.scene_mut(), "one\n    two", plain()).unwrap();
     let line = code.line(0).unwrap();
     assert!(session
         .session()

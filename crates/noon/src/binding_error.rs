@@ -98,7 +98,6 @@ impl From<crate::TableAuthoringError> for AuthoringFailure {
             #[cfg(feature = "latex")]
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),
-            LiveSession(error) => Self::unclassified("table.live_session", &error),
         }
     }
 }
@@ -114,7 +113,6 @@ impl From<crate::CodeAuthoringError> for AuthoringFailure {
             Text(error) => error.into(),
             TextPart(error) => error.into(),
             Semantic(error) => error.into(),
-            LiveSession(error) => error.into(),
             Io(error) => Self::unclassified("code.io", &error),
         }
     }
@@ -133,7 +131,6 @@ impl From<crate::MatrixAuthoringError> for AuthoringFailure {
             #[cfg(feature = "latex")]
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),
-            LiveSession(error) => Self::unclassified("matrix.live_session", &error),
         }
     }
 }

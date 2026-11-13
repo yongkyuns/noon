@@ -1,4 +1,4 @@
-//! Matrix language adapters use the common player live-session boundary.
+//! Matrix authoring through the current Scene.
 use super::SemanticExecutionPlayer;
 use crate::authoring_error::AuthoringFailure;
 
@@ -9,12 +9,8 @@ impl SemanticExecutionPlayer {
         rows: Vec<Vec<String>>,
         options: noon::MatrixOptions,
     ) -> Result<noon::Matrix, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::Matrix::from_rows_in_live_session(
-                live, backend, rows, options,
-            ))
-        })?
-        .map_err(AuthoringFailure::from)
+        noon::Matrix::from_rows_with_options(self.source.scene_mut(), backend, rows, options)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_integer_matrix(
         &mut self,
@@ -22,12 +18,8 @@ impl SemanticExecutionPlayer {
         rows: Vec<Vec<f64>>,
         options: noon::MatrixOptions,
     ) -> Result<noon::IntegerMatrix, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::IntegerMatrix::from_rows_in_live_session(
-                live, backend, rows, options,
-            ))
-        })?
-        .map_err(AuthoringFailure::from)
+        noon::IntegerMatrix::from_rows_with_options(self.source.scene_mut(), backend, rows, options)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_decimal_matrix(
         &mut self,
@@ -35,18 +27,16 @@ impl SemanticExecutionPlayer {
         rows: Vec<Vec<f64>>,
         options: noon::MatrixOptions,
     ) -> Result<noon::DecimalMatrix, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::DecimalMatrix::from_rows_in_live_session(
-                live,
-                backend,
-                rows,
-                noon::DecimalFormat {
-                    decimal_places: 1,
-                    ..Default::default()
-                },
-                options,
-            ))
-        })?
+        noon::DecimalMatrix::from_rows_with_format_and_options(
+            self.source.scene_mut(),
+            backend,
+            rows,
+            noon::DecimalFormat {
+                decimal_places: 1,
+                ..Default::default()
+            },
+            options,
+        )
         .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_mobject_matrix<'a>(
@@ -55,11 +45,12 @@ impl SemanticExecutionPlayer {
         rows: Vec<Vec<noon::MobjectTarget<'a>>>,
         options: noon::MatrixOptions,
     ) -> Result<noon::MobjectMatrix, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::MobjectMatrix::from_target_rows_in_live_session(
-                live, backend, rows, options,
-            ))
-        })?
+        noon::MobjectMatrix::from_target_rows_with_options(
+            self.source.scene_mut(),
+            backend,
+            rows,
+            options,
+        )
         .map_err(AuthoringFailure::from)
     }
 }
