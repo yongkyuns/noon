@@ -1,9 +1,9 @@
 //! Animated painted-source blur, paired with web/python/examples/blur.py.
 use super::image_glow::image_options;
 use crate::{
-    effects::{Blur, EffectUpdate, Pixels},
     AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, RateFunction,
     Scene,
+    effects::{Blur, EffectUpdate, Pixels},
 };
 
 pub struct ImageBlur {
@@ -28,7 +28,6 @@ impl LiveContinuation for ImageBlur {
                     .rotate(&target, std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &target,
                         "soften",
@@ -48,7 +47,6 @@ impl LiveContinuation for ImageBlur {
                     .rotate(&target, -std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &target,
                         "soften",
@@ -62,7 +60,6 @@ impl LiveContinuation for ImageBlur {
             5 => {
                 // Removing a neutral blur preserves the same ordinary image.
                 scene
-                    .live()
                     .remove_effect(&self.image, "soften")
                     .map_err(message)?;
                 scene.live().wait_segment(0.75)
@@ -170,11 +167,13 @@ mod tests {
             drive(&mut program, &mut callbacks, 6.0),
             LiveProgramStatus::Finished
         );
-        assert!(program
-            .session()
-            .frame()
-            .objects
-            .iter()
-            .all(|row| row.effects.is_none()));
+        assert!(
+            program
+                .session()
+                .frame()
+                .objects
+                .iter()
+                .all(|row| row.effects.is_none())
+        );
     }
 }

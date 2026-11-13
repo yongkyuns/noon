@@ -128,7 +128,7 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
     ];
     for (owner, radius) in targets {
         session
-            .live()
+            .scene_mut()
             .set_effect(
                 owner,
                 "soften",
@@ -258,7 +258,7 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
     ];
     let mut last_removal = Vec::new();
     for (removed, owner) in removals {
-        session.live().remove_effect(owner, "soften").unwrap();
+        session.scene_mut().remove_effect(owner, "soften").unwrap();
         let actual = surface.render_on(
             &device,
             &queue,
@@ -297,5 +297,7 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
         ),
         (0, 0, 0)
     );
-    eprintln!("ANIMATED_COMPOSED_PASS samples=136 max_error={maximum} analytic_source=true nested_convolution=true seek_exact=true unrelated_forward_clean=true warmed_bytes={warmed_bytes} warmed_cycles=32 warmed_texture_allocations=0");
+    eprintln!(
+        "ANIMATED_COMPOSED_PASS samples=136 max_error={maximum} analytic_source=true nested_convolution=true seek_exact=true unrelated_forward_clean=true warmed_bytes={warmed_bytes} warmed_cycles=32 warmed_texture_allocations=0"
+    );
 }

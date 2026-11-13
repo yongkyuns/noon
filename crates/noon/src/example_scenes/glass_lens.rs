@@ -1,9 +1,9 @@
 //! A moving glass card treats the earlier texture while retaining its own paint.
 //! Paired with `web/python/examples/showcase_glass_lens.py` on the ordinary live timeline.
 use crate::{
-    effects::{BackdropBlur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, ImageMobjectOptions,
     LiveContinuation, LiveProgram, MobjectFamily, RasterImageSampling, RateFunction, Scene, Text,
+    effects::{BackdropBlur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
 };
 
 pub struct GlassLens {
@@ -33,7 +33,6 @@ impl LiveContinuation for GlassLens {
                     .shift_family(target.root(), dx, 0.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         target.root(),
                         "glass",
@@ -52,15 +51,11 @@ impl LiveContinuation for GlassLens {
                 )
             }
             5 => {
-                scene
-                    .live()
-                    .remove_effect(&self.card, "glass")
-                    .map_err(message)?;
+                scene.remove_effect(&self.card, "glass").map_err(message)?;
                 scene.live().wait_segment(0.5)
             }
             6 => {
                 scene
-                    .live()
                     .add_effect(
                         &self.card,
                         BackdropBlur::new(EffectUpdate::default().radius(Pixels(12.0)))
@@ -267,9 +262,11 @@ mod tests {
             .collect::<Vec<_>>();
         let resources = reader.resource_publication();
         assert_eq!(image_handles.len(), 2);
-        assert!(image_handles
-            .iter()
-            .all(|handle| resources.raster_image_resources().get(*handle).is_some()));
+        assert!(
+            image_handles
+                .iter()
+                .all(|handle| resources.raster_image_resources().get(*handle).is_some())
+        );
         assert!(reader.retained_resource_bytes() > 0);
 
         let mut last = first;

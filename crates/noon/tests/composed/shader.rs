@@ -224,9 +224,9 @@ fn shader_scene_animation_pose_camera_resolution_and_replay_match_independent_fi
                     let camera = Camera2D::new(center, world).unwrap();
                     let (scene, objects, animation) = fixture(Some(&program), angle, scale);
                     let (plain, _, plain_animation) = fixture(None, angle, scale);
-                    let mut session = scene.execution_session().unwrap();
+                    let mut session = scene.into_execution().unwrap();
                     let mut baseline = plain.execution_session().unwrap();
-                    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+                    let segment = session.live().play_animation(&animation).unwrap();
                     plain
                         .live(&mut baseline)
                         .play_animation(&plain_animation)
@@ -250,7 +250,7 @@ fn shader_scene_animation_pose_camera_resolution_and_replay_match_independent_fi
                         let actual = surface.render_on(
                             &device,
                             &queue,
-                            &mut session,
+                            session.session_mut(),
                             wgpu::Color::TRANSPARENT,
                         );
                         assert_eq!(
@@ -275,7 +275,10 @@ fn shader_scene_animation_pose_camera_resolution_and_replay_match_independent_fi
                             .max()
                             .unwrap();
                         maximum = maximum.max(error);
-                        assert!(error<=2,"space={space:?} angle={angle} scale={scale:?} size={size:?} time={time}: max RGBA error{error}");
+                        assert!(
+                            error <= 2,
+                            "space={space:?} angle={angle} scale={scale:?} size={size:?} time={time}: max RGBA error{error}"
+                        );
                         if time == 0.5 {
                             if let Some(old) = &midpoint {
                                 assert_eq!(&actual, old, "ordinary shader rewind must be exact");
@@ -285,14 +288,16 @@ fn shader_scene_animation_pose_camera_resolution_and_replay_match_independent_fi
                         }
                         samples += 1;
                     }
-                    scene
-                        .live(&mut session)
-                        .advance_segment_to(segment, 1.0)
-                        .unwrap();
-                    scene.live(&mut session).complete_segment(segment).unwrap();
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
-                    scene
-                        .live(&mut session)
+                    session.live().advance_segment_to(segment, 1.0).unwrap();
+                    session.live().complete_segment(segment).unwrap();
+                    surface.render_on(
+                        &device,
+                        &queue,
+                        session.session_mut(),
+                        wgpu::Color::TRANSPARENT,
+                    );
+                    session
+                        .scene_mut()
                         .set_effect(
                             &objects[1],
                             "material",
@@ -302,8 +307,12 @@ fn shader_scene_animation_pose_camera_resolution_and_replay_match_independent_fi
                             ),
                         )
                         .unwrap();
-                    let actual =
-                        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                    let actual = surface.render_on(
+                        &device,
+                        &queue,
+                        session.session_mut(),
+                        wgpu::Color::TRANSPARENT,
+                    );
                     assert_eq!(
                         surface.program_stats,
                         noon_render_wgpu::EffectProgramStats {
@@ -337,7 +346,9 @@ fn shader_scene_animation_pose_camera_resolution_and_replay_match_independent_fi
             }
         }
     }
-    eprintln!("ordinary shader scene:{samples} samples, max byte error{maximum}; two shared-program attachments; exact rewind and local parameter-only reuse");
+    eprintln!(
+        "ordinary shader scene:{samples} samples, max byte error{maximum}; two shared-program attachments; exact rewind and local parameter-only reuse"
+    );
 }
 
 #[test]
@@ -368,11 +379,13 @@ fn offscreen_shader_residency_and_rejected_source_keep_the_published_scene() {
     assert!(valid.iter().any(|&v| v > 0));
     let before = session.publication_context();
     let changes = session.resource_publication().changes().clone();
-    assert!(WgslEffectProgram::prepare(
-        program.schema().clone(),
-        format!("{SOURCE}\nfn fs_sample() {{}}")
-    )
-    .is_err());
+    assert!(
+        WgslEffectProgram::prepare(
+            program.schema().clone(),
+            format!("{SOURCE}\nfn fs_sample() {{}}")
+        )
+        .is_err()
+    );
     assert_eq!(session.publication_context(), before);
     assert_eq!(session.resource_publication().changes(), &changes);
     assert_eq!(
@@ -474,7 +487,9 @@ fn shader_time_wait_pixels_and_seek_use_authored_time_without_source_recapture()
             assert_eq!(surface.effect_stats.sources_prepared, 1);
         }
     }
-    eprintln!("ordinary shader canonical time:6 images, max byte error{overall_maximum}; independent coverage gain; exact seek; no source recapture or allocation on forward time changes");
+    eprintln!(
+        "ordinary shader canonical time:6 images, max byte error{overall_maximum}; independent coverage gain; exact seek; no source recapture or allocation on forward time changes"
+    );
 }
 
 #[test]
@@ -495,9 +510,14 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
     let mut incoming = scene.rectangle(1.6, 1.2).unwrap();
     incoming.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
     incoming.disable_stroke().unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut surface = Surface::new(&device, &queue);
-    let input = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let input = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     let program = program(ShaderCoordinates::LocalNormalized, SOURCE);
     let definition = |program: &WgslEffectProgram| {
         ShaderEffect::new(program.clone())
@@ -512,21 +532,21 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
             )
             .unwrap()
     };
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&object, definition(&program), "material")
         .unwrap();
     let preparation = surface
         .renderer
-        .effect_program_preparation(&device, &session.resource_publication())
+        .effect_program_preparation(&device, &session.session().resource_publication())
         .unwrap();
     let preparation = preparation
         .try_ready()
         .expect_err("new module must be prepared asynchronously");
     // Input/parameter work may commit while device validation awaits. The request
     // owns only immutable modules, so it neither borrows nor rewrites this source.
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(
             &object,
             "material",
@@ -538,8 +558,8 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
         .unwrap();
     let prepared = pollster::block_on(preparation.prepare()).unwrap();
     assert_eq!(prepared.stats().pipeline_compiles, 1);
-    let context = session.publication_context();
-    let changes = session.resource_publication().changes().clone();
+    let context = session.session().publication_context();
+    let changes = session.session().resource_publication().changes().clone();
     surface
         .renderer
         .cache_effect_programs(&device, &prepared)
@@ -559,13 +579,13 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
             "cache authority and row proofs are not transferred"
         );
         let rows = compatible
-            .effect_program_preparation(&device, &session.resource_publication())
+            .effect_program_preparation(&device, &session.session().resource_publication())
             .unwrap()
             .try_ready()
             .expect("new rows reuse the retained immutable modules");
         assert_eq!(rows.stats().pipeline_compiles, 0);
         compatible
-            .commit_effect_programs(&device, &session.resource_publication(), rows)
+            .commit_effect_programs(&device, &session.session().resource_publication(), rows)
             .unwrap();
         assert_eq!(compatible.resident_effect_program_counts(), [1, 1]);
         let (other_device, other_queue) =
@@ -583,36 +603,45 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
     }
     let current = surface
         .renderer
-        .effect_program_preparation(&device, &session.resource_publication())
+        .effect_program_preparation(&device, &session.session().resource_publication())
         .unwrap()
         .try_ready()
         .expect("newer parameter publication reuses compiled module");
-    assert!(surface
-        .renderer
-        .commit_effect_programs(&device, &session.resource_publication(), prepared)
-        .is_err());
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(session.resource_publication().changes(), &changes);
+    assert!(
+        surface
+            .renderer
+            .commit_effect_programs(&device, &session.session().resource_publication(), prepared)
+            .is_err()
+    );
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.session().resource_publication().changes(), &changes);
     assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 1]);
     assert_eq!(readback(&device, &queue, &surface.target), input);
     let work = surface
         .renderer
-        .commit_effect_programs(&device, &session.resource_publication(), current)
+        .commit_effect_programs(&device, &session.session().resource_publication(), current)
         .unwrap();
     assert_eq!(work.pipeline_compiles, 0);
     assert_eq!(surface.renderer.resident_effect_program_counts(), [1, 1]);
-    let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let actual = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     let expected: Vec<_> = input
         .iter()
         .map(|&v| (f64::from(v) * 0.6).round() as u8)
         .collect();
-    assert!(actual
-        .iter()
-        .zip(&expected)
-        .all(|(a, b)| a.abs_diff(*b) <= 2));
+    assert!(
+        actual
+            .iter()
+            .zip(&expected)
+            .all(|(a, b)| a.abs_diff(*b) <= 2)
+    );
     let old = surface
         .renderer
-        .effect_program_preparation(&device, &session.resource_publication())
+        .effect_program_preparation(&device, &session.session().resource_publication())
         .unwrap()
         .try_ready()
         .unwrap();
@@ -620,61 +649,83 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
     assert!(
         surface
             .renderer
-            .commit_effect_programs(&device, &session.resource_publication(), old)
+            .commit_effect_programs(&device, &session.session().resource_publication(), old)
             .is_err(),
         "reset cache must reject even an equal-context token"
     );
     assert_eq!(readback(&device, &queue, &surface.target), actual);
     assert_eq!(
-        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+        surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT
+        ),
         actual
     );
     assert_eq!(surface.program_stats.pipeline_compiles, 1);
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .remove_effect(&object, "material")
         .unwrap();
     assert_eq!(
-        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+        surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT
+        ),
         input
     );
     assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 0]);
     for index in 0..16 {
         let source = format!("{SOURCE}\nfn marker() -> u32 {{ return {index}u; }}");
         let program = WgslEffectProgram::prepare(program.schema().clone(), source).unwrap();
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .add_effect(&object, definition(&program), "material")
             .unwrap();
-        let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+        let actual = surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT,
+        );
         let expected: Vec<_> = input
             .iter()
             .map(|&v| (f64::from(v) * 0.7).round() as u8)
             .collect();
-        assert!(actual
-            .iter()
-            .zip(&expected)
-            .all(|(a, b)| a.abs_diff(*b) <= 2));
+        assert!(
+            actual
+                .iter()
+                .zip(&expected)
+                .all(|(a, b)| a.abs_diff(*b) <= 2)
+        );
         assert_eq!(surface.program_stats.pipeline_compiles, 1);
         assert_eq!(surface.renderer.resident_effect_program_counts(), [1, 1]);
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .remove_effect(&object, "material")
             .unwrap();
         assert_eq!(
-            surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+            surface.render_on(
+                &device,
+                &queue,
+                session.session_mut(),
+                wgpu::Color::TRANSPARENT
+            ),
             input
         );
         assert_eq!(surface.renderer.resident_effect_program_counts(), [0, 0]);
     }
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&incoming, definition(&program), "material")
         .unwrap();
-    session.require_effect_resource_preparation();
-    let context = session.publication_context();
-    let pending = scene
-        .live(&mut session)
+    session.session_mut().require_effect_resource_preparation();
+    let context = session.session().publication_context();
+    let pending = session
+        .live()
         .prepare_membership(noon::SceneMembershipRequest::Replace {
             old: (&object).into(),
             new: (&incoming).into(),
@@ -692,23 +743,29 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
         .renderer
         .cache_effect_programs(&device, &modules)
         .unwrap();
-    assert_eq!(session.publication_context(), context);
+    assert_eq!(session.session().publication_context(), context);
     assert_eq!(readback(&device, &queue, &surface.target), input);
-    scene
-        .live(&mut session)
-        .publish_staged_effects(pending)
-        .unwrap();
-    assert!(!scene.live(&mut session).contains(&object).unwrap());
-    assert!(scene.live(&mut session).contains(&incoming).unwrap());
-    let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    session.live().publish_staged_effects(pending).unwrap();
+    assert!(!session.live().contains(&object).unwrap());
+    assert!(session.live().contains(&incoming).unwrap());
+    let actual = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     let expected: Vec<_> = input
         .iter()
         .map(|&v| (f64::from(v) * 0.7).round() as u8)
         .collect();
-    assert!(actual
-        .iter()
-        .zip(&expected)
-        .all(|(a, b)| a.abs_diff(*b) <= 2));
+    assert!(
+        actual
+            .iter()
+            .zip(&expected)
+            .all(|(a, b)| a.abs_diff(*b) <= 2)
+    );
     assert_eq!(surface.program_stats.pipeline_compiles, 0);
-    eprintln!("owned shader preparation: stale context and reset rejected; current module reused; pending changes/last image retained;16 real program enrollment/retirement cycles; shader-bearing replacement prepares before publication and matches independent coverage gain");
+    eprintln!(
+        "owned shader preparation: stale context and reset rejected; current module reused; pending changes/last image retained;16 real program enrollment/retirement cycles; shader-bearing replacement prepares before publication and matches independent coverage gain"
+    );
 }

@@ -134,7 +134,7 @@ fn sequential_family_targets_distinguish_omitted_method_opacity_from_full_snapsh
             .set_family_object_opacity(a.root(), 0.25)
             .unwrap();
         session
-            .live()
+            .scene_mut()
             .set_effect(
                 b.root(),
                 "soften",
@@ -181,10 +181,13 @@ fn sequential_family_targets_distinguish_omitted_method_opacity_from_full_snapsh
         ] {
             session.seek(time).unwrap();
             assert_eq!(
-            row(session.session(), family.node_id()).unwrap().style.opacity,
-            opacity,
-            "method={method}: target selection must preserve the declared appearance policy at {time}"
-        );
+                row(session.session(), family.node_id())
+                    .unwrap()
+                    .style
+                    .opacity,
+                opacity,
+                "method={method}: target selection must preserve the declared appearance policy at {time}"
+            );
         }
         session
             .session_mut()
@@ -499,7 +502,7 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
             let target_inner = target.family(&inner).unwrap();
             let target_leaf = target.mobject(&leaf).unwrap();
             session
-                .live()
+                .scene_mut()
                 .set_effect(
                     target.root(),
                     "root",
@@ -507,7 +510,7 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                 )
                 .unwrap();
             session
-                .live()
+                .scene_mut()
                 .set_effect(
                     &target_inner,
                     "inner",
@@ -515,7 +518,7 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                 )
                 .unwrap();
             session
-                .live()
+                .scene_mut()
                 .set_effect(
                     &target_leaf,
                     "leaf",
@@ -651,7 +654,7 @@ fn family_scope_clock_preserves_play_overrides_member_lag_and_seek() {
         .shift_family(target.root(), 2.0, 0.0)
         .unwrap();
     session
-        .live()
+        .scene_mut()
         .set_effect(
             target.root(),
             "soften",
@@ -738,7 +741,7 @@ fn parallel_family_targets_reserve_exact_parameter_generations_and_rollback_conf
         let a = session.scene_mut().copy_family(&family).unwrap();
         let b = session.scene_mut().copy_family(&family).unwrap();
         session
-            .live()
+            .scene_mut()
             .set_effect(
                 a.root(),
                 "first",
@@ -747,7 +750,7 @@ fn parallel_family_targets_reserve_exact_parameter_generations_and_rollback_conf
             .unwrap();
         // Same-valued explicit writes still compete for the exact lane.
         session
-            .live()
+            .scene_mut()
             .set_effect(
                 b.root(),
                 if conflict { "first" } else { "second" },
@@ -876,7 +879,7 @@ fn sequential_family_targets_capture_prior_scope_endpoint_and_seek_deterministic
     let first = session.scene_mut().copy_family(&family).unwrap();
     let last = session.scene_mut().copy_family(&family).unwrap();
     session
-        .live()
+        .scene_mut()
         .set_effect(
             first.root(),
             "soften",
@@ -886,7 +889,7 @@ fn sequential_family_targets_capture_prior_scope_endpoint_and_seek_deterministic
     // This explicit return to the original value must consume the preceding
     // completed radius, rather than being treated as an unchanged copied target.
     session
-        .live()
+        .scene_mut()
         .set_effect(
             last.root(),
             "soften",
@@ -967,32 +970,29 @@ fn inert_family_effect_declaration_captures_effective_values_and_rejects_rebound
         )
         .unwrap();
     let attachment = family.get_effect("soften").unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
         .set_effect(
             &family,
             &attachment,
             EffectUpdate::default().radius(Pixels(4.0)),
         )
         .unwrap();
-    let segment = scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .unwrap();
-    session.advance_segment_to(segment, 0.5).unwrap();
+    let segment = session.live().play_animation(&declaration).unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(
-        effect_radius(&session, family.node_id(), attachment.node_id()),
+        effect_radius(session.session(), family.node_id(), attachment.node_id()),
         5.0
     );
-    session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
+    session
+        .scene_mut()
         .remove_effect(&family, &attachment)
         .unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(
             &family,
             Blur::new(EffectUpdate::default().radius(Pixels(2.0))).unwrap(),
@@ -1001,14 +1001,11 @@ fn inert_family_effect_declaration_captures_effective_values_and_rejects_rebound
         .unwrap();
     let replacement = family.get_effect("soften").unwrap();
     assert_ne!(replacement.node_id(), attachment.node_id());
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
+    let before = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(session.live().play_animation(&declaration).is_err());
+    assert_eq!(session.session().frame(), &before);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
 }

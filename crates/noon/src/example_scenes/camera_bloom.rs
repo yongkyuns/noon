@@ -1,8 +1,8 @@
 //! Material radiance and camera Bloom animate independently, then restore.
 use crate::{
-    effects::{Bloom, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
     Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    effects::{Bloom, EffectUpdate, Pixels},
 };
 use noon_core::ViewColorProfile;
 
@@ -24,7 +24,6 @@ impl LiveContinuation for CameraBloom {
                     .set_emission(&panel, if bright { 7.0 } else { 0.0 })
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &camera,
                         "bloom",

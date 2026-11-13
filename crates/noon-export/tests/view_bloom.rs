@@ -3,8 +3,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use noon::{
-    effects::{Bloom, EffectUpdate, Pixels},
     Scene,
+    effects::{Bloom, EffectUpdate, Pixels},
 };
 use noon_core::ViewColorProfile;
 use noon_export::{CaptureOptions, CapturePixelFormat, SessionCapture};
@@ -102,11 +102,11 @@ fn session_capture_resolves_camera_bloom_and_switches_working_profiles() {
     for phase in 0..6 {
         match phase {
             1 => execution
-                .live()
+                .scene_mut()
                 .set_effect(&camera, "bloom", EffectUpdate::default().intensity(0.0))
                 .unwrap(),
             2 => execution
-                .live()
+                .scene_mut()
                 .set_effect(
                     &camera,
                     "bloom",
@@ -116,7 +116,10 @@ fn session_capture_resolves_camera_bloom_and_switches_working_profiles() {
                         .intensity(3.0),
                 )
                 .unwrap(),
-            3 => execution.live().remove_effect(&camera, "bloom").unwrap(),
+            3 => execution
+                .scene_mut()
+                .remove_effect(&camera, "bloom")
+                .unwrap(),
             4 => execution
                 .scene_mut()
                 .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
@@ -175,7 +178,10 @@ fn session_capture_resolves_camera_bloom_and_switches_working_profiles() {
         )
         .unwrap();
     }
-    eprintln!("native view capture: {} phases, maximum display error {maximum}, exact removals/profile restoration",cases.len());
+    eprintln!(
+        "native view capture: {} phases, maximum display error {maximum}, exact removals/profile restoration",
+        cases.len()
+    );
 }
 
 struct BloomMotion {

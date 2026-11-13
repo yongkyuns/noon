@@ -103,12 +103,14 @@ fn dissolve_lifecycle_reuses_warmed_resources_and_restores_exact_source_pixels()
                 images += 1;
                 if direction == DissolveDirection::In {
                     assert_eq!(pixels, original);
-                    assert!(scene
-                        .integration_store()
-                        .borrow()
-                        .visibility_effect(owner)
-                        .unwrap()
-                        .is_none());
+                    assert!(
+                        scene
+                            .integration_store()
+                            .borrow()
+                            .visibility_effect(owner)
+                            .unwrap()
+                            .is_none()
+                    );
                 } else {
                     assert!(pixels.iter().all(|value| *value == 0));
                 }
@@ -121,7 +123,9 @@ fn dissolve_lifecycle_reuses_warmed_resources_and_restores_exact_source_pixels()
             }
         }
     }
-    eprintln!("DISSOLVE_LIFECYCLE_PASS images={images} cycles=16 endpoints_exact=true repeated_seed_exact=true held_exact=true warmed_allocations=0");
+    eprintln!(
+        "DISSOLVE_LIFECYCLE_PASS images={images} cycles=16 endpoints_exact=true repeated_seed_exact=true held_exact=true warmed_allocations=0"
+    );
 }
 
 #[test]
@@ -161,9 +165,10 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                 (&a).into()
             }
         };
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
         let mut tx = SemanticMutationTransaction::new();
-        scene
+        session
+            .scene()
             .integration_store()
             .borrow()
             .stage_visibility_mask(
@@ -175,16 +180,17 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                 &mut tx,
             )
             .unwrap();
-        scene.live(&mut session).apply(tx).unwrap();
-        let visibility = scene
+        session.live().apply(tx).unwrap();
+        let visibility = session
+            .scene()
             .integration_store()
             .borrow()
             .visibility_effect(owner)
             .unwrap()
             .unwrap();
         // A later silhouette glow must be inserted below the visibility mask.
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .add_effect(
                 target(),
                 Glow::new(
@@ -204,7 +210,8 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
         for cycle in 0..16 {
             for progress in [1.0, 0.0] {
                 let mut tx = SemanticMutationTransaction::new();
-                scene
+                session
+                    .scene()
                     .integration_store()
                     .borrow()
                     .stage_visibility_mask(
@@ -216,9 +223,13 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                         &mut tx,
                     )
                     .unwrap();
-                scene.live(&mut session).apply(tx).unwrap();
-                let pixels =
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                session.live().apply(tx).unwrap();
+                let pixels = surface.render_on(
+                    &device,
+                    &queue,
+                    session.session_mut(),
+                    wgpu::Color::TRANSPARENT,
+                );
                 images += 1;
                 if progress == 1.0 {
                     assert!(
@@ -237,7 +248,8 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                     }
                 }
                 assert_eq!(
-                    scene
+                    session
+                        .scene()
                         .integration_store()
                         .borrow()
                         .visibility_effect(owner)
@@ -254,8 +266,12 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                         "progress changes must reuse captured source pixels"
                     );
                 }
-                let clean =
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                let clean = surface.render_on(
+                    &device,
+                    &queue,
+                    session.session_mut(),
+                    wgpu::Color::TRANSPARENT,
+                );
                 images += 1;
                 assert_eq!(clean, pixels);
                 assert_eq!(
@@ -272,12 +288,19 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
         }
         let mut tx = SemanticMutationTransaction::new();
         tx.remove_node(visibility);
-        scene.live(&mut session).apply(tx).unwrap();
+        session.live().apply(tx).unwrap();
         assert_eq!(
-            surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+            surface.render_on(
+                &device,
+                &queue,
+                session.session_mut(),
+                wgpu::Color::TRANSPARENT
+            ),
             ordinary.unwrap()
         );
         images += 1;
     }
-    eprintln!("VISIBILITY_ROLE_PASS images={images} endpoints_exact=true clean_exact=true warmed_allocations=0 named_glow_cannot_bypass=true");
+    eprintln!(
+        "VISIBILITY_ROLE_PASS images={images} endpoints_exact=true clean_exact=true warmed_allocations=0 named_glow_cannot_bypass=true"
+    );
 }

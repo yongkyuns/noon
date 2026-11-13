@@ -102,13 +102,13 @@ fn transient_glow_disjoint_and_same_value_edits_adopt_without_restarting_intensi
     // This is an explicit ownership handoff even though the authored white value
     // produces no semantic parameter impact.
     execution
-        .live()
+        .scene_mut()
         .set_glow(&object, EffectUpdate::default().color(Color::WHITE))
         .unwrap();
     assert_eq!(glow(&execution, &object).intensity(), 2.0);
     assert!(execution.session().interactions_active());
     execution
-        .live()
+        .scene_mut()
         .set_glow(
             &object,
             EffectUpdate::default().color(Color::BLUE).radius(0.3),
@@ -131,7 +131,7 @@ fn transient_glow_same_value_intensity_write_supersedes_the_effective_peak() {
     let (mut execution, object) = clicked();
     let attachment = object.get_effect("glow").unwrap().node_id();
     execution
-        .live()
+        .scene_mut()
         .set_glow(&object, EffectUpdate::default().intensity(0.0))
         .unwrap();
     assert!(!execution.session().interactions_active());
@@ -149,19 +149,21 @@ fn transient_glow_empty_or_rejected_edit_keeps_temporary_retirement_owned() {
     let publication = execution.session().publication_context();
     let frame = execution.session().frame().clone();
     execution
-        .live()
+        .scene_mut()
         .set_glow(&object, EffectUpdate::default())
         .unwrap();
     assert_eq!(execution.session().publication_context(), publication);
     // A live source-mode schema change is rejected by compiler preparation;
     // submitted intent must not adopt the effect before that preparation succeeds.
-    assert!(execution
-        .live()
-        .set_glow(
-            &object,
-            EffectUpdate::default().source(GlowSource::Silhouette),
-        )
-        .is_err());
+    assert!(
+        execution
+            .scene_mut()
+            .set_glow(
+                &object,
+                EffectUpdate::default().source(GlowSource::Silhouette),
+            )
+            .is_err()
+    );
     assert_eq!(execution.session().publication_context(), publication);
     assert_eq!(execution.session().frame(), &frame);
     assert!(execution.session().interactions_active());
@@ -177,7 +179,7 @@ fn transient_glow_authored_radius_track_adopts_and_keeps_input_intensity_indepen
     let attachment = object.get_effect("glow").unwrap().node_id();
     let target = execution.scene_mut().target_editor(&object).unwrap();
     execution
-        .live()
+        .scene_mut()
         .set_glow(&target, EffectUpdate::default().radius(0.4))
         .unwrap();
     let request = AnimationCompositionRequest::TransformTo(
@@ -215,7 +217,7 @@ fn transient_glow_authored_intensity_track_keeps_its_reversed_initial_sample() {
     let attachment = object.get_effect("glow").unwrap().node_id();
     let target = execution.scene_mut().target_editor(&object).unwrap();
     execution
-        .live()
+        .scene_mut()
         .set_glow(&target, EffectUpdate::default().intensity(0.8))
         .unwrap();
     let request = AnimationCompositionRequest::TransformTo(
@@ -309,13 +311,15 @@ fn transient_glow_admits_preclick_motion_target_without_adopting_temporary_attac
     assert_eq!(execution.session().frame().time, 0.4);
     assert!(object.get_effect("glow").is_err());
     assert!(temporary.authored_definition().is_err());
-    assert!(execution
-        .session()
-        .runtime
-        .effective_object(object_id)
-        .unwrap()
-        .effects
-        .is_none());
+    assert!(
+        execution
+            .session()
+            .runtime
+            .effective_object(object_id)
+            .unwrap()
+            .effects
+            .is_none()
+    );
     execution
         .live()
         .advance_segment_to(segment, segment.end_time())

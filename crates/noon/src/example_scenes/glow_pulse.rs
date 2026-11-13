@@ -2,10 +2,10 @@
 //! Paired with `web/python/examples/glow_pulse.py`.
 
 use crate::{
-    effects::{Blur, EffectUpdate, Pixels},
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     LiveContinuation, LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
     TransformToRequest,
+    effects::{Blur, EffectUpdate, Pixels},
 };
 
 pub struct GlowPulseScene {
@@ -29,7 +29,6 @@ impl LiveContinuation for GlowPulseScene {
             1 => {
                 let target = scene.target_editor(&self.persistent).map_err(message)?;
                 scene
-                    .live()
                     .set_glow(&target, EffectUpdate::default().intensity(1.2))
                     .map_err(message)?;
                 scene.live().declare_and_activate_transform_to(
@@ -42,7 +41,6 @@ impl LiveContinuation for GlowPulseScene {
                 let target = scene.target_editor(&self.persistent).map_err(message)?;
                 scene.live().shift(&target, 0.0, 0.4).map_err(message)?;
                 scene
-                    .live()
                     .set_glow(&target, EffectUpdate::default().radius(Pixels(12.0)))
                     .map_err(message)?;
                 scene.live().declare_and_activate_animation_composition(

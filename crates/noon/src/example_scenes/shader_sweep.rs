@@ -2,14 +2,14 @@
 //! scene-space stripes stay fixed behind the right panel. Phase is an ordinary
 //! animation channel, with no shader clock or per-frame host callback.
 use crate::{
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
+    LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    TransformToRequest,
     effects::{
         EffectUpdate, ShaderCoordinates, ShaderDependencies, ShaderEffect,
         ShaderParameterDefinition, ShaderParameterKey, ShaderParameterType, ShaderProfile,
         ShaderSchema, ShaderUnit, ShaderValue, WgslEffectProgram,
     },
-    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
-    TransformToRequest,
 };
 
 const SOURCE: &str = "
@@ -139,7 +139,6 @@ impl LiveContinuation for ShaderSweep {
                         .set_rotation(target, if outward { 0.35 } else { 0.0 })
                         .map_err(message)?;
                     scene
-                        .live()
                         .set_effect(
                             target,
                             "stripes",
@@ -171,10 +170,7 @@ impl LiveContinuation for ShaderSweep {
             }
             5 if self.retire => {
                 for panel in &self.panels {
-                    scene
-                        .live()
-                        .remove_effect(panel, "stripes")
-                        .map_err(message)?;
+                    scene.remove_effect(panel, "stripes").map_err(message)?;
                 }
                 scene.live().wait_segment(0.5)
             }

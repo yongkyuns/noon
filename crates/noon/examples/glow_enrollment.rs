@@ -1,8 +1,8 @@
 //! An absent glow becomes a neutral attachment only when its target animation activates.
 //! Paired with web/python/examples/glow_scene_worker_pixels.py on the same shared engine.
 use noon::{
-    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, RateFunction, Scene,
+    effects::{EffectUpdate, Pixels},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     scene.add(&dot)?;
     let mut session = scene.into_execution()?;
     let target = session.scene_mut().target_editor(&dot)?;
-    session.live().set_glow(
+    session.scene_mut().set_glow(
         &target,
         EffectUpdate::default()
             .color(Color::BLUE)
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.live().complete_segment(segment)?;
     let completed = (attachment.authored_definition()?).as_glow().unwrap();
     assert_eq!(completed.intensity(), 1.4);
-    session.live().remove_glow(&dot)?;
+    session.scene_mut().remove_glow(&dot)?;
     assert!(
         attachment.authored_definition().is_err(),
         "generation retired"

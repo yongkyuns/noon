@@ -2,9 +2,9 @@
 //! Paired with `web/python/examples/image_glow.py`.
 
 use crate::{
-    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, ContinuationStep, ImageMobjectOptions, LiveContinuation, LiveProgram,
     Mobject, RasterImageSampling, RateFunction, Scene,
+    effects::{EffectUpdate, Pixels},
 };
 
 pub const SIDE: u32 = 9;
@@ -62,7 +62,6 @@ impl LiveContinuation for ImageGlow {
                     .rotate(&target, std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_glow(
                         &target,
                         EffectUpdate::default()
@@ -84,7 +83,6 @@ impl LiveContinuation for ImageGlow {
                     .rotate(&target, -std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_glow(
                         &target,
                         EffectUpdate::default()
@@ -99,7 +97,7 @@ impl LiveContinuation for ImageGlow {
             }
             5 => {
                 // Removing a neutral effect preserves the same ordinary image.
-                scene.live().remove_glow(&self.image).map_err(message)?;
+                scene.remove_glow(&self.image).map_err(message)?;
                 scene.live().wait_segment(0.75)
             }
             6 => return Ok(ContinuationStep::Finished),

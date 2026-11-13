@@ -1,14 +1,13 @@
 //! Shared public live controls and membership, checked against literal source fields
 //! and an independently normalized full two-dimensional Gaussian.
 use super::*;
-use noon::{effects::Blur, MobjectFamily};
+use noon::{MobjectFamily, effects::Blur};
 
 mod animation;
 mod visibility;
 
-fn soften(scene: &mut Scene, session: &mut ExecutionSession, family: &MobjectFamily) {
+fn soften(scene: &mut Scene, family: &MobjectFamily) {
     scene
-        .live(session)
         .add_effect(
             family,
             Blur::new(EffectUpdate::default().radius(Pixels(2.0))).unwrap(),
@@ -151,42 +150,36 @@ fn public_composed_group_pixels_cover_live_attachment_membership_and_retirement(
     added.set_object_opacity(0.5).unwrap();
     added.shift(2.0, 0.0).unwrap();
     let root = scene.root();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut surface = Surface::new(&device, &queue);
     let mut maximum = 0;
     for step in 0..13 {
         match step {
-            1 => soften(&mut scene, &mut session, &inner),
-            2 | 7 => soften(&mut scene, &mut session, &outer),
-            3 => scene
-                .live(&mut session)
+            1 => soften(session.scene_mut(), &inner),
+            2 | 7 => soften(session.scene_mut(), &outer),
+            3 => session
+                .scene_mut()
                 .set_effect(
                     &inner,
                     "soften",
                     EffectUpdate::default().radius(Pixels(0.0)),
                 )
                 .unwrap(),
-            4 => scene
-                .live(&mut session)
-                .remove_effect(&outer, "soften")
-                .unwrap(),
-            5 => scene
-                .live(&mut session)
-                .remove_effect(&inner, "soften")
-                .unwrap(),
-            6 => scene
-                .live(&mut session)
+            4 => session.scene_mut().remove_effect(&outer, "soften").unwrap(),
+            5 => session.scene_mut().remove_effect(&inner, "soften").unwrap(),
+            6 => session
+                .scene_mut()
                 .remove_effect(&images[0], "soften")
                 .unwrap(),
             8 => {
-                scene
-                    .live(&mut session)
+                session
+                    .live()
                     .add_family_members(&inner, &[(&added).into()])
                     .unwrap();
             }
             9 => {
-                scene
-                    .live(&mut session)
+                session
+                    .live()
                     .remove_family_members(&inner, &[(&images[0]).into()])
                     .unwrap();
             }
@@ -197,11 +190,16 @@ fn public_composed_group_pixels_cover_live_attachment_membership_and_retirement(
                 } else {
                     tx.add_member(root, outer.node_id());
                 }
-                scene.live(&mut session).apply(tx).unwrap();
+                session.live().apply(tx).unwrap();
             }
             _ => {}
         }
-        let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+        let actual = surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT,
+        );
         let filtered = matches!(step, 2 | 3 | 7 | 8 | 9 | 11 | 12);
         let expected = reference(step, filtered);
         let error = actual

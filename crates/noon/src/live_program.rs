@@ -819,10 +819,8 @@ mod tests {
                 parameters: Box::new([]),
             }, "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return input.color; }").unwrap();
             assert!(matches!(
-                scene
-                    .live()
-                    .add_effect(&self.0[0], ShaderEffect::new(material.clone()), "stripes"),
-                Err(crate::LiveSessionError::Publication(
+                scene.add_effect(&self.0[0], ShaderEffect::new(material.clone()), "stripes"),
+                Err(crate::AuthoringError::ExecutionPublication(
                     crate::ExecutionSessionPublicationError::ExternalEffectPreparationRequired
                 ))
             ));
@@ -873,11 +871,13 @@ mod tests {
         assert_eq!(store.borrow().scene_revision(), revision);
         assert_eq!(store.borrow().len(), count);
         for panel in &program.continuation.0 {
-            assert!(store
-                .borrow()
-                .effect_by_name(panel.node_id(), "stripes")
-                .unwrap()
-                .is_none());
+            assert!(
+                store
+                    .borrow()
+                    .effect_by_name(panel.node_id(), "stripes")
+                    .unwrap()
+                    .is_none()
+            );
         }
         assert!(program.take_renderer_publication().changes().is_empty());
         assert!(program.resume().is_err());
@@ -906,7 +906,6 @@ mod tests {
         let panels = program.continuation.0.clone();
         program
             .scene
-            .owned_live()
             .add_effect(&panels[1], crate::effects::Glow::default(), "stripes")
             .unwrap();
         let store = Rc::clone(program.scene.integration_store());
@@ -918,11 +917,13 @@ mod tests {
         assert_eq!(program.session().publication_context(), before);
         assert_eq!(store.borrow().scene_revision(), revision);
         assert_eq!(store.borrow().len(), count);
-        assert!(store
-            .borrow()
-            .effect_by_name(panels[0].node_id(), "stripes")
-            .unwrap()
-            .is_none());
+        assert!(
+            store
+                .borrow()
+                .effect_by_name(panels[0].node_id(), "stripes")
+                .unwrap()
+                .is_none()
+        );
 
         let mut retired = shader_attachment_program();
         retired.resume().unwrap();

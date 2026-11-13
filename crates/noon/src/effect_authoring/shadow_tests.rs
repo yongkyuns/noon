@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    effects::{EffectOffset, Pixels, Shadow},
     AnimationOptions, Color, RateFunction, TransformToRequest,
+    effects::{EffectOffset, Pixels, Shadow},
 };
 
 #[test]
@@ -31,15 +31,15 @@ fn shadow_channels_capture_complete_seek_and_retire_through_one_attachment() {
                 .offset(EffectOffset::Pixels([-5.75, 4.5])),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     // An offset/radius-only target must preserve an independent live color edit.
     let color = Color::rgba(0.3, 0.6, 0.9, 0.4);
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(&source, "depth", EffectUpdate::default().color(color))
         .unwrap();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_transform_composition(
             noon_core::SemanticAnimationCompositionKind::Parallel,
             &[TransformToRequest::new(
@@ -56,7 +56,7 @@ fn shadow_channels_capture_complete_seek_and_retire_through_one_attachment() {
         .unwrap();
     for time in [0.0, 0.75, 1.0, 0.25, 0.5] {
         session.seek(time).unwrap();
-        let value = session.frame().objects[0]
+        let value = session.session().frame().objects[0]
             .effects
             .as_ref()
             .unwrap()
@@ -71,23 +71,22 @@ fn shadow_channels_capture_complete_seek_and_retire_through_one_attachment() {
         assert_eq!(shadow.radius(), Pixels(1.25 + 4.0 * time).into());
         assert_eq!(shadow.color(), color);
     }
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     let authored = binding.authored_definition().unwrap().as_shadow().unwrap();
     assert_eq!(authored.offset(), EffectOffset::Pixels([-5.75, 4.5]));
     assert_eq!(authored.color(), color);
-    let context = session.publication_context();
-    assert!(scene
-        .live(&mut session)
-        .set_effect(&source, "depth", EffectUpdate::default().intensity(1.0))
-        .is_err());
-    assert_eq!(session.publication_context(), context);
-    session.take_renderer_publication();
-    scene
-        .live(&mut session)
+    let context = session.session().publication_context();
+    assert!(
+        session
+            .scene_mut()
+            .set_effect(&source, "depth", EffectUpdate::default().intensity(1.0))
+            .is_err()
+    );
+    assert_eq!(session.session().publication_context(), context);
+    session.session_mut().take_renderer_publication();
+    session
+        .scene_mut()
         .set_effect(
             &source,
             "depth",
@@ -96,17 +95,15 @@ fn shadow_channels_capture_complete_seek_and_retire_through_one_attachment() {
         .unwrap();
     assert_eq!(
         session
+            .session_mut()
             .take_renderer_publication()
             .changes()
             .object_indices(),
         &[0]
     );
-    scene
-        .live(&mut session)
-        .remove_effect(&source, "depth")
-        .unwrap();
+    session.scene_mut().remove_effect(&source, "depth").unwrap();
     assert!(binding.authored_definition().is_err());
-    assert!(session.frame().objects[0].effects.is_none());
+    assert!(session.session().frame().objects[0].effects.is_none());
 }
 
 #[test]
@@ -125,17 +122,17 @@ fn an_explicit_unchanged_offset_still_owns_its_method_target_channel() {
     target
         .set_effect("depth", EffectUpdate::default().offset([0.25, -0.5]))
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
         .set_effect(
             &source,
             "depth",
             EffectUpdate::default().offset([0.75, 1.0]),
         )
         .unwrap();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_transform_composition(
             noon_core::SemanticAnimationCompositionKind::Parallel,
             &[TransformToRequest::new(
@@ -150,20 +147,19 @@ fn an_explicit_unchanged_offset_still_owns_its_method_target_channel() {
             AnimationOptions::new(),
         )
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    let value = only_effect(session.frame().objects[0].effects.as_ref().unwrap())
-        .definition
-        .as_shadow()
-        .unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    let value = only_effect(
+        session.session().frame().objects[0]
+            .effects
+            .as_ref()
+            .unwrap(),
+    )
+    .definition
+    .as_shadow()
+    .unwrap();
     assert_eq!(value.offset(), EffectOffset::Scene([0.5, 0.25]));
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         source
             .get_effect("depth")

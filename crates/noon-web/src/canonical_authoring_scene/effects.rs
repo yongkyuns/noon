@@ -2,8 +2,8 @@
 use super::wasm::{CanonicalAuthoringSceneContext, WasmSceneMembershipBatch};
 #[cfg(target_arch = "wasm32")]
 use crate::{
-    authoring_error::js_error, WasmAuthoringMobjectHandle, WasmEffectDefinition, WasmEffectHandle,
-    WasmEffectUpdate,
+    WasmAuthoringMobjectHandle, WasmEffectDefinition, WasmEffectHandle, WasmEffectUpdate,
+    authoring_error::js_error,
 };
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -31,6 +31,15 @@ impl WasmStagedEffectPublication {
 
 #[cfg(target_arch = "wasm32")]
 impl CanonicalAuthoringSceneContext {
+    fn edit_effect(
+        &mut self,
+        edit: impl FnOnce(&mut noon::Scene) -> Result<(), noon::AuthoringError>,
+    ) -> Result<(), JsValue> {
+        let player = self.inner.active_live_player().map_err(js_error)?;
+        edit(player.scene_mut())
+            .map_err(|error| js_error(crate::AuthoringFailure::from_scene_mutation(error, true)))
+    }
+
     fn prepare_membership_target(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -123,11 +132,7 @@ impl CanonicalAuthoringSceneContext {
         object: &WasmAuthoringMobjectHandle,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_set_glow(object.semantic_mobject(), update.value.clone())
-            .map_err(js_error)
+        self.edit_effect(|scene| scene.set_glow(object.semantic_mobject(), update.value.clone()))
     }
     #[wasm_bindgen(js_name = liveAddEffect)]
     pub fn live_add_effect(
@@ -136,11 +141,9 @@ impl CanonicalAuthoringSceneContext {
         definition: &WasmEffectDefinition,
         name: &str,
     ) -> Result<(), JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_add_effect(object.semantic_mobject(), definition.definition(), name)
-            .map_err(js_error)
+        self.edit_effect(|scene| {
+            scene.add_effect(object.semantic_mobject(), definition.definition(), name)
+        })
     }
     #[wasm_bindgen(js_name = liveSetEffect)]
     pub fn live_set_effect(
@@ -149,11 +152,9 @@ impl CanonicalAuthoringSceneContext {
         name: &str,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_set_effect(object.semantic_mobject(), name.into(), update.value.clone())
-            .map_err(js_error)
+        self.edit_effect(|scene| {
+            scene.set_effect(object.semantic_mobject(), name, update.value.clone())
+        })
     }
     #[wasm_bindgen(js_name = liveSetEffectHandle)]
     pub fn live_set_effect_handle(
@@ -162,15 +163,13 @@ impl CanonicalAuthoringSceneContext {
         effect: &WasmEffectHandle,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_set_effect(
+        self.edit_effect(|scene| {
+            scene.set_effect(
                 object.semantic_mobject(),
-                (&effect.handle).into(),
+                &effect.handle,
                 update.value.clone(),
             )
-            .map_err(js_error)
+        })
     }
     #[wasm_bindgen(js_name = liveRemoveEffect)]
     pub fn live_remove_effect(
@@ -178,11 +177,7 @@ impl CanonicalAuthoringSceneContext {
         object: &WasmAuthoringMobjectHandle,
         name: &str,
     ) -> Result<(), JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_remove_effect(object.semantic_mobject(), name.into())
-            .map_err(js_error)
+        self.edit_effect(|scene| scene.remove_effect(object.semantic_mobject(), name))
     }
     #[wasm_bindgen(js_name = liveRemoveEffectHandle)]
     pub fn live_remove_effect_handle(
@@ -190,19 +185,11 @@ impl CanonicalAuthoringSceneContext {
         object: &WasmAuthoringMobjectHandle,
         effect: &WasmEffectHandle,
     ) -> Result<(), JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_remove_effect(object.semantic_mobject(), (&effect.handle).into())
-            .map_err(js_error)
+        self.edit_effect(|scene| scene.remove_effect(object.semantic_mobject(), &effect.handle))
     }
     #[wasm_bindgen(js_name = liveRemoveGlow)]
     pub fn live_remove_glow(&mut self, object: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
-        self.inner
-            .active_live_player()
-            .map_err(js_error)?
-            .live_remove_glow(object.semantic_mobject())
-            .map_err(js_error)
+        self.edit_effect(|scene| scene.remove_glow(object.semantic_mobject()))
     }
 }
 
@@ -315,13 +302,13 @@ mod tests {
             .execution_object_id(dot.node_id())
             .unwrap();
         player
-            .live_add_effect(
+            .scene_mut()
+            .add_effect(
                 &family,
                 noon::effects::Blur::new(
                     EffectUpdate::default().radius(noon::effects::Pixels(2.0)),
                 )
-                .unwrap()
-                .into(),
+                .unwrap(),
                 "soften",
             )
             .unwrap();
@@ -331,9 +318,10 @@ mod tests {
             .execution_object_id(family.node_id())
             .unwrap();
         player
-            .live_set_effect(
+            .scene_mut()
+            .set_effect(
                 &family,
-                (&original).into(),
+                &original,
                 EffectUpdate::default().radius(noon::effects::Pixels(4.0)),
             )
             .unwrap();
@@ -345,23 +333,32 @@ mod tests {
             original.authored_definition().unwrap()
         );
         let before = player.session_mut_for_test().frame().clone();
-        assert!(player
-            .live_set_effect(copied.root(), (&original).into(), EffectUpdate::default())
-            .is_err());
+        assert!(
+            player
+                .scene_mut()
+                .set_effect(copied.root(), &original, EffectUpdate::default())
+                .is_err()
+        );
         assert_eq!(player.session_mut_for_test().frame(), &before);
         player
-            .live_set_glow(&family, EffectUpdate::default().intensity(0.6))
+            .scene_mut()
+            .set_glow(&family, EffectUpdate::default().intensity(0.6))
             .unwrap();
         player
-            .live_remove_effect(&family, (&original).into())
+            .scene_mut()
+            .remove_effect(&family, &original)
             .unwrap();
         assert!(original.authored_definition().is_err());
-        assert!(player
-            .live_remove_effect(&family, (&original).into())
-            .is_err());
-        player.live_remove_glow(&family).unwrap();
+        assert!(
+            player
+                .scene_mut()
+                .remove_effect(&family, &original)
+                .is_err()
+        );
+        player.scene_mut().remove_glow(&family).unwrap();
         player
-            .live_add_effect(&family, noon::effects::Blur::default().into(), "soften")
+            .scene_mut()
+            .add_effect(&family, noon::effects::Blur::default(), "soften")
             .unwrap();
         assert_ne!(
             family.get_effect("soften").unwrap().node_id(),
@@ -385,9 +382,12 @@ mod tests {
         let foreign_dot = foreign_scene.circle(0.3).unwrap();
         let foreign = foreign_scene.family(&[(&foreign_dot).into()]).unwrap();
         let before = player.session_mut_for_test().frame().clone();
-        assert!(player
-            .live_add_effect(&foreign, Glow::default().into(), "foreign")
-            .is_err());
+        assert!(
+            player
+                .scene_mut()
+                .add_effect(&foreign, Glow::default(), "foreign")
+                .is_err()
+        );
         assert_eq!(player.session_mut_for_test().frame(), &before);
         assert!(foreign.get_effect("foreign").is_err());
     }
@@ -404,24 +404,35 @@ mod tests {
         let identity = player.ownership_identity();
         let time = player.time();
         assert_eq!(
-            player
-                .live_set_glow(&dot, EffectUpdate::default())
-                .unwrap_err()
-                .category,
+            crate::AuthoringFailure::from_scene_mutation(
+                player
+                    .scene_mut()
+                    .set_glow(&dot, EffectUpdate::default())
+                    .unwrap_err(),
+                true,
+            )
+            .category,
             "unsupported_operation"
         );
         assert_eq!(
-            player
-                .live_add_effect(&dot, Glow::default().into(), "accent")
-                .unwrap_err()
-                .category,
+            crate::AuthoringFailure::from_scene_mutation(
+                player
+                    .scene_mut()
+                    .add_effect(&dot, Glow::default(), "accent")
+                    .unwrap_err(),
+                true,
+            )
+            .category,
             "unsupported_operation"
         );
-        assert!(player
-            .live_set_effect(&dot, "missing".into(), EffectUpdate::default())
-            .is_err());
-        assert!(player.live_remove_effect(&dot, "missing".into()).is_err());
-        player.live_remove_glow(&dot).unwrap();
+        assert!(
+            player
+                .scene_mut()
+                .set_effect(&dot, "missing", EffectUpdate::default())
+                .is_err()
+        );
+        assert!(player.scene_mut().remove_effect(&dot, "missing").is_err());
+        player.scene_mut().remove_glow(&dot).unwrap();
         assert_eq!(player.ownership_identity(), identity);
         assert_eq!(player.time(), time);
         assert_eq!(context.scene.revision(), revision);
@@ -442,8 +453,8 @@ mod playback_tests {
     use super::super::*;
     use crate::retained_execution_transport::RetainedExecutionDeltaEnvelope;
     use noon::{
-        effects::{EffectUpdate, Pixels},
         AnimationOptions, Color, RateFunction,
+        effects::{EffectUpdate, Pixels},
     };
 
     #[test]
@@ -457,7 +468,8 @@ mod playback_tests {
         let player = context.active_live_player().unwrap();
         let identity = player.ownership_identity();
         player
-            .live_set_glow(
+            .scene_mut()
+            .set_glow(
                 &source,
                 EffectUpdate::default()
                     .color(Color::RED)
@@ -485,7 +497,8 @@ mod playback_tests {
         );
         player.live_set_translation(&target, 2.0, 0.0).unwrap();
         player
-            .live_set_glow(
+            .scene_mut()
+            .set_glow(
                 &target,
                 EffectUpdate::default()
                     .color(Color::BLUE)
@@ -531,7 +544,7 @@ mod playback_tests {
         assert_eq!(completed.intensity(), 1.4);
         assert_eq!(completed.radius(), Pixels(6.5).into());
         assert_eq!(completed.color(), Color::BLUE);
-        player.live_remove_glow(&source).unwrap();
+        player.scene_mut().remove_glow(&source).unwrap();
         let removed: RetainedExecutionDeltaEnvelope =
             serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap();
         assert_eq!(removed.objects.len(), 1);

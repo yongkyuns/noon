@@ -1,5 +1,5 @@
 use super::*;
-use crate::{effects::*, AnimationOptions, MobjectTarget, Vec2};
+use crate::{AnimationOptions, MobjectTarget, Vec2, effects::*};
 
 fn value(handle: &EffectHandle) -> Glow {
     (handle.authored_definition().unwrap()).as_glow().unwrap()
@@ -68,14 +68,16 @@ fn invalid_and_duplicate_calls_preserve_revision_and_prior_values() {
     let dot = scene.circle(0.08).unwrap();
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let before = scene.revision();
-    assert!(scene
-        .set_glow(
-            &dot,
-            EffectUpdate::default()
-                .color(crate::Color::RED)
-                .intensity(-1.0)
-        )
-        .is_err());
+    assert!(
+        scene
+            .set_glow(
+                &dot,
+                EffectUpdate::default()
+                    .color(crate::Color::RED)
+                    .intensity(-1.0)
+            )
+            .is_err()
+    );
     assert!(scene.add_effect(&dot, Glow::default(), "glow").is_err());
     assert_eq!(scene.revision(), before);
     assert_eq!(value(&dot.get_effect("glow").unwrap()), Glow::default());
@@ -90,9 +92,11 @@ fn stale_and_foreign_handles_do_not_select_a_replacement() {
     let other = scene.circle(0.08).unwrap();
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     let old = dot.get_effect("glow").unwrap();
-    assert!(scene
-        .set_effect(&other, &old, EffectUpdate::default())
-        .is_err());
+    assert!(
+        scene
+            .set_effect(&other, &old, EffectUpdate::default())
+            .is_err()
+    );
     scene.remove_glow(&dot).unwrap();
     scene.set_glow(&dot, EffectUpdate::default()).unwrap();
     assert!(scene.remove_effect(&dot, &old).is_err());
@@ -161,32 +165,51 @@ fn rejected_live_attachment_preserves_both_scene_and_runtime() {
     let mut dot = scene.circle(0.08).unwrap();
     dot.set_scale(0.0, 1.0).unwrap();
     scene.add(&dot).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = scene.revision();
-    let nodes_before = scene.integration_store().borrow().len();
-    let publication = session.publication_context();
+    let mut session = scene.into_execution().unwrap();
+    let before = session.scene().revision();
+    let nodes_before = session.scene().integration_store().borrow().len();
+    let publication = session.session().publication_context();
     {
-        let mut live = scene.live(&mut session);
-        assert!(live.set_glow(&dot, EffectUpdate::default()).is_err());
+        assert!(
+            session
+                .scene_mut()
+                .set_glow(&dot, EffectUpdate::default())
+                .is_err()
+        );
         assert_eq!(
-            live.effective(&dot).unwrap().transform.translation,
+            session
+                .live()
+                .effective(&dot)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::ZERO
         );
     }
-    assert_eq!(scene.revision(), before);
-    assert_eq!(session.publication_context(), publication);
-    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert_eq!(session.scene().revision(), before);
+    assert_eq!(session.session().publication_context(), publication);
+    assert_eq!(
+        session.scene().integration_store().borrow().len(),
+        nodes_before
+    );
     {
-        let mut live = scene.live(&mut session);
-        live.set_translation(&dot, 1.0, 0.0).unwrap();
+        session.live().set_translation(&dot, 1.0, 0.0).unwrap();
         assert_eq!(
-            live.effective(&dot).unwrap().transform.translation,
+            session
+                .live()
+                .effective(&dot)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::new(1.0, 0.0)
         );
     }
     assert!(dot.get_effect("glow").is_err());
-    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
-    assert_ne!(scene.revision(), before); // only the successful ordinary edit
+    assert_eq!(
+        session.scene().integration_store().borrow().len(),
+        nodes_before
+    );
+    assert_ne!(session.scene().revision(), before); // only the successful ordinary edit
 }
 
 #[test]

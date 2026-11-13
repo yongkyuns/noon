@@ -1,8 +1,8 @@
 //! Square-cell detail lesson paired with web/python/examples/pixelate.py.
 use crate::{
-    effects::{EffectUpdate, Pixelate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
     MobjectFamily, RateFunction, Scene,
+    effects::{EffectUpdate, Pixelate, Pixels},
 };
 pub struct PixelDetail {
     source: MobjectFamily,
@@ -19,7 +19,6 @@ impl LiveContinuation for PixelDetail {
             1 => {
                 let target = scene.copy_family(&self.source).map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         target.root(),
                         "detail",
@@ -44,14 +43,12 @@ impl LiveContinuation for PixelDetail {
                     EffectUpdate::default().size(0.2)
                 };
                 scene
-                    .live()
                     .set_effect(&self.source, "detail", update)
                     .map_err(message)?;
                 scene.live().wait_segment(0.5)
             }
             5 => {
                 scene
-                    .live()
                     .remove_effect(&self.source, "detail")
                     .map_err(message)?;
                 scene.live().wait_segment(0.5)

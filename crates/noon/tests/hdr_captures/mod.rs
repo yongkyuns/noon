@@ -1,13 +1,13 @@
 //! Actual authored composed/mixed captures in the linear working profile.
 use super::{decode, read, reference as bloom_reference, srgb_decode};
 use noon::{
-    effects::{Blur, EffectUpdate, Pixels},
     ExecutionSession, Scene,
+    effects::{Blur, EffectUpdate, Pixels},
 };
 use noon_core::{SemanticMutationTransaction, Vec2, ViewColorProfile};
 use noon_render_wgpu::{
-    text::TextDeviceMetrics, Camera2D, GpuRenderer, HdrBloomCapture, HdrBloomFilter,
-    HdrBloomParameters, HdrBloomScope, RetainedFramePreparer, RetainedTextGpuState,
+    Camera2D, GpuRenderer, HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomScope,
+    RetainedFramePreparer, RetainedTextGpuState, text::TextDeviceMetrics,
 };
 const SIZE: [u32; 2] = [64, 48];
 const CLEAR: [f64; 4] = [0.015625, 0.03125, 0.0625, 0.25];
@@ -278,7 +278,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
             };
             if phase > 0 {
                 session
-                    .live()
+                    .scene_mut()
                     .set_effect(
                         &group,
                         "soften",
@@ -292,7 +292,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
             }
             if ordered && phase > 0 {
                 session
-                    .live()
+                    .scene_mut()
                     .set_effect(
                         &group,
                         "polish",
@@ -397,5 +397,8 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
     if let Some(root) = root {
         std::fs::write(root.join("report.json"),serde_json::to_vec(&serde_json::json!({"size":SIZE,"clear":CLEAR,"cases":cases,"maximum_error":maximum,"display_maximum":display_max,"post_bloom_witness":bloom_witness})).unwrap()).unwrap();
     }
-    eprintln!("HDR composed: {} authored phases, float max={maximum}, display max={display_max}, post-Bloom witness={bloom_witness}",cases.len());
+    eprintln!(
+        "HDR composed: {} authored phases, float max={maximum}, display max={display_max}, post-Bloom witness={bloom_witness}",
+        cases.len()
+    );
 }

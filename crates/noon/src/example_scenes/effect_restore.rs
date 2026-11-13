@@ -1,7 +1,7 @@
 //! Ordered leaf and composed-family save/restore, paired with effect_restore.py.
 use crate::{
-    effects::{Blur, EffectUpdate, Glow, Pixels},
     Color, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily, Scene,
+    effects::{Blur, EffectUpdate, Glow, Pixels},
 };
 
 pub struct EffectRestore {
@@ -43,7 +43,6 @@ impl LiveContinuation for EffectRestore {
                         .clone(),
                 );
                 scene
-                    .live()
                     .set_effect(
                         &self.leaf,
                         "soften",
@@ -51,11 +50,9 @@ impl LiveContinuation for EffectRestore {
                     )
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(&self.leaf, "halo", EffectUpdate::default().intensity(1.0))
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &self.group,
                         "soften",
@@ -68,16 +65,9 @@ impl LiveContinuation for EffectRestore {
                     .map_err(message)?;
             }
             2 => {
+                scene.remove_effect(&self.leaf, "soften").map_err(message)?;
+                scene.remove_effect(&self.leaf, "halo").map_err(message)?;
                 scene
-                    .live()
-                    .remove_effect(&self.leaf, "soften")
-                    .map_err(message)?;
-                scene
-                    .live()
-                    .remove_effect(&self.leaf, "halo")
-                    .map_err(message)?;
-                scene
-                    .live()
                     .remove_effect(&self.group, "soften")
                     .map_err(message)?;
             }
@@ -95,7 +85,6 @@ impl LiveContinuation for EffectRestore {
             4 => {
                 let (leaf, group) = self.saved()?;
                 scene
-                    .live()
                     .set_effect(leaf, "halo", EffectUpdate::default().intensity(0.0))
                     .map_err(message)?;
                 scene
@@ -104,16 +93,9 @@ impl LiveContinuation for EffectRestore {
                     .map_err(message)?;
             }
             6 => {
+                scene.remove_effect(&self.leaf, "soften").map_err(message)?;
+                scene.remove_effect(&self.leaf, "halo").map_err(message)?;
                 scene
-                    .live()
-                    .remove_effect(&self.leaf, "soften")
-                    .map_err(message)?;
-                scene
-                    .live()
-                    .remove_effect(&self.leaf, "halo")
-                    .map_err(message)?;
-                scene
-                    .live()
                     .remove_effect(&self.group, "soften")
                     .map_err(message)?;
                 scene

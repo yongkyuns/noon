@@ -1,8 +1,8 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
 use noon::{
-    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, ExecutionSession, PrefixReader, RateFunction, Scene,
+    effects::{EffectUpdate, Pixels},
 };
 use noon_runtime::ReplayLimits;
 
@@ -35,7 +35,7 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
         (2, Color::GREEN, 4.0, 1.1),
     ] {
         if phase == 2 {
-            source.live().remove_glow(&shape).unwrap();
+            source.scene_mut().remove_glow(&shape).unwrap();
             let boundary = source.session().wait_segment(0.5).unwrap();
             source
                 .session_mut()
@@ -49,7 +49,7 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
         }
         let target = source.scene_mut().target_editor(&shape).unwrap();
         source
-            .live()
+            .scene_mut()
             .set_glow(
                 &target,
                 EffectUpdate::default()

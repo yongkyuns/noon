@@ -84,18 +84,22 @@ fn glow_pulse_predeclared_activation_captures_later_live_baseline() {
     let (scene, object) = fixture(true);
     let animation = scene.declare_glow_pulse(&object, 2.0, options()).unwrap();
     let id = object.get_effect("glow").unwrap().node_id();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
         .set_glow(&object, EffectUpdate::default().intensity(0.7))
         .unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    assert_eq!(effect(&session, &object).intensity(), 0.7);
-    advance(&scene, &mut session, segment, 0.5);
-    assert_eq!(effect(&session, &object).intensity(), 2.0);
+    let segment = session.live().play_animation(&animation).unwrap();
+    assert_eq!(effect(session.session(), &object).intensity(), 0.7);
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(effect(session.session(), &object).intensity(), 2.0);
     assert_eq!(authored(&object).intensity(), 0.7);
-    finish(&scene, &mut session, segment);
-    assert_eq!(effect(&session, &object).intensity(), 0.7);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
+    assert_eq!(effect(session.session(), &object).intensity(), 0.7);
     assert_eq!(object.get_effect("glow").unwrap().node_id(), id);
 }
 
@@ -135,23 +139,36 @@ fn glow_pulse_predeclared_absence_enrolls_only_at_activation_and_replays_cleanup
 fn glow_pulse_repeated_predeclared_activation_never_rebinds_a_stale_attachment() {
     let (scene, object) = fixture(false);
     let animation = scene.declare_glow_pulse(&object, 2.0, options()).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let first = scene.live(&mut session).play_animation(&animation).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let first = session.live().play_animation(&animation).unwrap();
     let old = object.get_effect("glow").unwrap();
-    finish(&scene, &mut session, first);
-    let second = scene.live(&mut session).play_animation(&animation).unwrap();
+    session
+        .live()
+        .advance_segment_to(first, first.end_time())
+        .unwrap();
+    session.live().complete_segment(first).unwrap();
+    let second = session.live().play_animation(&animation).unwrap();
     let current = object.get_effect("glow").unwrap().node_id();
     assert_ne!(old.node_id(), current);
-    let publication = session.publication_context();
-    assert!(scene
-        .live(&mut session)
-        .set_effect(&object, &old, EffectUpdate::default().intensity(0.8))
-        .is_err());
-    assert_eq!(session.publication_context(), publication);
+    let publication = session.session().publication_context();
+    assert!(
+        session
+            .scene_mut()
+            .set_effect(&object, &old, EffectUpdate::default().intensity(0.8))
+            .is_err()
+    );
+    assert_eq!(session.session().publication_context(), publication);
     assert_eq!(object.get_effect("glow").unwrap().node_id(), current);
-    advance(&scene, &mut session, second, second.start_time() + 0.5);
-    assert_eq!(effect(&session, &object).intensity(), 2.0);
-    finish(&scene, &mut session, second);
+    session
+        .live()
+        .advance_segment_to(second, second.start_time() + 0.5)
+        .unwrap();
+    assert_eq!(effect(session.session(), &object).intensity(), 2.0);
+    session
+        .live()
+        .advance_segment_to(second, second.end_time())
+        .unwrap();
+    session.live().complete_segment(second).unwrap();
     assert!(object.get_effect("glow").is_err());
 }
 
@@ -159,33 +176,37 @@ fn glow_pulse_repeated_predeclared_activation_never_rebinds_a_stale_attachment()
 fn glow_pulse_same_valued_color_adopts_but_empty_patch_does_not() {
     for explicit in [false, true] {
         let (scene, object) = fixture(false);
-        let mut session = scene.execution_session().unwrap();
-        let segment = scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let segment = session
+            .live()
             .declare_and_activate_glow_pulse(&object, 2.0, options())
             .unwrap();
         let id = object.get_effect("glow").unwrap().node_id();
-        advance(&scene, &mut session, segment, 0.5);
-        let revision = scene.revision();
+        session.live().advance_segment_to(segment, 0.5).unwrap();
+        let revision = session.scene().revision();
         let update = if explicit {
             EffectUpdate::default().color(authored(&object).color())
         } else {
             EffectUpdate::default()
         };
-        scene.live(&mut session).set_glow(&object, update).unwrap();
+        session.scene_mut().set_glow(&object, update).unwrap();
         assert_eq!(
-            scene.revision(),
+            session.scene().revision(),
             revision,
             "value-equal adoption is completion ownership, not a semantic rewrite"
         );
-        assert_eq!(effect(&session, &object).intensity(), 2.0);
-        finish(&scene, &mut session, segment);
+        assert_eq!(effect(session.session(), &object).intensity(), 2.0);
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
+            .unwrap();
+        session.live().complete_segment(segment).unwrap();
         if explicit {
             assert_eq!(object.get_effect("glow").unwrap().node_id(), id);
-            assert_eq!(effect(&session, &object).intensity(), 0.0);
+            assert_eq!(effect(session.session(), &object).intensity(), 0.0);
         } else {
             assert!(object.get_effect("glow").is_err());
-            assert!(row(&session, &object).effects.is_none());
+            assert!(row(session.session(), &object).effects.is_none());
         }
     }
 }
@@ -193,23 +214,27 @@ fn glow_pulse_same_valued_color_adopts_but_empty_patch_does_not() {
 #[test]
 fn glow_pulse_same_valued_intensity_supersedes_effective_driver_and_cleanup() {
     let (scene, object) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_glow_pulse(&object, 2.0, options())
         .unwrap();
     let id = object.get_effect("glow").unwrap().node_id();
-    advance(&scene, &mut session, segment, 0.5);
-    let revision = scene.revision();
-    scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    let revision = session.scene().revision();
+    session
+        .scene_mut()
         .set_glow(&object, EffectUpdate::default().intensity(0.0))
         .unwrap();
-    assert_eq!(scene.revision(), revision);
-    assert_eq!(effect(&session, &object).intensity(), 0.0);
-    advance(&scene, &mut session, segment, 0.75);
-    assert_eq!(effect(&session, &object).intensity(), 0.0);
-    finish(&scene, &mut session, segment);
+    assert_eq!(session.scene().revision(), revision);
+    assert_eq!(effect(session.session(), &object).intensity(), 0.0);
+    session.live().advance_segment_to(segment, 0.75).unwrap();
+    assert_eq!(effect(session.session(), &object).intensity(), 0.0);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(object.get_effect("glow").unwrap().node_id(), id);
     assert_eq!(authored(&object).intensity(), 0.0);
 }
@@ -217,14 +242,14 @@ fn glow_pulse_same_valued_intensity_supersedes_effective_driver_and_cleanup() {
 #[test]
 fn glow_pulse_radius_and_color_edits_survive_without_releasing_intensity() {
     let (scene, object) = fixture(true);
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_glow_pulse(&object, 2.0, options())
         .unwrap();
-    advance(&scene, &mut session, segment, 0.5);
-    scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    session
+        .scene_mut()
         .set_glow(
             &object,
             EffectUpdate::default()
@@ -232,9 +257,13 @@ fn glow_pulse_radius_and_color_edits_survive_without_releasing_intensity() {
                 .radius(Pixels(12.0)),
         )
         .unwrap();
-    assert_eq!(effect(&session, &object).intensity(), 2.0);
-    finish(&scene, &mut session, segment);
-    let final_glow = effect(&session, &object);
+    assert_eq!(effect(session.session(), &object).intensity(), 2.0);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
+    let final_glow = effect(session.session(), &object);
     assert_eq!(final_glow.intensity(), 0.4);
     assert_eq!(final_glow.color(), Color::BLUE);
     assert_eq!(final_glow.radius(), Pixels(12.0).into());
@@ -244,8 +273,9 @@ fn glow_pulse_radius_and_color_edits_survive_without_releasing_intensity() {
 #[test]
 fn glow_pulse_persistent_intensity_supersedes_future_pulses_and_replays_exactly() {
     let (scene, object) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
     let request = Request::Composition {
@@ -257,55 +287,63 @@ fn glow_pulse_persistent_intensity_supersedes_future_pulses_and_replays_exactly(
         ],
         options: AnimationOptions::new(),
     };
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .unwrap();
-    advance(&scene, &mut session, segment, 0.25);
-    let before_edit = row(&session, &object).clone();
-    advance(&scene, &mut session, segment, 0.5);
-    scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 0.25).unwrap();
+    let before_edit = row(session.session(), &object).clone();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    session
+        .scene_mut()
         .set_glow(&object, EffectUpdate::default().intensity(0.3))
         .unwrap();
     for time in [0.75, 1.25, 1.75, 2.25] {
-        advance(&scene, &mut session, segment, time);
-        assert_eq!(effect(&session, &object).intensity(), 0.3);
+        session.live().advance_segment_to(segment, time).unwrap();
+        assert_eq!(effect(session.session(), &object).intensity(), 0.3);
     }
-    finish(&scene, &mut session, segment);
-    session.seal_replay().unwrap();
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
+    session.session_mut().seal_replay().unwrap();
     session.seek(0.25).unwrap();
-    assert_eq!(row(&session, &object), &before_edit);
+    assert_eq!(row(session.session(), &object), &before_edit);
     session.seek(1.75).unwrap();
-    assert_eq!(effect(&session, &object).intensity(), 0.3);
+    assert_eq!(effect(session.session(), &object).intensity(), 0.3);
     session.seek(2.25).unwrap();
-    assert_eq!(effect(&session, &object).intensity(), 0.3);
+    assert_eq!(effect(session.session(), &object).intensity(), 0.3);
 }
 
 #[test]
 fn glow_pulse_invalid_updates_and_structural_edits_preserve_unadopted_cleanup() {
     let (scene, object) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_glow_pulse(&object, 2.0, options())
         .unwrap();
-    advance(&scene, &mut session, segment, 0.5);
-    let publication = session.publication_context();
-    let frame = session.frame().clone();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    let publication = session.session().publication_context();
+    let frame = session.session().frame().clone();
     for update in [
         EffectUpdate::default().intensity(-1.0),
         EffectUpdate::default().radius(Pixels(12.0)),
         EffectUpdate::default().source(GlowSource::Silhouette),
     ] {
-        assert!(scene.live(&mut session).set_glow(&object, update).is_err());
-        assert_eq!(session.publication_context(), publication);
-        assert_eq!(session.frame(), &frame);
+        assert!(session.scene_mut().set_glow(&object, update).is_err());
+        assert_eq!(session.session().publication_context(), publication);
+        assert_eq!(session.session().frame(), &frame);
     }
-    assert!(scene.live(&mut session).remove_glow(&object).is_err());
-    assert_eq!(session.publication_context(), publication);
-    assert_eq!(session.frame(), &frame);
-    finish(&scene, &mut session, segment);
+    assert!(session.scene_mut().remove_glow(&object).is_err());
+    assert_eq!(session.session().publication_context(), publication);
+    assert_eq!(session.session().frame(), &frame);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert!(object.get_effect("glow").is_err());
 }
 
@@ -321,10 +359,12 @@ fn glow_pulse_overlapping_activation_fails_without_neutral_identity_or_tracks() 
         children: vec![pulse(&object), pulse(&object)],
         options: AnimationOptions::new(),
     };
-    assert!(scene
-        .live(&mut session)
-        .declare_and_activate_composition(&request, AnimationOptions::new())
-        .is_err());
+    assert!(
+        scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, AnimationOptions::new())
+            .is_err()
+    );
     assert_eq!(session.publication_context(), publication);
     assert_eq!(session.frame(), &frame);
     assert_eq!(scene.integration_store().borrow().len(), nodes);
@@ -436,10 +476,12 @@ fn glow_pulse_followed_by_complete_glow_target_persists_its_attachment() {
         children: children.clone(),
         options: AnimationOptions::new(),
     };
-    assert!(scene
-        .live(&mut session)
-        .declare_and_activate_composition(&parallel, AnimationOptions::new())
-        .is_err());
+    assert!(
+        scene
+            .live(&mut session)
+            .declare_and_activate_composition(&parallel, AnimationOptions::new())
+            .is_err()
+    );
     assert_eq!(session.publication_context(), publication);
     assert_eq!(scene.integration_store().borrow().len(), nodes);
     assert!(object.get_effect("glow").is_err());
@@ -469,7 +511,7 @@ fn glow_pulse_persistent_edit_respects_ordinary_parameter_ownership() {
     target
         .set_glow(EffectUpdate::default().radius(Pixels(12.0)))
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let request = Request::Composition {
         kind: Kind::Parallel,
         children: vec![
@@ -485,27 +527,33 @@ fn glow_pulse_persistent_edit_respects_ordinary_parameter_ownership() {
         ],
         options: AnimationOptions::new(),
     };
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .unwrap();
-    advance(&scene, &mut session, segment, 0.5);
-    let publication = session.publication_context();
-    let frame = session.frame().clone();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    let publication = session.session().publication_context();
+    let frame = session.session().frame().clone();
     for radius in [authored(&object).radius(), Pixels(5.0).into()] {
-        assert!(scene
-            .live(&mut session)
-            .set_glow(&object, EffectUpdate::default().radius(radius))
-            .is_err());
-        assert_eq!(session.publication_context(), publication);
-        assert_eq!(session.frame(), &frame);
+        assert!(
+            session
+                .scene_mut()
+                .set_glow(&object, EffectUpdate::default().radius(radius))
+                .is_err()
+        );
+        assert_eq!(session.session().publication_context(), publication);
+        assert_eq!(session.session().frame(), &frame);
     }
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_glow(&object, EffectUpdate::default().color(Color::BLUE))
         .unwrap();
-    assert_eq!(effect(&session, &object).intensity(), 2.0);
-    finish(&scene, &mut session, segment);
+    assert_eq!(effect(session.session(), &object).intensity(), 2.0);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(authored(&object).radius(), Pixels(12.0).into());
     assert_eq!(authored(&object).color(), Color::BLUE);
     assert_eq!(authored(&object).intensity(), 0.4);
@@ -557,9 +605,11 @@ fn glow_pulse_fade_out_retires_source_and_temporary_output_together() {
     );
     assert!(!session.semantic_object_is_reachable(object.node_id()));
     assert!(!session.frame().is_present(source_frame_index));
-    assert!(!session
-        .painter_order()
-        .contains(&(source_frame_index as u32)));
+    assert!(
+        !session
+            .painter_order()
+            .contains(&(source_frame_index as u32))
+    );
 }
 
 #[test]

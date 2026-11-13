@@ -1,8 +1,8 @@
 //! Visibility enrollment and lifecycle through the shared animation pipeline.
 //! Uses the ordinary Scene transaction, lowering and runtime publication path.
 use noon::{
-    effects::{EffectUpdate, Glow, NoiseDissolve, Pixels},
     ExecutionSession, Scene,
+    effects::{EffectUpdate, Glow, NoiseDissolve, Pixels},
 };
 use noon_core::{SemanticMutationTransaction, SemanticNodeId};
 
@@ -266,12 +266,14 @@ fn dissolve_sequence_captures_prior_progress_and_holds_each_seed_without_interpo
             );
         }
         scene.live(&mut session).complete_segment(segment).unwrap();
-        assert!(scene
-            .integration_store()
-            .borrow()
-            .visibility_effect(owner)
-            .unwrap()
-            .is_none());
+        assert!(
+            scene
+                .integration_store()
+                .borrow()
+                .visibility_effect(owner)
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -371,10 +373,12 @@ fn dissolve_play_lifecycle_overrides_are_preflighted_before_nested_membership_ch
         style: DissolveStyle::default(),
         options: linear().remover(false),
     };
-    assert!(scene
-        .live(&mut session)
-        .declare_and_activate_composition(&request, noon::AnimationOptions::new().remover(true))
-        .is_err());
+    assert!(
+        scene
+            .live(&mut session)
+            .declare_and_activate_composition(&request, noon::AnimationOptions::new().remover(true))
+            .is_err()
+    );
     assert_eq!(session.frame(), &before);
     assert_eq!(session.publication_context(), context);
     assert_eq!(
@@ -553,12 +557,14 @@ fn dissolve_rejects_capacity_conflict_and_unsupported_options_without_publicatio
         assert_eq!(session.publication_context(), context);
         assert_eq!(scene.integration_store().borrow().len(), nodes);
         assert!(session.take_renderer_publication().changes().is_empty());
-        assert!(scene
-            .integration_store()
-            .borrow()
-            .visibility_effect(source.node_id())
-            .unwrap()
-            .is_none());
+        assert!(
+            scene
+                .integration_store()
+                .borrow()
+                .visibility_effect(source.node_id())
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -574,19 +580,23 @@ fn declared_dissolve_is_inert_replayable_and_enrolls_at_activation() {
         .declare_dissolve(&source, Direction::Out, DissolveStyle::default(), linear())
         .unwrap();
     let nodes = scene.integration_store().borrow().len();
-    assert!(scene
-        .integration_store()
-        .borrow()
-        .visibility_effect(source.node_id())
-        .unwrap()
-        .is_none());
-    assert!(scene
-        .integration_store()
-        .borrow()
-        .node(source.node_id())
-        .unwrap()
-        .parents()
-        .is_empty());
+    assert!(
+        scene
+            .integration_store()
+            .borrow()
+            .visibility_effect(source.node_id())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        scene
+            .integration_store()
+            .borrow()
+            .node(source.node_id())
+            .unwrap()
+            .parents()
+            .is_empty()
+    );
     let mut session = scene.execution_session().unwrap();
     for _ in 0..3 {
         for declaration in [&input, &output] {
@@ -628,11 +638,15 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
                 (&leaf).into()
             }
         };
-        let mut session = scene.execution_session().unwrap();
-        let leaf_execution = session.execution_object_id(leaf.node_id()).unwrap();
-        let unrelated_before = row(&session, unrelated.node_id()).clone();
+        let mut session = scene.into_execution().unwrap();
+        let leaf_execution = session
+            .session()
+            .execution_object_id(leaf.node_id())
+            .unwrap();
+        let unrelated_before = row(session.session(), unrelated.node_id()).clone();
         let mut tx = SemanticMutationTransaction::new();
-        scene
+        session
+            .scene()
             .integration_store()
             .borrow()
             .stage_visibility_mask(
@@ -644,18 +658,19 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
                 &mut tx,
             )
             .unwrap();
-        scene.live(&mut session).apply(tx).unwrap();
-        let visibility = scene
+        session.live().apply(tx).unwrap();
+        let visibility = session
+            .scene()
             .integration_store()
             .borrow()
             .visibility_effect(owner)
             .unwrap()
             .unwrap();
-        let owner_execution = session.execution_object_id(owner).unwrap();
-        let original_source = source_plan(&session, owner).map(std::sync::Arc::clone);
+        let owner_execution = session.session().execution_object_id(owner).unwrap();
+        let original_source = source_plan(session.session(), owner).map(std::sync::Arc::clone);
         assert_eq!(composed, original_source.is_some());
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .add_effect(
                 target(),
                 Glow::new(
@@ -674,36 +689,49 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
         };
         assert_ne!(authored.node_id(), visibility);
         assert_eq!(
-            row(&session, owner).effects.as_ref().unwrap().attachments(),
+            row(session.session(), owner)
+                .effects
+                .as_ref()
+                .unwrap()
+                .attachments(),
             &[authored.node_id(), visibility]
         );
         assert_eq!(
-            row(&session, owner).effects.as_ref().unwrap().definitions()[1]
+            row(session.session(), owner)
+                .effects
+                .as_ref()
+                .unwrap()
+                .definitions()[1]
                 .as_noise_dissolve()
                 .unwrap()
                 .progress(),
             1.0
         );
-        assert_eq!(session.execution_object_id(owner), Some(owner_execution));
         assert_eq!(
-            session.execution_object_id(leaf.node_id()),
+            session.session().execution_object_id(owner),
+            Some(owner_execution)
+        );
+        assert_eq!(
+            session.session().execution_object_id(leaf.node_id()),
             Some(leaf_execution)
         );
         for seed in 0..16 {
-            session.take_renderer_publication();
+            session.session_mut().take_renderer_publication();
             let mut tx = SemanticMutationTransaction::new();
             let definition = NoiseDissolve::new(seed, 0.4)
                 .unwrap()
                 .with_progress(f64::from(seed % 2))
                 .unwrap();
-            scene
+            session
+                .scene()
                 .integration_store()
                 .borrow()
                 .stage_visibility_mask(owner, definition, &mut tx)
                 .unwrap();
-            scene.live(&mut session).apply(tx).unwrap();
+            session.live().apply(tx).unwrap();
             assert_eq!(
                 session
+                    .session_mut()
                     .take_renderer_publication()
                     .changes()
                     .object_indices()
@@ -712,13 +740,14 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
             );
             assert_eq!(
                 session
+                    .session()
                     .last_structural_publication_stats()
                     .preparation
                     .object_states_lowered,
                 0
             );
             assert_eq!(
-                row(&session, owner)
+                row(session.session(), owner)
                     .effects
                     .as_ref()
                     .unwrap()
@@ -727,31 +756,38 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
                     .definition,
                 definition.into()
             );
-            assert_eq!(row(&session, unrelated.node_id()), &unrelated_before);
+            assert_eq!(
+                row(session.session(), unrelated.node_id()),
+                &unrelated_before
+            );
             if let Some(original) = &original_source {
                 assert!(std::sync::Arc::ptr_eq(
                     original,
-                    source_plan(&session, owner).unwrap()
+                    source_plan(session.session(), owner).unwrap()
                 ));
             }
         }
         let mut remove = SemanticMutationTransaction::new();
         remove.remove_node(visibility);
-        scene.live(&mut session).apply(remove).unwrap();
+        session.live().apply(remove).unwrap();
         assert_eq!(
-            row(&session, owner).effects.as_ref().unwrap().attachments(),
+            row(session.session(), owner)
+                .effects
+                .as_ref()
+                .unwrap()
+                .attachments(),
             &[authored.node_id()]
         );
-        let before = session.frame().clone();
-        let context = session.publication_context();
-        let revision = scene.revision();
+        let before = session.session().frame().clone();
+        let context = session.session().publication_context();
+        let revision = session.scene().revision();
         let mut stale = SemanticMutationTransaction::new();
         stale.update_effect(authored.node_id(), EffectUpdate::default().intensity(2.0));
         stale.update_effect(visibility, EffectUpdate::default().progress(0.5));
-        assert!(scene.live(&mut session).apply(stale).is_err());
-        assert_eq!(session.frame(), &before);
-        assert_eq!(session.publication_context(), context);
-        assert_eq!(scene.revision(), revision);
+        assert!(session.live().apply(stale).is_err());
+        assert_eq!(session.session().frame(), &before);
+        assert_eq!(session.session().publication_context(), context);
+        assert_eq!(session.scene().revision(), revision);
     }
 }
 
@@ -867,30 +903,34 @@ fn pulse_enrollment_capacity_and_wrong_canonical_kind_reject_atomically() {
         let before = session.frame().clone();
         let context = session.publication_context();
         let revision = scene.revision();
-        assert!(scene
-            .live(&mut session)
-            .declare_and_activate_composition(
-                &noon::AnimationCompositionRequest::GlowPulse {
-                    target: &source,
-                    intensity: 2.0,
-                    options: noon::AnimationOptions::new().run_time(1.0)
-                },
-                noon::AnimationOptions::new(),
-            )
-            .is_err());
+        assert!(
+            scene
+                .live(&mut session)
+                .declare_and_activate_composition(
+                    &noon::AnimationCompositionRequest::GlowPulse {
+                        target: &source,
+                        intensity: 2.0,
+                        options: noon::AnimationOptions::new().run_time(1.0)
+                    },
+                    noon::AnimationOptions::new(),
+                )
+                .is_err()
+        );
         assert_eq!(session.frame(), &before);
         assert_eq!(session.publication_context(), context);
         assert_eq!(scene.revision(), revision);
         if full {
             assert!(source.get_effect("glow").is_err());
         } else {
-            assert!(source
-                .get_effect("glow")
-                .unwrap()
-                .authored_definition()
-                .unwrap()
-                .as_blur()
-                .is_some());
+            assert!(
+                source
+                    .get_effect("glow")
+                    .unwrap()
+                    .authored_definition()
+                    .unwrap()
+                    .as_blur()
+                    .is_some()
+            );
         }
         scene.live(&mut session).wait_segment(0.1).unwrap();
     }

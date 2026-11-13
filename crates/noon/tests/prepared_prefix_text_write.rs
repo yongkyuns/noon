@@ -1,8 +1,8 @@
 #![cfg(all(feature = "prepared-prefix", feature = "typst"))]
 mod raster_support;
 use noon::{
-    effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, ExecutionSession, MathTypst, PrefixReader, RateFunction, Scene,
+    effects::{EffectUpdate, Pixels},
 };
 use noon_runtime::{FrameState, PrefixError, ReplayLimits};
 
@@ -32,7 +32,7 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
         .math_typst(MathTypst::new("integral_0^1 x^2 dif x = frac(1, 3)").with_font_size(36.0))
         .unwrap();
     execution
-        .live()
+        .scene_mut()
         .set_glow(
             &text,
             EffectUpdate::default()
@@ -106,12 +106,16 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
 // New physical slots are dormant before their creation revision. Compare every
 // original frame column while explicitly rejecting visible future membership.
 fn historical_frame(mut frame: FrameState, expected_rows: usize) -> FrameState {
-    assert!(frame.presences[expected_rows..]
-        .iter()
-        .all(|&present| !present));
-    assert!(frame.family_animations[expected_rows..]
-        .iter()
-        .all(Option::is_none));
+    assert!(
+        frame.presences[expected_rows..]
+            .iter()
+            .all(|&present| !present)
+    );
+    assert!(
+        frame.family_animations[expected_rows..]
+            .iter()
+            .all(Option::is_none)
+    );
     frame.objects.truncate(expected_rows);
     frame.presences.truncate(expected_rows);
     frame.reveals.truncate(expected_rows);

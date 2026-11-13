@@ -1,8 +1,8 @@
 //! Blur reaches the ordinary transaction, timeline and completion owners.
 use super::*;
 use crate::{
-    effects::{Blur, Pixels},
     AnimationOptions, RateFunction,
+    effects::{Blur, Pixels},
 };
 
 fn radius(session: &crate::ExecutionSession) -> f64 {
@@ -41,14 +41,14 @@ fn blur_animation_completion_seek_and_lifetime_use_the_existing_row() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    assert_eq!(radius(&session), 1.25);
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    assert_eq!(radius(session.session()), 1.25);
+    let segment = session.live().play_animation(&animation).unwrap();
     for time in [0.75, 0.25, 1.0, 0.5] {
         session.seek(time).unwrap();
-        assert_eq!(radius(&session), 1.25 + 4.0 * time);
+        assert_eq!(radius(session.session()), 1.25 + 4.0 * time);
         assert_eq!(
-            session.frame().objects[0]
+            session.session().frame().objects[0]
                 .effects
                 .as_ref()
                 .unwrap()
@@ -58,45 +58,44 @@ fn blur_animation_completion_seek_and_lifetime_use_the_existing_row() {
             original.node_id()
         );
     }
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         original.authored_definition().unwrap().radius(),
         Some(Pixels(5.25).into())
     );
-    session.take_renderer_publication();
-    scene
-        .live(&mut session)
+    session.session_mut().take_renderer_publication();
+    session
+        .scene_mut()
         .set_effect(
             &source,
             &original,
             EffectUpdate::default().radius(Pixels(0.0)),
         )
         .unwrap();
-    assert_eq!(radius(&session), 0.0);
-    let publication = session.take_renderer_publication();
+    assert_eq!(radius(session.session()), 0.0);
+    let publication = session.session_mut().take_renderer_publication();
     assert_eq!(publication.changes().object_indices(), &[0]);
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .remove_effect(&source, &original)
         .unwrap();
-    assert!(session.frame().objects[0].effects.is_none());
+    assert!(session.session().frame().objects[0].effects.is_none());
     assert!(original.authored_definition().is_err());
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&source, Blur::default(), "soften")
         .unwrap();
     assert_ne!(
         source.get_effect("soften").unwrap().node_id(),
         original.node_id()
     );
-    assert!(scene
-        .live(&mut session)
-        .set_effect(&source, &original, EffectUpdate::default().radius(1.0))
-        .is_err());
+    assert!(
+        session
+            .scene_mut()
+            .set_effect(&source, &original, EffectUpdate::default().radius(1.0))
+            .is_err()
+    );
 }
 
 #[test]
@@ -107,15 +106,17 @@ fn blur_rejects_glow_parameters_without_changing_publication() {
         .add_effect(&source, Blur::default(), "soften")
         .unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .set_effect(&source, "soften", EffectUpdate::default().intensity(0.0))
-        .is_err());
-    assert_eq!(scene.revision(), revision);
-    assert_eq!(session.publication_context(), before);
+    let mut session = scene.into_execution().unwrap();
+    let before = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(
+        session
+            .scene_mut()
+            .set_effect(&source, "soften", EffectUpdate::default().intensity(0.0))
+            .is_err()
+    );
+    assert_eq!(session.scene().revision(), revision);
+    assert_eq!(session.session().publication_context(), before);
 }
 
 #[test]
@@ -125,14 +126,16 @@ fn glow_conveniences_do_not_reinterpret_a_blur_named_glow() {
     scene.add_effect(&source, Blur::default(), "glow").unwrap();
     scene.add(&source).unwrap();
     let original = source.get_effect("glow").unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.publication_context();
-    assert!(scene
-        .live(&mut session)
-        .set_glow(&source, EffectUpdate::default().radius(0.4))
-        .is_err());
-    assert!(scene.live(&mut session).remove_glow(&source).is_err());
-    assert_eq!(session.publication_context(), before);
+    let mut session = scene.into_execution().unwrap();
+    let before = session.session().publication_context();
+    assert!(
+        session
+            .scene_mut()
+            .set_glow(&source, EffectUpdate::default().radius(0.4))
+            .is_err()
+    );
+    assert!(session.scene_mut().remove_glow(&source).is_err());
+    assert_eq!(session.session().publication_context(), before);
     assert_eq!(
         source.get_effect("glow").unwrap().node_id(),
         original.node_id()

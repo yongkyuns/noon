@@ -1,7 +1,7 @@
 use noon::{
-    effects::{EffectRadius, EffectUpdate, Pixelate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest,
+    effects::{EffectRadius, EffectUpdate, Pixelate, Pixels},
 };
 use noon_core::SemanticNodeId;
 fn value(
@@ -96,9 +96,9 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     session.live().complete_segment(segment).unwrap();
     assert!(a.authored_definition().unwrap().is_neutral());
     let saved = session.scene_mut().copy_mobject(&source).unwrap();
-    session.live().remove_effect(&source, &a).unwrap();
+    session.scene_mut().remove_effect(&source, &a).unwrap();
     session
-        .live()
+        .scene_mut()
         .add_effect(&source, Pixelate::default(), "a")
         .unwrap();
     let replacement = source.get_effect("a").unwrap();
@@ -106,10 +106,12 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     let before = session.session().frame().clone();
     let context = session.session().publication_context();
     let revision = session.scene().revision();
-    assert!(session
-        .live()
-        .set_effect(&source, &a, EffectUpdate::default().size(Pixels(3.0)))
-        .is_err());
+    assert!(
+        session
+            .scene_mut()
+            .set_effect(&source, &a, EffectUpdate::default().size(Pixels(3.0)))
+            .is_err()
+    );
     assert_eq!(session.session().frame(), &before);
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.scene().revision(), revision);

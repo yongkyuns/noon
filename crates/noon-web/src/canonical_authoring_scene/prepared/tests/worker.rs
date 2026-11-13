@@ -73,10 +73,12 @@ fn interpreter_worker_foreign_source_is_rejected_before_completion_or_sealing() 
         foreign.active_live_player().unwrap().debug_frame_json(),
         before
     );
-    assert!(foreign
-        .active_live_player()
-        .unwrap()
-        .has_pending_live_segment());
+    assert!(
+        foreign
+            .active_live_player()
+            .unwrap()
+            .has_pending_live_segment()
+    );
     // Neither the foreign context nor the rightful binding was retired.
     foreign.prepare_live_segment().unwrap();
     assert!(foreign.create_prepared_prefix().is_ok());
@@ -109,15 +111,19 @@ fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source(
     player.prepare_interpreter_segment(&mut context).unwrap();
     let prepared = context.active_live_player().unwrap().debug_frame_json();
     let before = state(&player);
-    assert!(player
-        .deliver_source_prefix()
-        .unwrap_err()
-        .contains("CapacityRequired"));
+    assert!(
+        player
+            .deliver_source_prefix()
+            .unwrap_err()
+            .contains("CapacityRequired")
+    );
     assert_eq!(state(&player), before);
-    assert!(player
-        .prepare_interpreter_segment(&mut context)
-        .unwrap_err()
-        .contains("pending prefix"));
+    assert!(
+        player
+            .prepare_interpreter_segment(&mut context)
+            .unwrap_err()
+            .contains("pending prefix")
+    );
     assert!(player.finish_interpreter_source(&mut context).is_err());
     assert_eq!(
         context.active_live_player().unwrap().debug_frame_json(),
@@ -200,10 +206,12 @@ fn interpreter_worker_failed_completion_cannot_retry_but_retains_playback() {
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
     context.begin_ordinary_wait(0.25).unwrap();
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
-    assert!(context
-        .active_live_player()
-        .unwrap()
-        .has_pending_live_segment());
+    assert!(
+        context
+            .active_live_player()
+            .unwrap()
+            .has_pending_live_segment()
+    );
     assert_eq!(state(&player)["frontier"], 1.0);
     assert_eq!(state(&player)["end"], serde_json::Value::Null);
     assert!(player.seek_delta_json(0.75).is_ok());
@@ -249,10 +257,12 @@ fn interpreter_worker_late_source_handoff_waits_for_demand_and_keeps_original_pl
         context.active_live_player().unwrap().debug_frame_json(),
         before
     );
-    assert!(context
-        .active_live_player()
-        .unwrap()
-        .has_pending_live_segment());
+    assert!(
+        context
+            .active_live_player()
+            .unwrap()
+            .has_pending_live_segment()
+    );
     assert_eq!(state(&player)["frontier"], 1.0);
     assert!(player.seek_delta_json(0.75).is_ok());
     player.tick_delta_json(0.0).unwrap();
@@ -286,10 +296,12 @@ fn interpreter_worker_raw_reader_has_no_implicit_source_authority() {
     let mut player = PreparedExecutionPlayer::from_reader(reader, 904);
     context.begin_ordinary_wait(0.25).unwrap();
     assert!(player.prepare_interpreter_segment(&mut context).is_err());
-    assert!(context
-        .active_live_player()
-        .unwrap()
-        .has_pending_live_segment());
+    assert!(
+        context
+            .active_live_player()
+            .unwrap()
+            .has_pending_live_segment()
+    );
     assert!(player.finish_interpreter_source(&mut context).is_err());
 }
 
@@ -327,10 +339,12 @@ fn interpreter_worker_terminal_admission_rejects_a_pending_source_segment() {
     context.set_translation_drag_targets(vec![target]).unwrap();
     context.begin_ordinary_wait(1.0).unwrap();
     assert!(player.finish_interpreter_source(&mut context).is_err());
-    assert!(context
-        .active_live_player()
-        .unwrap()
-        .has_pending_live_segment());
+    assert!(
+        context
+            .active_live_player()
+            .unwrap()
+            .has_pending_live_segment()
+    );
     assert!(
         !player.prepare_interpreter_segment(&mut context).unwrap(),
         "rejected finish cannot consume the rightful pending source"
@@ -339,14 +353,15 @@ fn interpreter_worker_terminal_admission_rejects_a_pending_source_segment() {
 
 #[test]
 fn interpreter_worker_retains_single_glow_edits_between_prefixes() {
-    use noon::effects::{EffectUpdate, Pixels};
     use noon::Color;
+    use noon::effects::{EffectUpdate, Pixels};
     let (mut context, target, mut player) = start();
     for color in [Color::RED, Color::BLUE] {
         context
             .active_live_player()
             .unwrap()
-            .live_set_glow(
+            .scene_mut()
+            .set_glow(
                 &target,
                 EffectUpdate::default()
                     .color(color)

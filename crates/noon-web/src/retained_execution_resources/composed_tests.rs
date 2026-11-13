@@ -6,8 +6,8 @@ use crate::{
     TransportComposedSourceHandle, TransportSlotId,
 };
 use noon::{
-    effects::{Blur, EffectUpdate, Pixels},
     ExecutionSession, Mobject, MobjectFamily, Scene,
+    effects::{Blur, EffectUpdate, Pixels},
 };
 use noon_compile::CompiledComposedSourceErrorKind as Kind;
 use noon_core::{
@@ -266,9 +266,11 @@ fn nested_public_groups_cross_worker_codec_reuse_parameter_resources_and_retire_
     assert_eq!(parameter.retained.objects.len(), 1);
     assert_eq!(source_handle(&parameter, f.inner_id), inner_key);
     assert!(parameter.resource_additions.is_none());
-    assert!(!serde_json::to_string(&parameter)
-        .unwrap()
-        .contains("\"members\""));
+    assert!(
+        !serde_json::to_string(&parameter)
+            .unwrap()
+            .contains("\"members\"")
+    );
     apply(&mut f.mirror, &parameter).unwrap();
     assert!(Arc::ptr_eq(
         &original.upgrade().unwrap(),
@@ -778,7 +780,7 @@ fn forged_backdrop_input_roles_reject_before_worker_frame_or_sequence_publicatio
 
 #[test]
 fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows() {
-    use noon::{effects::BackdropBlur, Rect, Vec2};
+    use noon::{Rect, Vec2, effects::BackdropBlur};
     let window = Rect::new(Vec2::new(-2.0, -2.0), Vec2::new(2.0, 2.0));
     let mut scene = Scene::new();
     let earlier = scene.circle(0.3).unwrap();
@@ -787,25 +789,33 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
     scene
         .add_many(&[(&earlier).into(), (&panel).into(), (&later).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let anchor = session.execution_object_id(panel.node_id()).unwrap();
-    let earlier_id = session.execution_object_id(earlier.node_id()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let anchor = session
+        .session()
+        .execution_object_id(panel.node_id())
+        .unwrap();
+    let earlier_id = session
+        .session()
+        .execution_object_id(earlier.node_id())
+        .unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(123);
     let mut mirror =
         InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
             .unwrap();
-    let snapshot = encode(&mut encoder, &mut session, true);
+    let snapshot = encode(&mut encoder, session.session_mut(), true);
     apply(&mut mirror, &snapshot).unwrap();
-    assert!(mirror
-        .renderer_publication(&FrameChanges::default())
-        .unwrap()
-        .spatial_index()
-        .is_none());
-    scene
-        .live(&mut session)
+    assert!(
+        mirror
+            .renderer_publication(&FrameChanges::default())
+            .unwrap()
+            .spatial_index()
+            .is_none()
+    );
+    session
+        .scene_mut()
         .add_effect(&panel, BackdropBlur::default(), "glass")
         .unwrap();
-    let added = encode(&mut encoder, &mut session, false);
+    let added = encode(&mut encoder, session.session_mut(), false);
     let (_, changes) = apply(&mut mirror, &added).unwrap();
     assert_eq!(mirror.last_spatial_query_update_stats().full_rebuilds, 1);
     let query = mirror
@@ -815,26 +825,25 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
         .unwrap();
     assert_eq!(query.objects, [earlier_id]);
     assert_eq!(query.stats.full_scan_fallbacks, 0);
-    scene.live(&mut session).shift(&earlier, 20.0, 0.0).unwrap();
-    let moved = encode(&mut encoder, &mut session, false);
+    session.live().shift(&earlier, 20.0, 0.0).unwrap();
+    let moved = encode(&mut encoder, session.session_mut(), false);
     let (_, changes) = apply(&mut mirror, &moved).unwrap();
     let stats = mirror.last_spatial_query_update_stats();
     assert_eq!(stats.full_rebuilds, 0);
     assert_eq!(stats.leaves_upserted, 1);
-    assert!(mirror
-        .renderer_publication(&changes)
-        .unwrap()
-        .query_painter_prefix_geometry(window, anchor)
-        .unwrap()
-        .objects
-        .is_empty());
+    assert!(
+        mirror
+            .renderer_publication(&changes)
+            .unwrap()
+            .query_painter_prefix_geometry(window, anchor)
+            .unwrap()
+            .objects
+            .is_empty()
+    );
     // A bad suffix must preserve the previously committed query, not just the
     // frame and protocol sequence. Retry the exact same sequence afterward.
-    scene
-        .live(&mut session)
-        .shift(&earlier, -20.0, 0.0)
-        .unwrap();
-    let good = encode(&mut encoder, &mut session, false);
+    session.live().shift(&earlier, -20.0, 0.0).unwrap();
+    let good = encode(&mut encoder, session.session_mut(), false);
     let mut bad = good.clone();
     let mut suffix = added.retained.objects[0].clone();
     suffix.effects[0].definition = crate::TransportEffectDefinition::BackdropBlur {
@@ -844,13 +853,15 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
     let sequence = mirror.wire.applied_sequence();
     assert!(apply(&mut mirror, &bad).is_err());
     assert_eq!(mirror.wire.applied_sequence(), sequence);
-    assert!(mirror
-        .renderer_publication(&FrameChanges::default())
-        .unwrap()
-        .query_painter_prefix_geometry(window, anchor)
-        .unwrap()
-        .objects
-        .is_empty());
+    assert!(
+        mirror
+            .renderer_publication(&FrameChanges::default())
+            .unwrap()
+            .query_painter_prefix_geometry(window, anchor)
+            .unwrap()
+            .objects
+            .is_empty()
+    );
     apply(&mut mirror, &good).unwrap();
     assert_eq!(
         mirror
@@ -861,22 +872,21 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
             .objects,
         [earlier_id]
     );
-    scene
-        .live(&mut session)
-        .remove_effect(&panel, "glass")
-        .unwrap();
-    let removed = encode(&mut encoder, &mut session, false);
+    session.scene_mut().remove_effect(&panel, "glass").unwrap();
+    let removed = encode(&mut encoder, session.session_mut(), false);
     apply(&mut mirror, &removed).unwrap();
-    assert!(mirror
-        .renderer_publication(&FrameChanges::default())
-        .unwrap()
-        .spatial_index()
-        .is_none());
+    assert!(
+        mirror
+            .renderer_publication(&FrameChanges::default())
+            .unwrap()
+            .spatial_index()
+            .is_none()
+    );
 }
 
 #[test]
 fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
-    use noon::{effects::BackdropBlur, Rect, Vec2};
+    use noon::{Rect, Vec2, effects::BackdropBlur};
     let mut scene = Scene::new();
     let path = noon::VectorPath::new()
         .move_to(Vec2::new(-0.5, -0.5))

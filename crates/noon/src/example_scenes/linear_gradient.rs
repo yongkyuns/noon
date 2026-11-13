@@ -48,7 +48,6 @@ impl LiveContinuation for PaintedSurface {
                             .map_err(message)?;
                         if self.glow {
                             scene
-                                .live()
                                 .set_glow(
                                     &target,
                                     crate::effects::EffectUpdate::default()
@@ -79,7 +78,7 @@ impl LiveContinuation for PaintedSurface {
             }
             2 | 4 | 6 => scene.live().wait_segment(0.25),
             7 if self.glow => {
-                scene.live().remove_glow(&self.panel).map_err(message)?;
+                scene.remove_glow(&self.panel).map_err(message)?;
                 scene.live().wait_segment(0.25)
             }
             7 | 8 => return Ok(ContinuationStep::Finished),
