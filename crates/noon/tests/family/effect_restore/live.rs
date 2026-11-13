@@ -318,7 +318,7 @@ fn late_invalid_group_isolation_preserves_old_effects_and_entire_publication() {
     priorities
         .set_z_index(b.node_id(), 1.0)
         .set_z_index(c.node_id(), 2.0);
-    session.live().apply(priorities).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), priorities).unwrap();
     let old = a.get_effect("glow").unwrap();
     let frame = session.session().frame().clone();
     let context = session.session().publication_context();

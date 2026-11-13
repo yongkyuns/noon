@@ -176,7 +176,7 @@ fn native_family_opacity_applies_once_across_empty_neutral_filtered_nested_and_r
             if mode > 0 {
                 let mut tx = SemanticMutationTransaction::new();
                 tx.remove_node(group.get_effect("soften").unwrap().node_id());
-                session.live().apply(tx).unwrap();
+                noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
                 let frame = capture.capture(session.session_mut()).unwrap();
                 let expected = reference(0.5, outer, false);
                 assert!(

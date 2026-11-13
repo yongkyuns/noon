@@ -136,6 +136,17 @@ pub mod host_execution {
         scene.apply_semantic_transaction(transaction)
     }
 
+    /// Publish for a host that explicitly retains a raw store, root, and runtime.
+    pub fn publish_at_root(
+        store: &Rc<RefCell<SemanticStore>>,
+        root: SemanticNodeId,
+        execution: &mut ExecutionSession,
+        transaction: noon_core::SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, ExecutionSessionPublicationError>
+    {
+        Scene::publish_running_transaction(store, root, execution, transaction)
+    }
+
     /// Borrow the original store and root alongside the installed execution.
     pub fn parts_mut(
         scene: &mut Scene,

@@ -198,9 +198,7 @@ fn create_morph_fade_session() -> Result<noon::SceneExecution, String> {
         .map_err(|error| error.to_string())?;
     scene.add(&source).map_err(|error| error.to_string())?;
     scene.add(&leaving).map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
     let options = AnimationOptions::new()
         .run_time(2.0)
         .rate_func(RateFunction::Linear);
@@ -226,13 +224,11 @@ fn create_morph_fade_session() -> Result<noon::SceneExecution, String> {
     // Activate through the ordinary live API: initial exact-track lowering is
     // intentionally narrower. Replay compares the activated execution channels;
     // logical segment completion/publication has its own shared live tests.
-    scene
-        .live(&mut session)
+    execution
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 #[cfg(all(

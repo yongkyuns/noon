@@ -230,7 +230,10 @@ fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
         SemanticVec3::new(9.0, 0.0, 0.0),
     );
     batch.create_effect(source.node_id(), "second", noon_core::Glow::default());
-    assert!(session.live().apply(batch).is_err());
+    assert!(session
+        .scene_mut()
+        .apply_semantic_transaction(batch)
+        .is_err());
     assert_eq!(session.session().publication_context(), before);
     assert_eq!(row(session.session(), &source), &original);
     assert!(source.get_effect("second").is_err());

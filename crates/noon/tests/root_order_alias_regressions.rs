@@ -1,5 +1,5 @@
 use noon::integration::{SemanticMutationTransaction, SemanticStore};
-use noon::{ExecutionSession, LiveSession};
+use noon::ExecutionSession;
 use noon_compile::semantic_execution_object_id;
 use noon_core::{SemanticNodeId, SemanticObjectState, StoredGeometry};
 use std::{cell::RefCell, rc::Rc};
@@ -40,8 +40,7 @@ fn raw_cross_root_alias_reorder_matches_first_occurrence() {
     let owner = Rc::new(RefCell::new(store));
     let mut transaction = SemanticMutationTransaction::new();
     transaction.reorder_member(root, left, None);
-    LiveSession::new(&owner, root, &mut session)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, transaction)
         .unwrap();
     check(&owner.borrow(), root, &session);
 }
@@ -56,8 +55,7 @@ fn raw_append_with_nested_alias_matches_first_occurrence() {
     let owner = Rc::new(RefCell::new(store));
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_member(root, group);
-    LiveSession::new(&owner, root, &mut session)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, transaction)
         .unwrap();
     check(&owner.borrow(), root, &session);
 }
@@ -128,8 +126,7 @@ fn all_cross_root_alias_positions_match_independent_reference() {
                 let owner = Rc::new(RefCell::new(store));
                 let mut tx = SemanticMutationTransaction::new();
                 tx.reorder_member(root, ordered[moved], ordered.get(before).copied());
-                LiveSession::new(&owner, root, &mut session)
-                    .apply(tx)
+                noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx)
                     .unwrap();
                 assert_eq!(
                     painter(&session),
@@ -165,8 +162,7 @@ fn compound_alias_reorder_removal_and_readmission_preserve_net_order() {
         let mut tx = SemanticMutationTransaction::new();
         tx.reorder_member(root, third, Some(left));
         tx.reorder_member(root, left, None);
-        LiveSession::new(&owner, root, &mut session)
-            .apply(tx)
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx)
             .unwrap();
         assert_eq!(painter(&session), oracle(&owner.borrow(), root));
         let mut tx = SemanticMutationTransaction::new();
@@ -175,16 +171,14 @@ fn compound_alias_reorder_removal_and_readmission_preserve_net_order() {
         } else {
             tx.remove_member(root, right);
         }
-        LiveSession::new(&owner, root, &mut session)
-            .apply(tx)
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx)
             .unwrap();
         assert_eq!(painter(&session), oracle(&owner.borrow(), root));
         let mut tx = SemanticMutationTransaction::new();
         tx.add_member(root, b);
         tx.reorder_member(root, b, Some(left));
         tx.reorder_member(root, left, Some(third));
-        LiveSession::new(&owner, root, &mut session)
-            .apply(tx)
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx)
             .unwrap();
         assert_eq!(painter(&session), oracle(&owner.borrow(), root));
         assert_eq!(session.runtime_identity(), runtime);
@@ -193,7 +187,7 @@ fn compound_alias_reorder_removal_and_readmission_preserve_net_order() {
 
 #[test]
 fn alias_transfer_revisions_rejection_recovery_and_seek_are_coherent() {
-    use noon::{ExecutionSessionPublicationError, LiveSessionError};
+    use noon::ExecutionSessionPublicationError;
     use noon_core::{SemanticObjectProperty, SemanticVec3};
     let mut store = SemanticStore::new();
     let [shared, a, b] = std::array::from_fn(|_| object(&mut store));
@@ -210,9 +204,7 @@ fn alias_transfer_revisions_rejection_recovery_and_seek_are_coherent() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(3.0, 0.0, 0.0),
     );
-    LiveSession::new(&owner, root, &mut session)
-        .apply(tx)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx).unwrap();
     let before = session.publication_context();
     let frame = session.frame().clone();
     let before_order = painter(&session);
@@ -221,10 +213,8 @@ fn alias_transfer_revisions_rejection_recovery_and_seek_are_coherent() {
     invalid.reorder_member(root, left, None);
     invalid.set_property(b, SemanticObjectProperty::RotationZ, f64::MAX);
     assert!(matches!(
-        LiveSession::new(&owner, root, &mut session).apply(invalid),
-        Err(LiveSessionError::Publication(
-            ExecutionSessionPublicationError::Lowering(_)
-        ))
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, invalid),
+        Err(ExecutionSessionPublicationError::Lowering(_))
     ));
     assert_eq!(session.publication_context(), before);
     assert_eq!(owner.borrow().scene_revision(), before.scene_revision());
@@ -248,9 +238,7 @@ fn alias_transfer_revisions_rejection_recovery_and_seek_are_coherent() {
     assert!(!changes.has_painter_order_change());
     let mut valid = SemanticMutationTransaction::new();
     valid.reorder_member(root, left, None);
-    LiveSession::new(&owner, root, &mut session)
-        .apply(valid)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, valid).unwrap();
     let after = session.publication_context();
     assert_eq!(
         after.scene_revision(),
@@ -269,9 +257,7 @@ fn alias_transfer_revisions_rejection_recovery_and_seek_are_coherent() {
     session.take_frame_changes();
     let mut noop = SemanticMutationTransaction::new();
     noop.reorder_member(root, left, None);
-    LiveSession::new(&owner, root, &mut session)
-        .apply(noop)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, noop).unwrap();
     assert_eq!(session.publication_context(), after);
     assert!(session.take_frame_changes().is_empty());
     for time in [1.0, 2.0, 0.0] {
@@ -301,9 +287,7 @@ fn identical_alias_blocks_reorder_authored_only() {
     let owner = Rc::new(RefCell::new(store));
     let mut tx = SemanticMutationTransaction::new();
     tx.reorder_member(root, left, None);
-    LiveSession::new(&owner, root, &mut session)
-        .apply(tx)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx).unwrap();
     let after = session.publication_context();
     assert_eq!(
         after.scene_revision(),
@@ -357,8 +341,7 @@ fn repeated_alias_membership_edits_match_reference_after_every_publication() {
                 tx.add_member(root, target);
             }
         }
-        LiveSession::new(&owner, root, &mut session)
-            .apply(tx)
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx)
             .unwrap();
         assert_eq!(
             painter(&session),

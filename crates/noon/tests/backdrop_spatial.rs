@@ -76,7 +76,7 @@ fn backdrop_queries_borrow_the_synchronized_session_index_and_follow_local_edits
     }
     let mut tx = SemanticMutationTransaction::new();
     tx.set_z_index(later.node_id(), -1.0);
-    session.live().apply(tx).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
     assert_eq!(
         session
             .session_mut()
@@ -185,7 +185,7 @@ fn native_live_backdrop_capability_failure_rolls_back_semantic_and_execution_pub
         source.node_id(),
         noon_core::SemanticWorldTransform3D::IDENTITY.into(),
     );
-    let error = session.live().apply(bad).unwrap_err();
+    let error = noon::integration::scene_execution::publish(session.scene_mut(), bad).unwrap_err();
     assert!(format!("{error:?}").contains("UnsupportedBackdropInput"));
     assert_eq!(store.borrow().scene_revision(), before_revision);
     assert_eq!(
@@ -206,13 +206,13 @@ fn native_live_backdrop_capability_failure_rolls_back_semantic_and_execution_pub
         noon_core::SemanticWorldTransform3D::IDENTITY.into(),
     );
     good.set_z_index(source.node_id(), 2.0);
-    session.live().apply(good).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), good).unwrap();
     let before_frame = session.session().frame().clone();
     let before_context = session.session().publication_context();
     let before_revision = store.borrow().scene_revision();
     let mut bad = SemanticMutationTransaction::new();
     bad.set_z_index(source.node_id(), -1.0);
-    assert!(session.live().apply(bad).is_err());
+    assert!(noon::integration::scene_execution::publish(session.scene_mut(), bad).is_err());
     assert_eq!(session.session().frame(), &before_frame);
     assert_eq!(session.session().publication_context(), before_context);
     assert_eq!(store.borrow().scene_revision(), before_revision);

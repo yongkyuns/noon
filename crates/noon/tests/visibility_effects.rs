@@ -648,7 +648,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
                 &mut tx,
             )
             .unwrap();
-        session.live().apply(tx).unwrap();
+        noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
         let visibility = session
             .scene()
             .integration_store()
@@ -718,7 +718,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
                 .borrow()
                 .stage_visibility_mask(owner, definition, &mut tx)
                 .unwrap();
-            session.live().apply(tx).unwrap();
+            noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
             assert_eq!(
                 session
                     .session_mut()
@@ -759,7 +759,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
         }
         let mut remove = SemanticMutationTransaction::new();
         remove.remove_node(visibility);
-        session.live().apply(remove).unwrap();
+        noon::integration::scene_execution::publish(session.scene_mut(), remove).unwrap();
         assert_eq!(
             row(session.session(), owner)
                 .effects
@@ -774,7 +774,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
         let mut stale = SemanticMutationTransaction::new();
         stale.update_effect(authored.node_id(), EffectUpdate::default().intensity(2.0));
         stale.update_effect(visibility, EffectUpdate::default().progress(0.5));
-        assert!(session.live().apply(stale).is_err());
+        assert!(noon::integration::scene_execution::publish(session.scene_mut(), stale).is_err());
         assert_eq!(session.session().frame(), &before);
         assert_eq!(session.session().publication_context(), context);
         assert_eq!(session.scene().revision(), revision);
@@ -808,7 +808,13 @@ fn temporary_pulse_enrollment_preserves_existing_named_and_visibility_bindings()
                     &mut tx,
                 )
                 .unwrap();
-            scene.live(&mut session).apply(tx).unwrap();
+            noon::integration::scene_execution::publish_at_root(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                tx,
+            )
+            .unwrap();
         }
         let original = row(&session, source.node_id())
             .effects

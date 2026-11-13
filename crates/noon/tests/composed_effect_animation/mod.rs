@@ -452,7 +452,7 @@ fn declared_opacity_scope_retires_when_its_last_declaration_is_cascade_removed()
     let mut transaction = SemanticMutationTransaction::new();
     transaction.remove_node(target.root().node_id());
     let before = session.scene().revision();
-    session.live().apply(transaction).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), transaction).unwrap();
     assert_ne!(session.scene().revision(), before);
     assert!(
         declaration.options().is_err(),

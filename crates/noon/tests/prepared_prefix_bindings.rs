@@ -304,7 +304,7 @@ fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_
 
     let mut deletion = SemanticMutationTransaction::new();
     deletion.remove_node(target.node_id());
-    source.live().apply(deletion).unwrap();
+    noon::integration::scene_execution::publish(source.scene_mut(), deletion).unwrap();
     assert_eq!(source.session().execution_object_id(target.node_id()), None);
     append_interval(source.session_mut(), &mut publisher, &mut reader);
     drop(target);

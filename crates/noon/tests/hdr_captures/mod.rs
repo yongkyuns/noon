@@ -255,7 +255,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
         let mut session = scene.into_execution().unwrap();
         let mut tx = SemanticMutationTransaction::new();
         tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-        session.live().apply(tx).unwrap();
+        noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
         let mut surface = Surface::new(&device, &queue);
         let mut bloom = HdrBloomFilter::new(&adapter, &device);
         let mut bloom_scope = HdrBloomScope::default();
