@@ -59,7 +59,7 @@ fn family_queries_mix_effective_and_detached_bounds_without_mutation() {
         revision
     );
     assert!(execution
-        .live()
+        .scene_mut()
         .move_family_to(&aliases, Target::Point(0.0, 0.0), (0.0, 0.0), (1.0, 1.0))
         .is_err());
     assert_eq!(
@@ -235,7 +235,7 @@ fn live_frame_alignment_keeps_aliases_local_and_rejects_active_drivers() {
     execution.session_mut().take_frame_changes();
     {
         let result = execution
-            .live()
+            .scene_mut()
             .align_family_on_frame(&family, (0.0, 1.0), 0.25)
             .unwrap();
         assert_eq!(result.impacts().len(), 2);
@@ -260,7 +260,7 @@ fn live_frame_alignment_keeps_aliases_local_and_rejects_active_drivers() {
         .borrow()
         .scene_revision();
     assert!(execution
-        .live()
+        .scene_mut()
         .align_family_on_frame(&family, (1.0, 0.0), 0.25)
         .is_err());
     assert_eq!(
@@ -278,7 +278,7 @@ fn live_frame_alignment_keeps_aliases_local_and_rejects_active_drivers() {
     execution.live().advance_segment_to(segment, 1.0).unwrap();
     execution.live().complete_segment(segment).unwrap();
     execution
-        .live()
+        .scene_mut()
         .align_family_on_frame(&family, (1.0, 0.0), 0.25)
         .unwrap();
 }

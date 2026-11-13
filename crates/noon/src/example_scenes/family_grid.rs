@@ -51,7 +51,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .complete_segment(wait)
             .map_err(|e| e.to_string())?;
         session
-            .live()
+            .scene_mut()
             .arrange_family_in_grid_with_options(
                 &family,
                 &FamilyGridOptions {

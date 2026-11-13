@@ -321,7 +321,10 @@ fn live_capture_restores_current_completed_state_in_one_publication() {
         .unwrap();
     session.live().complete_segment(segment).unwrap();
     let saved = session.scene_mut().copy_family(&source).unwrap();
-    session.live().shift_family(&source, -5.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_family(&source, -5.0, 0.0)
+        .unwrap();
     session
         .scene_mut()
         .become_family(&source, saved.root(), Default::default())

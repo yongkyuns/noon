@@ -954,6 +954,21 @@ impl Scene {
         self.apply_semantic_transaction(transaction)
     }
 
+    /// Move an object's layout center to a point.
+    pub fn move_to_point(
+        &mut self,
+        object: &Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.move_to(
+            object,
+            crate::LiveLayoutTarget::Point(x, y),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
+    }
+
     /// Move one object using authored layout while cold or coherent effective layout while running.
     pub fn move_to(
         &mut self,

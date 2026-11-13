@@ -166,7 +166,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             ),
         ] {
             execution
-                .live()
+                .scene_mut()
                 .move_family_to(
                     &family,
                     crate::LiveLayoutTarget::Point(point.0, point.1),
@@ -176,7 +176,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 .map_err(|e| e.to_string())?;
         }
         execution
-            .live()
+            .scene_mut()
             .align_family_on_frame(&family, (0.0, -1.0), 0.5)
             .map_err(|e| e.to_string())?;
         let layout = execution
@@ -185,7 +185,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .map_err(|e| e.to_string())?;
         assert!((layout.center.1 - layout.height * 0.5 + 3.5).abs() < 1e-6);
         execution
-            .live()
+            .scene_mut()
             .move_family_to(
                 &family,
                 crate::LiveLayoutTarget::Point(center.0, center.1),

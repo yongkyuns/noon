@@ -34,7 +34,6 @@ impl LiveContinuation for Placement {
             (LiveLayoutTarget::Mobject(&self.reference), (0.5, 1.0))
         };
         scene
-            .live()
             .move_to(&target, destination, (0.0, 1.0), mask)
             .map_err(|error| error.to_string())?;
         self.stage += 1;

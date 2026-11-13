@@ -2531,19 +2531,16 @@ impl Context {
         if batch.kind != "add" {
             return Err(engine_error("family creation requires an add batch"));
         }
-        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_family_creation_with_presentation(
-            store,
-            root,
-            execution,
-            &batch.targets(),
-            z_index,
-            noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
-            draw_enabled,
-        )
-        .map(|family| crate::family::FamilyHandle { family })
-        .map_err(engine_error)
+        self.require_execution()?;
+        self.scene
+            .family_with_presentation(
+                &batch.targets(),
+                z_index,
+                noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
+                draw_enabled,
+            )
+            .map(|family| crate::family::FamilyHandle { family })
+            .map_err(engine_error)
     }
     #[pyo3(name = "liveCopyFamily")]
     fn copy_family(

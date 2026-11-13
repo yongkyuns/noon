@@ -645,22 +645,17 @@ fn initial_family_color_and_membership_publish_atomically_without_leaf_recolor()
     assert_eq!(scene.revision(), revision);
     assert_eq!(leaf.state().unwrap(), before);
     scene.add(&leaf).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let revision = scene.revision();
-    let live_family = noon::integration::publish_family_creation_with_color(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        &[(&leaf).into()],
-        4.0,
-        Color::BLUE,
-    )
-    .unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let revision = session.scene().revision();
+    let live_family = session
+        .scene_mut()
+        .family_with_presentation(&[(&leaf).into()], 4.0, Color::BLUE, true)
+        .unwrap();
     assert_eq!(live_family.own_color().unwrap(), Color::BLUE);
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_eq!(
-        session.publication_context().scene_revision(),
-        scene.revision()
+        session.session().publication_context().scene_revision(),
+        session.scene().revision()
     );
     assert_eq!(leaf.state().unwrap(), before);
 }

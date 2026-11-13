@@ -1,6 +1,5 @@
 //! Family affine edits and compatibility placement forwarding during control migration.
 use super::*;
-pub use crate::family_layout::LiveLayoutTarget;
 use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
@@ -472,84 +471,6 @@ impl LiveSession<'_> {
             self.session,
             anchor,
             boundary,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    /// Compatibility forwarding while callers migrate to Scene-owned placement.
-    pub fn move_to(
-        &mut self,
-        mobject: &Mobject,
-        target: LiveLayoutTarget<'_>,
-        edge: (f64, f64),
-        mask: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_move_to(
-            self.store,
-            self.root,
-            self.session,
-            mobject,
-            target,
-            edge,
-            mask,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    pub fn move_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
-        edge: (f64, f64),
-        mask: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_move_family_to(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            target,
-            edge,
-            mask,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    /// Align effective family bounds and publish only the selected leaves.
-    pub fn align_family_on_frame(
-        &mut self,
-        family: &MobjectFamily,
-        direction: (f64, f64),
-        buff: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_align_family_on_frame(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            direction,
-            buff,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    /// Place an entire object/family from selected effective bounds. All anchor
-    /// resolution and driver validation precede one local mutation transaction.
-    pub fn next_layout_to_aligned(
-        &mut self,
-        source: &crate::LayoutAnchor,
-        target: LiveLayoutTarget<'_>,
-        aligner: &crate::LayoutAnchor,
-        args: ManimNextToArgs,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_next_layout_to_aligned(
-            self.store,
-            self.root,
-            self.session,
-            source,
-            target,
-            aligner,
-            args,
         )
         .map_err(LiveSessionError::from)
     }

@@ -7,9 +7,9 @@ use noon::integration::{
     SemanticSignalError,
 };
 use noon::{
-    AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionCallbackError,
-    LayoutAnchor, LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene, SceneRevision,
-    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticVec3, StoredGeometry,
+    AnimationOptions, AuthoringError, ExecutionSessionCallbackError, LayoutAnchor,
+    LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId,
+    SemanticObjectProperty, SemanticObjectState, SemanticVec3, StoredGeometry,
     UnsupportedAuthoringOperation, Vec2, VectorPath,
 };
 
@@ -41,20 +41,6 @@ fn snapshot(scene: &Scene, objects: &[&Mobject]) -> AuthoredSnapshot {
             .map(|object| object.state().unwrap())
             .collect(),
     }
-}
-
-fn assert_live_unchanged(
-    scene: &Scene,
-    session: &mut ExecutionSession,
-    objects: &[&Mobject],
-    before: AuthoredSnapshot,
-    frame: noon::integration::FrameState,
-    publication: noon::PublicationContext,
-) {
-    assert_eq!(snapshot(scene, objects), before);
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(session.publication_context(), publication);
-    assert!(session.take_frame_changes().is_empty());
 }
 
 #[test]
@@ -607,25 +593,24 @@ fn frame_alignment_preserves_typed_rejection_and_live_recovery() -> TestResult {
         Err(AuthoringError::InvalidRenderNumber { .. })
     ));
     assert_eq!(snapshot(&scene, &[&object]), before);
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let error = scene
-        .live(&mut session)
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
+    let error = session
+        .scene_mut()
         .align_family_on_frame(&family, (1.0, 0.0), f64::NAN)
         .unwrap_err();
-    assert!(matches!(
-        error,
-        LiveSessionError::Authoring(AuthoringError::InvalidRenderNumber { .. })
-    ));
-    assert!(error.source().unwrap().is::<AuthoringError>());
-    assert_live_unchanged(&scene, &mut session, &[&object], before, frame, publication);
+    assert!(matches!(error, AuthoringError::InvalidRenderNumber { .. }));
+    assert_eq!(snapshot(session.scene(), &[&object]), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
     let old = object.state()?.transform;
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .align_family_on_frame(&family, (2.0, 0.0), 0.25)?;
     assert_ne!(object.state()?.transform, old);
-    assert!(!session.take_frame_changes().is_empty());
+    assert!(!session.session_mut().take_frame_changes().is_empty());
     Ok(())
 }

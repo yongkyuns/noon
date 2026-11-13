@@ -11,7 +11,8 @@ mod camera_motion;
 mod family_layout;
 mod path_editing;
 mod point_promotion;
-pub use family_layout::LiveLayoutTarget;
+#[cfg(test)]
+use crate::LiveLayoutTarget;
 
 #[cfg(test)]
 use crate::effective_capture::target_style_from_effective;
@@ -1960,68 +1961,6 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
-    /// Shift every ordinary leaf of one semantic family in a single publication.
-    ///
-    /// Family traversal and alias handling stay in the shared semantic store. This
-    /// is also the live-safe edit path for a detached family target: its authored
-    /// leaves change without leaving the execution session on an older revision.
-    pub fn shift_family(
-        &mut self,
-        family: &MobjectFamily,
-        x: f64,
-        y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.shift_family_3d(family, SemanticVec3::new(x, y, 0.0))
-    }
-
-    pub fn shift_family_3d(
-        &mut self,
-        family: &MobjectFamily,
-        delta: SemanticVec3,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_shift_family(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            delta,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    /// Grid alignment and sizing consume coherent live bounds and publish atomically.
-    pub fn arrange_family_in_grid_with_options(
-        &mut self,
-        family: &MobjectFamily,
-        options: &crate::FamilyGridOptions,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_arrange_family_in_grid(
-            self.store,
-            self.root,
-            self.session,
-            family,
-            options,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    /// Move an object's effective layout center to one point through a single
-    /// shared translation publication. Layout evaluation is bounded to this
-    /// object; the caller never reconstructs geometry or an affine offset.
-    pub fn move_to_point(
-        &mut self,
-        mobject: &Mobject,
-        x: f64,
-        y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.move_to(
-            mobject,
-            LiveLayoutTarget::Point(x, y),
-            (0.0, 0.0),
-            (1.0, 1.0),
-        )
-    }
-
     fn placement_authored_transform(
         &self,
         mobject: &Mobject,
@@ -2708,18 +2647,28 @@ mod tests {
         // so setting translation directly would not implement MoveTo semantics.
         let line = scene.line((0.0, 0.0), (2.0, 0.0)).unwrap();
         scene.add(&line).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
 
-        assert_eq!(live.effective_layout(&line).unwrap().center, (1.0, 0.0));
-        let result = live.move_to_point(&line, 5.0, -3.0).unwrap();
+        assert_eq!(
+            session.live().effective_layout(&line).unwrap().center,
+            (1.0, 0.0)
+        );
+        let result = session.scene_mut().move_to_point(&line, 5.0, -3.0).unwrap();
 
         assert_eq!(result.impacts().len(), 1);
         assert_eq!(
-            live.authored(&line).unwrap().transform.translation,
+            session
+                .live()
+                .authored(&line)
+                .unwrap()
+                .transform
+                .translation,
             SemanticVec3::new(4.0, -3.0, 0.0)
         );
-        assert_eq!(live.effective_layout(&line).unwrap().center, (5.0, -3.0));
+        assert_eq!(
+            session.live().effective_layout(&line).unwrap().center,
+            (5.0, -3.0)
+        );
     }
 
     #[test]
@@ -2731,7 +2680,10 @@ mod tests {
         let target = session.scene_mut().target_editor(&frame).unwrap();
         session.live().session.take_frame_changes();
 
-        let result = session.live().move_to_point(&target, 3.0, -2.0).unwrap();
+        let result = session
+            .scene_mut()
+            .move_to_point(&target, 3.0, -2.0)
+            .unwrap();
 
         assert_eq!(result.impacts().len(), 1);
         assert_eq!(
@@ -2844,23 +2796,25 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let segment = live.play_animation(&animation).unwrap();
-        live.advance_segment_to(segment, 1.0).unwrap();
-        let before = live.session.publication_context();
+        let mut session = scene.into_execution().unwrap();
+        let segment = session.live().play_animation(&animation).unwrap();
+        session.live().advance_segment_to(segment, 1.0).unwrap();
+        let before = session.live().session.publication_context();
 
         assert!(matches!(
-            live.move_to_point(&circle, 3.0, 0.0),
-            Err(LiveSessionError::Authoring(
-                crate::AuthoringError::Unsupported(
-                    crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
-                )
+            session.scene_mut().move_to_point(&circle, 3.0, 0.0),
+            Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
             ))
         ));
-        assert_eq!(live.session.publication_context(), before);
+        assert_eq!(session.live().session.publication_context(), before);
         assert_eq!(
-            live.authored(&circle).unwrap().transform.translation,
+            session
+                .live()
+                .authored(&circle)
+                .unwrap()
+                .transform
+                .translation,
             SemanticVec3::ZERO
         );
     }

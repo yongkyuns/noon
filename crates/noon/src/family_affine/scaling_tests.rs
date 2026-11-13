@@ -122,10 +122,14 @@ fn generic_scale_xyz_matches_ce_in_all_native_hosts() {
             } else {
                 if let Some(family) = &family {
                     if let Some(execution) = borrowed.as_mut() {
-                        scene
-                            .live(execution)
-                            .shift_family_3d(family, delta)
-                            .unwrap();
+                        crate::family_layout::publish_shift_family(
+                            scene.integration_store(),
+                            scene.root(),
+                            execution,
+                            family,
+                            delta,
+                        )
+                        .unwrap();
                     } else {
                         scene.shift_family_3d(family, delta).unwrap();
                     }

@@ -130,7 +130,7 @@ fn highlighted_code_retains_pixels_and_obeys_live_family_edits() {
     retain("code-original", &original, SIZE, SIZE);
 
     session
-        .live()
+        .scene_mut()
         .shift_family(code.family(), 0.5, -0.5)
         .unwrap();
     let shifted = raster.capture(&session.session_mut().take_renderer_publication());

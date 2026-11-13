@@ -106,7 +106,7 @@ fn live_alignment_uses_effective_target_bounds_and_one_local_publication() {
         .borrow()
         .scene_revision();
     let result = execution
-        .live()
+        .scene_mut()
         .next_layout_to_aligned(
             &source,
             LiveLayoutTarget::Anchor(&destination),
@@ -138,7 +138,7 @@ fn live_alignment_uses_effective_target_bounds_and_one_local_publication() {
         .borrow()
         .scene_revision();
     assert!(execution
-        .live()
+        .scene_mut()
         .next_layout_to_aligned(
             &source,
             LiveLayoutTarget::Anchor(&destination.clone().member(1)),
