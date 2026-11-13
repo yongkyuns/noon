@@ -9,12 +9,12 @@ mod scalar_authoring;
 mod scalar_authoring_3d;
 use scalar::ScalarPathEdit;
 mod transaction;
-use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily};
+use crate::{AuthoringError, Mobject, MobjectFamily};
 use noon_core::{
     SemanticMutationTransaction, SemanticNodeId, SemanticObjectContent, SemanticObjectState,
     SemanticStore, SemanticVec3, StoredGeometry, Vec2, VectorPath,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 pub(crate) use transaction::PreparedPathEdits;
 
 pub(crate) fn raw_points_path(points: &[(f64, f64)]) -> Result<VectorPath, AuthoringError> {
@@ -38,75 +38,6 @@ pub(crate) fn promote_point(point: Vec2) -> (f64, f64) {
 
 fn promote_points(points: &[Vec2]) -> Vec<(f64, f64)> {
     points.iter().copied().map(promote_point).collect()
-}
-
-/// Validate that one running Scene root may admit immutable path resources.
-///
-/// Callers that must preserve fail-closed ordering can invoke this before
-/// effective capture; [`publish_running_path_edits`] repeats the check for any
-/// prepared edit that actually creates resources.
-pub(crate) fn require_running_path_resource_admission(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &ExecutionSession,
-) -> Result<(), AuthoringError> {
-    execution
-        .require_resource_creation_at_root(&store.borrow(), root)
-        .map_err(AuthoringError::from)
-}
-
-/// Publish one already-prepared path edit through the running Scene authority.
-///
-/// Resource admission and immutable-resource rollback remain inside the same
-/// `PreparedPathEdits::publish` scope as semantic publication, so a rejected
-/// running mutation cannot leak newly admitted geometry resources.
-pub(crate) fn publish_running_path_edits(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    prepared: PreparedPathEdits,
-) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
-    if prepared.creates_resources() {
-        require_running_path_resource_admission(store, root, execution)?;
-    }
-    let mut store = store.borrow_mut();
-    prepared.publish(&mut store, |store, transaction| {
-        execution
-            .apply_semantic_transaction_at_root(store, root, transaction)
-            .map_err(AuthoringError::from)
-    })
-}
-
-fn require_running_object(
-    store: &Rc<RefCell<SemanticStore>>,
-    object: &Mobject,
-) -> Result<(), AuthoringError> {
-    if !Rc::ptr_eq(store, object.integration_store()) {
-        return Err(AuthoringError::ForeignStore);
-    }
-    object.validate()
-}
-
-/// Capture, prepare and publish one ordinary running path edit.
-///
-/// Resource admission remains before effective capture, preserving the existing
-/// fail-closed ordering for edits that may allocate immutable geometry.
-pub(crate) fn publish_running_object_edit(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    object: &Mobject,
-    edit: PathEdit<'_>,
-) -> Result<(), AuthoringError> {
-    require_running_object(store, object)?;
-    require_running_path_resource_admission(store, root, execution)?;
-    let captured = crate::effective_capture::capture_mobject_state(store, execution, object)?;
-    let store_ref = store.borrow();
-    let Some(prepared) = prepare_object_edit(&store_ref, object.node_id(), captured, edit)? else {
-        return Ok(());
-    };
-    drop(store_ref);
-    publish_running_path_edits(store, root, execution, prepared).map(|_| ())
 }
 
 fn prepare_family_reverse_points(
