@@ -3550,12 +3550,13 @@ class LiveExecution:
         _commit_typed_binding(mobject, self._scene, reservation, handle)
 
     def remove(self, mobject: _base.Mobject) -> None:
-        engine_call(self._context.liveRemove, self._handle(mobject), operation="LiveExecution.remove")
+        self._handle(mobject)
+        self._scene.remove(mobject)
 
     def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
         """Use preauthored source content while preserving target identity and state."""
         engine_call(
-            self._context.liveReplaceContent,
+            self._context.replaceContent,
             self._handle(target),
             self._handle(source, allow_detached=True),
             operation="LiveExecution.replace_content",
@@ -3586,14 +3587,12 @@ class LiveExecution:
         )
 
     def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
-        observed = engine_call(
-            self._context.liveEffectiveMobject, self._handle(mobject),
+        owned = getattr(mobject, "_canonical_live_target_context", None) is self._context
+        translation = engine_call(
+            self._context.queryEffectiveTranslation, self._handle(mobject, allow_detached=owned),
             operation="LiveExecution.effective_center",
         )
-        return _base.Vec2(
-            float(observed.translationX),
-            float(observed.translationY),
-        )
+        return _base.Vec2(float(translation[0]), float(translation[1]))
 
     def play(self, animation: "LiveAnimation") -> float:
         """Activate one declaration that was authored before this session began."""

@@ -473,23 +473,6 @@ impl Context {
         })
     }
 
-    fn require_execution(&self) -> PyResult<()> {
-        self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        Ok(())
-    }
-
-    fn edit_running_scene<T>(
-        &mut self,
-        edit: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
-    ) -> PyResult<T> {
-        self.require_execution()?;
-        edit(&mut self.scene)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-    }
-
     fn promote_own_points(
         &mut self,
         target: MobjectTarget<'_>,
@@ -4470,13 +4453,19 @@ impl Context {
         }
         Ok(())
     }
-    #[pyo3(name = "liveEffectiveMobject")]
-    fn effective_mobject(&mut self, target: &MobjectHandle) -> PyResult<CallbackTransform> {
+    #[pyo3(name = "queryEffectiveTranslation")]
+    fn query_effective_translation(&self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
+        self.require_active()?;
         self.same_store(target)?;
-        self.observe_effective(target)
-            .map(|value| CallbackTransform {
-                transform: value.transform,
+        self.scene
+            .effective(&target.handle)
+            .map(|value| {
+                (
+                    value.transform.translation.x.into(),
+                    value.transform.translation.y.into(),
+                )
             })
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
     #[pyo3(name = "setTranslation")]
     fn set_translation(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
@@ -4493,16 +4482,11 @@ impl Context {
         self.same_store(target)?;
         self.edit_scene_property(|scene| scene.set_rotation(&target.handle, angle))
     }
-    #[pyo3(name = "liveReplaceContent")]
+    #[pyo3(name = "replaceContent")]
     fn replace_content(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
         self.same_store(target)?;
         self.same_store(source)?;
-        self.edit_running_scene(|scene| scene.replace_content(&target.handle, &source.handle))
-    }
-    #[pyo3(name = "liveRemove")]
-    fn live_remove(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.remove(&target.handle))
+        self.edit_scene_property(|scene| scene.replace_content(&target.handle, &source.handle))
     }
     #[pyo3(name = "becomeMobject")]
     fn become_mobject(
