@@ -10,7 +10,8 @@
 
 use super::{ExecutionSession, ReplayError, ReplayLimits};
 use crate::{
-    AnimationOptions, ExecutionSegment, FadeEndpoint, FadeTranslation, Mobject, RateFunction, Scene,
+    family_authoring::FamilyTranslation, AnimationOptions, ExecutionSegment, FadeEndpoint,
+    FadeTranslation, Mobject, RateFunction, Scene,
 };
 use noon_core::{SemanticFadeDirection, SemanticVec3};
 use noon_runtime::{EvaluationError, FrameState};
@@ -68,14 +69,15 @@ fn shift(
     x: f64,
     y: f64,
 ) -> Result<(), crate::AuthoringError> {
-    crate::family_layout::publish_shift_root(
-        scene.integration_store(),
-        scene.root(),
-        session,
-        shape.node_id(),
-        crate::SemanticVec3::new(x, y, 0.0),
-    )
-    .map(|_| ())
+    let store = scene.integration_store();
+    let transaction = {
+        let store = store.borrow();
+        session.require_published_store(&store)?;
+        FamilyTranslation::begin_3d(&store, shape.node_id(), SemanticVec3::new(x, y, 0.0))?
+            .transaction(&store)?
+    };
+    Scene::publish_running_transaction(store, scene.root(), session, transaction)?;
+    Ok(())
 }
 
 fn recorded_scene(limits: ReplayLimits) -> (Scene, Mobject, ExecutionSession) {
