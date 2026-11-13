@@ -99,10 +99,14 @@ fn depth_xyz_affines_match_all_ce_pivots_in_authored_owned_and_borrowed_hosts() 
                 }
                 if let Some(family) = &family {
                     if let Some(execution) = borrowed.as_mut() {
-                        scene
-                            .live(execution)
-                            .shift_family_3d(family, delta)
-                            .unwrap();
+                        crate::family_layout::publish_shift_family(
+                            scene.integration_store(),
+                            scene.root(),
+                            execution,
+                            family,
+                            delta,
+                        )
+                        .unwrap();
                     } else {
                         scene.shift_family_3d(family, delta).unwrap();
                     }
@@ -254,23 +258,23 @@ fn depth_xyz_invalid_shifts_roll_back_all_aliased_leaves() {
             .family(&[(&a).into(), (&b).into(), (&a).into()])
             .unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut execution = scene.execution_session().unwrap();
+        let mut execution = scene.into_execution().unwrap();
         let before = [a.state().unwrap(), b.state().unwrap()];
-        let revision = scene.revision();
-        let publication = execution.publication_context();
+        let revision = execution.scene().revision();
+        let publication = execution.session().publication_context();
         for z in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let delta = SemanticVec3::new(1., 2., z);
             assert!(if live {
-                scene
-                    .live(&mut execution)
+                execution
+                    .scene_mut()
                     .shift_family_3d(&family, delta)
                     .is_err()
             } else {
                 family.shift_3d(delta).is_err()
             });
             assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
-            assert_eq!(scene.revision(), revision);
-            assert_eq!(execution.publication_context(), publication);
+            assert_eq!(execution.scene().revision(), revision);
+            assert_eq!(execution.session().publication_context(), publication);
         }
     }
 }

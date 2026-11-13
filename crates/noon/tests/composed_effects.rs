@@ -533,7 +533,7 @@ fn unchanged_family_effect_copy_can_animate_member_motion_without_rebinding_scop
         .unwrap();
     let target = session.scene_mut().copy_family(&family).unwrap();
     session
-        .live()
+        .scene_mut()
         .shift_family(target.root(), 2.0, 0.0)
         .unwrap();
     let segment = session

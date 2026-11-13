@@ -345,7 +345,7 @@ fn family_opacity_uses_root_clock_with_member_lag_backward_seek_and_returning_co
             .set_family_object_opacity(target.root(), 0.25)
             .unwrap();
         session
-            .live()
+            .scene_mut()
             .shift_family(target.root(), 2.0, 0.0)
             .unwrap();
         let options = AnimationOptions::new()
@@ -543,7 +543,7 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                 )
                 .unwrap();
             session
-                .live()
+                .scene_mut()
                 .shift_family(target.root(), 2.0, 0.0)
                 .unwrap();
             let options = AnimationOptions::new()
@@ -667,7 +667,7 @@ fn family_scope_clock_preserves_play_overrides_member_lag_and_seek() {
     let mut session = scene.into_execution().unwrap();
     let target = session.scene_mut().copy_family(&family).unwrap();
     session
-        .live()
+        .scene_mut()
         .shift_family(target.root(), 2.0, 0.0)
         .unwrap();
     session

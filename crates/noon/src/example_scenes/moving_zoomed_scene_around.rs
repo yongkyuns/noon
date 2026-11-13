@@ -129,7 +129,6 @@ impl LiveContinuation for MovingZoomedSceneAround {
             2 => {
                 let caption_anchor = LayoutAnchor::from(&self.zoomed_camera_text);
                 scene
-                    .live()
                     .next_layout_to_aligned(
                         &caption_anchor,
                         LiveLayoutTarget::Mobject(&self.display),

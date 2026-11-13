@@ -67,7 +67,7 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
     scene.add_many(&[(&family).into()]).unwrap();
     let mut session = scene.into_execution().unwrap();
     let result = session
-        .live()
+        .scene_mut()
         .arrange_family_in_grid_with_options(
             &family,
             &noon::FamilyGridOptions {
@@ -98,7 +98,7 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.family(&[]).unwrap();
     assert!(session
-        .live()
+        .scene_mut()
         .arrange_family_in_grid_with_options(
             &foreign,
             &noon::FamilyGridOptions {
@@ -231,7 +231,7 @@ fn explicit_sizes_and_alignments_infer_dimensions_and_publish_from_live_bounds()
     let mut session = scene.into_execution().unwrap();
     let before = unrelated.state().unwrap();
     session
-        .live()
+        .scene_mut()
         .arrange_family_in_grid_with_options(
             &family,
             &FamilyGridOptions {

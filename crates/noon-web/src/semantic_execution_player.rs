@@ -2446,17 +2446,10 @@ impl SemanticExecutionPlayer {
         color: noon::Color,
         draw_enabled: bool,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_family_creation_with_presentation(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            members,
-            z_index,
-            color,
-            draw_enabled,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene_mut()
+            .family_with_presentation(members, z_index, color, draw_enabled)
+            .map_err(AuthoringFailure::from)
     }
 
     /// Apply subset-display constructor preparation through the active retained

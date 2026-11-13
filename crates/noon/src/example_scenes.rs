@@ -1375,7 +1375,6 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     mask: (1.0, 1.0),
                 };
                 scene
-                    .live()
                     .next_layout_to_aligned(
                         &source,
                         crate::LiveLayoutTarget::Mobject(&self.circle),
@@ -1391,7 +1390,6 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     .map_err(|error| error.to_string())?;
                 let source = crate::LayoutAnchor::from(&self.circle);
                 let error = scene
-                    .live()
                     .next_layout_to_aligned(
                         &source,
                         crate::LiveLayoutTarget::Mobject(&probe),
@@ -1401,9 +1399,9 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     .unwrap_err();
                 assert!(matches!(
                     error,
-                    crate::LiveSessionError::Authoring(crate::AuthoringError::Unsupported(
+                    crate::AuthoringError::Unsupported(
                         crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
-                    ))
+                    )
                 ));
                 assert_eq!(
                     scene

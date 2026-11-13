@@ -47,7 +47,6 @@ impl LiveContinuation for GappedPlayback {
                 }
                 Some(stroke) if !drawing.shown => {
                     scene
-                        .live()
                         .move_to_point(&drawing.marker, stroke.start[0], stroke.start[1])
                         .map_err(|e| e.to_string())?;
                     scene.add(&drawing.marker).map_err(|e| e.to_string())?;
