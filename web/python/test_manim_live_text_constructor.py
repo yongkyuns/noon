@@ -12,6 +12,7 @@ class ManimLiveTextConstructorTests(unittest.TestCase):
         source = r"""
 from types import SimpleNamespace
 import _manim_latex as latex
+import _manim_reactive as reactive
 import noon
 assert noon.Tex is latex.Tex and noon.MathTex is latex.MathTex
 calls = []
@@ -19,7 +20,6 @@ def latex_parts(args, source):
     return SimpleNamespace(source=source, family=lambda: object(), members=lambda: ())
 latex._create = lambda *args: calls.append(args) or latex_parts(args, args[0])
 latex._create_strings = lambda *args: calls.append(args) or latex_parts(args, r"x{{+}}y  z ")
-latex._live_text_context = lambda: None
 cold = noon.MathTex(r"\frac{1}{2}", font_size=32, color=noon.BLUE, opacity=0.4)
 assert cold.source == r"\frac{1}{2}"
 assert calls[0][:3] == (r"\frac{1}{2}", True, 32.0)
@@ -27,12 +27,14 @@ assert calls[0][-3:] == (0.4, [], None)
 parts = noon.MathTex(r"x{{+}}y", r"{{ z }}")
 assert parts.source == r"x{{+}}y  z "
 assert calls[-1][:3] == ([r"x{{+}}y", r"{{ z }}"], True, 48.0)
-context = object()
-latex._live_text_context = lambda: context
-live = noon.Tex("raw % source")
-assert live._canonical_live_target_context is context
-assert calls[-1][0:2] == ("raw % source", False)
-assert calls[-1][-1] is context
+for ownership in ("none", "returned"):
+    context = SimpleNamespace(liveExecutionOwnership=lambda: ownership)
+    scene = SimpleNamespace(_canonical_authoring_context=context)
+    reactive._current_authoring_scene = lambda: scene
+    authored = noon.Tex("raw % source")
+    assert authored._canonical_live_target_context is context
+    assert calls[-1][0:2] == ("raw % source", False)
+    assert calls[-1][-1] is context
 before = len(calls)
 for kwargs in (
     {"font_size": 0}, {"opacity": 2}, {"unknown_option": 1},
