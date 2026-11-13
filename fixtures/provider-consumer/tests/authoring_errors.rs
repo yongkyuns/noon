@@ -276,13 +276,11 @@ fn live_stale_handle_is_not_reduced_to_a_mobject_string() -> TestResult {
     let frame = session.session().frame().clone();
     let publication = session.session().publication_context();
     for error in [
-        LiveSessionError::from(session.scene_mut().add(&stale).unwrap_err()),
-        session.live().effective(&stale).unwrap_err(),
+        session.scene_mut().add(&stale).unwrap_err(),
+        session.scene().effective(&stale).unwrap_err(),
     ] {
-        assert!(
-            matches!(error, LiveSessionError::Authoring(AuthoringError::Semantic(
-            SemanticSceneOperationError::UnknownNode(id))) if id == stale.node_id())
-        );
+        assert!(matches!(error, AuthoringError::Semantic(
+            SemanticSceneOperationError::UnknownNode(id)) if id == stale.node_id()));
     }
     assert_eq!(authored_snapshot(session.scene()), before);
     assert_eq!(session.session().frame(), &frame);
@@ -290,7 +288,7 @@ fn live_stale_handle_is_not_reduced_to_a_mobject_string() -> TestResult {
     assert!(session.session_mut().take_frame_changes().is_empty());
     session.scene_mut().set_translation(&valid, 2.0, 0.0)?;
     assert_eq!(
-        session.live().effective(&valid)?.transform.translation,
+        session.scene().effective(&valid)?.transform.translation,
         Vec2::new(2.0, 0.0)
     );
     Ok(())
@@ -373,11 +371,11 @@ fn pending_segment_rejects_membership_then_accepts_it_after_logical_completion()
     assert_eq!(session.session().publication_context(), publication);
     assert!(session.session_mut().take_frame_changes().is_empty());
     assert_eq!(
-        session.live().authored(&local)?.transform.translation.x,
+        session.scene().authored(&local)?.transform.translation.x,
         0.0
     );
     assert_eq!(
-        session.live().effective(&local)?.transform.translation.x,
+        session.scene().effective(&local)?.transform.translation.x,
         2.0
     );
     session
@@ -386,11 +384,11 @@ fn pending_segment_rejects_membership_then_accepts_it_after_logical_completion()
     session.live().complete_segment(segment)?;
     session.scene_mut().add(&detached)?;
     assert_eq!(
-        session.live().authored(&local)?.transform.translation.x,
+        session.scene().authored(&local)?.transform.translation.x,
         4.0
     );
     assert_eq!(
-        session.live().effective(&local)?.transform.translation.x,
+        session.scene().effective(&local)?.transform.translation.x,
         4.0
     );
     Ok(())
