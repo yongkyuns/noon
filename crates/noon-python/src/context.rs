@@ -1737,7 +1737,7 @@ impl Context {
         space: &crate::sample_space::SampleSpaceHandle,
         probabilities: Vec<f64>,
         rgba: Vec<f64>,
-    ) -> PyResult<FamilyHandle> {
+    ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
         crate::sample_space::family(space.0.get_horizontal_division_in_scene(
             &mut self.scene,
@@ -1752,7 +1752,7 @@ impl Context {
         space: &crate::sample_space::SampleSpaceHandle,
         probabilities: Vec<f64>,
         rgba: Vec<f64>,
-    ) -> PyResult<FamilyHandle> {
+    ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
         crate::sample_space::family(space.0.get_vertical_division_in_scene(
             &mut self.scene,
@@ -1767,7 +1767,7 @@ impl Context {
         space: &mut crate::sample_space::SampleSpaceHandle,
         probabilities: Vec<f64>,
         rgba: Vec<f64>,
-    ) -> PyResult<FamilyHandle> {
+    ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
         crate::sample_space::family(space.0.divide_horizontally(
             &mut self.scene,
@@ -1782,7 +1782,7 @@ impl Context {
         space: &mut crate::sample_space::SampleSpaceHandle,
         probabilities: Vec<f64>,
         rgba: Vec<f64>,
-    ) -> PyResult<FamilyHandle> {
+    ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
         crate::sample_space::family(space.0.divide_vertically(
             &mut self.scene,
