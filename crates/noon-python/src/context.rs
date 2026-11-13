@@ -1925,10 +1925,67 @@ impl Context {
         cap.map(|cap| cap.as_str()).map_err(engine_error)
     }
 
-    #[pyo3(name = "liveSetFamilyFade")]
+    fn fade(&mut self, target: &MobjectHandle, darkness: f64) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| scene.fade(&target.handle, darkness))
+    }
+
+    #[pyo3(name = "fadeFamily")]
     fn fade_family(&mut self, target: &crate::family::FamilyHandle, darkness: f64) -> PyResult<()> {
         self.available()?;
-        self.place(|scene| scene.fade_family(&target.family, darkness))
+        self.edit_scene(|scene| scene.fade_family(&target.family, darkness))
+    }
+
+    #[pyo3(name = "fadeTo")]
+    fn fade_to(
+        &mut self,
+        target: &MobjectHandle,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        amount: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        self.edit_scene(|scene| scene.fade_to(&target.handle, color, amount))
+    }
+
+    #[pyo3(name = "fadeToFamily")]
+    fn fade_to_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        amount: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        self.edit_scene(|scene| scene.fade_to_family(&target.family, color, amount))
+    }
+
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&mut self, receiver: &MobjectHandle, donor: &MobjectHandle) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .match_style(&receiver.handle, &donor.handle)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
+    #[pyo3(name = "matchFamilyStyle")]
+    fn match_family_style(
+        &mut self,
+        receiver: &crate::family::FamilyHandle,
+        donor: &crate::family::FamilyHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .match_family_style(&receiver.family, &donor.family)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
 
     #[pyo3(name = "liveApplyMatrixFamily")]

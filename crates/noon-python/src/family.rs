@@ -67,6 +67,23 @@ impl FamilyHandle {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&self, target: &Self) -> PyResult<()> {
+        self.family
+            .match_style(&target.family)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "fadeTo")]
+    fn fade_to(&self, red: f64, green: f64, blue: f64, alpha: f64, amount: f64) -> PyResult<()> {
+        self.family
+            .fade_to(
+                noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                amount,
+            )
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "setColorGradient")]
     fn set_color_gradient(&self, values: Vec<f64>) -> PyResult<()> {
         let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;

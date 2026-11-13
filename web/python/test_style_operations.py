@@ -686,11 +686,11 @@ class StyleOperationsTests(unittest.TestCase):
         source._semantic_family_handle = object()
         target._semantic_family_handle = object()
         source_handle, target_handle = object(), object()
-        context = SimpleNamespace(liveMatchFamilyStyle=Mock())
-        with patch.object(handles, '_style_target', side_effect=[
+        context = SimpleNamespace(matchFamilyStyle=Mock())
+        with patch.object(handles, '_paint_authoring_target', side_effect=[
                 (source_handle, context, 'Family'), (target_handle, context, 'Family')]):
             self.assertIs(source.match_style(target), source)
-        context.liveMatchFamilyStyle.assert_called_once_with(source_handle, target_handle)
+        context.matchFamilyStyle.assert_called_once_with(source_handle, target_handle)
         style = {
             "fill_color": compat._base.GREEN,
             "fill_opacity": 0.3,

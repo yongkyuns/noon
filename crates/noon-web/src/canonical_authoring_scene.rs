@@ -10981,26 +10981,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveFade)]
-        pub fn live_fade(
+        #[wasm_bindgen(js_name = fade)]
+        pub fn fade(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             darkness: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .fade(handle.semantic_mobject(), darkness)
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.fade(handle.semantic_mobject(), darkness))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveFadeTo)]
-        pub fn live_fade_to(
+        #[wasm_bindgen(js_name = fadeTo)]
+        pub fn fade_to(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -11009,20 +11003,16 @@ mod wasm {
             alpha: f64,
             amount: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .fade_to(
-                    handle.semantic_mobject(),
-                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
-                    amount,
-                )
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.fade_to(
+                        handle.semantic_mobject(),
+                        noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                        amount,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = setEmission)]
@@ -11572,20 +11562,20 @@ mod wasm {
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
-        #[wasm_bindgen(js_name = liveMatchStyle)]
-        pub fn live_match_style(
+        #[wasm_bindgen(js_name = matchStyle)]
+        pub fn match_style(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .match_style(&source.semantic_mobject(), &target.semantic_mobject())
                 .map(|_| ())
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
+
         #[wasm_bindgen(js_name = setFamilyStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_family_style(
@@ -11896,20 +11886,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
-        pub fn live_match_family_style(
+        #[wasm_bindgen(js_name = matchFamilyStyle)]
+        pub fn match_family_style(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .match_family_style(&source.semantic_family()?, &target.semantic_family()?)
                 .map(|_| ())
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
+
         #[wasm_bindgen(js_name = setFamilyOwnColor)]
         pub fn set_family_own_color(
             &mut self,
@@ -12017,8 +12007,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyFade)]
-        pub fn live_set_family_fade(
+        #[wasm_bindgen(js_name = fadeFamily)]
+        pub fn fade_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             darkness: f64,
@@ -12026,16 +12016,12 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .fade_family(&family, darkness)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.fade_family(&family, darkness))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyFadeTo)]
-        pub fn live_set_family_fade_to(
+        #[wasm_bindgen(js_name = fadeToFamily)]
+        pub fn fade_to_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             red: f64,
@@ -12046,16 +12032,14 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .fade_to_family(
-                    &family,
-                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
-                    amount,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.fade_to_family(
+                        &family,
+                        noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                        amount,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
