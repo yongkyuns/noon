@@ -37,6 +37,7 @@ mod paints;
 mod path_input;
 mod path_query;
 mod plotting;
+mod riemann;
 mod sample_space;
 mod shaders;
 mod signals;
@@ -83,6 +84,7 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
     arrow::register(m)?;
+    riemann::register(m)?;
     audio::register(m)?;
     m.add_class::<graph::GraphOptions>()?;
     sample_space::register(m)?;

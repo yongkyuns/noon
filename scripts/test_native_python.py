@@ -27,7 +27,7 @@ class NativePythonTests(unittest.TestCase):
                      "showcase_bezier_paths", "manim_parity_family_slices",
                      "manim_parity_object_members", "ordinary_family_membership_order", "manim_parity_family_member_queries",
                      "manim_parity_point_promotion", "ordinary_subset_display",
-                     "coordinate_plotting", "animated_number_line", "live_coordinate_plotting",
+                     "coordinate_plotting", "animated_number_line", "live_coordinate_plotting", "area_helpers",
                      "number_plane", "polar_plane", "manim_example_moving_camera_center",
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
                      "showcase_glass_lens", "showcase_camera_follows_path",
@@ -74,6 +74,46 @@ class NativePythonTests(unittest.TestCase):
                 close_scene(scene)
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
+
+    def test_riemann_rectangles_follow_effective_axes_and_preserve_sample_order(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        axes = Axes([-1, 1, 1], [-1, 1, 1], x_length=2, y_length=2, tips=False)
+        calls = []
+        def top(x):
+            calls.append(("top", x))
+            return x * x
+        def lower(x):
+            calls.append(("lower", x))
+            return -0.25
+        graph = axes.plot(top, [-1, 1, 1], use_smoothing=False)
+        bound = axes.plot(lower, [-1, 1, 1], use_smoothing=False)
+        def rectangles():
+            calls.clear()
+            family = axes.get_riemann_rectangles(
+                graph, dx=0.5, input_sample_type="center",
+                width_scale_factor=1, bounded_graph=bound)
+            assert calls == [
+                (kind, x) for start in (-1, -0.5, 0, 0.5)
+                for kind, x in (("top", start + 0.25), ("lower", start))
+            ]
+            assert len(family) == 4
+            actual, expected = family[0].get_start(), axes.c2p(-0.5, 0.5625)
+            assert abs(actual.x - expected.x) < 1e-5 and abs(actual.y - expected.y) < 1e-5
+            return family
+        subject = VGroup(axes, graph, bound)
+        self.add(subject)
+        before = rectangles()
+        self.add(before)
+        self.play(subject.animate.shift(RIGHT), run_time=0.125)
+        after = rectangles()
+        assert after[0].get_start().x > before[0].get_start().x
+        self.add(after)
+        self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
 
     def test_code_listing_constructed_during_playback_can_be_copied(self):
         source = """from noon import *

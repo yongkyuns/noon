@@ -393,21 +393,22 @@ fn plan_rejects_foreign_bounded_source_before_host_evaluation() {
 }
 
 #[test]
-fn effective_plan_values_use_one_existing_live_publication_transaction() {
+fn effective_plan_values_publish_through_the_owning_scene() {
     let (mut scene, axes, graph) = quadratic_fixture();
     scene
         .add_many(&[axes.family().into(), (&graph).into()])
         .unwrap();
+    let mut other = Scene::with_integration_store(Rc::clone(scene.integration_store()));
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
     let plan = scene
         .effective_riemann_plan(&axes, &graph, midpoint_options())
         .unwrap();
+    let top = [0.5625, 0.0625, 0.0625, 0.5625];
+    assert!(plan.publish(Some(&top), None).is_err());
+    assert!(other.publish_riemann_plan(&plan, Some(&top), None).is_err());
     let revision = scene.revision();
-    let paths = plan
-        .paths(Some(&[0.5625, 0.0625, 0.0625, 0.5625]), None)
-        .unwrap();
-    let family = scene.path_family(paths).unwrap();
+    let family = scene.publish_riemann_plan(&plan, Some(&top), None).unwrap();
     assert_eq!(scene.revision().get(), revision.get() + 1);
     assert_eq!(
         family_top_points(&scene, &family),

@@ -85,6 +85,18 @@ impl CoordinateOptions {
 
 #[pymethods]
 impl CoordinateOptions {
+    #[staticmethod]
+    fn riemann(
+        range: Vec<f64>,
+        dx: f64,
+        sample: u32,
+        width_scale_factor: f64,
+    ) -> PyResult<crate::riemann::RiemannOptions> {
+        noon::integration::RiemannInput::new(&range, dx, sample, width_scale_factor)
+            .map(|input| crate::riemann::RiemannOptions(Some(input)))
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "numberLabels")]
     #[cfg(feature = "native-text")]
     #[staticmethod]
