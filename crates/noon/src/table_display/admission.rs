@@ -72,24 +72,21 @@ fn validate_label_counts(
     Ok(())
 }
 
-pub(super) enum TablePublisher<'a, 'session> {
+pub(super) enum TablePublisher<'a> {
     Store(Rc<RefCell<noon_core::SemanticStore>>),
     Scene(&'a mut Scene),
-    Live(&'a mut crate::LiveSession<'session>),
 }
-impl TablePublisher<'_, '_> {
+impl TablePublisher<'_> {
     fn store(&self) -> Rc<RefCell<noon_core::SemanticStore>> {
         match self {
             Self::Store(store) => Rc::clone(store),
             Self::Scene(scene) => Rc::clone(scene.integration_store()),
-            Self::Live(live) => Rc::clone(live.integration_store()),
         }
     }
     fn entry_state(&self, object: &Mobject) -> Result<SemanticObjectState, AuthoringError> {
         match self {
             Self::Store(_) => Ok(object.state()?),
             Self::Scene(scene) => Ok(scene.composite_entry_state(object)?),
-            Self::Live(live) => Ok(live.composite_entry_state(object)?),
         }
     }
     fn composite_entries(
@@ -139,20 +136,6 @@ impl TablePublisher<'_, '_> {
             Self::Scene(scene) => scene
                 .with_semantic_publication(operation)
                 .map_err(Into::into),
-            Self::Live(live) => {
-                live.with_semantic_publication(operation)
-                    .map_err(|error| match error {
-                        crate::LiveSessionError::Authoring(error) => {
-                            TableAuthoringError::Semantic(error)
-                        }
-                        crate::LiveSessionError::Publication(error) => {
-                            TableAuthoringError::Semantic(AuthoringError::ExecutionPublication(
-                                error,
-                            ))
-                        }
-                        other => TableAuthoringError::LiveSession(other),
-                    })
-            }
         }
     }
 }
@@ -441,7 +424,7 @@ fn stage(
     })
 }
 fn commit_composite(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     entries: Vec<MobjectTarget<'_>>,
     shape: TableShape,
     rows: Option<Vec<MobjectTarget<'_>>>,
@@ -517,7 +500,7 @@ fn commit_composite(
 }
 
 pub(super) fn publish_existing_table(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     entries: Vec<Mobject>,
     shape: TableShape,
     rows: Option<Vec<Mobject>>,
@@ -542,7 +525,7 @@ pub(super) fn publish_existing_table(
     )
 }
 pub(super) fn publish_target_table(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     entries: Vec<MobjectTarget<'_>>,
     shape: TableShape,
     rows: Option<Vec<Mobject>>,
@@ -566,7 +549,7 @@ pub(super) fn publish_target_table(
     )
 }
 pub(super) fn publish_target_table_with_composite_labels(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     entries: Vec<MobjectTarget<'_>>,
     shape: TableShape,
     rows: Option<Vec<MobjectTarget<'_>>>,
@@ -576,7 +559,7 @@ pub(super) fn publish_target_table_with_composite_labels(
     commit_composite(publisher, entries, shape, rows, columns, None, options)
 }
 pub(super) fn publish_target_table_with_top_left_entry(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     entries: Vec<MobjectTarget<'_>>,
     shape: TableShape,
     rows: Option<Vec<Mobject>>,
@@ -602,7 +585,7 @@ pub(super) fn publish_target_table_with_top_left_entry(
     )
 }
 pub(super) fn publish_target_table_with_composite_labels_and_top_left_entry(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     entries: Vec<MobjectTarget<'_>>,
     shape: TableShape,
     rows: Option<Vec<MobjectTarget<'_>>>,
@@ -622,7 +605,7 @@ pub(super) fn publish_target_table_with_composite_labels_and_top_left_entry(
 }
 #[cfg(any(feature = "latex", feature = "native-text"))]
 fn publish_prepared_text_table(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     prepared: Vec<PreparedTextCell>,
     shape: TableShape,
     rows: Option<Vec<MobjectTarget<'_>>>,
@@ -730,7 +713,7 @@ fn publish_prepared_text_table(
 
 #[cfg(feature = "latex")]
 pub(super) fn publish_text_table(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     backend: &mut impl LatexBackend,
     values: Vec<String>,
     shape: TableShape,
@@ -767,7 +750,7 @@ pub(super) fn publish_text_table(
 /// as one publication.
 #[cfg(feature = "native-text")]
 pub(super) fn publish_native_text_table(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     values: Vec<String>,
     shape: TableShape,
     rows: Option<Vec<Mobject>>,
@@ -793,7 +776,7 @@ pub(super) fn publish_native_text_table(
 
 #[cfg(feature = "native-text")]
 pub(super) fn publish_native_text_table_with_composite_labels(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     values: Vec<String>,
     shape: TableShape,
     rows: Option<Vec<MobjectTarget<'_>>>,
@@ -819,7 +802,7 @@ pub(super) fn publish_native_text_table_with_composite_labels(
 #[cfg(feature = "latex")]
 #[allow(clippy::too_many_arguments)] // Numeric resource admission and topology publish one transaction.
 pub(super) fn publish_numeric_table(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     backend: &mut impl LatexBackend,
     values: Vec<f64>,
     shape: TableShape,
@@ -915,7 +898,7 @@ pub(super) fn alias(
     Ok(MobjectFamily::create(Rc::clone(store), &targets)?)
 }
 fn selected_cell_bounds(
-    publisher: &TablePublisher<'_, '_>,
+    publisher: &TablePublisher<'_>,
     family: &MobjectFamily,
     options: TableOptions,
     row: &[noon_core::SemanticNodeId],
@@ -972,7 +955,7 @@ pub(super) fn cell(
     )
 }
 pub(super) fn cell_in_publisher(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     family: &MobjectFamily,
     options: TableOptions,
     row: &[noon_core::SemanticNodeId],
@@ -1037,7 +1020,7 @@ pub(super) fn highlighted_cell(
 }
 
 pub(super) fn highlighted_cell_in_publisher(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     family: &MobjectFamily,
     options: TableOptions,
     row: &[noon_core::SemanticNodeId],
@@ -1052,7 +1035,7 @@ pub(super) fn highlighted_cell_in_publisher(
 
 #[allow(clippy::too_many_arguments)] // One atomic rectangle creation plus retained highlight membership.
 pub(super) fn highlight_in_publisher(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     family: &MobjectFamily,
     highlights: &MobjectFamily,
     options: TableOptions,
@@ -1075,7 +1058,7 @@ pub(super) fn highlight_in_publisher(
 
 #[allow(clippy::too_many_arguments)] // One atomic rectangle creation plus optional family membership.
 fn highlight_with_membership(
-    publisher: TablePublisher<'_, '_>,
+    publisher: TablePublisher<'_>,
     family: &MobjectFamily,
     highlights: Option<&MobjectFamily>,
     options: TableOptions,

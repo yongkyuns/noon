@@ -172,7 +172,6 @@ pub enum TableAuthoringError {
     #[cfg(feature = "latex")]
     Numeric(NumericAuthoringError),
     Semantic(AuthoringError),
-    LiveSession(crate::LiveSessionError),
 }
 impl std::fmt::Display for TableAuthoringError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -199,7 +198,6 @@ impl std::fmt::Display for TableAuthoringError {
             #[cfg(feature = "latex")]
             Self::Numeric(error) => error.fmt(f),
             Self::Semantic(error) => error.fmt(f),
-            Self::LiveSession(error) => error.fmt(f),
         }
     }
 }
@@ -433,55 +431,6 @@ impl Table {
             options,
         )
     }
-    #[cfg(feature = "native-text")]
-    pub fn from_rows_in_live_session<I, J, S>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let rows = collect_text_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_native_text_table(
-            TablePublisher::Live(live),
-            rows.into_iter().flatten().collect(),
-            shape,
-            None,
-            None,
-            options,
-        )
-    }
-    /// Live-session counterpart of [`Self::from_rows_with_composite_labels`].
-    #[cfg(feature = "native-text")]
-    pub fn from_rows_with_composite_labels_in_live_session<'a, I, J, S>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        row_labels: Option<Vec<MobjectTarget<'a>>>,
-        column_labels: Option<Vec<MobjectTarget<'a>>>,
-        top_left_entry: Option<MobjectTarget<'a>>,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let rows = collect_text_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_native_text_table_with_composite_labels(
-            TablePublisher::Live(live),
-            rows.into_iter().flatten().collect(),
-            shape,
-            row_labels,
-            column_labels,
-            top_left_entry,
-            options,
-        )
-    }
     pub fn family(&self) -> &MobjectFamily {
         &self.family
     }
@@ -588,30 +537,6 @@ impl MathTable {
         )
         .map(Self)
     }
-    pub fn from_rows_in_live_session<I, J, S>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let rows = collect_text_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_text_table(
-            TablePublisher::Live(live),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            None,
-            None,
-            options,
-        )
-        .map(Self)
-    }
     pub fn table(&self) -> &Table {
         &self.0
     }
@@ -646,30 +571,6 @@ impl IntegerTable {
         let shape = table_shape(&rows)?;
         publish_numeric_table(
             TablePublisher::Scene(scene),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            integer_format(),
-            None,
-            None,
-            options,
-        )
-        .map(Self)
-    }
-    pub fn from_rows_in_live_session<I, J>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = f64>,
-    {
-        let rows = collect_number_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_numeric_table(
-            TablePublisher::Live(live),
             backend,
             rows.into_iter().flatten().collect(),
             shape,
@@ -716,31 +617,6 @@ impl DecimalTable {
         let shape = table_shape(&rows)?;
         publish_numeric_table(
             TablePublisher::Scene(scene),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            format,
-            None,
-            None,
-            options,
-        )
-        .map(Self)
-    }
-    pub fn from_rows_in_live_session<I, J>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        format: DecimalFormat,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = f64>,
-    {
-        let rows = collect_number_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_numeric_table(
-            TablePublisher::Live(live),
             backend,
             rows.into_iter().flatten().collect(),
             shape,
@@ -805,27 +681,6 @@ impl MobjectTable {
         let shape = table_shape(&rows)?;
         publish_target_table(
             TablePublisher::Store(store),
-            rows.into_iter().flatten().collect(),
-            shape,
-            None,
-            None,
-            options,
-        )
-        .map(Self)
-    }
-    pub fn from_target_rows_in_live_session<'a, I, J>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = MobjectTarget<'a>>,
-    {
-        let rows = collect_target_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_target_table(
-            TablePublisher::Live(live),
             rows.into_iter().flatten().collect(),
             shape,
             None,
@@ -988,129 +843,12 @@ impl MobjectTable {
         .map(Self)
     }
     /// Live-session counterpart of [`Self::from_target_rows_with_labels`].
-    pub fn from_target_rows_with_labels_in_live_session<'a, I, J>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        row_labels: Option<Vec<Mobject>>,
-        column_labels: Option<Vec<Mobject>>,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = MobjectTarget<'a>>,
-    {
-        let rows = collect_target_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_target_table(
-            TablePublisher::Live(live),
-            rows.into_iter().flatten().collect(),
-            shape,
-            row_labels,
-            column_labels,
-            options,
-        )
-        .map(Self)
-    }
     /// Live-session counterpart of [`Self::from_target_rows_with_composite_labels`].
-    pub fn from_target_rows_with_composite_labels_in_live_session<'a, I, J>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        row_labels: Option<Vec<MobjectTarget<'a>>>,
-        column_labels: Option<Vec<MobjectTarget<'a>>>,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = MobjectTarget<'a>>,
-    {
-        let rows = collect_target_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_target_table_with_composite_labels(
-            TablePublisher::Live(live),
-            rows.into_iter().flatten().collect(),
-            shape,
-            row_labels,
-            column_labels,
-            options,
-        )
-        .map(Self)
-    }
     /// Live-session counterpart of
     /// [`Self::from_target_rows_with_labels_and_top_left_entry`].
-    pub fn from_target_rows_with_labels_and_top_left_entry_in_live_session<'a, I, J>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        row_labels: Vec<Mobject>,
-        column_labels: Vec<Mobject>,
-        top_left_entry: Mobject,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = MobjectTarget<'a>>,
-    {
-        let rows = collect_target_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_target_table_with_top_left_entry(
-            TablePublisher::Live(live),
-            rows.into_iter().flatten().collect(),
-            shape,
-            Some(row_labels),
-            Some(column_labels),
-            Some(top_left_entry),
-            options,
-        )
-        .map(Self)
-    }
     /// Live-session counterpart of
     /// [`Self::from_target_rows_with_composite_labels_and_top_left_entry`].
-    pub fn from_target_rows_with_composite_labels_and_top_left_entry_in_live_session<'a, I, J>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        row_labels: Vec<MobjectTarget<'a>>,
-        column_labels: Vec<MobjectTarget<'a>>,
-        top_left_entry: MobjectTarget<'a>,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = MobjectTarget<'a>>,
-    {
-        Self::from_target_rows_with_optional_composite_labels_in_live_session(
-            live,
-            rows,
-            Some(row_labels),
-            Some(column_labels),
-            Some(top_left_entry),
-            options,
-        )
-    }
     /// Construct using optional label lists, preserving absent versus empty input.
-    pub fn from_target_rows_with_optional_composite_labels_in_live_session<'a, I, J>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        row_labels: Option<Vec<MobjectTarget<'a>>>,
-        column_labels: Option<Vec<MobjectTarget<'a>>>,
-        top_left_entry: Option<MobjectTarget<'a>>,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = MobjectTarget<'a>>,
-    {
-        let rows = collect_target_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_target_table_with_composite_labels_and_top_left_entry(
-            TablePublisher::Live(live),
-            rows.into_iter().flatten().collect(),
-            shape,
-            row_labels,
-            column_labels,
-            top_left_entry,
-            options,
-        )
-        .map(Self)
-    }
     pub fn from_rows<I, J>(scene: &mut Scene, rows: I) -> Result<Self, TableAuthoringError>
     where
         I: IntoIterator<Item = J>,
@@ -1152,27 +890,6 @@ impl MobjectTable {
         let shape = table_shape(&rows)?;
         publish_existing_table(
             TablePublisher::Store(store),
-            rows.into_iter().flatten().collect(),
-            shape,
-            None,
-            None,
-            options,
-        )
-        .map(Self)
-    }
-    pub fn from_rows_in_live_session<I, J>(
-        live: &mut crate::LiveSession<'_>,
-        rows: I,
-        options: TableOptions,
-    ) -> Result<Self, TableAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = Mobject>,
-    {
-        let rows = collect_mobject_rows(rows);
-        let shape = table_shape(&rows)?;
-        publish_existing_table(
-            TablePublisher::Live(live),
             rows.into_iter().flatten().collect(),
             shape,
             None,
@@ -2326,8 +2043,8 @@ mod tests {
         let second = circle(&store, 1.0);
         let mut execution = scene.into_execution().unwrap();
         let table = {
-            let table = MobjectTable::from_rows_in_live_session(
-                &mut execution.live(),
+            let table = MobjectTable::from_rows_with_options(
+                execution.scene_mut(),
                 vec![vec![first, second]],
                 TableOptions {
                     h_buff: 1.25,

@@ -8,7 +8,6 @@ impl SemanticExecutionPlayer {
         source: &str,
         options: noon::CodeOptions,
     ) -> Result<noon::Code, AuthoringFailure> {
-        self.with_live_session(|live| Ok(noon::Code::in_live_session(live, source, options)))?
-            .map_err(AuthoringFailure::from)
+        noon::Code::new(self.source.scene_mut(), source, options).map_err(AuthoringFailure::from)
     }
 }

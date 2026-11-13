@@ -1,4 +1,4 @@
-//! Table language adapters use the shared live-session publication boundary.
+//! Table authoring through the current Scene.
 use super::SemanticExecutionPlayer;
 use crate::authoring_error::AuthoringFailure;
 
@@ -8,7 +8,8 @@ impl SemanticExecutionPlayer {
         selection: &noon::TableCellColumns,
         column: noon::IntegerIndex,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.with_live_session(|live| Ok(selection.get_cell_in_live_session(live, column)))?
+        selection
+            .get_cell_in_scene(self.source.scene_mut(), column)
             .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_highlight_table_cell(
@@ -18,10 +19,9 @@ impl SemanticExecutionPlayer {
         color: noon::Color,
         opacity: f64,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(selection.highlight_cell_in_live_session(live, column, color, opacity))
-        })?
-        .map_err(AuthoringFailure::from)
+        selection
+            .highlight_cell_in_scene(self.source.scene_mut(), column, color, opacity)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_get_highlighted_table_cell(
         &mut self,
@@ -30,20 +30,17 @@ impl SemanticExecutionPlayer {
         color: noon::Color,
         opacity: f64,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(selection.get_highlighted_cell_in_live_session(live, column, color, opacity))
-        })?
-        .map_err(AuthoringFailure::from)
+        selection
+            .get_highlighted_cell_in_scene(self.source.scene_mut(), column, color, opacity)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_table(
         &mut self,
         rows: Vec<Vec<String>>,
         options: noon::TableOptions,
     ) -> Result<noon::Table, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::Table::from_rows_in_live_session(live, rows, options))
-        })?
-        .map_err(AuthoringFailure::from)
+        noon::Table::from_rows_with_options(self.source.scene_mut(), rows, options)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_table_with_labels<'a>(
         &mut self,
@@ -53,18 +50,14 @@ impl SemanticExecutionPlayer {
         top_left_entry: Option<noon::MobjectTarget<'a>>,
         options: noon::TableOptions,
     ) -> Result<noon::Table, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(
-                noon::Table::from_rows_with_composite_labels_in_live_session(
-                    live,
-                    rows,
-                    row_labels,
-                    column_labels,
-                    top_left_entry,
-                    options,
-                ),
-            )
-        })?
+        noon::Table::from_rows_with_composite_labels(
+            self.source.scene_mut(),
+            rows,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options,
+        )
         .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_math_table(
@@ -73,13 +66,9 @@ impl SemanticExecutionPlayer {
         rows: Vec<Vec<String>>,
         options: noon::TableOptions,
     ) -> Result<noon::Table, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(
-                noon::MathTable::from_rows_in_live_session(live, backend, rows, options)
-                    .map(noon::MathTable::into_table),
-            )
-        })?
-        .map_err(AuthoringFailure::from)
+        noon::MathTable::from_rows_with_options(self.source.scene_mut(), backend, rows, options)
+            .map(noon::MathTable::into_table)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_integer_table(
         &mut self,
@@ -87,12 +76,8 @@ impl SemanticExecutionPlayer {
         rows: Vec<Vec<f64>>,
         options: noon::TableOptions,
     ) -> Result<noon::IntegerTable, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::IntegerTable::from_rows_in_live_session(
-                live, backend, rows, options,
-            ))
-        })?
-        .map_err(AuthoringFailure::from)
+        noon::IntegerTable::from_rows_with_options(self.source.scene_mut(), backend, rows, options)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_decimal_table(
         &mut self,
@@ -101,11 +86,13 @@ impl SemanticExecutionPlayer {
         format: noon::DecimalFormat,
         options: noon::TableOptions,
     ) -> Result<noon::DecimalTable, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::DecimalTable::from_rows_in_live_session(
-                live, backend, rows, format, options,
-            ))
-        })?
+        noon::DecimalTable::from_rows_with_options(
+            self.source.scene_mut(),
+            backend,
+            rows,
+            format,
+            options,
+        )
         .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_mobject_table<'a>(
@@ -113,12 +100,8 @@ impl SemanticExecutionPlayer {
         rows: Vec<Vec<noon::MobjectTarget<'a>>>,
         options: noon::TableOptions,
     ) -> Result<noon::MobjectTable, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(noon::MobjectTable::from_target_rows_in_live_session(
-                live, rows, options,
-            ))
-        })?
-        .map_err(AuthoringFailure::from)
+        noon::MobjectTable::from_target_rows_with_options(self.source.scene_mut(), rows, options)
+            .map_err(AuthoringFailure::from)
     }
     pub(crate) fn live_create_mobject_table_with_labels_and_top_left_entry<'a>(
         &mut self,
@@ -128,18 +111,14 @@ impl SemanticExecutionPlayer {
         top_left_entry: Option<noon::MobjectTarget<'a>>,
         options: noon::TableOptions,
     ) -> Result<noon::MobjectTable, AuthoringFailure> {
-        self.with_live_session(|live| {
-            Ok(
-                noon::MobjectTable::from_target_rows_with_optional_composite_labels_in_live_session(
-                    live,
-                    rows,
-                    row_labels,
-                    column_labels,
-                    top_left_entry,
-                    options,
-                ),
-            )
-        })?
+        noon::MobjectTable::from_target_rows_with_optional_composite_labels(
+            self.source.scene_mut(),
+            rows,
+            row_labels,
+            column_labels,
+            top_left_entry,
+            options,
+        )
         .map_err(AuthoringFailure::from)
     }
 }
