@@ -1508,7 +1508,7 @@ class BarChart(Axes):
                     _compat._as_color("bar color", color).alpha,
                 )]
                 engine_call(options.setColors, _array(rgba))
-            context = _shared._live_constructor_context("bar chart", allow_unstarted=True)
+            context = _shared._path_authoring_context()
             if bar_names is not None:
                 engine_call(options.setNames, _to_js(list(bar_names)), name_size)
             from _manim_number_labels import _options
@@ -1564,7 +1564,7 @@ class BarChart(Axes):
             raise NotImplementedError("BarChart labels support Tex or MathTex")
         if _bar_labels is None:
             raise RuntimeError("BarChart labels require the shared Rust authoring host")
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _shared._path_authoring_context(self)
         rgba = []
         if color is not None:
             c = _compat._as_color("label color", color)
@@ -1575,12 +1575,12 @@ class BarChart(Axes):
 
     def change_bar_values(self, values, update_colors=True):
         values = tuple(float(value) for value in values)
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _shared._path_authoring_context(self)
         old = engine_call(self._bar_chart_handle.barPrefix, len(values))
         if context is None:
             engine_call(self._bar_chart_handle.changeBarValues, _array(values), bool(update_colors))
         else:
-            engine_call(context.liveChangeBarValues, self._bar_chart_handle, _array(values), bool(update_colors))
+            engine_call(context.changeBarValues, self._bar_chart_handle, _array(values), bool(update_colors))
         new = engine_call(self._bar_chart_handle.barPrefix, len(values))
         changed = []
         for before, after in zip(old, new):

@@ -1060,6 +1060,7 @@ for (const retired of [
   "livePromoteFamilyOwnPoints(", "livePromoteMobjectOwnPoints(",
   "liveCreateCoordinates(", "liveSetAngleValue(",
   "liveCreateVariable(", "liveCreateCode(",
+  "liveCreateBarChart(", "liveCreateLabeledBarChart(", "liveChangeBarValues(", "liveBarLabelFamily(",
   "liveCreateGraph(", "liveCreateCircularGraph(", "liveGraphCopy(",
   "liveGraphAddVertices(", "liveGraphAddEdges(", "liveGraphCircularLayout(",
   "liveGraphExplicitLayout(", "liveGraphRemoveVertices(", "liveGraphRemoveEdges(",

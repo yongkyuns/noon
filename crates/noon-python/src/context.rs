@@ -1720,6 +1720,27 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "changeBarValues")]
+    fn change_bar_values(
+        &mut self,
+        chart: &mut crate::bar_chart::BarChartHandle,
+        values: Vec<f64>,
+        update_colors: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        let failure = if self.has_execution() {
+            noon::integration::live_coordinate_publication_failure
+        } else {
+            noon::integration::coordinate_failure
+        };
+        chart
+            .0
+            .change_bar_values(&mut self.scene, &values, update_colors)
+            .map_err(failure)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "braceGeometryOptions")]
     fn brace_geometry_options(
         &self,

@@ -8,6 +8,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 mod arrow;
 mod audio;
+#[cfg(feature = "latex")]
+mod bar_chart;
 mod brace;
 mod callback;
 mod callback_values;
@@ -86,6 +88,7 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     sample_space::register(m)?;
     #[cfg(feature = "latex")]
     {
+        bar_chart::register(m)?;
         latex::register(m)?;
         matrix::register(m)?;
         numbers::register(m)?;

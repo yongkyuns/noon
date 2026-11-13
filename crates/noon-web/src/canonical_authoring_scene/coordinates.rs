@@ -36,76 +36,76 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_bar_chart(
+    pub(crate) fn create_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return self
-                .scene
-                .bar_chart(options)
-                .map_err(crate::plot_error::coordinate_failure);
-        }
-        self.active_live_player()?
-            .scene_mut()
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .bar_chart(options)
-            .map_err(noon::integration::live_coordinate_publication_failure)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_coordinate_publication_failure(error)
+                } else {
+                    crate::plot_error::coordinate_failure(error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_change_bar_values(
+    pub(crate) fn change_bar_values(
         &mut self,
         chart: &mut noon::ManimBarChart,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), AuthoringFailure> {
+        let running = self.requires_live_mutation_routing();
         chart
-            .change_bar_values(
-                self.active_live_player()?.scene_mut(),
-                values,
-                update_colors,
-            )
-            .map_err(noon::integration::live_coordinate_publication_failure)
+            .change_bar_values(self.local_authoring_scene()?, values, update_colors)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_coordinate_publication_failure(error)
+                } else {
+                    crate::plot_error::coordinate_failure(error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_labeled_bar_chart(
+    pub(crate) fn create_labeled_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
         labels: &noon::plot_presentation::NumberLabelOptions,
         compiler: &mut impl noon::LatexBackend,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return self
-                .scene
-                .bar_chart_with_axis_labels(options, labels, compiler)
-                .map_err(|error| AuthoringFailure::unclassified("bar_chart.create", &error));
-        }
-        self.active_live_player()?
-            .scene_mut()
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .bar_chart_with_axis_labels(options, labels, compiler)
             .map_err(|error| {
-                AuthoringFailure::new("invalid_input", "plot.bar_chart", error.to_string())
+                if running {
+                    AuthoringFailure::new("invalid_input", "plot.bar_chart", error.to_string())
+                } else {
+                    AuthoringFailure::unclassified("bar_chart.create", &error)
+                }
             })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_bar_labels(
+    pub(crate) fn bar_labels(
         &mut self,
         chart: &noon::ManimBarChart,
         compiler: &mut impl noon::LatexBackend,
         options: &noon::BarLabelOptions,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return chart
-                .get_bar_labels(compiler, options)
-                .map_err(|error| AuthoringFailure::unclassified("bar_chart.labels", &error));
-        }
-        self.active_live_player()?
-            .scene_mut()
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .bar_labels(chart, compiler, options)
             .map_err(|error| {
-                AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
+                if running {
+                    AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
+                } else {
+                    AuthoringFailure::unclassified("bar_chart.labels", &error)
+                }
             })
     }
 }
