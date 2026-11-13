@@ -6,7 +6,6 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
-mod camera_motion;
 #[cfg(test)]
 use crate::LiveLayoutTarget;
 
@@ -574,32 +573,6 @@ impl<'a> LiveSession<'a> {
         self.session
             .submit_translation_drag_input(&mut store, token, input)
             .map_err(LiveSessionError::TranslationDrag)
-    }
-
-    /// Publish one object-owned restoring `click -> Indicate` declaration
-    /// through the live semantic transaction path.
-    pub fn on_click_indicate(
-        &mut self,
-        target: &Mobject,
-        indication: IndicateOptions,
-        options: AnimationOptions,
-    ) -> Result<(), LiveSessionError> {
-        if !Rc::ptr_eq(self.store, target.integration_store()) {
-            return Err(LiveSessionError::ForeignMobjectStore);
-        }
-        target.validate().map_err(LiveSessionError::from)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_click_indicate(
-            target.node_id(),
-            Some(crate::scene::click_indicate_declaration(
-                indication, options,
-            )?),
-        );
-        let mut store = self.store.borrow_mut();
-        self.session
-            .apply_semantic_transaction_at_root(&mut store, self.root, transaction)
-            .map(|_| ())
-            .map_err(Into::into)
     }
 
     pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {

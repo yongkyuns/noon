@@ -1101,7 +1101,6 @@ impl From<crate::SpatialCompositionError> for AuthoringFailure {
         use crate::SpatialCompositionError::*;
         match error {
             Authoring(error) => error.into(),
-            Live(error) => error.into(),
             FixedFrameRequiresPlanarOrientation => Self::new(
                 "unsupported_operation",
                 "spatial.fixed_frame_orientation",

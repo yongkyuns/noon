@@ -323,8 +323,10 @@ mod tests {
         for illusion in [false, true] {
             let mut scene = Scene::new();
             let camera = scene.camera_3d_profile(profile(), 0.1, 100.0).unwrap();
-            let mut session = scene.execution_session().unwrap();
-            session
+            let session = scene.execution_session().unwrap();
+            scene.install_execution(session);
+            scene
+                .owned_execution_mut()
                 .begin_replay_retention(noon_runtime::ReplayLimits::default())
                 .unwrap();
             let mut samples = Vec::new();
@@ -334,38 +336,41 @@ mod tests {
                 1.0
             };
             let segment = {
-                let mut live = scene.live(&mut session);
                 if illusion {
-                    live.begin_3dillusion_camera_rotation(&camera, 2.0, None, None)
+                    scene
+                        .begin_3dillusion_camera_rotation(&camera, 2.0, None, None)
                         .unwrap();
                 } else {
-                    live.begin_ambient_camera_rotation(&camera, CameraRotationAxis::Theta, 0.1)
+                    scene
+                        .begin_ambient_camera_rotation(&camera, CameraRotationAxis::Theta, 0.1)
                         .unwrap();
                 }
-                live.wait_segment(duration).unwrap()
+                scene.owned_live().wait_segment(duration).unwrap()
             };
             for time in [0.0, 0.5, duration - 1.0 / 30.0, duration] {
                 scene
-                    .live(&mut session)
+                    .owned_live()
                     .advance_segment_to(segment, time)
                     .unwrap();
                 samples.push((
                     time,
-                    session.effective_camera_profile(camera.node_id()).unwrap(),
+                    scene
+                        .owned_execution()
+                        .effective_camera_profile(camera.node_id())
+                        .unwrap(),
                 ));
             }
             {
-                let mut live = scene.live(&mut session);
-                live.complete_segment(segment).unwrap();
+                scene.owned_live().complete_segment(segment).unwrap();
                 if illusion {
-                    live.stop_3dillusion_camera_rotation(&camera).unwrap();
+                    scene.stop_3dillusion_camera_rotation(&camera).unwrap();
                 } else {
-                    live.stop_ambient_camera_rotation(&camera).unwrap();
+                    scene.stop_ambient_camera_rotation(&camera).unwrap();
                 }
             }
             if !illusion {
                 let segment = scene
-                    .live(&mut session)
+                    .owned_live()
                     .move_camera_profile(
                         &camera,
                         profile(),
@@ -374,33 +379,42 @@ mod tests {
                     .unwrap();
                 for time in [1.0, 31.0 / 30.0, 1.5, 59.0 / 30.0, 2.0] {
                     scene
-                        .live(&mut session)
+                        .owned_live()
                         .advance_segment_to(segment, time)
                         .unwrap();
                     samples.push((
                         time,
-                        session.effective_camera_profile(camera.node_id()).unwrap(),
+                        scene
+                            .owned_execution()
+                            .effective_camera_profile(camera.node_id())
+                            .unwrap(),
                     ));
                 }
-                let mut live = scene.live(&mut session);
-                live.complete_segment(segment).unwrap();
+                scene.owned_live().complete_segment(segment).unwrap();
+                let mut live = scene.owned_live();
                 let hold = live.wait_segment(1.0).unwrap();
                 live.advance_segment_to(hold, 3.0).unwrap();
                 live.complete_segment(hold).unwrap();
                 samples.push((
                     3.0,
-                    session.effective_camera_profile(camera.node_id()).unwrap(),
+                    scene
+                        .owned_execution()
+                        .effective_camera_profile(camera.node_id())
+                        .unwrap(),
                 ));
             }
-            session.seal_replay().unwrap();
+            scene.owned_execution_mut().seal_replay().unwrap();
             let authored = camera.state().unwrap();
             let revision = scene.integration_store().borrow().scene_revision();
             // Cross the stop/move revisions backward, then forward, without
             // rerunning the source or discretizing the authored clock.
             for &(time, expected) in samples.iter().rev().chain(samples.iter()) {
-                session.seek(time).unwrap();
+                scene.owned_execution_mut().seek(time).unwrap();
                 assert_eq!(
-                    session.effective_camera_profile(camera.node_id()).unwrap(),
+                    scene
+                        .owned_execution()
+                        .effective_camera_profile(camera.node_id())
+                        .unwrap(),
                     expected,
                     "illusion={illusion} at t={time}"
                 );

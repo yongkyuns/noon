@@ -880,7 +880,7 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn local_authoring_scene(&mut self) -> Result<&mut noon::Scene, AuthoringFailure> {
         if self.player_ownership.is_unstarted() {
             return Ok(&mut self.scene);
@@ -1683,16 +1683,10 @@ impl CanonicalAuthoringScene {
         indication: noon::IndicateOptions,
         options: noon_core::AnimationOptions,
     ) -> Result<(), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        match self.player_ownership.local_mut() {
-            Some(player) => player.live_bind_click_indicate(target, indication, options),
-            None => self
-                .scene
-                .on_click_indicate(target, indication, options)
-                .map_err(AuthoringFailure::from),
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .on_click_indicate(target, indication, options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1702,30 +1696,18 @@ impl CanonicalAuthoringScene {
         intensity: f64,
         options: noon_core::AnimationOptions,
     ) -> Result<(), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        match self.player_ownership.local_mut() {
-            Some(player) => player.live_bind_click_glow_pulse(target, intensity, options),
-            None => self
-                .scene
-                .on_click_glow_pulse(target, intensity, options)
-                .map_err(AuthoringFailure::from),
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .on_click_glow_pulse(target, intensity, options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn clear_click_action(&mut self, target: &noon::Mobject) -> Result<(), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        match self.player_ownership.local_mut() {
-            Some(player) => player.live_clear_click_action(target),
-            None => self
-                .scene
-                .on_click(target, None)
-                .map_err(AuthoringFailure::from),
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .on_click(target, None)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     /// Create one scalar signal in this context's shared semantic store.

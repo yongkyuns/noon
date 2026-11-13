@@ -724,43 +724,6 @@ impl SemanticExecutionPlayer {
         self.source.session().publication_context().scene_revision()
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_bind_click_indicate(
-        &mut self,
-        target: &noon::Mobject,
-        indication: noon::IndicateOptions,
-        options: noon_core::AnimationOptions,
-    ) -> Result<(), AuthoringFailure> {
-        self.source
-            .live()
-            .on_click_indicate(target, indication, options)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_bind_click_glow_pulse(
-        &mut self,
-        target: &noon::Mobject,
-        intensity: f64,
-        options: noon_core::AnimationOptions,
-    ) -> Result<(), AuthoringFailure> {
-        self.source
-            .live()
-            .on_click_glow_pulse(target, intensity, options)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_clear_click_action(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.source
-            .live()
-            .on_click(target, None)
-            .map_err(AuthoringFailure::from)
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_set_translation(
         &mut self,
