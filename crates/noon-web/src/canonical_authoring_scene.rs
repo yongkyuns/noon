@@ -3758,23 +3758,6 @@ impl CanonicalAuthoringScene {
         }
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_add_mobject(
-        &mut self,
-        id: ObjectId,
-        handle: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.edit_membership(SceneMembershipBatch {
-            kind: SceneMembershipBatchKind::Add,
-            spatial_domain: None,
-            members: vec![OwnedSceneMembershipMember::Mobject {
-                wrapper_id: Some(id),
-                handle: handle.clone(),
-            }],
-            bindings: vec![(id, handle.clone())],
-        })
-    }
-
     fn validate_membership_bindings(
         &self,
         batch: &SceneMembershipBatch,
@@ -11173,22 +11156,6 @@ mod wasm {
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
-        #[wasm_bindgen(js_name = liveAdd)]
-        pub fn live_add(
-            &mut self,
-            object_id: &str,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .live_add_mobject(id, handle.semantic_mobject())
-                .map_err(typed_js_error)
-        }
-
         #[wasm_bindgen(js_name = liveRemove)]
         pub fn live_remove(
             &mut self,
@@ -13442,9 +13409,7 @@ mod tests {
         // New detached state must publish through the active session as well.
         let collision = context.target_editor(&anchor).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
-        assert!(context
-            .live_add_mobject(ObjectId::new(0), &collision)
-            .is_err());
+        assert!(context.bind_mobject(ObjectId::new(0), &collision).is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
@@ -13461,12 +13426,8 @@ mod tests {
             .unwrap()
             .live_effective(&toggled)
             .is_err());
-        context
-            .live_add_mobject(ObjectId::new(1), &toggled)
-            .unwrap();
-        context
-            .live_add_mobject(ObjectId::new(2), &appended)
-            .unwrap();
+        context.bind_mobject(ObjectId::new(1), &toggled).unwrap();
+        context.bind_mobject(ObjectId::new(2), &appended).unwrap();
         context
             .active_live_player()
             .unwrap()
@@ -14230,9 +14191,9 @@ mod tests {
         // Repeated explicit `Scene.live_execution()` helpers may adjust the loop
         // duration, but must preserve the returned continuation lease.
         context.live_player(handoff).unwrap();
-        context.live_add_mobject(ObjectId::new(1), &left).unwrap();
+        context.bind_mobject(ObjectId::new(1), &left).unwrap();
         context.live_player(handoff).unwrap();
-        context.live_add_mobject(ObjectId::new(2), &right).unwrap();
+        context.bind_mobject(ObjectId::new(2), &right).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
 
         let copied = context
@@ -17664,7 +17625,7 @@ mod tests {
 
         // The original derived ObjectId re-enters through the shared session;
         // no replacement semantic handle or second runtime is allocated.
-        context.live_add_mobject(ObjectId::new(0), &circle).unwrap();
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         assert!(context.contains_direct_mobject(&circle).unwrap());
     }
 
@@ -17751,7 +17712,7 @@ mod tests {
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
         assert!(!context.contains_direct_mobject(&square).unwrap());
-        context.live_add_mobject(id, &square).unwrap();
+        context.bind_mobject(id, &square).unwrap();
         assert!(context.contains_direct_mobject(&square).unwrap());
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
     }
