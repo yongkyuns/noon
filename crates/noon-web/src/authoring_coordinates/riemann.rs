@@ -71,9 +71,8 @@ impl WasmRiemannRectangleOptions {
         show_signed_area: bool,
         blend: bool,
     ) -> Result<(), JsValue> {
-        let colors = crate::authoring_mobject::gradient_colors(colors).map_err(js_error)?;
-        let stroke_colors =
-            crate::authoring_mobject::gradient_colors(stroke_color).map_err(js_error)?;
+        let colors = noon::integration::gradient_colors(colors).map_err(js_error)?;
+        let stroke_colors = noon::integration::gradient_colors(stroke_color).map_err(js_error)?;
         let [stroke_color] = stroke_colors.as_slice() else {
             return Err(js_error(AuthoringFailure::new(
                 "invalid_input",

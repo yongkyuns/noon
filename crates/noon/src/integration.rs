@@ -195,6 +195,42 @@ pub fn family_color(
     )))
 }
 
+/// Decode RGBA components for per-member gradient authoring.
+pub fn gradient_colors(values: &[f64]) -> Result<Vec<crate::Color>, AuthoringFailure> {
+    if !values.len().is_multiple_of(4) {
+        return Err(AuthoringFailure::new(
+            "invalid_input",
+            "gradient.invalid_components",
+            "gradient colors require RGBA components",
+        ));
+    }
+    values
+        .chunks_exact(4)
+        .map(|c| {
+            family_color(true, c[0], c[1], c[2], c[3])
+                .map(|color| color.expect("enabled color"))
+                .map_err(|error| {
+                    AuthoringFailure::new("invalid_input", "gradient.invalid_color", error)
+                })
+        })
+        .collect()
+}
+
+/// Decode the inner and outer colors of a per-member radial gradient.
+pub fn radial_gradient_colors(
+    values: &[f64],
+) -> Result<(crate::Color, crate::Color), AuthoringFailure> {
+    let colors = gradient_colors(values)?;
+    match colors.as_slice() {
+        [inner, outer] => Ok((*inner, *outer)),
+        _ => Err(AuthoringFailure::new(
+            "invalid_input",
+            "radial_gradient.color_count",
+            "radial gradients require exactly two RGBA colors",
+        )),
+    }
+}
+
 mod effect_options;
 pub use effect_options::{effect_color, effect_update, mask_parameters};
 

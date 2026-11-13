@@ -892,6 +892,17 @@ impl CanonicalAuthoringScene {
             })
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn edit_gradient<T>(
+        &mut self,
+        edit: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
+    ) -> Result<(), AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        edit(self.local_authoring_scene()?)
+            .map(|_| ())
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
+    }
+
     /// Ordinary continuation declarations reuse an existing local lease as-is.
     /// Only the first declaration bootstraps a player; an explicit new run uses
     /// `live_player`/`prepare_execution_run` and owns any recovery transition.
@@ -9032,40 +9043,33 @@ mod wasm {
                 .map(|cap| cap.as_str().to_owned())
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetColorGradient)]
-        pub fn live_set_color_gradient(
+        #[wasm_bindgen(js_name = setColorGradient)]
+        pub fn set_color_gradient(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let colors =
-                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_color_by_gradient(&target.semantic_mobject(), &colors)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_gradient(|scene| {
+                    scene.set_color_by_gradient(&target.semantic_mobject(), &colors)
+                })
+                .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFamilyColorGradient)]
-        pub fn live_set_family_color_gradient(
+        #[wasm_bindgen(js_name = setFamilyColorGradient)]
+        pub fn set_family_color_gradient(
             &mut self,
             target: &crate::WasmAuthoringFamilyHandle,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let colors =
-                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(typed_js_error)?;
+            let family = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_color_by_gradient(&target.semantic_family()?, &colors)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_gradient(|scene| scene.set_family_color_by_gradient(&family, &colors))
+                .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetColorRadialGradient)]
-        pub fn live_set_color_radial_gradient(
+        #[wasm_bindgen(js_name = setColorRadialGradient)]
+        pub fn set_color_radial_gradient(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             center_x: f64,
@@ -9075,23 +9079,21 @@ mod wasm {
             values: &[f64],
         ) -> Result<(), JsValue> {
             let (inner, outer) =
-                crate::authoring_mobject::radial_gradient_colors(values).map_err(typed_js_error)?;
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_color_by_radial_gradient(
-                    &target.semantic_mobject(),
-                    (center_x, center_y, center_z),
-                    radius,
-                    inner,
-                    outer,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_gradient(|scene| {
+                    scene.set_color_by_radial_gradient(
+                        &target.semantic_mobject(),
+                        (center_x, center_y, center_z),
+                        radius,
+                        inner,
+                        outer,
+                    )
+                })
+                .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFamilyColorRadialGradient)]
-        pub fn live_set_family_color_radial_gradient(
+        #[wasm_bindgen(js_name = setFamilyColorRadialGradient)]
+        pub fn set_family_color_radial_gradient(
             &mut self,
             target: &crate::WasmAuthoringFamilyHandle,
             center_x: f64,
@@ -9101,20 +9103,19 @@ mod wasm {
             values: &[f64],
         ) -> Result<(), JsValue> {
             let (inner, outer) =
-                crate::authoring_mobject::radial_gradient_colors(values).map_err(typed_js_error)?;
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
+            let family = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_color_by_radial_gradient(
-                    &target.semantic_family()?,
-                    (center_x, center_y, center_z),
-                    radius,
-                    inner,
-                    outer,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_gradient(|scene| {
+                    scene.set_family_color_by_radial_gradient(
+                        &family,
+                        (center_x, center_y, center_z),
+                        radius,
+                        inner,
+                        outer,
+                    )
+                })
+                .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = queryMobjectColor)]
         pub fn query_mobject_color(

@@ -1582,14 +1582,14 @@ def _set_color_by_gradient(self, *colors):
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("per-member gradients in host callbacks require staged paint publication")
     parsed = [_compat._as_color("gradient color", color) for color in colors]
-    target, context, suffix = _style_target(self)
+    target, context, suffix = _gradient_target(self)
     if target is None:
         raise RuntimeError("gradients require the shared Rust authoring host")
     arguments = _gradient_components(parsed)
     if context is None:
         engine_call(target.setColorGradient, arguments)
     else:
-        engine_call(getattr(context, f"liveSet{suffix}ColorGradient"), target, arguments)
+        engine_call(getattr(context, f"set{suffix}ColorGradient"), target, arguments)
     return self
 
 
@@ -1619,7 +1619,7 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
             raise TypeError("expected a two- or three-component numeric vector") from error
         if dimensions == 2:
             center = (*center, 0.0)
-    target, context, suffix = _style_target(self)
+    target, context, suffix = _gradient_target(self)
     if target is None:
         raise RuntimeError("radial gradients require the shared Rust authoring host")
     arguments = _gradient_components((inner, outer))
@@ -1632,13 +1632,19 @@ def _set_color_by_radial_gradient(self, center, radius, inner_color, outer_color
         )
     else:
         engine_call(
-            getattr(context, f"liveSet{suffix}ColorRadialGradient"),
+            getattr(context, f"set{suffix}ColorRadialGradient"),
             target,
             *center,
             radius,
             arguments,
         )
     return self
+
+
+def _gradient_target(value):
+    if _is_shared_family(value):
+        return value._semantic_family_handle, _group_target_context(value, include_setup=True), "Family"
+    return _handle_for(value), _path_authoring_context(value), ""
 
 
 def _style_target(value):
