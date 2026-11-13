@@ -7,8 +7,8 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveApplyMatrixFamily)]
-    pub fn live_apply_matrix_family(
+    #[wasm_bindgen(js_name = applyMatrixFamily)]
+    pub fn apply_matrix_family(
         &mut self,
         handle: &WasmAuthoringFamilyHandle,
         values: Vec<f64>,

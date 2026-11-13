@@ -128,17 +128,17 @@ class MovingCameraWrapperTests(unittest.TestCase):
                     self.calls.append("targetEditor")
                     return handle.targetEditor()
 
-                def liveScaleLayout3d(self, anchor, x, y, z, px, py, pz, about_point):
+                def scaleLayout3d(self, anchor, x, y, z, px, py, pz, about_point):
                     assert (px, py, pz, about_point) == (0.0, 0.0, 0.0, False)
                     assert z == x == y
-                    self.liveScale(anchor, x, y)
+                    self.scale(anchor, x, y)
 
-                def liveScale(self, handle, x, y):
+                def scale(self, handle, x, y):
                     self._require_coherent()
                     handle.scale(x, y)
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveScale")
+                    self.calls.append("scale")
 
                 def liveMoveToPoint(self, handle, x, y, *args):
                     self._require_coherent()
@@ -205,13 +205,13 @@ class MovingCameraWrapperTests(unittest.TestCase):
             assert target.camera.frame._canonical_live_target_context is context
             assert context.semantic_revision == context.execution_revision
             assert context.calls.count("targetEditor") >= 5, context.calls
-            assert context.calls[-2:] == ["liveScale", "liveMoveToPoint"], context.calls
+            assert context.calls[-2:] == ["scale", "liveMoveToPoint"], context.calls
 
-            context.liveScale(frame._semantic_handle, 2.0, 2.0)
+            context.scale(frame._semantic_handle, 2.0, 2.0)
             frame.restore()
             assert frame._semantic_handle.state["scale"] == [1.0, 1.0]
             assert context.calls[-1] == "becomeMobject"
-            context.liveScale(display._semantic_handle, 2.0, 2.0)
+            context.scale(display._semantic_handle, 2.0, 2.0)
             display.restore()
             assert display._semantic_handle.state["scale"] == [1.0, 1.0]
             assert context.calls[-1] == "becomeMobject"

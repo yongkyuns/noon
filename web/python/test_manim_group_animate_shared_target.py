@@ -204,7 +204,7 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                     self.calls.append(("copy-family", family.identity()))
                     return family.copyFamily(references)
 
-                def liveShiftFamily(self, family, x, y):
+                def shiftFamily(self, family, x, y):
                     self.calls.append(("shift-family", family.identity(), float(x), float(y)))
 
             context = FakeCanonicalContext()

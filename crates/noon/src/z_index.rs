@@ -53,6 +53,17 @@ impl LayoutAnchor {
 }
 
 impl Scene {
+    /// Read painter priority from the owning Scene during setup or execution.
+    pub fn z_index(&self, source: &LayoutAnchor) -> Result<f64, AuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_z_index(source);
+        }
+        if !source.belongs_to_store(self.integration_store()) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        source.z_index()
+    }
+
     /// Observe one anchor's priority from the current coherent publication.
     ///
     /// Reachable leaves use effective Runtime priority. Detached objects and
@@ -124,6 +135,8 @@ mod tests {
         let detached = scene.square(1.0).unwrap();
         detached.set_z_index(3.0).unwrap();
         let anchor = LayoutAnchor::from(&object);
+        scene.set_z_index(&anchor, 5.0, false).unwrap();
+        assert_eq!(scene.z_index(&anchor).unwrap(), 5.0);
         assert!(matches!(
             scene.effective_z_index(&anchor),
             Err(AuthoringError::Unsupported(
@@ -137,7 +150,7 @@ mod tests {
         scene.set_z_index(&anchor, 7.0, true).unwrap();
         assert_eq!(scene.revision().get(), before.get() + 1);
         assert_eq!(object.z_index().unwrap(), 7.0);
-        assert_eq!(scene.effective_z_index(&anchor).unwrap(), 7.0);
+        assert_eq!(scene.z_index(&anchor).unwrap(), 7.0);
         assert_eq!(
             scene
                 .effective_z_index(&LayoutAnchor::from(&detached))

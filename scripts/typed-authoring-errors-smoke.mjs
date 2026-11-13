@@ -152,10 +152,10 @@ try {
     };
     // The same real Rust operations run directly in JS and through Pyodide below.
     const livePropertyMethods = [
-      {method: "liveSetTranslation", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
-      {method: "liveShift", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
-      {method: "liveSetScale", args: [2, 0.5], property: "Scale", field: "scale", expected: {x: 2, y: 0.5}},
-      {method: "liveSetRotation", args: [0.5], property: "RotationZ", field: "rotation", expected: 0.5},
+      {method: "setTranslation", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
+      {method: "shift", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
+      {method: "setScale", args: [2, 0.5], property: "Scale", field: "scale", expected: {x: 2, y: 0.5}},
+      {method: "setRotation", args: [0.5], property: "RotationZ", field: "rotation", expected: 0.5},
     ];
     const livePropertyCases = livePropertyMethods.flatMap(spec => [
       ...spec.args.flatMap((_, axis) => ["nan", "positive_infinity", "negative_infinity"].map(kind => ({...spec, kind, axis}))),
