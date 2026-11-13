@@ -82,9 +82,7 @@ fn scene_plane_frames_observe_detached_and_animating_axes() {
 
 #[test]
 fn scene_plane_frames_reject_unavailable_publications_for_detached_axes() {
-    use crate::{
-        ExecutionSessionCallbackError, ExecutionSessionPublicationError, LiveSessionError,
-    };
+    use crate::{ExecutionSessionCallbackError, ExecutionSessionPublicationError};
     use noon_core::HostCallbackId;
 
     let mut scene = Scene::new();
@@ -107,15 +105,15 @@ fn scene_plane_frames_reject_unavailable_publications_for_detached_axes() {
     let publication = running.session().publication_context();
     assert!(matches!(
         running.scene().effective_number_plane_frame(&plane),
-        Err(CoordinateAuthoringError::Live(LiveSessionError::Callback(
-            ExecutionSessionCallbackError::Pending(_)
-        )))
+        Err(CoordinateAuthoringError::Authoring(
+            AuthoringError::ExecutionCallback(ExecutionSessionCallbackError::Pending(_))
+        ))
     ));
     marker.shift(0.0, 1.0).unwrap();
     assert!(matches!(
         running.scene().effective_polar_plane_frame(&plane),
-        Err(CoordinateAuthoringError::Live(
-            LiveSessionError::Publication(
+        Err(CoordinateAuthoringError::Authoring(
+            AuthoringError::ExecutionPublication(
                 ExecutionSessionPublicationError::StaleSceneRevision { .. }
             )
         ))

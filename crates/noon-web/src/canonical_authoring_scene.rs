@@ -3459,7 +3459,7 @@ impl CanonicalAuthoringScene {
                 .active_live_player()?
                 .scene_mut()
                 .target_editor(source)
-                .map_err(AuthoringFailure::from),
+                .map_err(AuthoringFailure::from_scene_capture),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -9299,7 +9299,7 @@ mod wasm {
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
         #[wasm_bindgen(js_name = liveCyclicReplaceTarget)]
@@ -9318,7 +9318,7 @@ mod wasm {
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
         #[wasm_bindgen(js_name = liveBecomeFamily)]
@@ -11464,7 +11464,7 @@ mod wasm {
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_object_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
         #[wasm_bindgen(js_name = liveInvertFamilyMembers)]
         pub fn live_invert_family_members(

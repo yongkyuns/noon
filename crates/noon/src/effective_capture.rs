@@ -1,13 +1,13 @@
 //! Coherent effective-state capture shared by Scene-owned live operations.
 use crate::{
-    AuthoringError, ExecutionSession, ExecutionSessionCallbackError, LiveSessionError, Mobject,
-    Scene, UnsupportedAuthoringOperation,
+    AuthoringError, ExecutionSession, ExecutionSessionCallbackError, Mobject, Scene,
+    UnsupportedAuthoringOperation,
 };
 use noon_core::{Color, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, Style};
 use std::{cell::RefCell, rc::Rc};
 
 impl Scene {
-    pub(crate) fn require_effective_capture(&self) -> Result<(), LiveSessionError> {
+    pub(crate) fn require_effective_capture(&self) -> Result<(), AuthoringError> {
         if let Some(execution) = self.running_execution() {
             require_target_capture(execution, &self.integration_store().borrow())?;
         }
@@ -29,15 +29,15 @@ impl Scene {
 pub(crate) fn require_target_capture(
     execution: &ExecutionSession,
     store: &SemanticStore,
-) -> Result<(), LiveSessionError> {
+) -> Result<(), AuthoringError> {
     execution.require_published_store(store)?;
     if let Some(token) = execution.pending_callback_token() {
-        return Err(LiveSessionError::Callback(
+        return Err(AuthoringError::ExecutionCallback(
             ExecutionSessionCallbackError::Pending(token),
         ));
     }
     if let Some(termination) = execution.callback_termination() {
-        return Err(LiveSessionError::Callback(
+        return Err(AuthoringError::ExecutionCallback(
             ExecutionSessionCallbackError::Terminated(termination),
         ));
     }

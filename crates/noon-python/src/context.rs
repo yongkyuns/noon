@@ -474,7 +474,7 @@ impl Context {
         self.scene
             .promote_own_points(target, &references.add_targets()?)
             .map(|copied| crate::family::FamilyCopy { copied })
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
 
     fn edit_children(
@@ -2628,7 +2628,7 @@ impl Context {
             .map(|copied| crate::family::FamilyCopy {
                 copied: copied.into_entry_copy(),
             })
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
     #[pyo3(name = "liveEditFamilyMembership")]
     fn edit_family(
@@ -2720,7 +2720,7 @@ impl Context {
             .map(|copied| crate::family::FamilyCopy {
                 copied: copied.into_entry_copy(),
             })
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
 
     #[pyo3(name = "liveShiftFamily")]
@@ -2890,7 +2890,7 @@ impl Context {
         self.scene
             .target_editor(&source.handle)
             .map(MobjectHandle::from_semantic_mobject)
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
     #[pyo3(name = "liveCreateManimGeometry")]
     fn geometry(&mut self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
@@ -3886,7 +3886,7 @@ impl Context {
         self.scene
             .become_mobject(&target.handle, &source.handle, options)
             .map(|_| ())
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
     #[pyo3(name = "liveBecomeFamily")]
     fn become_family(
@@ -3914,7 +3914,7 @@ impl Context {
                 },
             )
             .map(|_| ())
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
 
     #[pyo3(name = "beginOrdinaryWait")]

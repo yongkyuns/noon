@@ -90,7 +90,6 @@ pub enum CoordinateAuthoringError {
     Coordinate(CoordinateError),
     Authoring(AuthoringError),
     Plot(PlotAuthoringError),
-    Live(crate::LiveSessionError),
     InvalidOptions(&'static str),
     InvalidTopology,
 }
@@ -101,7 +100,6 @@ impl std::fmt::Display for CoordinateAuthoringError {
             Self::Coordinate(error) => std::fmt::Display::fmt(error, formatter),
             Self::Authoring(error) => std::fmt::Display::fmt(error, formatter),
             Self::Plot(error) => std::fmt::Display::fmt(error, formatter),
-            Self::Live(error) => std::fmt::Display::fmt(error, formatter),
             Self::InvalidOptions(reason) => formatter.write_str(reason),
             Self::InvalidTopology => formatter.write_str("coordinate family topology is invalid"),
         }
@@ -114,7 +112,6 @@ impl std::error::Error for CoordinateAuthoringError {
             Self::Coordinate(error) => Some(error),
             Self::Authoring(error) => Some(error),
             Self::Plot(error) => Some(error),
-            Self::Live(error) => Some(error),
             Self::InvalidOptions(_) | Self::InvalidTopology => None,
         }
     }
@@ -133,12 +130,6 @@ impl From<AuthoringError> for CoordinateAuthoringError {
 impl From<PlotAuthoringError> for CoordinateAuthoringError {
     fn from(error: PlotAuthoringError) -> Self {
         Self::Plot(error)
-    }
-}
-
-impl From<crate::LiveSessionError> for CoordinateAuthoringError {
-    fn from(error: crate::LiveSessionError) -> Self {
-        Self::Live(error)
     }
 }
 
