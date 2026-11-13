@@ -3579,9 +3579,11 @@ impl CanonicalAuthoringScene {
         options: noon::ManimArrowOptions,
     ) -> Result<noon::ManimArrow, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_manim_arrow(options)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .manim_arrow(options)
+                .map_err(|error| noon::LiveSessionError::from(error).into()),
             PlayerOwnership::Unstarted => {
                 Err("live Arrow construction requires an active canonical session".into())
             }

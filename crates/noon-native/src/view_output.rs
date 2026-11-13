@@ -302,7 +302,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
     let (mut device, mut queue) =
         pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let (scene, camera, _panel) = scene();
-    let mut session = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     let mut output = AuthoredViewOutput::new(
         &adapter,
         &device,
@@ -339,8 +339,8 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
                 sigma = 2.0;
                 threshold = 0.0;
                 intensity = 3.0;
-                scene
-                    .live(&mut session)
+                execution
+                    .live()
                     .set_effect(
                         &camera,
                         "bloom",
@@ -353,33 +353,30 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
             }
             4 => {
                 intensity = 0.0;
-                scene
-                    .live(&mut session)
+                execution
+                    .live()
                     .set_effect(&camera, "bloom", EffectUpdate::default().intensity(0.0))
                     .unwrap();
             }
             5 => {
                 sigma = 0.0;
                 threshold = 1.0;
-                scene
-                    .live(&mut session)
-                    .remove_effect(&camera, "bloom")
-                    .unwrap();
+                execution.live().remove_effect(&camera, "bloom").unwrap();
             }
-            6 => scene
-                .live(&mut session)
+            6 => execution
+                .scene_mut()
                 .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
                 .unwrap(),
-            7 => scene
-                .live(&mut session)
+            7 => execution
+                .scene_mut()
                 .set_view_color_profile(&camera, ViewColorProfile::LinearHdr)
                 .unwrap(),
             8 => {
                 sigma = 1.25;
                 threshold = 0.25;
                 intensity = 1.0;
-                scene
-                    .live(&mut session)
+                execution
+                    .live()
                     .add_effect(
                         &camera,
                         Bloom::new(
@@ -431,7 +428,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
         overlay.update(&device, &queue, tint);
         // A snapshot is used only at the explicit qualification/export boundary.
         // Both normal hosts observe the same published effective state.
-        let mut capture_session = session.clone();
+        let mut capture_session = execution.session().clone();
         let mut capture = noon_export::SessionCapture::new(
             &capture_session,
             noon_export::CaptureOptions::new(size[0], size[1]),
@@ -440,11 +437,11 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
         let capture_pixels = capture.capture(&mut capture_session).unwrap().rgba.to_vec();
         eprintln!("native HDR phase {phase}: capture readback complete");
         assert_eq!(
-            session.frame().time,
+            execution.session().frame().time,
             0.0,
             "view resources never advance authored time"
         );
-        let publication = session.take_renderer_publication();
+        let publication = execution.session_mut().take_renderer_publication();
         if phase == 0 {
             let mut unsupported = AuthoredViewOutput::new(
                 &adapter,

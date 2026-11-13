@@ -789,13 +789,10 @@ impl Context {
         let surface =
             noon::SurfaceFamily::from_family(target.family.clone()).map_err(engine_error)?;
         let colors = crate::spatial::checkerboard(&first, &second)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_surface_checkerboard(&surface, colors, opacity))
-        } else {
-            self.scene
-                .set_surface_checkerboard(&surface, colors, opacity)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_surface_checkerboard(&surface, colors, opacity)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "shiftWorld")]
     fn shift_world(&mut self, target: &MobjectHandle, x: f64, y: f64, z: f64) -> PyResult<()> {
@@ -1366,13 +1363,10 @@ impl Context {
         self.available()?;
         self.same_store(target)?;
         let value = noon::integration::camera_color_profile(value).map_err(engine_error)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_view_color_profile(&target.handle, value))
-        } else {
-            self.scene
-                .set_view_color_profile(&target.handle, value)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_view_color_profile(&target.handle, value)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "liveSetEmission")]
     fn emission(&mut self, target: &MobjectHandle, value: f64) -> PyResult<()> {

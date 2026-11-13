@@ -26,9 +26,12 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
     let a = scene.square(1.0).unwrap();
     let family = scene.family(&[(&a).into()]).unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let camera_id = session.execution_object_id(camera.node_id()).unwrap();
-    let publication = session.take_renderer_publication();
+    let mut execution = scene.into_execution().unwrap();
+    let camera_id = execution
+        .session()
+        .execution_object_id(camera.node_id())
+        .unwrap();
+    let publication = execution.session_mut().take_renderer_publication();
     assert_eq!(publication.primary_view(), Some(camera_id));
     assert_eq!(
         publication.view_effects().unwrap().input_role(),
@@ -37,40 +40,80 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
     drop(publication);
     let (device, queue) = wgpu::Device::noop(&Default::default());
     let mut wrong_host = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    let publication = session.take_renderer_publication();
+    let publication = execution.session_mut().take_renderer_publication();
     assert!(matches!(
         wrong_host.effect_source_visibility(&publication, &[]),
         Err(noon_render_wgpu::EffectPrepareError::UnsupportedCapture)
     ));
     assert!(!wrong_host.has_retained_effect_sources());
     drop(publication);
-    let before = scene.integration_store().borrow().scene_revision();
+    let before = execution
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
     let mut wrong = a.clone();
     assert!(wrong.add_effect(Bloom::default(), "wrong-initial").is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
 
-    assert!(scene
-        .live(&mut session)
+    assert!(execution
+        .live()
         .add_effect(&a, Bloom::default(), "wrong")
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    assert!(scene
-        .live(&mut session)
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert!(execution
+        .live()
         .add_effect(&family, Bloom::default(), "wrong")
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    assert!(scene
-        .live(&mut session)
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert!(execution
+        .live()
         .add_effect(&camera, Bloom::default(), "duplicate")
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    assert!(scene
-        .live(&mut session)
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert!(execution
+        .scene_mut()
         .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     assert_eq!(
-        session
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert_eq!(
+        execution
+            .session_mut()
             .take_renderer_publication()
             .view_effects()
             .unwrap()
@@ -81,12 +124,13 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
         0.25
     );
     let binding = camera.get_effect("bloom").unwrap();
-    scene
-        .live(&mut session)
+    execution
+        .live()
         .set_effect(&camera, &binding, EffectUpdate::default().threshold(0.0))
         .unwrap();
     assert_eq!(
-        session
+        execution
+            .session_mut()
             .take_renderer_publication()
             .view_effects()
             .unwrap()
@@ -100,8 +144,8 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
     let mut tx = noon_core::SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::Compatibility);
     tx.remove_node(binding.node_id());
-    scene.live(&mut session).apply(tx).unwrap();
-    let publication = session.take_renderer_publication();
+    execution.live().apply(tx).unwrap();
+    let publication = execution.session_mut().take_renderer_publication();
     assert_eq!(publication.color_profile(), ViewColorProfile::Compatibility);
     assert!(publication.view_effects().is_none());
 }

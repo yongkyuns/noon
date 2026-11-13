@@ -3,8 +3,6 @@
 mod audio;
 #[cfg(target_arch = "wasm32")]
 mod brace;
-#[cfg(any(target_arch = "wasm32", test))]
-mod camera_profile;
 #[cfg(target_arch = "wasm32")]
 mod code;
 #[cfg(any(target_arch = "wasm32", test))]

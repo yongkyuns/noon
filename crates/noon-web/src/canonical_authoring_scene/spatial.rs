@@ -19,7 +19,9 @@ impl CanonicalAuthoringScene {
                 .map_err(Into::into),
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_set_surface_checkerboard(surface, colors, opacity),
+                .scene_mut()
+                .set_surface_checkerboard(surface, colors, opacity)
+                .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, true)),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
