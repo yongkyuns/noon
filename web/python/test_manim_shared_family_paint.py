@@ -432,10 +432,10 @@ class SharedFamilyPaintTests(unittest.TestCase):
             handle = Mock()
             context = Mock() if live else None
             with patch.object(handles, "_handle_for", return_value=handle), \
-                 patch.object(handles, "_live_mutation_context", return_value=context):
+                 patch.object(handles, "_path_authoring_context", return_value=context):
                 self.assertIs(leaf.fade(family=False), leaf)
             if live:
-                context.liveFade.assert_called_once_with(handle, 0.5)
+                context.fade.assert_called_once_with(handle, 0.5)
                 handle.fade.assert_not_called()
             else:
                 handle.fade.assert_called_once_with(0.5)
@@ -481,10 +481,10 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 handle = Mock()
                 context = Mock() if live else None
                 with patch.object(handles, "_handle_for", return_value=handle), \
-                     patch.object(handles, "_live_mutation_context", return_value=context):
+                     patch.object(handles, "_path_authoring_context", return_value=context):
                     self.assertIs(leaf.fade_to(color, alpha=1.25), leaf)
                 if live:
-                    context.liveFadeTo.assert_called_once_with(
+                    context.fadeTo.assert_called_once_with(
                         handle, color.red, color.green, color.blue, color.alpha, 1.25
                     )
                     handle.fadeTo.assert_not_called()
@@ -512,7 +512,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
             with patch.object(handles, "_group_target_context", return_value=context):
                 self.assertIs(family.fade_to(target, 0.75), family)
             owner = context if live else family._semantic_family_handle
-            method = owner.liveSetFamilyFadeTo if live else owner.fadeTo
+            method = owner.fadeToFamily if live else owner.fadeTo
             expected = ((family._semantic_family_handle,) if live else ()) + (
                 target.red, target.green, target.blue, target.alpha, 0.75
             )
@@ -628,7 +628,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 method("Stroke").assert_called_once_with(*prefix, True, color.red, color.green, color.blue, color.alpha, compat._manim_stroke_width(2), 0.25)
                 method("Opacity").assert_called_once_with(*prefix, 0.5)
                 if live:
-                    context.liveSetFamilyFade.assert_called_once_with(
+                    context.fadeFamily.assert_called_once_with(
                         family._semantic_family_handle, 0.25
                     )
                     family._semantic_family_handle.fade.assert_not_called()

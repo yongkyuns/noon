@@ -387,7 +387,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         surface.match_style(target)
         context.setColor.assert_called_once()
         context.setObjectOpacity.assert_called_once_with(mesh_handle, 0.4)
-        context.liveMatchStyle.assert_called_once_with(mesh_handle, target_handle)
+        context.matchStyle.assert_called_once_with(mesh_handle, target_handle)
 
         with patch("_manim_geometry._mobject_get_color", return_value=noon.BLUE) as get_color:
             self.assertIs(surface.get_color(), noon.BLUE)

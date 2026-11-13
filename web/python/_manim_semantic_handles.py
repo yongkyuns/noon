@@ -2200,15 +2200,15 @@ def _match_style(self, vmobject, family=True):
         return set_style(**get_style(simple=True), family=False)
     if _is_shared_family(self) != _is_shared_family(vmobject):
         raise NotImplementedError("mixed object/family style matching requires shared family style state")
-    source, context, suffix = _style_target(self)
-    target, target_context, _ = _style_target(vmobject)
+    source, context, suffix = _paint_authoring_target(self)
+    target, target_context, _ = _paint_authoring_target(vmobject)
     if source is None or target is None:
         raise RuntimeError("style matching requires the shared Rust authoring host")
     context = context or target_context
     if context is None:
         engine_call(source.matchStyle, target)
     else:
-        engine_call(getattr(context, f"liveMatch{suffix}Style"), source, target)
+        engine_call(getattr(context, f"match{suffix}Style"), source, target)
     return self
 
 
@@ -2455,13 +2455,13 @@ def _fade(self, darkness=0.5, family=True):
         return self
     if not family and _is_shared_family(self):
         raise NotImplementedError("non-recursive Group fade requires shared family style state")
-    handle, context, suffix = _style_target(self)
+    handle, context, suffix = _paint_authoring_target(self)
     if handle is None:
         raise RuntimeError("Mobject fade requires the shared Rust authoring host")
     if context is None:
         engine_call(handle.fade, darkness, operation="Mobject.fade")
     else:
-        operation = context.liveSetFamilyFade if suffix else context.liveFade
+        operation = context.fadeFamily if suffix else context.fade
         engine_call(operation, handle, darkness, operation="Mobject.fade")
     return self
 
@@ -2473,13 +2473,13 @@ def _fade_to(self, color, alpha, family=True):
         ("red", "green", "blue", "alpha"), color
     ))
     amount = _ir._finite_number("alpha", alpha)
-    handle, context, suffix = _style_target(self)
+    handle, context, suffix = _paint_authoring_target(self)
     if handle is None:
         raise RuntimeError("Mobject.fade_to requires the shared Rust authoring host")
     if context is None:
         engine_call(handle.fadeTo, *target, amount, operation="Mobject.fade_to")
     else:
-        operation = context.liveSetFamilyFadeTo if suffix else context.liveFadeTo
+        operation = context.fadeToFamily if suffix else context.fadeTo
         engine_call(operation, handle, *target, amount, operation="Mobject.fade_to")
     return self
 
