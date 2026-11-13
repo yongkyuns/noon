@@ -81,6 +81,7 @@ async function captureFrameState(frame) {
             executionDiagnostics:gallery.executionDiagnostics} : null,
           status:read('#status'),draft:read('#draft-status'),patch:read('#patch-status'),
           autoRun:read('#auto-run'),run:read('#replace-scene'),scrubber:read('.playback-scrubber'),
+          playback:read('.playback-controls'),restart:read('.playback-restart'),
           time:read('#metric-time'),traceback:read('#python-traceback'),
           source:source ? {value:source.value,
             nativeValue:Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').get.call(source),
@@ -116,7 +117,11 @@ async function edit(frame, page, source) {
   await frame.getByRole('tab',{name:'Code',exact:true}).click();
   const editor = frame.locator('.cm-content');
   await editor.waitFor({state:'visible'});
-  await editor.click();
+  // Firefox can mis-hit-test the middle of a long CodeMirror document in a
+  // nested iframe after scrolling. Focus its real editable node and issue real
+  // keyboard input; never write the textarea or invoke a synthetic Run.
+  await editor.focus();
+  await frame.waitForFunction(() => document.activeElement?.matches('.cm-content'));
   await editor.press('ControlOrMeta+A');
   await page.keyboard.insertText(source);
   // Verify the real editor committed the requested text before waiting for its
@@ -266,7 +271,11 @@ try {
             await frame.waitForFunction(()=>document.querySelector('#status').dataset.playbackPlaying==='true');
             await frame.locator('.preview-pane').press('Space');
             await frame.waitForFunction(()=>document.querySelector('#status').dataset.playbackPlaying==='false');
-            await frame.locator('.preview-pane').press('Home');
+            // The controller temporarily disables restart while a preceding transport
+          // transition settles. Wait for its actual command-ready state rather than
+          // treating the optimistic paused status as an acknowledgement.
+          await frame.waitForFunction(() => document.querySelector('.playback-restart')?.disabled === false);
+          await frame.locator('.preview-pane').press('Home');
             await frame.waitForFunction(()=>parseFloat(document.querySelector('#metric-time').value)<1);
             await frame.getByRole('tab',{name:'Code',exact:true}).click();
             await frame.getByRole('tab',{name:'View',exact:true}).click();
