@@ -787,16 +787,19 @@ fn digraph_live_copy_preserves_arrow_style_and_remaps_endpoint_dependencies() {
     scene
         .add_many(&[crate::MobjectTarget::Family(graph.family())])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = crate::LiveSession::new(scene.integration_store(), scene.root(), &mut session);
+    let mut session = scene.into_execution().unwrap();
     let source_arrow = graph.edge(&1, &2).unwrap().arrow().unwrap();
-    live.set_fill(source_arrow.end_tip(), 1.0, 0.0, 0.0, 0.4)
+    session
+        .scene_mut()
+        .set_fill_rgb(source_arrow.end_tip(), 1.0, 0.0, 0.0, 0.4)
         .unwrap();
-    live.set_stroke(source_arrow.shaft(), 1.0, 1.0, 0.0, 0.12)
+    session
+        .scene_mut()
+        .set_stroke(source_arrow.shaft(), 1.0, 1.0, 0.0, 0.12)
         .unwrap();
     let source_shaft_transform = source_arrow.shaft().state().unwrap().transform;
     let source_tip_transform = source_arrow.end_tip().state().unwrap().transform;
-    let copied = graph.copy_live(&mut live).unwrap();
+    let copied = graph.copy_live(&mut session.live()).unwrap();
     let copied_arrow = copied.edge(&1, &2).unwrap().arrow().unwrap();
     assert_ne!(
         source_arrow.shaft().node_id(),
@@ -828,13 +831,18 @@ fn digraph_live_copy_preserves_arrow_style_and_remaps_endpoint_dependencies() {
         Some(copied.vertex(&1).unwrap().node_id())
     );
     drop(declaration);
-    live.add_many(&[crate::MobjectTarget::Family(copied.family())])
+    session
+        .live()
+        .add_many(&[crate::MobjectTarget::Family(copied.family())])
         .unwrap();
-    let store = scene.integration_store();
-    let source_path =
-        crate::path_queries::effective_path_query(store, &session, source_arrow.shaft()).unwrap();
-    let copied_path =
-        crate::path_queries::effective_path_query(store, &session, copied_arrow.shaft()).unwrap();
+    let source_path = session
+        .scene()
+        .effective_path_query(source_arrow.shaft())
+        .unwrap();
+    let copied_path = session
+        .scene()
+        .effective_path_query(copied_arrow.shaft())
+        .unwrap();
     assert_eq!(source_path.start().unwrap(), copied_path.start().unwrap());
     assert_eq!(source_path.end().unwrap(), copied_path.end().unwrap());
 }

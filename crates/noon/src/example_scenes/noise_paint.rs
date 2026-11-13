@@ -50,8 +50,7 @@ impl LiveContinuation for NoiseSurface {
                     }
                     3 => {
                         scene
-                            .live()
-                            .set_fill(&target, 1.0, 0.0, 0.0, 1.0)
+                            .set_fill_rgb(&target, 1.0, 0.0, 0.0, 1.0)
                             .map_err(message)?;
                     }
                     _ => {

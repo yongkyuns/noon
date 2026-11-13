@@ -119,7 +119,8 @@ fn authored_text_linear_tint_composes_with_geometry_and_restores_without_raster_
     let mut compatibility = Raster::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let (coverage, _) = compatibility.render(&device, &queue, &mut source);
     assert!(coverage.as_chunks::<4>().0.iter().any(|p| p[3] != 0));
-    let (scene, label, mut session) = scene(true);
+    let (scene, label, session) = scene(true);
+    let mut running = scene.into_execution_with_session(session).unwrap();
     let mut linear = Raster::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
     let artifact =
         std::env::var_os("NOON_RETAINED_TEXT_ARTIFACT_DIR").map(std::path::PathBuf::from);
@@ -134,12 +135,12 @@ fn authored_text_linear_tint_composes_with_geometry_and_restores_without_raster_
         .enumerate()
     {
         if phase != 0 {
-            scene
-                .live(&mut session)
-                .set_fill(&label, tint[0], tint[1], tint[2], 0.5)
+            running
+                .scene_mut()
+                .set_fill_rgb(&label, tint[0], tint[1], tint[2], 0.5)
                 .unwrap();
         }
-        let (pixels, upload) = linear.render(&device, &queue, &mut session);
+        let (pixels, upload) = linear.render(&device, &queue, running.session_mut());
         if phase != 0 {
             assert_eq!(upload.geometry.bytes_uploaded, 0);
             assert_eq!(upload.images.pixel_bytes_uploaded, 0);
@@ -179,7 +180,7 @@ fn authored_text_linear_tint_composes_with_geometry_and_restores_without_raster_
                 "exact text tint restoration"
             );
         }
-        let (clean, upload) = linear.render(&device, &queue, &mut session);
+        let (clean, upload) = linear.render(&device, &queue, running.session_mut());
         assert_eq!(clean, pixels);
         assert_eq!(upload.bytes_uploaded(), 0);
         if let Some(dir) = &artifact {

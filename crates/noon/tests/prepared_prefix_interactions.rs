@@ -64,9 +64,10 @@ fn at_time(frame: &FrameState, time: f64) -> FrameState {
 
 #[test]
 fn historical_effect_survives_append_and_forward_playback_without_editing_source() {
-    let (scene, target, mut source, object, mut publisher, mut reader) = fixture();
+    let (scene, target, source, object, mut publisher, mut reader) = fixture();
+    let mut source = scene.into_execution_with_session(source).unwrap();
     let baseline = reader.frame().clone();
-    let source_before = source.frame().clone();
+    let source_before = source.session().frame().clone();
     let history = reader.replay_stats();
     let context = reader.take_renderer_publication().context();
     start(&mut reader, object, 10.0);
@@ -80,7 +81,7 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
     assert_eq!(middle.time, 0.5);
     assert_eq!(reader.frontier(), 1.0);
     assert_eq!(reader.replay_stats(), history);
-    assert_eq!(source.frame(), &source_before);
+    assert_eq!(source.session().frame(), &source_before);
     assert_eq!(middle_context.scene_revision(), context.scene_revision());
     assert_eq!(
         middle_context.execution_revision(),
@@ -97,18 +98,22 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
 
     // New source revisions belong to the future. Receiving them must not replace
     // the current display, cancel its effect, or reuse the producer's new values.
-    scene.live(&mut source).shift(&target, 2.0, 0.0).unwrap();
-    scene
-        .live(&mut source)
-        .set_fill(&target, 0.9, 0.1, 0.2, 1.0)
+    source.live().shift(&target, 2.0, 0.0).unwrap();
+    source
+        .scene_mut()
+        .set_fill_rgb(&target, 0.9, 0.1, 0.2, 1.0)
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(1.5).unwrap();
-    let later_reference = source.frame().clone();
-    source.advance_to(boundary.end_time()).unwrap();
+    let boundary = source.session().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.5).unwrap();
+    let later_reference = source.session().frame().clone();
+    source
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
     reader
         .append(
             source
+                .session_mut()
                 .publish_prepared_prefix(boundary, &mut publisher)
                 .unwrap(),
         )
@@ -123,7 +128,7 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
     assert!(reader.interactions_active());
     let appended = reader.replay_stats();
     assert!(appended.revisions_retained > history.revisions_retained);
-    let source_ahead = source.frame().clone();
+    let source_ahead = source.session().frame().clone();
     let source_state = target.state().unwrap();
 
     reader.advance_to(0.75).unwrap();
@@ -133,7 +138,7 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
     assert!(!reader.interactions_active());
     assert_eq!(reader.frame(), &at_time(&baseline, 0.75));
     assert_eq!(reader.replay_stats(), appended);
-    assert_eq!(source.frame(), &source_ahead);
+    assert_eq!(source.session().frame(), &source_ahead);
     assert_eq!(target.state().unwrap(), source_state);
 
     // An actual crossed authored revision takes precedence over a captured
@@ -144,7 +149,7 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
     reader.advance_interactions(20.75).unwrap();
     assert!(!reader.interactions_active());
     assert_eq!(reader.frame(), &later_reference);
-    assert_eq!(source.frame(), &source_ahead);
+    assert_eq!(source.session().frame(), &source_ahead);
     assert_eq!(target.state().unwrap(), source_state);
 }
 
@@ -244,11 +249,12 @@ fn invalid_navigation_and_ticks_preserve_effect_but_explicit_seek_cancels_it() {
 #[ignore = "requires actual Vulkan raster; explicitly invoked by focused qualification"]
 fn prefix_indicate_pixels_change_and_restore_after_appends_source_drop_and_seek() {
     pollster::block_on(async {
-        let (scene, target, mut source, object) = recorded_scene();
-        let initial = source.wait_segment(1.0).unwrap();
+        let (scene, target, source, object) = recorded_scene();
+        let mut source = scene.into_execution_with_session(source).unwrap();
+        let initial = source.session().wait_segment(1.0).unwrap();
         let mut oracle = raster_support::Raster::new().await;
-        source.advance_to(0.5).unwrap();
-        let reference = oracle.capture(&source.take_renderer_publication());
+        source.session_mut().advance_to(0.5).unwrap();
+        let reference = oracle.capture(&source.session_mut().take_renderer_publication());
         assert!(
             reference
                 .as_chunks::<4>()
@@ -259,8 +265,11 @@ fn prefix_indicate_pixels_change_and_restore_after_appends_source_drop_and_seek(
                 > 128,
             "the first-pass reference must contain a visible filled target"
         );
-        source.advance_to(initial.end_time()).unwrap();
-        let (mut publisher, mut reader) = source.create_prepared_prefix(initial).unwrap();
+        source.session_mut().advance_to(initial.end_time()).unwrap();
+        let (mut publisher, mut reader) = source
+            .session_mut()
+            .create_prepared_prefix(initial)
+            .unwrap();
         reader.seek(0.5).unwrap();
         let mut retained = raster_support::Raster::new().await;
         assert_eq!(
@@ -290,20 +299,24 @@ fn prefix_indicate_pixels_change_and_restore_after_appends_source_drop_and_seek(
 
         // Publish a changed future, then a removal, while the historical effect
         // remains active. Neither append may alter the currently presented pixels.
-        scene.live(&mut source).shift(&target, 2.0, 0.0).unwrap();
-        scene
-            .live(&mut source)
-            .set_fill(&target, 0.9, 0.1, 0.2, 1.0)
+        source.live().shift(&target, 2.0, 0.0).unwrap();
+        source
+            .scene_mut()
+            .set_fill_rgb(&target, 0.9, 0.1, 0.2, 1.0)
             .unwrap();
         for removed in [false, true] {
             if removed {
-                scene.live(&mut source).remove(&target).unwrap();
+                source.live().remove(&target).unwrap();
             }
-            let boundary = source.wait_segment(1.0).unwrap();
-            source.advance_to(boundary.end_time()).unwrap();
+            let boundary = source.session().wait_segment(1.0).unwrap();
+            source
+                .session_mut()
+                .advance_to(boundary.end_time())
+                .unwrap();
             reader
                 .append(
                     source
+                        .session_mut()
                         .publish_prepared_prefix(boundary, &mut publisher)
                         .unwrap(),
                 )
@@ -318,7 +331,7 @@ fn prefix_indicate_pixels_change_and_restore_after_appends_source_drop_and_seek(
         let history = reader.replay_stats();
         drop(target);
         drop(source);
-        drop(scene);
+
         drop(publisher);
         drop(oracle);
 

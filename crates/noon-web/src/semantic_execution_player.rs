@@ -962,24 +962,6 @@ impl SemanticExecutionPlayer {
         self.with_live_session(|live| live.effective_stroke_cap(target))
     }
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke_cap(
-        &mut self,
-        target: &noon::Mobject,
-        cap: &str,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke_cap(target, cap))
-            .map(|_| ())
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_style(
-        &mut self,
-        source: &noon::Mobject,
-        update: noon::StyleUpdate,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_style(source, update))
-            .map(|_| ())
-    }
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_interpolate_manim_style(
         &mut self,
         receiver: &noon::Mobject,
@@ -1236,129 +1218,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill(mobject, red, green, blue, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_color(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_color(mobject, red, green, blue, alpha))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_fill(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.disable_fill(mobject))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_opacity(mobject, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_color(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_color(mobject, red, green, blue, alpha))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke(mobject, red, green, blue, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke_color(
-        &mut self,
-        mobject: &noon::Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke_color(mobject, red, green, blue, alpha))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_disable_stroke(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.disable_stroke(mobject))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_stroke_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_stroke_opacity(mobject, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_opacity(mobject, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_fade(
-        &mut self,
-        mobject: &noon::Mobject,
-        darkness: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.fade(mobject, darkness))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_fade_to(
         &mut self,
         mobject: &noon::Mobject,
@@ -1366,26 +1225,6 @@ impl SemanticExecutionPlayer {
         amount: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.fade_to(mobject, color, amount))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_emission(
-        &mut self,
-        mobject: &noon::Mobject,
-        strength: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_emission(mobject, strength))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_object_opacity(
-        &mut self,
-        mobject: &noon::Mobject,
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_object_opacity(mobject, opacity))
             .map(|_| ())
     }
 

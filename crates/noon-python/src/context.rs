@@ -405,6 +405,18 @@ impl Context {
             .map_err(engine_error)
     }
 
+    fn edit_live_style(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+    ) -> PyResult<()> {
+        self.require_active()?;
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        edit(&mut self.scene)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+    }
+
     fn edit_path(
         &mut self,
         target: &MobjectHandle,
@@ -526,7 +538,7 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.with_live(|live| live.set_style(&source.handle, update).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_style(&source.handle, update))
     }
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="liveSetFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
@@ -1373,7 +1385,7 @@ impl Context {
     fn emission(&mut self, target: &MobjectHandle, value: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.set_emission(&target.handle, value).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_emission(&target.handle, value))
     }
     #[pyo3(name = "liveSetFamilyEmission")]
     fn family_emission(
@@ -3150,7 +3162,7 @@ impl Context {
     #[pyo3(name = "liveSetFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_fill(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetFillColor")]
     fn fill_color(
@@ -3162,27 +3174,27 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_fill_color(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetFillOpacity")]
     fn fill_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_fill_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_fill_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveSetColor")]
     fn color(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_color(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetOpacity")]
     fn opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveSetObjectOpacity")]
     fn object_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_object_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_object_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveZIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
@@ -3957,7 +3969,7 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_stroke(&target.handle, r, g, b, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_stroke(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetStrokeColor")]
     fn set_stroke_color(
@@ -3969,15 +3981,12 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.set_stroke_color(&target.handle, r, g, b, a)
-                .map(|_| ())
-        })
+        self.edit_live_style(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetStrokeOpacity")]
     fn set_stroke_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.set_stroke_opacity(&target.handle, a).map(|_| ()))
+        self.edit_live_style(|scene| scene.set_stroke_opacity(&target.handle, a))
     }
     fn metrics(&self) -> (u64, u64, u64) {
         (self.frames, self.segments, self.callback_regions)

@@ -3,7 +3,9 @@
 use crate::{
     family_authoring::FamilyTranslation,
     semantic_mobject::{
-        edit_color, edit_fill, edit_fill_opacity, edit_stroke_width, prepare_fill_paint_value,
+        edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fill, edit_fill_color,
+        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
+        edit_stroke_opacity, edit_stroke_width, prepare_fill_paint_value,
     },
     AuthoringError, Mobject, Scene,
 };
@@ -20,15 +22,13 @@ impl Scene {
     /// scene changes; while running, the same transaction publishes coherently
     /// after the shared runtime edit barriers have been validated.
     pub fn set_color(&mut self, object: &Mobject, color: Color) -> Result<(), AuthoringError> {
-        self.edit_object_style(object, |style| {
-            edit_color(
-                style,
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                f64::from(color.alpha),
-            )
-        })
+        self.set_color_rgba(
+            object,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            color.alpha.into(),
+        )
     }
 
     /// Set persistent fill RGB and explicit layer opacity, preserving the stroke.
@@ -42,15 +42,13 @@ impl Scene {
         color: Color,
         opacity: f64,
     ) -> Result<(), AuthoringError> {
-        self.edit_object_style(object, |style| {
-            edit_fill(
-                style,
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                opacity,
-            )
-        })
+        self.set_fill_rgb(
+            object,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            opacity,
+        )
     }
 
     /// Set persistent fill opacity without changing the fill color or stroke.
@@ -65,6 +63,129 @@ impl Scene {
     /// Set persistent stroke width through the shared paint and publication rules.
     pub fn set_stroke_width(&mut self, object: &Mobject, width: f64) -> Result<(), AuthoringError> {
         self.edit_object_style(object, |style| edit_stroke_width(style, width))
+    }
+
+    pub fn set_fill_rgb(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| edit_fill(style, red, green, blue, opacity))
+    }
+
+    pub fn set_fill_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| {
+            edit_fill_color(style, red, green, blue, alpha)
+        })
+    }
+
+    pub fn disable_fill(&mut self, mobject: &Mobject) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| {
+            edit_disable_fill(style);
+            Ok(())
+        })
+    }
+
+    pub fn set_color_rgba(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| edit_color(style, red, green, blue, alpha))
+    }
+
+    pub fn set_stroke(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        opacity: f64,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| {
+            edit_stroke(style, red, green, blue, opacity)
+        })
+    }
+
+    pub fn set_stroke_color(
+        &mut self,
+        mobject: &Mobject,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| {
+            edit_stroke_color(style, red, green, blue, alpha)
+        })
+    }
+
+    pub fn disable_stroke(&mut self, mobject: &Mobject) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| {
+            edit_disable_stroke(style);
+            Ok(())
+        })
+    }
+
+    pub fn set_stroke_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| edit_stroke_opacity(style, opacity))
+    }
+
+    pub fn set_stroke_cap(&mut self, mobject: &Mobject, cap: &str) -> Result<(), AuthoringError> {
+        let cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
+        self.edit_object_style(mobject, |style| {
+            style.stroke_cap = cap;
+            Ok(())
+        })
+    }
+
+    pub fn set_opacity(&mut self, mobject: &Mobject, opacity: f64) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| edit_manim_opacity(style, opacity))
+    }
+
+    pub fn fade(&mut self, mobject: &Mobject, darkness: f64) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| edit_fade(style, darkness))
+    }
+
+    pub fn set_emission(&mut self, mobject: &Mobject, strength: f64) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| {
+            style.emission =
+                noon_core::Emission::new(strength).map_err(crate::AuthoringError::Emission)?;
+            Ok(())
+        })
+    }
+
+    pub fn set_object_opacity(
+        &mut self,
+        mobject: &Mobject,
+        opacity: f64,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(mobject, |style| edit_object_opacity(style, opacity))
+    }
+
+    pub fn set_style(
+        &mut self,
+        object: &Mobject,
+        update: crate::StyleUpdate,
+    ) -> Result<(), AuthoringError> {
+        self.edit_object_style(object, |style| update.apply(style))
     }
 
     /// Set an immutable linear fill and optional fill opacity.

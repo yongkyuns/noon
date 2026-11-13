@@ -146,11 +146,18 @@ fn ordinary_material_targets_keep_exact_endpoints_seek_and_parallel_opacity() {
     source.set_emission(start).unwrap();
     scene.add(&source).unwrap();
     scene.add(&other).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let source_id = session.execution_object_id(source.node_id()).unwrap();
-    let other_id = session.execution_object_id(other.node_id()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let source_id = session
+        .session()
+        .execution_object_id(source.node_id())
+        .unwrap();
+    let other_id = session
+        .session()
+        .execution_object_id(other.node_id())
+        .unwrap();
     let index = |id| {
         session
+            .session()
             .frame()
             .objects
             .iter()
@@ -159,27 +166,31 @@ fn ordinary_material_targets_keep_exact_endpoints_seek_and_parallel_opacity() {
     };
     let source_index = index(source_id);
     let other_index = index(other_id);
-    let unrelated = session.frame().objects[other_index].clone();
-    let wait = scene.live(&mut session).wait_segment(0.5).unwrap();
+    let unrelated = session.session().frame().objects[other_index].clone();
+    let wait = session.live().wait_segment(0.5).unwrap();
     session.seek(0.5).unwrap();
-    scene.live(&mut session).complete_segment(wait).unwrap();
+    session.live().complete_segment(wait).unwrap();
     let segment = {
-        let mut live = scene.live(&mut session);
-        let target = live.target_editor(&source).unwrap();
-        live.set_emission(&target, end).unwrap();
-        live.set_object_opacity(&target, 0.5).unwrap();
-        live.declare_and_activate_transform_to(
-            &source,
-            &target,
-            AnimationOptions::new()
-                .run_time(2.0)
-                .rate_func(RateFunction::Linear),
-        )
-        .unwrap()
+        let target = session.live().target_editor(&source).unwrap();
+        session.scene_mut().set_emission(&target, end).unwrap();
+        session
+            .scene_mut()
+            .set_object_opacity(&target, 0.5)
+            .unwrap();
+        session
+            .live()
+            .declare_and_activate_transform_to(
+                &source,
+                &target,
+                AnimationOptions::new()
+                    .run_time(2.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap()
     };
     for alpha in [0.0, 0.5, 0.12345678912345, 0.9, 0.25, 1.0, 0.0, 1.0] {
         session.seek(segment.start_time() + 2.0 * alpha).unwrap();
-        let row = &session.frame().objects[source_index];
+        let row = &session.session().frame().objects[source_index];
         let expected = start * (1.0 - alpha) + end * alpha;
         assert!(
             (row.style.emission.strength() - expected).abs() < 1e-12,
@@ -187,14 +198,14 @@ fn ordinary_material_targets_keep_exact_endpoints_seek_and_parallel_opacity() {
             row.style.emission.strength()
         );
         assert!((f64::from(row.style.opacity) - (1.0 - 0.5 * alpha)).abs() < 1e-7);
-        assert_eq!(session.frame().objects[other_index], unrelated);
+        assert_eq!(session.session().frame().objects[other_index], unrelated);
     }
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(source.emission().unwrap(), end);
     assert_eq!(source.state().unwrap().style.object_opacity, 0.5);
     session.seek(0.25).unwrap();
     assert_eq!(
-        session.frame().objects[source_index]
+        session.session().frame().objects[source_index]
             .style
             .emission
             .strength(),
@@ -202,7 +213,7 @@ fn ordinary_material_targets_keep_exact_endpoints_seek_and_parallel_opacity() {
     );
     session.seek(2.5).unwrap();
     assert_eq!(
-        session.frame().objects[source_index]
+        session.session().frame().objects[source_index]
             .style
             .emission
             .strength(),
@@ -210,31 +221,32 @@ fn ordinary_material_targets_keep_exact_endpoints_seek_and_parallel_opacity() {
     );
 
     let pulse = {
-        let mut live = scene.live(&mut session);
-        let target = live.target_editor(&source).unwrap();
-        live.set_emission(&target, 0.0).unwrap();
-        live.declare_and_activate_transform_to(
-            &source,
-            &target,
-            AnimationOptions::new()
-                .run_time(1.0)
-                .rate_func(RateFunction::ThereAndBack),
-        )
-        .unwrap()
+        let target = session.live().target_editor(&source).unwrap();
+        session.scene_mut().set_emission(&target, 0.0).unwrap();
+        session
+            .live()
+            .declare_and_activate_transform_to(
+                &source,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::ThereAndBack),
+            )
+            .unwrap()
     };
     session.seek(pulse.start_time() + 0.5).unwrap();
     assert_eq!(
-        session.frame().objects[source_index]
+        session.session().frame().objects[source_index]
             .style
             .emission
             .strength(),
         0.0
     );
     session.seek(pulse.start_time() + 1.0).unwrap();
-    scene.live(&mut session).complete_segment(pulse).unwrap();
+    session.live().complete_segment(pulse).unwrap();
     assert_eq!(source.emission().unwrap(), end);
     assert_eq!(
-        session.frame().objects[source_index]
+        session.session().frame().objects[source_index]
             .style
             .emission
             .strength(),

@@ -11,11 +11,10 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         shape.set_stroke_color(1., 1., 1., 1.)?;
         shape.set_stroke_width(0.)?;
         scene.add(&shape)?;
-        let mut session = scene.execution_session()?;
+        let mut session = scene.into_execution()?;
         for width in [0.2, 0.02] {
-            let mut live = scene.live(&mut session);
-            let target = live.target_editor(&shape)?;
-            live.set_style(
+            let target = session.live().target_editor(&shape)?;
+            session.scene_mut().set_style(
                 &target,
                 crate::StyleUpdate {
                     stroke_width: Some(width),
@@ -30,12 +29,15 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                         .run_time(1.)
                         .rate_func(RateFunction::Linear),
                 ));
-            let segment =
-                live.declare_and_activate_composition(&request, AnimationOptions::new())?;
-            live.advance_segment_to(segment, segment.end_time())?;
-            live.complete_segment(segment)?;
+            let segment = session
+                .live()
+                .declare_and_activate_composition(&request, AnimationOptions::new())?;
+            session
+                .live()
+                .advance_segment_to(segment, segment.end_time())?;
+            session.live().complete_segment(segment)?;
         }
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(session)
     };
     build().map_err(|error| error.to_string())
 }

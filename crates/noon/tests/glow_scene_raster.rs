@@ -1090,16 +1090,14 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
             }
             let (scene, source) = drawable_scene(kind, true, 1.0);
             let (plain_scene, plain_source) = drawable_scene(kind, false, 1.0);
-            let mut session = scene.execution_session().unwrap();
+            let mut session = scene.into_execution().unwrap();
             let mut plain = plain_scene.execution_session().unwrap();
             let segment = if write {
-                scene
-                    .live(&mut session)
+                session
+                    .live()
                     .declare_and_activate_text_write(&source, false, options)
             } else {
-                scene
-                    .live(&mut session)
-                    .declare_and_activate_create(&source, options)
+                session.live().declare_and_activate_create(&source, options)
             }
             .unwrap();
             let plain_segment = if write {
@@ -1116,15 +1114,12 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
             let mut reference = Surface::new(&device, &queue);
             let mut last_plain = Vec::new();
             for time in [0.0, 0.125, 0.5, 0.875, 1.0] {
-                scene
-                    .live(&mut session)
-                    .advance_segment_to(segment, time)
-                    .unwrap();
+                session.live().advance_segment_to(segment, time).unwrap();
                 plain_scene
                     .live(&mut plain)
                     .advance_segment_to(plain_segment, time)
                     .unwrap();
-                let actual = surface.render(&device, &queue, &mut session);
+                let actual = surface.render(&device, &queue, session.session_mut());
                 last_plain = reference.render(&device, &queue, &mut plain);
                 let expected = expected(&last_plain, 0.0);
                 let difference = error(&actual, &expected);
@@ -1133,7 +1128,7 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
                     difference <= 2,
                     "{kind} write={write} reveal={time}: full-image Gaussian error {difference}"
                 );
-                let repeated = surface.render(&device, &queue, &mut session);
+                let repeated = surface.render(&device, &queue, session.session_mut());
                 assert!(
                     repeated == actual,
                     "{kind} write={write} reveal={time}: clean pixel error {} ({} channels)",
@@ -1141,16 +1136,16 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
                     repeated.iter().zip(&actual).filter(|(a, b)| a != b).count()
                 );
             }
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            session.live().complete_segment(segment).unwrap();
             plain_scene
                 .live(&mut plain)
                 .complete_segment(plain_segment)
                 .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .set_object_opacity(&source, 0.35)
                 .unwrap();
-            let actual = surface.render(&device, &queue, &mut session);
+            let actual = surface.render(&device, &queue, session.session_mut());
             let opaque = expected(&last_plain, 0.0);
             let mut faded = opaque.clone();
             for pixel in faded.as_chunks_mut::<4>().0 {
@@ -1163,22 +1158,22 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
                 "{kind} opacity applied more than once: {}",
                 error(&actual, &faded)
             );
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .set_object_opacity(&source, 1.0)
                 .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .live()
                 .set_glow(&source, EffectUpdate::default().intensity(0.0))
                 .unwrap();
             assert_eq!(
-                surface.render(&device, &queue, &mut session),
+                surface.render(&device, &queue, session.session_mut()),
                 last_plain,
                 "{kind} neutral changed source pixels"
             );
-            scene.live(&mut session).remove_glow(&source).unwrap();
+            session.live().remove_glow(&source).unwrap();
             assert_eq!(
-                surface.render(&device, &queue, &mut session),
+                surface.render(&device, &queue, session.session_mut()),
                 last_plain,
                 "{kind} removal changed source pixels"
             );
@@ -1561,7 +1556,7 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
             assert_eq!(surface.effect_stats.blur_passes, 0);
             assert_eq!(surface.effect_stats.texture_allocations, 0);
             plain
-                .live()
+                .scene_mut()
                 .set_object_opacity(&plain_source, 0.45)
                 .unwrap();
             let ordinary = reference.render(&device, &queue, plain.session_mut());
@@ -1760,14 +1755,11 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
             };
             let (mask_scene, _, mask_animation) = image_scene(None, sampling, mask_opacity, 1.0);
             let resource = source.state().unwrap().content.image().unwrap().resource();
-            let mut session = scene.execution_session().unwrap();
-            let mut plain = plain_scene.execution_session().unwrap();
+            let mut session = scene.into_execution().unwrap();
+            let mut plain = plain_scene.into_execution().unwrap();
             let mut mask = mask_scene.execution_session().unwrap();
-            let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-            let plain_segment = plain_scene
-                .live(&mut plain)
-                .play_animation(&plain_animation)
-                .unwrap();
+            let segment = session.live().play_animation(&animation).unwrap();
+            let plain_segment = plain.live().play_animation(&plain_animation).unwrap();
             let mask_segment = mask_scene
                 .live(&mut mask)
                 .play_animation(&mask_animation)
@@ -1778,24 +1770,29 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
             let times = [0.0, 0.25, 0.5, 0.75, 1.0];
             let mut frames = Vec::new();
             for time in times {
-                scene
-                    .live(&mut session)
-                    .advance_segment_to(segment, time)
-                    .unwrap();
-                plain_scene
-                    .live(&mut plain)
+                session.live().advance_segment_to(segment, time).unwrap();
+                plain
+                    .live()
                     .advance_segment_to(plain_segment, time)
                     .unwrap();
                 mask_scene
                     .live(&mut mask)
                     .advance_segment_to(mask_segment, time)
                     .unwrap();
-                let ordinary =
-                    reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
+                let ordinary = reference.render_on(
+                    &device,
+                    &queue,
+                    plain.session_mut(),
+                    wgpu::Color::TRANSPARENT,
+                );
                 let alpha =
                     mask_surface.render_on(&device, &queue, &mut mask, wgpu::Color::TRANSPARENT);
-                let actual =
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                let actual = surface.render_on(
+                    &device,
+                    &queue,
+                    session.session_mut(),
+                    wgpu::Color::TRANSPARENT,
+                );
                 let expected =
                     expected_image_glow(&ordinary, &alpha, time, OPACITY, wgpu::Color::TRANSPARENT);
                 let difference = error(&actual, &expected);
@@ -1816,12 +1813,17 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
                     "missing-glow negative control is ineffective"
                 );
                 assert_eq!(
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    surface.render_on(
+                        &device,
+                        &queue,
+                        session.session_mut(),
+                        wgpu::Color::TRANSPARENT
+                    ),
                     actual,
                     "clean publication changed image pixels"
                 );
                 assert_eq!(
-                    session.frame().objects[0]
+                    session.session().frame().objects[0]
                         .content
                         .image()
                         .unwrap()
@@ -1835,16 +1837,18 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
             for index in [4, 1, 3, 0, 2, 4] {
                 session.seek(times[index]).unwrap();
                 assert_eq!(
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    surface.render_on(
+                        &device,
+                        &queue,
+                        session.session_mut(),
+                        wgpu::Color::TRANSPARENT
+                    ),
                     frames[index],
                     "{sampling:?} {mode:?}: seek differs from forward"
                 );
             }
-            scene.live(&mut session).complete_segment(segment).unwrap();
-            plain_scene
-                .live(&mut plain)
-                .complete_segment(plain_segment)
-                .unwrap();
+            session.live().complete_segment(segment).unwrap();
+            plain.live().complete_segment(plain_segment).unwrap();
             mask_scene
                 .live(&mut mask)
                 .complete_segment(mask_segment)
@@ -1855,42 +1859,47 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
                 b: 0.375,
                 a: 1.0,
             };
-            let ordinary =
-                reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
+            let ordinary = reference.render_on(
+                &device,
+                &queue,
+                plain.session_mut(),
+                wgpu::Color::TRANSPARENT,
+            );
             let alpha =
                 mask_surface.render_on(&device, &queue, &mut mask, wgpu::Color::TRANSPARENT);
             let expected = expected_image_glow(&ordinary, &alpha, 1.0, OPACITY, background);
-            let restored = surface.render_on(&device, &queue, &mut session, background);
+            let restored = surface.render_on(&device, &queue, session.session_mut(), background);
             assert!(
                 error(&restored, &expected) <= 2,
                 "colored-background composition differs"
             );
-            plain_scene
-                .live(&mut plain)
+            plain
+                .scene_mut()
                 .set_object_opacity(&plain_source, OPACITY)
                 .unwrap();
-            let plain_pixels = reference.render_on(&device, &queue, &mut plain, background);
-            scene
-                .live(&mut session)
+            let plain_pixels =
+                reference.render_on(&device, &queue, plain.session_mut(), background);
+            session
+                .live()
                 .set_glow(&source, EffectUpdate::default().intensity(0.0))
                 .unwrap();
             assert_eq!(
-                surface.render_on(&device, &queue, &mut session, background),
+                surface.render_on(&device, &queue, session.session_mut(), background),
                 plain_pixels,
                 "neutral effect changed ordinary image"
             );
-            scene
-                .live(&mut session)
+            session
+                .live()
                 .set_glow(&source, EffectUpdate::default().intensity(1.4))
                 .unwrap();
             assert_eq!(
-                surface.render_on(&device, &queue, &mut session, background),
+                surface.render_on(&device, &queue, session.session_mut(), background),
                 restored,
                 "glow restoration changed image"
             );
-            scene.live(&mut session).remove_glow(&source).unwrap();
+            session.live().remove_glow(&source).unwrap();
             assert_eq!(
-                surface.render_on(&device, &queue, &mut session, background),
+                surface.render_on(&device, &queue, session.session_mut(), background),
                 plain_pixels,
                 "effect removal left a stale image or halo"
             );
@@ -3118,8 +3127,8 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                     assert_eq!(surface.upload_stats.images.textures_retired, 0);
                     assert_eq!(surface.renderer.image_residency_stats().textures, 1);
                     execution
-                        .live()
-                        .set_fill(&source, 0.2, 0.4, 0.8, 1.0)
+                        .scene_mut()
+                        .set_fill_rgb(&source, 0.2, 0.4, 0.8, 1.0)
                         .unwrap();
                     surface.render(&device, &queue, execution.session_mut());
                     assert_eq!(surface.upload_stats.images.textures_retired, 1);

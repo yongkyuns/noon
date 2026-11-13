@@ -17,7 +17,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let selected = running.scene_mut().subcurve(&source, 0.875, 0.375)?;
         let mut live = running.live();
         live.shift(&selected, 4., 0.)?;
-        live.set_stroke_color(
+        running.scene_mut().set_stroke_color(
             &selected,
             f64::from(noon_core::YELLOW.red),
             f64::from(noon_core::YELLOW.green),

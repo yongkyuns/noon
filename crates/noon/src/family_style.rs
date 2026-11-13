@@ -1394,11 +1394,11 @@ mod tests {
         let leaf = scene.square(0.5).unwrap();
         let family = scene.family(&[(&leaf).into()]).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let leaf_before = live.effective(&leaf).unwrap();
+        let mut session = scene.into_execution().unwrap();
+        let leaf_before = session.live().effective(&leaf).unwrap();
 
-        let result = live
+        let result = session
+            .live()
             .set_family_own_style_with_background_stroke(
                 &family,
                 StyleUpdate {
@@ -1424,17 +1424,26 @@ mod tests {
         assert_eq!(family.own_background_stroke_color().unwrap(), Color::BLUE);
         assert_eq!(family.own_background_stroke_width().unwrap(), 0.06);
         assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.55);
-        assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
+        assert_eq!(
+            session.live().effective(&leaf).unwrap().style,
+            leaf_before.style
+        );
 
-        live.set_family_own_stroke_cap(&family, "square").unwrap();
+        session
+            .live()
+            .set_family_own_stroke_cap(&family, "square")
+            .unwrap();
         assert_eq!(
             family.own_stroke_cap().unwrap(),
             noon_core::StrokeCap::Square
         );
-        assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
-        live.set_stroke_cap(&leaf, "butt").unwrap();
         assert_eq!(
-            live.effective_stroke_cap(&leaf).unwrap(),
+            session.live().effective(&leaf).unwrap().style,
+            leaf_before.style
+        );
+        session.scene_mut().set_stroke_cap(&leaf, "butt").unwrap();
+        assert_eq!(
+            session.live().effective_stroke_cap(&leaf).unwrap(),
             noon_core::StrokeCap::Butt
         );
         assert_eq!(
