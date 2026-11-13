@@ -1022,9 +1022,8 @@ impl Scene {
 
     /// Install the execution component lowered from this exact Scene.
     ///
-    /// This is private migration plumbing for the Scene-owned live path. External
-    /// integration entry points may still construct standalone sessions until the
-    /// broader control-surface migration removes that compatibility shape.
+    /// Callers lower the runtime here or validate an existing host-owned runtime
+    /// before installation.
     pub(crate) fn install_execution(&mut self, execution: ExecutionSession) {
         assert!(
             self.execution.is_none(),
