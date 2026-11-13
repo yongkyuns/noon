@@ -496,7 +496,6 @@ impl Context {
         references: &MembershipBatch,
     ) -> PyResult<crate::family::FamilyCopy> {
         self.available()?;
-        self.require_execution()?;
         self.scene
             .promote_own_points(target, &references.add_targets()?)
             .map(|copied| crate::family::FamilyCopy { copied })
@@ -3177,7 +3176,7 @@ impl Context {
             .map(|family| crate::family::FamilyHandle { family })
             .map_err(engine_error)
     }
-    #[pyo3(name = "livePromoteFamilyOwnPoints")]
+    #[pyo3(name = "promoteFamilyOwnPoints")]
     fn promote_family_own_points(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3186,7 +3185,7 @@ impl Context {
         self.promote_own_points((&target.family).into(), references)
     }
 
-    #[pyo3(name = "livePromoteMobjectOwnPoints")]
+    #[pyo3(name = "promoteMobjectOwnPoints")]
     fn promote_mobject_own_points(
         &mut self,
         target: &MobjectHandle,
