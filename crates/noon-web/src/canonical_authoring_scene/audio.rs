@@ -307,7 +307,7 @@ mod tests {
         }
         context
             .audio(
-                &crate::authoring_audio::small_discovery().unwrap(),
+                &noon::integration::small_discovery_audio().unwrap(),
                 AudioClipOptions {
                     duration: Some(30.0),
                     gain: 0.5,

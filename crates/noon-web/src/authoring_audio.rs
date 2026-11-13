@@ -23,20 +23,6 @@ pub(crate) fn pcm_resource(
     .map_err(Into::into)
 }
 
-pub(crate) fn small_discovery() -> Result<AudioResource, AuthoringFailure> {
-    use noon::example_scenes::background_audio::{music, SAMPLE_RATE};
-    let pcm = music::render_music(SAMPLE_RATE)
-        .map_err(|error| AuthoringFailure::unclassified("audio.music_preparation", &error))?;
-    AudioResource::from_interleaved(
-        pcm.sample_rate(),
-        music::CHANNELS as u16,
-        pcm.into_samples(),
-        DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
-    )
-    .map_err(noon::AuthoringError::from)
-    .map_err(Into::into)
-}
-
 /// An alias of one scene-global generational clip identity, never a clip copy.
 #[derive(Clone)]
 pub(crate) struct AuthoringAudioClipHandle {
@@ -83,7 +69,7 @@ mod wasm {
         /// Prepare the original CC0 composition once, outside playback.
         #[wasm_bindgen(js_name = smallDiscovery)]
         pub fn small_discovery() -> Result<WasmAudioSource, JsValue> {
-            super::small_discovery()
+            noon::integration::small_discovery_audio()
                 .map(|resource| Self { resource })
                 .map_err(js_error)
         }
@@ -201,7 +187,7 @@ mod tests {
 
     #[test]
     fn bundled_source_retains_original_music_format_and_is_shared_on_clone() {
-        let source = small_discovery().unwrap();
+        let source = noon::integration::small_discovery_audio().unwrap();
         assert_eq!(source.sample_rate(), 24_000);
         assert_eq!(source.channels(), 2);
         assert_eq!(source.frames(), 80 * 24_000);

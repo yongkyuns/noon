@@ -46,6 +46,21 @@ pub use crate::scene_script::{
     BlockingBoundary, BlockingContinuation, BlockingSceneHost, BlockingSceneSetup,
 };
 
+/// Prepare the bundled finite background score for a language host.
+pub fn small_discovery_audio() -> Result<crate::AudioResource, AuthoringFailure> {
+    use crate::example_scenes::background_audio::{music, SAMPLE_RATE};
+    let pcm = music::render_music(SAMPLE_RATE)
+        .map_err(|error| AuthoringFailure::unclassified("audio.music_preparation", &error))?;
+    crate::AudioResource::from_interleaved(
+        pcm.sample_rate(),
+        music::CHANNELS as u16,
+        pcm.into_samples(),
+        crate::DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+    )
+    .map_err(crate::AuthoringError::from)
+    .map_err(Into::into)
+}
+
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.
 pub const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 

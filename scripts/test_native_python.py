@@ -113,6 +113,18 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_background_music_lesson_prepares_its_full_authored_timeline(self):
+        path = ROOT / "web/python/examples/background_music_lesson.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        try:
+            self.assertEqual(view.duration, 30)
+            first = view.capture(time=0, width=320, height=180)
+            self.assertNotEqual(first, view.capture(time=9, width=320, height=180))
+            self.assertEqual(first, view.capture(time=0, width=320, height=180))
+        finally:
+            view.close()
+
     def test_scene_path_edits_match_during_setup_and_playback(self):
         source = """from noon import *
 class Demo(Scene):

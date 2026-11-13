@@ -94,6 +94,26 @@ class NativePythonExportTests(unittest.TestCase):
             self.assertAlmostEqual(sum(xs) / len(xs), expected_x, delta=0.85,
                                    msg=f"wrong source sample/order at output frame {index}")
 
+    def test_predeclared_audio_uses_the_shared_mp4_soundtrack(self):
+        source = """from noon import *
+result = Scene()
+result.add(Dot())
+result.declare_wait(0.25)
+pcm = AudioSource.from_interleaved([0.2, -0.2] * 3000, sample_rate=24000)
+clip = result.audio(pcm)
+assert pcm.frames == 6000
+assert clip.start_time == 0 and clip.end_time == 0.25
+"""
+        view, _ = prepare(source)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "soundtrack.mp4"
+            export(view, path)
+            streams = probe(path)["streams"]
+            self.assertEqual([stream["codec_name"] for stream in streams], ["h264", "aac"])
+            audio = streams[1]
+            self.assertEqual((audio["sample_rate"], audio["channels"]), ("48000", 2))
+            self.assertAlmostEqual(float(audio["duration"]), 0.25)
+
     def test_source_runs_once_and_off_grid_endpoint_preserves_actual_mp4_timing(self):
         view, context = prepare()
         with tempfile.TemporaryDirectory() as directory:

@@ -48,8 +48,9 @@ Python source executes once and prepares the existing bounded deterministic
 Rust history. The native renderer samples that history with Noon's shared output
 frame policy. Rendering or encoding speed does not change authored time, skip
 frames or execute Python again. MP4 uses SDR H.264/YUV420p and requires even
-dimensions. This initial native Python profile does not export audio or
-unrecorded Python callbacks/external input; those sources fail explicitly.
+dimensions. Fully predeclared scenes can export their authored soundtrack as
+48 kHz stereo AAC. The default native Python window has no audio device
+output. Export requires deterministic source timing.
 
 ### Output controls
 
