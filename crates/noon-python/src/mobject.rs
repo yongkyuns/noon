@@ -1242,6 +1242,48 @@ impl MobjectHandle {
     pub fn set_stroke_join(&mut self, join: &str) -> Result<(), PyErr> {
         self.handle.set_stroke_join(join).map_err(engine_error)
     }
+    #[pyo3(name = "sheenDirection")]
+    fn sheen_direction(&self) -> PyResult<Vec<f64>> {
+        self.handle
+            .sheen_direction()
+            .map(|direction| direction.components())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setSheenDirection")]
+    fn set_sheen_direction(
+        &self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        self.handle
+            .set_sheen_direction(direction, family)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "rotateSheenDirection")]
+    fn rotate_sheen_direction(
+        &self,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        self.handle
+            .rotate_sheen_direction(
+                angle,
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                family,
+            )
+            .map_err(engine_error)
+    }
+
     #[getter(strokeCap)]
     fn stroke_cap(&self) -> PyResult<&'static str> {
         self.handle

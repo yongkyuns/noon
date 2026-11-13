@@ -1645,12 +1645,6 @@ def _paint_authoring_target(value):
     return _handle_for(value), _path_authoring_context(value), ""
 
 
-def _style_target(value):
-    if _is_shared_family(value):
-        return value._semantic_family_handle, _group_target_context(value), "Family"
-    return _handle_for(value), _live_mutation_context(value), ""
-
-
 def _style_value(value, name):
     if hasattr(value, "tolist"):
         value = value.tolist()
@@ -2038,30 +2032,13 @@ def _check_sheen_callback_write(self):
 def _set_sheen_direction(self, direction, family=True):
     values, dimensions = _sheen_direction_components(direction)
     _check_sheen_callback_write(self)
-    target, context, suffix = _style_target(self)
+    target, context, suffix = _paint_authoring_target(self)
     if target is None:
         raise RuntimeError("sheen direction updates require the shared Rust authoring host")
-    if suffix == "Family":
-        if context is None:
-            engine_call(target.setSheenDirection, *values, dimensions, bool(family))
-        else:
-            engine_call(
-                context.liveSetFamilySheenDirection,
-                target,
-                *values,
-                dimensions,
-                bool(family),
-            )
-    elif context is None:
+    if context is None:
         engine_call(target.setSheenDirection, *values, dimensions, bool(family))
     else:
-        engine_call(
-            context.liveSetMobjectSheenDirection,
-            target,
-            *values,
-            dimensions,
-            bool(family),
-        )
+        engine_call(getattr(context, f"set{suffix or 'Mobject'}SheenDirection"), target, *values, dimensions, bool(family))
     return self
 
 
@@ -2111,41 +2088,22 @@ def _rotate_sheen_direction(self, angle, axis, family=True):
         return self
     axis = _sheen_rotation_axis(axis)
     _check_sheen_callback_write(self)
-    target, context, suffix = _style_target(self)
+    target, context, suffix = _paint_authoring_target(self)
     if target is None:
         raise RuntimeError("sheen direction updates require the shared Rust authoring host")
-    if suffix == "Family":
-        if context is None:
-            engine_call(target.rotateSheenDirection, value, *axis, bool(family))
-        else:
-            engine_call(
-                context.liveRotateFamilySheenDirection,
-                target,
-                value,
-                *axis,
-                bool(family),
-            )
-    elif context is None:
+    if context is None:
         engine_call(target.rotateSheenDirection, value, *axis, bool(family))
     else:
-        engine_call(
-            context.liveRotateMobjectSheenDirection,
-            target,
-            value,
-            *axis,
-            bool(family),
-        )
+        engine_call(getattr(context, f"rotate{suffix or 'Mobject'}SheenDirection"), target, value, *axis, bool(family))
     return self
 
 
 def _get_sheen_direction(self):
-    target, _context, suffix = _style_target(self)
-    if target is None:
-        values = (-1.0, 1.0, 0.0)
-    elif suffix == "Family":
-        values = engine_call(target.ownSheenDirection)
+    if _is_shared_family(self):
+        values = engine_call(self._semantic_family_handle.ownSheenDirection)
     else:
-        values = engine_call(target.sheenDirection)
+        target = _handle_for(self)
+        values = (-1.0, 1.0, 0.0) if target is None else engine_call(target.sheenDirection)
     try:
         import numpy as np
     except ImportError:

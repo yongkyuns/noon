@@ -296,6 +296,48 @@ impl FamilyHandle {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "ownSheenDirection")]
+    fn sheen_direction(&self) -> PyResult<Vec<f64>> {
+        self.family
+            .own_sheen_direction()
+            .map(|direction| direction.components())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setSheenDirection")]
+    fn set_sheen_direction(
+        &self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        noon::MobjectTarget::from(&self.family)
+            .set_sheen_direction(direction, family)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "rotateSheenDirection")]
+    fn rotate_sheen_direction(
+        &self,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        noon::MobjectTarget::from(&self.family)
+            .rotate_sheen_direction(
+                angle,
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                family,
+            )
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "ownStrokeCap")]
     fn own_stroke_cap(&self) -> PyResult<&'static str> {
         self.family
