@@ -1,5 +1,5 @@
 use super::*;
-use crate::Scene;
+use crate::{MeshOptions, Scene};
 use noon_core::{
     AnimationOptions, GeometryRef, GeometryResource, GeometryResourceLookup, MeshResource,
     RateFunction, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D, SemanticVec3,
@@ -141,7 +141,9 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
     {
         let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
         live.complete_segment(segment).unwrap();
-        let effective_at_barrier = live.effective_world_transform(target).unwrap();
+        let effective_at_barrier = live.session.frame().objects[target_frame_index]
+            .world_transform()
+            .unwrap();
         let authored_at_barrier = target.world_transform().unwrap();
         assert_eq!(effective_at_barrier, authored_at_barrier);
         let authored_state_at_barrier = target.state().unwrap();
@@ -160,8 +162,8 @@ fn replacing_one_live_mesh_is_local_and_keeps_old_resource_arc_valid() {
             context_at_barrier.scene_revision().checked_next().unwrap()
         );
         assert_eq!(
-            live.effective_world_transform(target).unwrap(),
-            effective_at_barrier
+            live.session.frame().objects[target_frame_index].world_transform(),
+            Some(effective_at_barrier)
         );
     }
 

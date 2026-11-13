@@ -167,6 +167,20 @@ impl From<&str> for AuthoringFailure {
     }
 }
 
+impl AuthoringFailure {
+    /// Project a Scene mutation through the host's existing running error codes.
+    pub fn from_scene_mutation(error: AuthoringError, running: bool) -> Self {
+        if !running {
+            return error.into();
+        }
+        match error {
+            AuthoringError::ExecutionPublication(error) => LiveSessionError::Publication(error),
+            other => other.into(),
+        }
+        .into()
+    }
+}
+
 impl From<AuthoringError> for AuthoringFailure {
     fn from(error: AuthoringError) -> Self {
         let message = error.to_string();

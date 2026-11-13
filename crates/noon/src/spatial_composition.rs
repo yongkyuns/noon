@@ -135,7 +135,7 @@ fn composition_transaction(
     Ok(transaction)
 }
 
-pub(crate) fn add_transaction(
+fn add_transaction(
     store: &Rc<RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
     targets: &[MobjectTarget<'_>],

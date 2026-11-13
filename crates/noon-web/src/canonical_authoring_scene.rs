@@ -3946,8 +3946,7 @@ impl CanonicalAuthoringScene {
                     domain.apply_scene(&mut self.scene, &borrowed)?;
                 }
                 PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                    self.active_live_player()?
-                        .live_add_spatial_membership(&borrowed, domain)?;
+                    domain.apply_scene(self.active_live_player()?.scene_mut(), &borrowed)?;
                 }
                 PlayerOwnership::Unstarted => {
                     return Err(
