@@ -1560,6 +1560,18 @@ impl FamilySlicePlan {
         self.plan.take();
     }
 }
+#[cfg(feature = "latex")]
+pub(crate) fn read_entry(value: &Bound<'_, PyAny>) -> PyResult<noon::CompositeEntryHandle> {
+    if let Ok(value) = value.cast::<MobjectHandle>() {
+        return Ok(noon::CompositeEntryHandle::Mobject(
+            value.borrow().handle.clone(),
+        ));
+    }
+    Ok(noon::CompositeEntryHandle::Family(
+        value.cast::<FamilyHandle>()?.borrow().family.clone(),
+    ))
+}
+
 pub(crate) fn entry_handle(
     py: Python<'_>,
     entry: Option<noon::CompositeEntryHandle>,

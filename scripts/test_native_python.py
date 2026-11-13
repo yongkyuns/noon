@@ -176,6 +176,41 @@ class Demo(Scene):
         os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
         "requires an explicit native TeX compiler and BaKoMa font profile",
     )
+    def test_table_examples_and_playback_cell_edits(self):
+        for name in ("table", "table_labels", "mobject_table_family_labels", "decimal_table_format"):
+            with self.subTest(example=name):
+                path = ROOT / "web/python/examples" / (name + ".py")
+                scene = asyncio.run(run_source(path.read_text(), filename=str(path)))
+                close_scene(scene)
+
+        source = """from noon import *
+class TableCellEdits(Scene):
+    async def construct(self):
+        table = Table([["a", "b"], ["c", "d"]], include_outer_lines=True)
+        assert len(table.get_horizontal_lines()) == len(table.get_vertical_lines()) == 3
+        self.add(table)
+        await self.wait(0.1)
+        table.shift(RIGHT)
+        assert table.get_cell((1, 1)).width > 0
+        clone = table.copy()
+        assert len(clone.get_entries()) == 4
+        assert len(clone.get_rows()) == len(clone.get_columns()) == 2
+        assert clone.get_entries((1, 1)) is not table.get_entries((1, 1))
+        clone.add_highlighted_cell((2, 2), color=YELLOW)
+        assert len(clone.submobjects[0]) == 1 and len(table.submobjects[0]) == 0
+        self.add(clone.shift(LEFT * 3), table.get_highlighted_cell((1, 2), color=BLUE))
+        await self.wait(0.1)
+"""
+        scene = asyncio.run(run_source(source))
+        try:
+            self.assertEqual(len(scene.mobjects), 3)
+        finally:
+            close_scene(scene)
+
+    @unittest.skipUnless(
+        os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
+        "requires an explicit native TeX compiler and BaKoMa font profile",
+    )
     def test_numeric_scene_edits_preserve_text_size_and_rewind(self):
         source = """from noon import *
 class Demo(Scene):
