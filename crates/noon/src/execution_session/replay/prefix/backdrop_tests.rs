@@ -46,14 +46,16 @@ fn glass_radius(frame: &FrameState) -> Option<EffectRadius> {
 #[test]
 fn editorial_backdrop_prefix_preserves_group_resources_and_radius_history() {
     let (scene, card) = editorial_card();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene.into_execution().unwrap();
     source
+        .session_mut()
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
-    let wait = source.wait_segment(0.7).unwrap();
-    source.advance_to(wait.end_time()).unwrap();
-    scene.live(&mut source).complete_segment(wait).unwrap();
+    let wait = source.session().wait_segment(0.7).unwrap();
+    source.session_mut().advance_to(wait.end_time()).unwrap();
+    source.live().complete_segment(wait).unwrap();
     let (mut publisher, mut reader) = source
+        .session_mut()
         .create_prepared_prefix(wait)
         .expect("a retained standalone backdrop should be publishable");
     let paused = reader.frame().clone();
@@ -61,29 +63,36 @@ fn editorial_backdrop_prefix_preserves_group_resources_and_radius_history() {
     assert_eq!(glass_radius(&paused), Some(EffectRadius::Pixels(4.0)));
 
     let movement = {
-        let mut live = scene.live(&mut source);
-        let target = live.copy_family(&card).unwrap();
-        live.set_effect(
-            target.root(),
-            "glass",
-            EffectUpdate::default().radius(Pixels(12.0)),
-        )
-        .unwrap();
-        live.declare_and_activate_composition(
-            &AnimationCompositionRequest::FamilyMethodTargetTo {
-                source: &card,
-                target_state: target.root(),
-                options: AnimationOptions::new()
-                    .run_time(1.0)
-                    .rate_func(RateFunction::Smooth),
-            },
-            AnimationOptions::new(),
-        )
-        .unwrap()
+        let target = source.scene_mut().copy_family(&card).unwrap();
+        source
+            .live()
+            .set_effect(
+                target.root(),
+                "glass",
+                EffectUpdate::default().radius(Pixels(12.0)),
+            )
+            .unwrap();
+        source
+            .live()
+            .declare_and_activate_composition(
+                &AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &card,
+                    target_state: target.root(),
+                    options: AnimationOptions::new()
+                        .run_time(1.0)
+                        .rate_func(RateFunction::Smooth),
+                },
+                AnimationOptions::new(),
+            )
+            .unwrap()
     };
-    source.advance_to(movement.end_time()).unwrap();
-    scene.live(&mut source).complete_segment(movement).unwrap();
+    source
+        .session_mut()
+        .advance_to(movement.end_time())
+        .unwrap();
+    source.live().complete_segment(movement).unwrap();
     let suffix = source
+        .session_mut()
         .publish_prepared_prefix(movement, &mut publisher)
         .expect("typed backdrop radius and group transform should be retained");
     reader.preflight_append(&suffix).unwrap();
@@ -95,10 +104,11 @@ fn editorial_backdrop_prefix_preserves_group_resources_and_radius_history() {
     );
     assert_eq!(reader.painter_order(), painter_order);
 
-    source.seal_replay().unwrap();
+    source.session_mut().seal_replay().unwrap();
     reader
         .append(
             source
+                .session_mut()
                 .finish_prepared_prefix(movement, &mut publisher)
                 .unwrap(),
         )
@@ -113,14 +123,19 @@ fn editorial_backdrop_prefix_preserves_group_resources_and_radius_history() {
     ] {
         source.seek(time).unwrap();
         reader.seek(time).unwrap();
-        assert_eq!(reader.frame(), source.frame(), "at authored time {time}");
-        assert_eq!(reader.painter_order(), source.painter_order());
+        assert_eq!(
+            reader.frame(),
+            source.session().frame(),
+            "at authored time {time}"
+        );
+        assert_eq!(reader.painter_order(), source.session().painter_order());
         assert_eq!(
             glass_radius(reader.frame()),
             Some(EffectRadius::Pixels(radius))
         );
     }
     assert!(source
+        .session()
         .frame()
         .objects
         .iter()

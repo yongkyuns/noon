@@ -28,7 +28,7 @@ fn authored_and_animated_fill_keep_stroke_and_object_opacity_independent() {
     let mut running = scene.into_execution().unwrap();
     assert_paint(running.session().frame().objects[0].style, red, 0.25);
     let id = running.session().frame().objects[0].id;
-    let target = running.live().target_editor(&circle).unwrap();
+    let target = running.scene_mut().target_editor(&circle).unwrap();
     running.scene_mut().set_fill(&target, pink, 0.5).unwrap();
     let segment = running
         .live()

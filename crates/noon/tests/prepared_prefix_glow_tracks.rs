@@ -13,15 +13,19 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
     shape.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
     shape.disable_stroke().unwrap();
     scene.add(&shape).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene.into_execution().unwrap();
     source
+        .session_mut()
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(0.5).unwrap();
-    observe(&mut source);
-    source.advance_to(1.0).unwrap();
-    let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+    let boundary = source.session().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(0.5).unwrap();
+    observe(source.session_mut());
+    source.session_mut().advance_to(1.0).unwrap();
+    let (mut publisher, mut reader) = source
+        .session_mut()
+        .create_prepared_prefix(boundary)
+        .unwrap();
     reader.seek(0.5).unwrap();
     let baseline = reader.frame().clone();
     let publication = reader.publication_context();
@@ -31,15 +35,21 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
         (2, Color::GREEN, 4.0, 1.1),
     ] {
         if phase == 2 {
-            scene.live(&mut source).remove_glow(&shape).unwrap();
-            let boundary = source.wait_segment(0.5).unwrap();
-            source.advance_to(boundary.start_time()).unwrap();
-            observe(&mut source);
-            source.advance_to(boundary.end_time()).unwrap();
+            source.live().remove_glow(&shape).unwrap();
+            let boundary = source.session().wait_segment(0.5).unwrap();
+            source
+                .session_mut()
+                .advance_to(boundary.start_time())
+                .unwrap();
+            observe(source.session_mut());
+            source
+                .session_mut()
+                .advance_to(boundary.end_time())
+                .unwrap();
         }
-        let target = scene.live(&mut source).target_editor(&shape).unwrap();
-        scene
-            .live(&mut source)
+        let target = source.scene_mut().target_editor(&shape).unwrap();
+        source
+            .live()
             .set_glow(
                 &target,
                 EffectUpdate::default()
@@ -48,8 +58,8 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
                     .intensity(intensity),
             )
             .unwrap();
-        let segment = scene
-            .live(&mut source)
+        let segment = source
+            .live()
             .declare_and_activate_transform_to(
                 &shape,
                 &target,
@@ -59,23 +69,25 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
             )
             .unwrap();
         for fraction in [0.0, 0.25, 0.75] {
-            scene
-                .live(&mut source)
+            source
+                .live()
                 .advance_segment_to(segment, segment.start_time() + fraction)
                 .unwrap();
-            observe(&mut source);
+            observe(source.session_mut());
         }
         {
-            let mut live = scene.live(&mut source);
-            live.advance_segment_to(segment, segment.end_time())
+            source
+                .live()
+                .advance_segment_to(segment, segment.end_time())
                 .unwrap();
-            live.complete_segment(segment).unwrap();
+            source.live().complete_segment(segment).unwrap();
         }
         // Keep the second edit, retirement and fresh generation in one suffix.
         if phase == 1 {
             continue;
         }
         let batch = source
+            .session_mut()
             .publish_prepared_prefix(segment, &mut publisher)
             .unwrap();
         assert_eq!(batch.stats().resource_payloads, 0);
@@ -87,13 +99,17 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
         );
         assert_eq!(reader.publication_context(), publication);
     }
-    let boundary = source.wait_segment(0.5).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
-    observe(&mut source);
-    source.seal_replay().unwrap();
+    let boundary = source.session().wait_segment(0.5).unwrap();
+    source
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
+    observe(source.session_mut());
+    source.session_mut().seal_replay().unwrap();
     reader
         .append(
             source
+                .session_mut()
                 .finish_prepared_prefix(boundary, &mut publisher)
                 .unwrap(),
         )

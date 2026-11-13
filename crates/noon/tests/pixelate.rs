@@ -47,9 +47,9 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     let mut tb = source.target_editor().unwrap();
     tb.set_effect("b", EffectUpdate::default().size(Pixels(9.0)))
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_animation_composition(
             SemanticAnimationCompositionKind::Parallel,
             &[
@@ -81,37 +81,40 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     for time in [0.75, 0.25, 0.875, 0.5] {
         session.seek(time).unwrap();
         assert_eq!(
-            value(&session, source.node_id(), a.node_id()),
+            value(session.session(), source.node_id(), a.node_id()),
             EffectRadius::Pixels(13.0 * (1.0 - time) + time)
         );
         assert_eq!(
-            value(&session, source.node_id(), b.node_id()),
+            value(session.session(), source.node_id(), b.node_id()),
             EffectRadius::Pixels(5.0 * (1.0 - time) + 9.0 * time)
         );
     }
-    session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session
+        .session_mut()
+        .advance_segment_to(segment, 1.0)
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert!(a.authored_definition().unwrap().is_neutral());
-    let saved = scene.live(&mut session).copy_mobject(&source).unwrap();
-    scene.live(&mut session).remove_effect(&source, &a).unwrap();
-    scene
-        .live(&mut session)
+    let saved = session.scene_mut().copy_mobject(&source).unwrap();
+    session.live().remove_effect(&source, &a).unwrap();
+    session
+        .live()
         .add_effect(&source, Pixelate::default(), "a")
         .unwrap();
     let replacement = source.get_effect("a").unwrap();
     assert_ne!(a.node_id(), replacement.node_id());
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
+    let before = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(session
+        .live()
         .set_effect(&source, &a, EffectUpdate::default().size(Pixels(3.0)))
         .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
-    scene
-        .live(&mut session)
+    assert_eq!(session.session().frame(), &before);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
+    session
+        .live()
         .become_mobject(&source, saved.root(), Default::default())
         .unwrap();
     assert!(replacement.authored_definition().is_err());
@@ -119,7 +122,7 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     assert!(restored.authored_definition().unwrap().is_neutral());
     assert_eq!(
         value(
-            &session,
+            session.session(),
             source.node_id(),
             source.get_effect("b").unwrap().node_id()
         ),

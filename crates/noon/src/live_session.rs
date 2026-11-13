@@ -791,74 +791,8 @@ impl<'a> LiveSession<'a> {
         mobject.state().map_err(LiveSessionError::from)
     }
 
-    /// Create a detached, session-coherent target copy for subsequent live authoring.
-    ///
-    /// Detached target edits advance the same semantic/runtime publication context but produce
-    /// no execution object or frame work. This keeps later atomic animation declaration valid
-    /// without resetting or relowering the active runtime.
-    pub fn target_editor(&mut self, source: &Mobject) -> Result<Mobject, LiveSessionError> {
-        Ok(self.copy_mobject(source)?.root().clone())
-    }
-
     fn require_target_capture(&self) -> Result<(), LiveSessionError> {
         crate::effective_capture::require_target_capture(self.session, &self.store.borrow())
-    }
-
-    /// Copy a complete family from this coherent runtime in one publication.
-    pub fn copy_family(
-        &mut self,
-        source: &MobjectFamily,
-    ) -> Result<crate::FamilyCopy, LiveSessionError> {
-        self.copy_family_with_references(source, &[])
-    }
-
-    /// Copy a family and detached metadata references from one coherent state.
-    pub fn copy_family_with_references(
-        &mut self,
-        source: &MobjectFamily,
-        references: &[crate::MobjectTarget<'_>],
-    ) -> Result<crate::FamilyCopy, LiveSessionError> {
-        self.copy_target_with_references(source.into(), references, MobjectFamily::from_node)
-    }
-
-    /// Copy an object and its descendants from one coherent publication.
-    pub fn copy_mobject(
-        &mut self,
-        source: &Mobject,
-    ) -> Result<crate::MobjectCopy, LiveSessionError> {
-        self.copy_mobject_with_references(source, &[])
-    }
-
-    /// Include detached metadata references in the same atomic object copy.
-    pub fn copy_mobject_with_references(
-        &mut self,
-        source: &Mobject,
-        references: &[crate::MobjectTarget<'_>],
-    ) -> Result<crate::MobjectCopy, LiveSessionError> {
-        self.copy_target_with_references(source.into(), references, Mobject::from_node)
-    }
-
-    fn copy_target_with_references<R>(
-        &mut self,
-        source: crate::MobjectTarget<'_>,
-        references: &[crate::MobjectTarget<'_>],
-        from_node: fn(
-            Rc<RefCell<SemanticStore>>,
-            noon_core::SemanticNodeId,
-        ) -> Result<R, crate::AuthoringError>,
-    ) -> Result<crate::SemanticCopy<R>, LiveSessionError> {
-        match source {
-            crate::MobjectTarget::Object(mobject) => self.require_mobject(mobject)?,
-            crate::MobjectTarget::Family(family) => self.require_family(family)?,
-        }
-        crate::family_copy::publish_running_copy(
-            self.store,
-            self.root,
-            self.session,
-            source,
-            references,
-            from_node,
-        )
     }
 
     /// Replace one object's presentation with another object's effective state while
@@ -3269,7 +3203,7 @@ mod tests {
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
         let mut session = scene.into_execution().unwrap();
-        let target = session.live().target_editor(&circle).unwrap();
+        let target = session.scene_mut().target_editor(&circle).unwrap();
         let before = session
             .live()
             .session
@@ -3345,21 +3279,33 @@ mod tests {
             .apply(&mut scene.integration_store().borrow_mut())
             .unwrap();
 
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let revision = live.session.publication_context().scene_revision();
-        let mut overlay = match live.session.advance_to_callback_barrier(0.0).unwrap() {
+        let mut session = scene.into_execution().unwrap();
+        let revision = session
+            .live()
+            .session
+            .publication_context()
+            .scene_revision();
+        let mut overlay = match session
+            .live()
+            .session
+            .advance_to_callback_barrier(0.0)
+            .unwrap()
+        {
             CallbackAdvance::HostRequired { overlay, .. } => overlay,
             CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
         };
         assert!(matches!(
-            live.target_editor(&circle),
+            session.scene_mut().target_editor(&circle),
             Err(LiveSessionError::Callback(
                 crate::ExecutionSessionCallbackError::Pending(_)
             ))
         ));
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             revision
         );
 
@@ -3374,18 +3320,23 @@ mod tests {
         style.opacity = 0.5;
         style.emission = noon_core::Emission::new(7.000000000000001).unwrap();
         overlay.set_style(circle.node_id(), style).unwrap();
-        live.session
+        session
+            .live()
+            .session
             .commit_required_callback_phase(overlay.finish())
             .unwrap();
 
-        live.session.take_frame_changes();
-        let target = live.target_editor(&circle).unwrap();
-        assert_eq!(live.effective(&circle).unwrap().fill_opacity(), 0.25);
+        session.live().session.take_frame_changes();
+        let target = session.scene_mut().target_editor(&circle).unwrap();
+        assert_eq!(
+            session.live().effective(&circle).unwrap().fill_opacity(),
+            0.25
+        );
         assert_eq!(target.fill_opacity().unwrap(), 0.25);
         assert_eq!(target.stroke_opacity().unwrap(), 1.0);
         assert_eq!(target.emission().unwrap(), style.emission.strength());
         assert_eq!(circle.emission().unwrap(), 0.0);
-        let target_state = live.authored(&target).unwrap();
+        let target_state = session.live().authored(&target).unwrap();
         assert_eq!(
             target_state.transform.translation,
             SemanticVec3::new(2.0, -1.0, 0.0)
@@ -3408,7 +3359,7 @@ mod tests {
                 fill_opacity: 1.0,
                 stroke: style.stroke.map(SemanticPaint::Solid),
                 stroke_opacity: 1.0,
-                stroke_width: live.authored(&circle).unwrap().style.stroke_width,
+                stroke_width: session.live().authored(&circle).unwrap().style.stroke_width,
                 stroke_width_mode: style.stroke_width_mode,
                 stroke_join: style.stroke_join,
                 stroke_cap: style.stroke_cap,
@@ -3417,10 +3368,15 @@ mod tests {
                 ..SemanticStyle::default()
             }
         );
-        assert!(live.session.take_frame_changes().is_empty());
+        assert!(session.live().session.take_frame_changes().is_empty());
         // The source's authored base remains distinct from the callback effect.
         assert_eq!(
-            live.authored(&circle).unwrap().transform.translation,
+            session
+                .live()
+                .authored(&circle)
+                .unwrap()
+                .transform
+                .translation,
             SemanticVec3::default()
         );
     }
@@ -3430,20 +3386,19 @@ mod tests {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
 
-        live.scale(&circle, 2.0, 0.5).unwrap();
-        live.rotate(&circle, 0.25).unwrap();
-        let effective = live.effective(&circle).unwrap();
+        session.live().scale(&circle, 2.0, 0.5).unwrap();
+        session.live().rotate(&circle, 0.25).unwrap();
+        let effective = session.live().effective(&circle).unwrap();
         assert_eq!(effective.transform.scale, noon_core::Vec2::new(2.0, 0.5));
         assert_eq!(effective.transform.rotation, 0.25);
 
-        live.session.take_frame_changes();
-        let target = live.target_editor(&circle).unwrap();
-        live.scale(&target, 0.5, 4.0).unwrap();
-        live.rotate(&target, 0.75).unwrap();
-        let authored = live.authored(&target).unwrap();
+        session.live().session.take_frame_changes();
+        let target = session.scene_mut().target_editor(&circle).unwrap();
+        session.live().scale(&target, 0.5, 4.0).unwrap();
+        session.live().rotate(&target, 0.75).unwrap();
+        let authored = session.live().authored(&target).unwrap();
         assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
         assert_eq!(
             authored
@@ -3452,7 +3407,7 @@ mod tests {
                 .expect("planar orientation"),
             1.0
         );
-        assert!(live.session.take_frame_changes().is_empty());
+        assert!(session.live().session.take_frame_changes().is_empty());
     }
 
     #[test]
@@ -3669,27 +3624,31 @@ mod tests {
         let mut scene = Scene::new();
         let frame = scene.rectangle(4.0, 2.0).unwrap();
         scene.add(&frame).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let target = live.target_editor(&frame).unwrap();
-        live.session.take_frame_changes();
+        let mut session = scene.into_execution().unwrap();
+        let target = session.scene_mut().target_editor(&frame).unwrap();
+        session.live().session.take_frame_changes();
 
-        let result = live.move_to_point(&target, 3.0, -2.0).unwrap();
+        let result = session.live().move_to_point(&target, 3.0, -2.0).unwrap();
 
         assert_eq!(result.impacts().len(), 1);
         assert_eq!(
-            live.authored(&target).unwrap().transform.translation,
+            session
+                .live()
+                .authored(&target)
+                .unwrap()
+                .transform
+                .translation,
             SemanticVec3::new(3.0, -2.0, 0.0)
         );
         assert_eq!(target.center().unwrap(), (3.0, -2.0));
         assert!(matches!(
-            live.effective(&target),
+            session.live().effective(&target),
             Err(LiveSessionError::Publication(
                 ExecutionSessionPublicationError::UnknownObject(_)
             ))
         ));
-        assert_eq!(live.session.frame().objects.len(), 1);
-        assert!(live.session.take_frame_changes().is_empty());
+        assert_eq!(session.live().session.frame().objects.len(), 1);
+        assert!(session.live().session.take_frame_changes().is_empty());
     }
 
     #[test]
@@ -3725,7 +3684,7 @@ mod tests {
                 .center,
             (-3.0, 3.0)
         );
-        let target = execution.live().target_editor(&source).unwrap();
+        let target = execution.scene_mut().target_editor(&source).unwrap();
         execution.session_mut().take_frame_changes();
         execution
             .scene_mut()
@@ -4977,17 +4936,20 @@ mod tests {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
 
-        let wait = live.wait_segment(3.0).unwrap();
-        live.advance_segment_to(wait, wait.end_time()).unwrap();
-        assert_eq!(live.session.frame().time, 3.0);
-        let target = live.target_editor(&circle).unwrap();
-        live.set_translation(&target, 6.0, 1.0).unwrap();
-        assert!(live.session.take_frame_changes().is_empty());
-        let segment = live
+        let wait = session.live().wait_segment(3.0).unwrap();
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .unwrap();
+        assert_eq!(session.live().session.frame().time, 3.0);
+        let target = session.scene_mut().target_editor(&circle).unwrap();
+        session.live().set_translation(&target, 6.0, 1.0).unwrap();
+        assert!(session.live().session.take_frame_changes().is_empty());
+        let segment = session
+            .live()
             .declare_and_activate_transform_to(
                 &circle,
                 &target,
@@ -4998,11 +4960,19 @@ mod tests {
             .unwrap();
 
         assert_eq!(segment.start_time(), 3.0);
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().complete_segment(segment).unwrap();
         assert_eq!(
-            live.effective(&circle).unwrap().transform.translation.x,
+            session
+                .live()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
             6.0
         );
     }
@@ -5014,14 +4984,16 @@ mod tests {
         let mut square = scene.square(1.0).unwrap();
         square.set_translation(-2.0, 0.5).unwrap();
         scene.add(&anchor).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
 
-        let wait = live.wait_segment(1.0).unwrap();
-        live.advance_segment_to(wait, wait.end_time()).unwrap();
-        let target = live.target_editor(&square).unwrap();
-        live.set_translation(&target, 3.0, -1.0).unwrap();
+        let wait = session.live().wait_segment(1.0).unwrap();
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .unwrap();
+        let target = session.scene_mut().target_editor(&square).unwrap();
+        session.live().set_translation(&target, 3.0, -1.0).unwrap();
         let request = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
             &square,
             &target,
@@ -5029,17 +5001,25 @@ mod tests {
                 .run_time(1.0)
                 .rate_func(RateFunction::Linear),
         ));
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
 
-        assert!(live.contains(&square).unwrap());
+        assert!(session.live().contains(&square).unwrap());
         assert_eq!(segment.start_time(), 1.0);
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().complete_segment(segment).unwrap();
         assert_eq!(
-            live.effective(&square).unwrap().transform.translation,
+            session
+                .live()
+                .effective(&square)
+                .unwrap()
+                .transform
+                .translation,
             noon_core::Vec2::new(3.0, -1.0)
         );
     }

@@ -131,56 +131,53 @@ fn morph_affine_morph_replay_selects_time_qualified_content_and_render_frame() {
     circle.shift(2.0, 0.0).unwrap();
     let rectangle = scene.rectangle(2.0, 0.4).unwrap();
     scene.add(&shape).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
     let mut samples = Vec::new();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(&shape, &circle, options(1.0))
         .unwrap();
-    sample(&mut session, &mut samples, 0.25);
-    sample(&mut session, &mut samples, 0.75);
+    sample(session.session_mut(), &mut samples, 0.25);
+    sample(session.session_mut(), &mut samples, 0.75);
     {
-        let mut live = scene.live(&mut session);
-        live.advance_segment_to(segment, 1.0).unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().advance_segment_to(segment, 1.0).unwrap();
+        session.live().complete_segment(segment).unwrap();
     }
-    sample(&mut session, &mut samples, 1.25);
-    session.advance_to(1.5).unwrap();
-    let target = scene.live(&mut session).target_editor(&shape).unwrap();
+    sample(session.session_mut(), &mut samples, 1.25);
+    session.session_mut().advance_to(1.5).unwrap();
+    let target = session.scene_mut().target_editor(&shape).unwrap();
     {
-        let mut live = scene.live(&mut session);
-        live.shift(&target, 3.0, 1.0).unwrap();
-        live.rotate(&target, 0.4).unwrap();
+        session.live().shift(&target, 3.0, 1.0).unwrap();
+        session.live().rotate(&target, 0.4).unwrap();
     }
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(&shape, &target, options(1.0))
         .unwrap();
-    sample(&mut session, &mut samples, 1.75);
-    sample(&mut session, &mut samples, 2.25);
+    sample(session.session_mut(), &mut samples, 1.75);
+    sample(session.session_mut(), &mut samples, 2.25);
     {
-        let mut live = scene.live(&mut session);
-        live.advance_segment_to(segment, 2.5).unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().advance_segment_to(segment, 2.5).unwrap();
+        session.live().complete_segment(segment).unwrap();
     }
-    sample(&mut session, &mut samples, 2.75);
-    session.advance_to(3.0).unwrap();
-    let segment = scene
-        .live(&mut session)
+    sample(session.session_mut(), &mut samples, 2.75);
+    session.session_mut().advance_to(3.0).unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(&shape, &rectangle, options(1.0))
         .unwrap();
-    sample(&mut session, &mut samples, 3.25);
-    sample(&mut session, &mut samples, 3.75);
+    sample(session.session_mut(), &mut samples, 3.25);
+    sample(session.session_mut(), &mut samples, 3.75);
     {
-        let mut live = scene.live(&mut session);
-        live.advance_segment_to(segment, 4.0).unwrap();
-        live.complete_segment(segment).unwrap();
+        session.live().advance_segment_to(segment, 4.0).unwrap();
+        session.live().complete_segment(segment).unwrap();
     }
-    sample(&mut session, &mut samples, 4.25);
-    verify(&mut session, &samples);
+    sample(session.session_mut(), &mut samples, 4.25);
+    verify(session.session_mut(), &samples);
 }
 
 #[test]

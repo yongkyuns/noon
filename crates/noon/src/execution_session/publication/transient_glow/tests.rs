@@ -175,7 +175,7 @@ fn transient_glow_empty_or_rejected_edit_keeps_temporary_retirement_owned() {
 fn transient_glow_authored_radius_track_adopts_and_keeps_input_intensity_independent() {
     let (mut execution, object) = clicked();
     let attachment = object.get_effect("glow").unwrap().node_id();
-    let target = execution.live().target_editor(&object).unwrap();
+    let target = execution.scene_mut().target_editor(&object).unwrap();
     execution
         .live()
         .set_glow(&target, EffectUpdate::default().radius(0.4))
@@ -213,7 +213,7 @@ fn transient_glow_authored_radius_track_adopts_and_keeps_input_intensity_indepen
 fn transient_glow_authored_intensity_track_keeps_its_reversed_initial_sample() {
     let (mut execution, object) = clicked();
     let attachment = object.get_effect("glow").unwrap().node_id();
-    let target = execution.live().target_editor(&object).unwrap();
+    let target = execution.scene_mut().target_editor(&object).unwrap();
     execution
         .live()
         .set_glow(&target, EffectUpdate::default().intensity(0.8))
