@@ -222,10 +222,11 @@ fn live_image_mapping_is_local_and_does_not_readmit_pixels_or_touch_spatial_stat
         let other = scene.circle(0.1).unwrap();
         scene.add(&other).unwrap();
     }
-    let mut session = scene.execution_session().unwrap();
-    session.take_frame_changes();
-    let original = image(row(&session, &source));
-    let stats = scene
+    let mut execution = scene.into_execution().unwrap();
+    execution.session_mut().take_frame_changes();
+    let original = image(row(execution.session(), &source));
+    let stats = execution
+        .scene()
         .integration_store()
         .borrow()
         .raster_image_resources()
@@ -236,23 +237,42 @@ fn live_image_mapping_is_local_and_does_not_readmit_pixels_or_touch_spatial_stat
         } else {
             ImageMapping::default()
         };
-        scene
-            .live(&mut session)
+        execution
+            .scene_mut()
             .set_fill_image_mapping(&source, next, None)
             .unwrap();
-        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
-        session.query_viewport(crate::Rect::new(
+        assert_eq!(
+            execution
+                .session_mut()
+                .take_frame_changes()
+                .object_indices(),
+            &[0]
+        );
+        execution.session_mut().query_viewport(crate::Rect::new(
             crate::Vec2::new(-2.0, -2.0),
             crate::Vec2::new(2.0, 2.0),
         ));
-        assert_eq!(session.last_spatial_update_stats().full_rebuilds, 0);
-        assert_eq!(session.last_spatial_update_stats().leaves_upserted, 0);
         assert_eq!(
-            image(row(&session, &source)).resource(),
+            execution
+                .session()
+                .last_spatial_update_stats()
+                .full_rebuilds,
+            0
+        );
+        assert_eq!(
+            execution
+                .session()
+                .last_spatial_update_stats()
+                .leaves_upserted,
+            0
+        );
+        assert_eq!(
+            image(row(execution.session(), &source)).resource(),
             original.resource()
         );
         assert_eq!(
-            scene
+            execution
+                .scene()
                 .integration_store()
                 .borrow()
                 .raster_image_resources()
@@ -260,14 +280,14 @@ fn live_image_mapping_is_local_and_does_not_readmit_pixels_or_touch_spatial_stat
             stats
         );
     }
-    let context = session.publication_context();
-    scene
-        .live(&mut session)
+    let context = execution.session().publication_context();
+    execution
+        .scene_mut()
         .set_fill_image_mapping(&source, ImageMapping::default(), None)
         .unwrap();
-    assert!(session.take_frame_changes().is_empty());
+    assert!(execution.session_mut().take_frame_changes().is_empty());
     assert_eq!(
-        session.publication_context().frame_epoch(),
+        execution.session().publication_context().frame_epoch(),
         context.frame_epoch()
     );
 }
@@ -279,46 +299,52 @@ fn image_admission_and_compiler_profile_rejections_preserve_the_live_publication
     let line = scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
     scene.add(&source).unwrap();
     scene.add(&line).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let resources = scene
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().frame().clone();
+    let context = execution.session().publication_context();
+    let resources = execution
+        .scene()
         .integration_store()
         .borrow()
         .raster_image_resources()
         .stats();
-    assert!(scene
-        .live(&mut session)
+    assert!(execution
+        .scene_mut()
         .set_fill_image(&source, paint(), Some(f64::NAN))
         .is_err());
-    assert!(scene
-        .live(&mut session)
+    assert!(execution
+        .scene_mut()
         .set_fill_image(&line, paint(), None)
         .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
+    assert_eq!(execution.session().frame(), &before);
+    assert_eq!(execution.session().publication_context(), context);
     assert_eq!(
-        scene
+        execution
+            .scene()
             .integration_store()
             .borrow()
             .raster_image_resources()
             .stats(),
         resources
     );
-    scene
-        .live(&mut session)
+    execution
+        .scene_mut()
         .set_fill_image(&source, paint(), Some(0.625))
         .unwrap();
-    let handle = image(row(&session, &source)).resource();
+    let handle = image(row(execution.session(), &source)).resource();
     assert_eq!(
-        session
+        execution
+            .session()
             .raster_image_resources()
             .get(handle)
             .unwrap()
             .rgba8(),
         pixels()
     );
-    assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.625);
+    assert_eq!(
+        row(execution.session(), &source).style.fill.unwrap().alpha,
+        0.625
+    );
 }
 
 #[test]
@@ -395,15 +421,16 @@ fn image_resource_replacement_keeps_an_older_execution_snapshot_usable() {
     scene.add(&source).unwrap();
     let old = scene.execution_session().unwrap();
     let old_handle = image(row(&old, &source)).resource();
-    let mut current = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     let next = ImagePaintOptions::rgba8(1, 1, vec![0, 255, 0, 128]).unwrap();
-    scene
-        .live(&mut current)
+    execution
+        .scene_mut()
         .set_fill_image(&source, next, None)
         .unwrap();
-    let next_handle = image(row(&current, &source)).resource();
+    let next_handle = image(row(execution.session(), &source)).resource();
     assert_ne!(old_handle, next_handle);
-    assert!(scene
+    assert!(execution
+        .scene()
         .integration_store()
         .borrow()
         .raster_image_resources()
@@ -417,14 +444,15 @@ fn image_resource_replacement_keeps_an_older_execution_snapshot_usable() {
         pixels()
     );
     assert_eq!(
-        current
+        execution
+            .session()
             .raster_image_resources()
             .get(next_handle)
             .unwrap()
             .rgba8(),
         &[0, 255, 0, 128]
     );
-    let mut captured = scene.live(&mut current).target_editor(&source).unwrap();
+    let mut captured = execution.live().target_editor(&source).unwrap();
     captured.set_fill_image_mapping(mapping(), None).unwrap();
     assert_eq!(
         captured

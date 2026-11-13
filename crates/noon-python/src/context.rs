@@ -1729,10 +1729,13 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_image(&target.handle, paint.options.clone(), opacity)
-                .map(|_| ())
-        })
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .set_fill_image(&target.handle, paint.options.clone(), opacity)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
 
     #[pyo3(name="liveSetFillImageMapping",signature=(target,paint,opacity))]
@@ -1744,10 +1747,13 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_image_mapping(&target.handle, paint.value, opacity)
-                .map(|_| ())
-        })
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .set_fill_image_mapping(&target.handle, paint.value, opacity)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
 
     #[pyo3(name="liveSetFillGradient", signature=(target,paint,opacity))]
@@ -2673,7 +2679,12 @@ impl Context {
         self.available()?;
         self.same_store(target)?;
         let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
-        self.with_live(|live| live.set_image_sampling(&target.handle, sampling))
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .set_image_sampling(&target.handle, sampling)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
     #[pyo3(name = "liveChangeAnchorMode")]
     fn change_anchor_mode(&mut self, target: &MobjectHandle, smooth: bool) -> PyResult<()> {

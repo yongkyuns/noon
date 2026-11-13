@@ -108,61 +108,65 @@ fn image_fades_transform_and_detached_live_creation() -> TestResult {
     let mut input = options();
     input.set_height(2.0)?;
     let object = scene.image(input)?;
-    let mut session = scene.execution_session()?;
-    let segment = scene.live(&mut session).declare_and_activate_fade(
+    let mut execution = scene.into_execution()?;
+    let segment = execution.live().declare_and_activate_fade(
         &object,
         SemanticFadeDirection::In,
         AnimationOptions::new()
             .run_time(2.0)
             .rate_func(RateFunction::Linear),
     )?;
-    scene.live(&mut session).advance_segment_to(segment, 1.0)?;
-    let index = session
+    execution.live().advance_segment_to(segment, 1.0)?;
+    let index = execution
+        .session()
         .frame()
         .objects
         .iter()
-        .position(|row| Some(row.id) == session.execution_object_id(object.node_id()))
+        .position(|row| Some(row.id) == execution.session().execution_object_id(object.node_id()))
         .unwrap();
-    assert!((session.frame().objects[index].appearance - 0.5).abs() < 1e-6);
-    scene
-        .live(&mut session)
+    assert!((execution.session().frame().objects[index].appearance - 0.5).abs() < 1e-6);
+    execution
+        .live()
         .advance_segment_to(segment, segment.end_time())?;
-    scene.live(&mut session).complete_segment(segment)?;
+    execution.live().complete_segment(segment)?;
     let resource = object.state()?.content.image().unwrap().resource();
-    let target = scene.live(&mut session).target_editor(&object)?;
-    scene
-        .live(&mut session)
-        .set_translation(&target, 4.0, 2.0)?;
-    scene.live(&mut session).set_opacity(&target, 0.4)?;
-    let segment = scene.live(&mut session).declare_and_activate_transform_to(
+    let target = execution.live().target_editor(&object)?;
+    execution.live().set_translation(&target, 4.0, 2.0)?;
+    execution.live().set_opacity(&target, 0.4)?;
+    let segment = execution.live().declare_and_activate_transform_to(
         &object,
         &target,
         AnimationOptions::new()
             .run_time(2.0)
             .rate_func(RateFunction::Linear),
     )?;
-    scene
-        .live(&mut session)
+    execution
+        .live()
         .advance_segment_to(segment, segment.start_time() + 1.0)?;
-    let middle = session.frame().clone();
-    scene
-        .live(&mut session)
+    let middle = execution.session().frame().clone();
+    execution
+        .live()
         .advance_segment_to(segment, segment.end_time())?;
-    scene.live(&mut session).complete_segment(segment)?;
+    execution.live().complete_segment(segment)?;
     assert_eq!(
         object.state()?.content.image().unwrap().resource(),
         resource
     );
     assert_eq!(object.center()?, (4.0, 2.0));
-    let count = scene
+    let count = execution
+        .scene()
         .integration_store()
         .borrow()
         .raster_image_resources()
         .len();
-    let created = scene.live(&mut session).create_image(options())?;
-    assert!(session.execution_object_id(created.node_id()).is_none());
+    let created = execution.scene_mut().image(options())?;
+    assert!(execution
+        .session()
+        .execution_object_id(created.node_id())
+        .is_none());
     assert_eq!(
-        scene
+        execution
+            .scene()
             .integration_store()
             .borrow()
             .raster_image_resources()

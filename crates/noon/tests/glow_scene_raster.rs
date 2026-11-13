@@ -2966,7 +2966,7 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                     bitmap.shift(20.0, 20.0).unwrap();
                     scene.add(&bitmap).unwrap();
                     scene.add(&source).unwrap();
-                    let mut session = scene.execution_session().unwrap();
+                    let mut execution = scene.into_execution().unwrap();
                     let mut surface = Surface::new(&device, &queue);
                     for pose in 0..4 {
                         let (translation, scale, angle) = match pose {
@@ -2981,12 +2981,12 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                             ImageUvTransform::new(translation, scale, angle).unwrap(),
                         )
                         .unwrap();
-                        scene
-                            .live(&mut session)
+                        execution
+                            .scene_mut()
                             .set_fill_image_mapping(&source, mapping, Some(0.7))
                             .unwrap();
                         if pose == 3 {
-                            let mut live = scene.live(&mut session);
+                            let mut live = execution.live();
                             live.set_scale(&source, -0.9, 1.2).unwrap();
                             live.set_rotation(&source, 0.413).unwrap();
                             live.shift(&source, 0.17, -0.23).unwrap();
@@ -2994,7 +2994,7 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                         let pixels = surface.render_on(
                             &device,
                             &queue,
-                            &mut session,
+                            execution.session_mut(),
                             wgpu::Color::TRANSPARENT,
                         );
                         assert_eq!(
@@ -3009,7 +3009,7 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                             surface.render_on(
                                 &device,
                                 &queue,
-                                &mut session,
+                                execution.session_mut(),
                                 wgpu::Color::TRANSPARENT
                             ),
                             pixels
@@ -3098,15 +3098,15 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                     }
                     assert_eq!(surface.renderer.image_residency_stats().textures, 1);
                     assert_eq!(surface.renderer.image_residency_stats().pixel_bytes, 24);
-                    scene.live(&mut session).remove(&bitmap).unwrap();
-                    surface.render(&device, &queue, &mut session);
+                    execution.live().remove(&bitmap).unwrap();
+                    surface.render(&device, &queue, execution.session_mut());
                     assert_eq!(surface.upload_stats.images.textures_retired, 0);
                     assert_eq!(surface.renderer.image_residency_stats().textures, 1);
-                    scene
-                        .live(&mut session)
+                    execution
+                        .live()
                         .set_fill(&source, 0.2, 0.4, 0.8, 1.0)
                         .unwrap();
-                    surface.render(&device, &queue, &mut session);
+                    surface.render(&device, &queue, execution.session_mut());
                     assert_eq!(surface.upload_stats.images.textures_retired, 1);
                     assert_eq!(surface.renderer.image_residency_stats().textures, 0);
                 }
@@ -3273,7 +3273,7 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
     let mut maximum_byte_error = 0;
     for kind in 0..4 {
         let (plain_scene, plain_source) = make(1.0, false);
-        let mut plain = plain_scene.execution_session().unwrap();
+        let mut plain_execution = plain_scene.into_execution().unwrap();
         let mut reference = Surface::new(&device, &queue);
         let (mask_scene, _) = make(1.0, true);
         let mut mask = mask_scene.execution_session().unwrap();
@@ -3311,7 +3311,7 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
             .into(),
         };
         source.add_effect(definition, "surface").unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut execution = scene.into_execution().unwrap();
         let mut surface = Surface::new(&device, &queue);
         for stage in 0..2 {
             if stage == 1 && matches!(fixture, ContinuousFillFixture::Noise) {
@@ -3325,12 +3325,12 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
                     ],
                 )
                 .unwrap();
-                scene
-                    .live(&mut session)
+                execution
+                    .live()
                     .set_fill_noise(&source, paint.clone(), None)
                     .unwrap();
-                plain_scene
-                    .live(&mut plain)
+                plain_execution
+                    .live()
                     .set_fill_noise(&plain_source, paint, None)
                     .unwrap();
             } else if let (1, ContinuousFillFixture::Hatch { cross }) = (stage, fixture) {
@@ -3346,12 +3346,12 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
                     },
                 )
                 .unwrap();
-                scene
-                    .live(&mut session)
+                execution
+                    .live()
                     .set_fill_hatch(&source, paint.clone(), None)
                     .unwrap();
-                plain_scene
-                    .live(&mut plain)
+                plain_execution
+                    .live()
                     .set_fill_hatch(&plain_source, paint, None)
                     .unwrap();
             } else if stage == 1 {
@@ -3362,18 +3362,27 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
                     ImageUvTransform::new([0.173, -0.231], [0.63, 1.37], 0.37).unwrap(),
                 )
                 .unwrap();
-                scene
-                    .live(&mut session)
+                execution
+                    .scene_mut()
                     .set_fill_image_mapping(&source, mapping, None)
                     .unwrap();
-                plain_scene
-                    .live(&mut plain)
+                plain_execution
+                    .scene_mut()
                     .set_fill_image_mapping(&plain_source, mapping, None)
                     .unwrap();
             }
-            let ordinary =
-                reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
-            let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+            let ordinary = reference.render_on(
+                &device,
+                &queue,
+                plain_execution.session_mut(),
+                wgpu::Color::TRANSPARENT,
+            );
+            let actual = surface.render_on(
+                &device,
+                &queue,
+                execution.session_mut(),
+                wgpu::Color::TRANSPARENT,
+            );
             let expected = match kind {
                 0 => expected_rgba_blur(&ordinary, 3.25, 0.37),
                 1 => expected_shadow(&ordinary, 3.25, [2.5, -1.25], [0.2, 0.7, 0.8, 0.6], 0.37),
@@ -3400,7 +3409,12 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
                 assert_eq!(surface.upload_stats.images, Default::default());
             }
             assert_eq!(
-                surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                surface.render_on(
+                    &device,
+                    &queue,
+                    execution.session_mut(),
+                    wgpu::Color::TRANSPARENT
+                ),
                 actual
             );
             assert_eq!(surface.effect_stats.source_passes, 0);
@@ -3411,11 +3425,8 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
             assert_eq!(surface.upload_stats.bytes_uploaded(), 0);
             samples += 1;
         }
-        scene
-            .live(&mut session)
-            .remove_effect(&source, "surface")
-            .unwrap();
-        surface.render(&device, &queue, &mut session);
+        execution.live().remove_effect(&source, "surface").unwrap();
+        surface.render(&device, &queue, execution.session_mut());
         assert_eq!(surface.renderer.effect_capture_texture_bytes(), 0);
     }
     eprintln!("{fixture:?} filter/composition qualification from ordinary source: {samples} whole-image comparisons, max byte error {maximum_byte_error} (bound 1)");

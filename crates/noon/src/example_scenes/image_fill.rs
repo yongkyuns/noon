@@ -45,14 +45,14 @@ impl LiveContinuation for ImageSurface {
     const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 => live.wait_segment(0.5),
+            0 => scene.live().wait_segment(0.5),
             1 => {
-                let target = live.target_editor(&self.panel).map_err(message)?;
-                live.set_fill_image_mapping(&target, mapping(false)?, Some(0.5))
+                let target = scene.live().target_editor(&self.panel).map_err(message)?;
+                scene
+                    .set_fill_image_mapping(&target, mapping(false)?, Some(0.5))
                     .map_err(message)?;
-                live.declare_and_activate_transform_to(
+                scene.live().declare_and_activate_transform_to(
                     &self.panel,
                     &target,
                     AnimationOptions::new()
@@ -60,17 +60,19 @@ impl LiveContinuation for ImageSurface {
                         .rate_func(RateFunction::Linear),
                 )
             }
-            2 => live.wait_segment(0.25),
+            2 => scene.live().wait_segment(0.25),
             3 => {
                 // Reflection is a discrete edit; animation never crosses a zero UV scale.
-                live.set_fill_image_mapping(&self.panel, mapping(true)?, Some(0.8))
+                scene
+                    .set_fill_image_mapping(&self.panel, mapping(true)?, Some(0.8))
                     .map_err(message)?;
-                live.wait_segment(0.25)
+                scene.live().wait_segment(0.25)
             }
             4 => {
-                live.set_fill(&self.panel, 0.2, 0.4, 0.8, 1.0)
+                scene
+                    .set_fill(&self.panel, crate::Color::rgb(0.2, 0.4, 0.8), 1.0)
                     .map_err(message)?;
-                live.wait_segment(0.25)
+                scene.live().wait_segment(0.25)
             }
             5 => return Ok(ContinuationStep::Finished),
             _ => return Err("image surface resumed after completion".into()),
