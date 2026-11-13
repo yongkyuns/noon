@@ -65,6 +65,7 @@ impl Scene {
     }
 
     /// Consume this scene with one explicitly selected authored animation graph.
+    /// Exact tracks keep their authored timing, and the chosen graph begins at zero.
     pub fn into_execution_with_animation_root(
         self,
         animation_root: &crate::DeclaredAnimation,
@@ -72,6 +73,7 @@ impl Scene {
         self.into_execution_with_animation_root_at(animation_root, 0.0)
     }
 
+    /// Start the chosen authored animation graph at an explicit origin.
     pub fn into_execution_with_animation_root_at(
         self,
         animation_root: &crate::DeclaredAnimation,

@@ -23,9 +23,8 @@ pub const SAMPLE_RATE: u32 = 24_000;
 /// A warm point visits three vertices while a quiet original score accompanies it.
 ///
 /// The sections at 0, 10 and 20 seconds identify the same authored times used by
-/// the animation and audio. Lower with
-/// `scene.execution_session_with_animation_root(&animation)`; keeping the Scene
-/// available also retains its section-navigation metadata. Music is generated
+/// the animation and audio. Use `scene.into_execution_with_animation_root(&animation)`
+/// to retain the Scene and its section-navigation metadata. Music is generated
 /// once during preparation, never on a frame, seek, or audio-device callback.
 /// Five filled rectangles declare click actions for Previous, Play/Pause, Next,
 /// Restart and Sound. The existing shared picker resolves their semantic targets;

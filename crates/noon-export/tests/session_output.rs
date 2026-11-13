@@ -143,9 +143,13 @@ fn fixture(visual_duration: f64, tone: Option<Tone>) -> ExecutionSession {
             )
             .unwrap();
     }
-    scene
-        .execution_session_with_animation_root(&animation)
-        .unwrap()
+    let execution = ExecutionSession::from_semantic_root_with_animation_root(
+        &scene.integration_store().borrow(),
+        scene.root(),
+        animation.node_id(),
+    )
+    .unwrap();
+    execution
 }
 
 fn frame_options() -> ExportFrameOptions {
