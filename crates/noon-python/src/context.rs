@@ -2212,8 +2212,8 @@ impl Context {
         .map(crate::path_input::point_array)
     }
 
-    #[pyo3(name="liveSetFillImage",signature=(target,paint,opacity))]
-    fn live_fill_image(
+    #[pyo3(name="setFillImage",signature=(target,paint,opacity))]
+    fn set_fill_image(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::ImagePaintOptions,
@@ -2221,17 +2221,13 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .set_fill_image(&target.handle, paint.options.clone(), opacity)
-            .map(|_| ())
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        self.edit_scene(|scene| {
+            scene.set_fill_image(&target.handle, paint.options.clone(), opacity)
+        })
     }
 
-    #[pyo3(name="liveSetFillImageMapping",signature=(target,paint,opacity))]
-    fn live_fill_image_mapping(
+    #[pyo3(name="setFillImageMapping",signature=(target,paint,opacity))]
+    fn set_fill_image_mapping(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::ImageMapping,
@@ -2239,17 +2235,11 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .set_fill_image_mapping(&target.handle, paint.value, opacity)
-            .map(|_| ())
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        self.edit_scene(|scene| scene.set_fill_image_mapping(&target.handle, paint.value, opacity))
     }
 
-    #[pyo3(name="liveSetFillGradient", signature=(target,paint,opacity))]
-    fn live_fill_gradient(
+    #[pyo3(name="setFillGradient", signature=(target,paint,opacity))]
+    fn set_fill_gradient(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::LinearGradient,
@@ -2260,8 +2250,8 @@ impl Context {
         self.place(|scene| scene.set_fill_gradient(&target.handle, paint.value.clone(), opacity))
     }
 
-    #[pyo3(name="liveSetFillRadialGradient", signature=(target,paint,opacity))]
-    fn live_fill_radial_gradient(
+    #[pyo3(name="setFillRadialGradient", signature=(target,paint,opacity))]
+    fn set_fill_radial_gradient(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::RadialGradient,
@@ -2274,8 +2264,8 @@ impl Context {
         })
     }
 
-    #[pyo3(name="liveSetFillNoise", signature=(target,paint,opacity))]
-    fn live_fill_noise(
+    #[pyo3(name="setFillNoise", signature=(target,paint,opacity))]
+    fn set_fill_noise(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::NoisePaint,
@@ -2286,8 +2276,8 @@ impl Context {
         self.place(|scene| scene.set_fill_noise(&target.handle, paint.value.clone(), opacity))
     }
 
-    #[pyo3(name="liveSetFillHatch", signature=(target,paint,opacity))]
-    fn live_fill_hatch(
+    #[pyo3(name="setFillHatch", signature=(target,paint,opacity))]
+    fn set_fill_hatch(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::HatchPaint,
