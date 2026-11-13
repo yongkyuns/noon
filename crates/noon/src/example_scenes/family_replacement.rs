@@ -33,8 +33,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         .map_err(|e| e.to_string())?;
     let mut session = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = session.live();
-        live.replace_layout(&(&family).into(), &(&target).into(), Width, true)
+        session
+            .scene_mut()
+            .replace_layout(&(&family).into(), &(&target).into(), Width, true)
             .map_err(|e| e.to_string())?;
         session
             .scene_mut()

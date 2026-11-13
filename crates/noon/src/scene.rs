@@ -3,6 +3,7 @@ mod audio;
 mod execution;
 mod family;
 mod image;
+mod layout;
 pub(crate) mod object_edits;
 mod sections;
 use crate::{

@@ -401,7 +401,7 @@ mod tests {
             .copy_family(live_parts.family())
             .unwrap();
         execution
-            .live()
+            .scene_mut()
             .scale_family(target.root(), 2.0, 2.0)
             .unwrap();
         let segment = execution
@@ -438,7 +438,7 @@ mod tests {
             .effective_family_layout(live_parts.family())
             .unwrap();
         execution
-            .live()
+            .scene_mut()
             .rotate_family(
                 live_parts.family(),
                 std::f64::consts::FRAC_PI_2,

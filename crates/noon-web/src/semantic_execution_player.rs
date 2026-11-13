@@ -1263,6 +1263,14 @@ impl SemanticExecutionPlayer {
         operation(&mut self.source.live()).map_err(AuthoringFailure::from)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn edit_layout<T>(
+        &mut self,
+        edit: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        edit(self.source.scene_mut()).map_err(Self::live_placement_error)
+    }
+
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_placement_error(error: noon::AuthoringError) -> AuthoringFailure {
         // The browser binding keeps its live diagnostic shape after placement moves to Scene.
@@ -1362,8 +1370,8 @@ impl SemanticExecutionPlayer {
         stretch: bool,
         pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.rescale_to_fit_with_pivot(source, length, dimension, stretch, pivot)
+        self.edit_layout(|scene| {
+            scene.rescale_to_fit_with_pivot(source, length, dimension, stretch, pivot)
         })
     }
 
@@ -1375,7 +1383,7 @@ impl SemanticExecutionPlayer {
         dimension: noon::LayoutDimension,
         stretch: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.replace_layout(source, target, dimension, stretch))
+        self.edit_layout(|scene| scene.replace_layout(source, target, dimension, stretch))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1387,8 +1395,8 @@ impl SemanticExecutionPlayer {
         stretch: bool,
         buffer_factor: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.surround_circle(source, target, dimension, stretch, buffer_factor)
+        self.edit_layout(|scene| {
+            scene.surround_circle(source, target, dimension, stretch, buffer_factor)
         })
     }
 
@@ -1401,8 +1409,8 @@ impl SemanticExecutionPlayer {
         stretch: bool,
         pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.match_dim_size_with_pivot(source, target, dimension, stretch, pivot)
+        self.edit_layout(|scene| {
+            scene.match_dim_size_with_pivot(source, target, dimension, stretch, pivot)
         })
     }
 
@@ -1423,7 +1431,7 @@ impl SemanticExecutionPlayer {
         x: f64,
         y: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|session| session.scale_family(family, x, y))
+        self.edit_layout(|scene| scene.scale_family(family, x, y))
             .map(|_| ())
     }
 
@@ -1511,8 +1519,8 @@ impl SemanticExecutionPlayer {
         args: noon::ManimNextToArgs,
         frame_buff: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.next_layout_to_edge_in_frame(source, target, edge, args, frame_buff)
+        self.edit_layout(|scene| {
+            scene.next_layout_to_edge_in_frame(source, target, edge, args, frame_buff)
         })
         .map(|_| ())
     }
@@ -1565,11 +1573,8 @@ impl SemanticExecutionPlayer {
         x: f64,
         y: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.source
-            .live()
-            .manim_scale(mobject, x, y)
+        self.edit_layout(|scene| scene.manim_scale(mobject, x, y))
             .map(|_| ())
-            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1592,7 +1597,7 @@ impl SemanticExecutionPlayer {
         dimension: noon::LayoutDimension,
         pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.stretch(anchor, factor, dimension, pivot))
+        self.edit_layout(|scene| scene.stretch(anchor, factor, dimension, pivot))
             .map(|_| ())
     }
 
@@ -1603,7 +1608,7 @@ impl SemanticExecutionPlayer {
         factors: noon::SemanticVec3,
         pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.scale_layout_3d(anchor, factors, pivot))
+        self.edit_layout(|scene| scene.scale_layout_3d(anchor, factors, pivot))
             .map(|_| ())
     }
 
@@ -1615,7 +1620,7 @@ impl SemanticExecutionPlayer {
         y: f64,
         pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.scale_layout(anchor, x, y, pivot))
+        self.edit_layout(|scene| scene.scale_layout(anchor, x, y, pivot))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1625,7 +1630,7 @@ impl SemanticExecutionPlayer {
         angle: f64,
         pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.rotate_layout(anchor, angle, pivot))
+        self.edit_layout(|scene| scene.rotate_layout(anchor, angle, pivot))
             .map(|_| ())
     }
 
@@ -1660,7 +1665,7 @@ impl SemanticExecutionPlayer {
         axis: noon::SemanticVec3,
         pivot: noon::ManimRotationPivot,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.flip_layout(anchor, axis, pivot))
+        self.edit_layout(|scene| scene.flip_layout(anchor, axis, pivot))
             .map(|_| ())
     }
 

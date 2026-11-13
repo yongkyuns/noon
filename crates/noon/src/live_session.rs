@@ -8,7 +8,6 @@
 
 mod brace;
 mod camera_motion;
-mod family_layout;
 mod path_editing;
 mod point_promotion;
 #[cfg(test)]
@@ -1961,28 +1960,6 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
-    fn placement_authored_transform(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<Transform2D, LiveSessionError> {
-        crate::family_layout::placement_authored_transform(self.store, self.session, mobject)
-            .map_err(LiveSessionError::from)
-    }
-
-    /// Rotate about the coherent effective geometry center through the shared
-    /// affine transaction. Active affine drivers must complete before this edit.
-    pub fn rotate(
-        &mut self,
-        mobject: &Mobject,
-        angle: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.rotate_layout(
-            &crate::LayoutAnchor::from(mobject),
-            angle,
-            crate::ManimRotationPivot::Center,
-        )
-    }
-
     pub(crate) fn require_mobject(&self, mobject: &Mobject) -> Result<(), LiveSessionError> {
         if !Rc::ptr_eq(self.store, mobject.integration_store()) {
             return Err(LiveSessionError::ForeignMobjectStore);
@@ -2410,7 +2387,7 @@ mod tests {
         let mut session = scene.into_execution().unwrap();
 
         session.scene_mut().scale(&circle, 2.0, 0.5).unwrap();
-        session.live().rotate(&circle, 0.25).unwrap();
+        session.scene_mut().rotate(&circle, 0.25).unwrap();
         let effective = session.live().effective(&circle).unwrap();
         assert_eq!(effective.transform.scale, noon_core::Vec2::new(2.0, 0.5));
         assert_eq!(effective.transform.rotation, 0.25);
@@ -2418,7 +2395,7 @@ mod tests {
         session.live().session.take_frame_changes();
         let target = session.scene_mut().target_editor(&circle).unwrap();
         session.scene_mut().scale(&target, 0.5, 4.0).unwrap();
-        session.live().rotate(&target, 0.75).unwrap();
+        session.scene_mut().rotate(&target, 0.75).unwrap();
         let authored = session.live().authored(&target).unwrap();
         assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
         assert_eq!(

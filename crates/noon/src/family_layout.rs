@@ -91,14 +91,10 @@ impl LayoutAnchor {
         args: ManimNextToArgs,
         frame_buff: f64,
     ) -> Result<(), AuthoringError> {
-        self.layout()?.place(
-            FamilyLayoutTarget::Anchor(target),
-            RelativePlacement::NextInFrame {
-                args,
-                edge,
-                frame_buff,
-            },
-        )
+        prepare_next_layout_to_edge_in_frame(&self.store, self, target, edge, args, frame_buff)?
+            .apply(&mut self.store.borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
     }
 
     /// Check that this anchor belongs to an expected semantic store without
@@ -948,6 +944,28 @@ pub(crate) fn prepare_next_layout_to_aligned(
         alignment.boundary,
         target,
         RelativePlacement::Next(args),
+    )
+}
+
+pub(crate) fn prepare_next_layout_to_edge_in_frame(
+    store: &Rc<RefCell<SemanticStore>>,
+    source: &LayoutAnchor,
+    target: &LayoutAnchor,
+    edge: (f64, f64),
+    args: ManimNextToArgs,
+    frame_buff: f64,
+) -> Result<SemanticMutationTransaction, AuthoringError> {
+    let layout = source.layout()?;
+    prepare_authored_layout_translation(
+        store,
+        layout.leaves,
+        layout.boundary,
+        LiveLayoutTarget::Anchor(target),
+        RelativePlacement::NextInFrame {
+            args,
+            edge,
+            frame_buff,
+        },
     )
 }
 

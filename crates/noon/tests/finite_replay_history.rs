@@ -165,7 +165,7 @@ fn morph_affine_morph_replay_selects_time_qualified_content_and_render_frame() {
             .scene_mut()
             .shift_3d(&target, noon::SemanticVec3::new(3.0, 1.0, 0.0))
             .unwrap();
-        session.live().rotate(&target, 0.4).unwrap();
+        session.scene_mut().rotate(&target, 0.4).unwrap();
     }
     let segment = session
         .live()

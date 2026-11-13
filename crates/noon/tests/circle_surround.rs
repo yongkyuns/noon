@@ -117,7 +117,7 @@ fn live_circle_surround_rejects_unfinished_source_drivers_without_writes() {
     session.live().advance_segment_to(segment, 1.0).unwrap();
     let before = session.live().effective(&circle).unwrap();
     assert!(session
-        .live()
+        .scene_mut()
         .surround_circle(&(&circle).into(), &(&target).into(), 0, false, 1.2)
         .is_err());
     assert_eq!(session.live().effective(&circle).unwrap(), before);
@@ -127,7 +127,7 @@ fn live_circle_surround_rejects_unfinished_source_drivers_without_writes() {
         .unwrap();
     session.live().complete_segment(segment).unwrap();
     session
-        .live()
+        .scene_mut()
         .surround_circle(&(&circle).into(), &(&target).into(), 0, false, 1.2)
         .unwrap();
     near(
@@ -178,7 +178,7 @@ fn live_circle_surround_publishes_once_and_preserves_unrelated_objects() {
     {
         let before = session.live().effective(&other).unwrap();
         session
-            .live()
+            .scene_mut()
             .surround_circle(&(&circle).into(), &(&target).into(), 1, true, 0.5)
             .unwrap();
         let layout = session.scene().effective_layout(&circle).unwrap();
@@ -191,7 +191,7 @@ fn live_circle_surround_publishes_once_and_preserves_unrelated_objects() {
         assert_eq!(after.appearance, before.appearance);
         let before_circle = session.live().effective(&circle).unwrap();
         assert!(session
-            .live()
+            .scene_mut()
             .surround_circle(&(&circle).into(), &(&target).into(), 0, false, f64::NAN)
             .is_err());
         assert_eq!(session.live().effective(&circle).unwrap(), before_circle);

@@ -1238,20 +1238,21 @@ impl Context {
         frame_buff: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.next_layout_to_edge_in_frame(
-                &source.anchor,
-                &target.anchor,
-                (ex, ey),
-                noon::ManimNextToArgs {
-                    direction: (dx, dy),
-                    buff,
-                    aligned_edge: (0., 0.),
-                    mask: (1., 1.),
-                },
-                frame_buff,
-            )
-            .map(|_| ())
+        self.place(|scene| {
+            scene
+                .next_layout_to_edge_in_frame(
+                    &source.anchor,
+                    &target.anchor,
+                    (ex, ey),
+                    noon::ManimNextToArgs {
+                        direction: (dx, dy),
+                        buff,
+                        aligned_edge: (0., 0.),
+                        mask: (1., 1.),
+                    },
+                    frame_buff,
+                )
+                .map(|_| ())
         })
     }
     #[pyo3(name = "liveArrangeFamily")]
@@ -1633,14 +1634,13 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         let dimension = dimension.try_into().map_err(engine_error)?;
-        self.with_live(|live| {
-            live.stretch(
+        self.place(|scene| {
+            scene.stretch(
                 &target.anchor,
                 factor,
                 dimension,
                 crate::mobject::pivot_3d(x, y, z, point),
             )
-            .map(|_| ())
         })
     }
     #[pyo3(name = "livePrependFamilyMembers")]
@@ -2082,13 +2082,12 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.scale_layout_3d(
+        self.place(|scene| {
+            scene.scale_layout_3d(
                 &source.anchor,
                 noon::SemanticVec3::new(sx, sy, sz),
                 crate::mobject::pivot_3d(x, y, z, point),
             )
-            .map(|_| ())
         })
     }
 
@@ -2676,7 +2675,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.scale_family(&target.family, x, y).map(|_| ()))
+        self.place(|scene| scene.scale_family(&target.family, x, y))
     }
     #[pyo3(name = "liveSetFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
     #[allow(clippy::too_many_arguments)]
@@ -2905,8 +2904,8 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         let dimension = dimension.try_into().map_err(engine_error)?;
-        self.with_live(|live| {
-            live.rescale_to_fit_with_pivot(
+        self.place(|scene| {
+            scene.rescale_to_fit_with_pivot(
                 &target.anchor,
                 length,
                 dimension,
@@ -3334,7 +3333,7 @@ impl Context {
     fn scale_mobject(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.manim_scale(&target.handle, x, y).map(|_| ()))
+        self.place(|scene| scene.manim_scale(&target.handle, x, y))
     }
     #[pyo3(name = "liveSetFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
@@ -3404,10 +3403,7 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.scale_layout(&target.anchor, sx, sy, pivot(x, y, point))
-                .map(|_| ())
-        })
+        self.place(|scene| scene.scale_layout(&target.anchor, sx, sy, pivot(x, y, point)))
     }
     #[pyo3(name = "liveRotateLayout")]
     fn rotate(
@@ -3419,10 +3415,7 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.rotate_layout(&target.anchor, angle, pivot(x, y, point))
-                .map(|_| ())
-        })
+        self.place(|scene| scene.rotate_layout(&target.anchor, angle, pivot(x, y, point)))
     }
     #[pyo3(name="beginOrdinaryCompositionBuilder",signature=(kind,duration,lag,play_duration))]
     fn composition(

@@ -109,21 +109,21 @@ fn live_fit_reads_effective_target_bounds_and_rejects_active_source_drivers() {
     let before_source = session.live().effective(&source).unwrap();
     let before_target = session.live().effective(&target).unwrap();
     session
-        .live()
+        .scene_mut()
         .rescale_to_fit(&(&target).into(), f64::NAN, Depth, true)
         .unwrap();
     session
-        .live()
+        .scene_mut()
         .match_dim_size(&(&source).into(), &(&target).into(), Depth, false)
         .unwrap();
     assert_eq!(session.live().effective(&source).unwrap(), before_source);
     assert_eq!(session.live().effective(&target).unwrap(), before_target);
     assert!(session
-        .live()
+        .scene_mut()
         .match_dim_size(&(&source).into(), &(&target).into(), Width, false)
         .is_err());
     assert!(session
-        .live()
+        .scene_mut()
         .rescale_to_fit(&(&target).into(), 5.0, Width, false)
         .is_err());
     assert_eq!(session.live().effective(&source).unwrap(), before_source);
@@ -134,7 +134,7 @@ fn live_fit_reads_effective_target_bounds_and_rejects_active_source_drivers() {
         .unwrap();
     session.live().complete_segment(segment).unwrap();
     session
-        .live()
+        .scene_mut()
         .match_dim_size(&(&source).into(), &(&target).into(), Width, false)
         .unwrap();
     assert_eq!(
@@ -178,16 +178,21 @@ fn planar_depth_fitting_and_stretch_preserve_aliases_without_publication() {
         0.0
     );
     {
-        let mut live = execution.live();
-        let before_a = live.effective(&a).unwrap();
-        live.rescale_to_fit(&source, f64::INFINITY, Depth, true)
+        let before_a = execution.scene().effective(&a).unwrap();
+        execution
+            .scene_mut()
+            .rescale_to_fit(&source, f64::INFINITY, Depth, true)
             .unwrap();
-        live.match_dim_size(&source, &target, Depth, false).unwrap();
-        let result = live
+        execution
+            .scene_mut()
+            .match_dim_size(&source, &target, Depth, false)
+            .unwrap();
+        let result = execution
+            .scene_mut()
             .stretch(&source, 2.0, Depth, noon::ManimRotationPivot::Center)
             .unwrap();
         assert!(result.impacts().is_empty());
-        assert_eq!(live.effective(&a).unwrap(), before_a);
+        assert_eq!(execution.scene().effective(&a).unwrap(), before_a);
     }
     assert_eq!(execution.scene().revision(), revision);
     assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
@@ -205,7 +210,7 @@ fn live_family_fitting_preserves_unrelated_state() {
     let mut session = scene.into_execution().unwrap();
     let before = session.live().effective(&other).unwrap();
     session
-        .live()
+        .scene_mut()
         .rescale_to_fit(&(&family).into(), 3.0, Height, true)
         .unwrap();
     assert_eq!(
@@ -222,7 +227,7 @@ fn live_family_fitting_preserves_unrelated_state() {
     );
     let foreign = Scene::new().square(1.0).unwrap();
     assert!(session
-        .live()
+        .scene_mut()
         .match_dim_size(&(&family).into(), &(&foreign).into(), Width, false)
         .is_err());
 }
@@ -262,7 +267,7 @@ fn fitting_preserves_offset_geometry_center_in_authored_and_live_paths() {
     scene.add_many(&[(&line).into()]).unwrap();
     let mut session = scene.into_execution().unwrap();
     session
-        .live()
+        .scene_mut()
         .rescale_to_fit(&anchor, 6.0, Width, true)
         .unwrap();
     let layout = session.scene().effective_layout(&line).unwrap();
@@ -286,7 +291,7 @@ fn fitting_pivots_keep_source_edges_and_capture_effective_target_dimensions() {
     scene.add_many(&[(&a).into(), (&target).into()]).unwrap();
     let mut session = scene.into_execution().unwrap();
     session
-        .live()
+        .scene_mut()
         .match_dim_size_with_pivot(
             &source,
             &LayoutAnchor::from(&target),
@@ -301,7 +306,7 @@ fn fitting_pivots_keep_source_edges_and_capture_effective_target_dimensions() {
     );
     let before = a.state().unwrap();
     assert!(session
-        .live()
+        .scene_mut()
         .rescale_to_fit_with_pivot(&source, 2., Width, false, Pivot::Point(f64::NAN, 0.))
         .is_err());
     assert_eq!(a.state().unwrap(), before);
