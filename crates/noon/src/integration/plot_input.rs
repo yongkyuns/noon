@@ -181,17 +181,7 @@ impl RiemannInput {
         sample: u32,
         width_scale_factor: f64,
     ) -> Result<Self, AuthoringFailure> {
-        let x_range = match range {
-            [] => None,
-            [start, end] if start.is_finite() && end.is_finite() => Some([*start, *end]),
-            _ => {
-                return Err(AuthoringFailure::new(
-                    "invalid_input",
-                    "riemann.range",
-                    "Riemann range requires two finite values",
-                ));
-            }
-        };
+        let x_range = optional_range(range, "riemann.range", "Riemann")?;
         let sample = match sample {
             0 => RiemannSample::Left,
             1 => RiemannSample::Right,
@@ -240,5 +230,22 @@ impl RiemannInput {
         self.options.show_signed_area = show_signed_area;
         self.options.blend = blend;
         Ok(())
+    }
+}
+
+/// Decode a host range with an empty value for an omitted interval.
+pub fn optional_range(
+    range: &[f64],
+    code: &'static str,
+    operation: &str,
+) -> Result<Option<[f64; 2]>, AuthoringFailure> {
+    match range {
+        [] => Ok(None),
+        [start, end] if start.is_finite() && end.is_finite() => Ok(Some([*start, *end])),
+        _ => Err(AuthoringFailure::new(
+            "invalid_input",
+            code,
+            format!("{operation} range requires two finite values"),
+        )),
     }
 }

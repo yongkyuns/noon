@@ -906,34 +906,13 @@ impl AxesObservation {
         bounded_graph: &MobjectHandle,
         has_bounded_graph: bool,
     ) -> Result<GeometryOptions, PyErr> {
-        let graph = &graph.handle;
-        let bounded = has_bounded_graph.then_some(&bounded_graph.handle);
-        let graph_path = graph
-            .path_query()
-            .map_err(AuthoringFailure::from)
+        let range = noon::integration::plot_optional_range(&range, "area.range", "area")
             .map_err(engine_error)?;
-        let bounded_path = bounded
-            .map(|object| object.path_query())
-            .transpose()
-            .map_err(AuthoringFailure::from)
-            .map_err(engine_error)?;
-        let range = match range.as_slice() {
-            [] => None,
-            [start, end] if start.is_finite() && end.is_finite() => Some([*start, *end]),
-            _ => {
-                return Err(engine_error(AuthoringFailure::new(
-                    "invalid_input",
-                    "area.range",
-                    "area range requires two finite values",
-                )));
-            }
-        };
         noon::ManimGeometryOptions::axes_area(
             self.frame,
-            graph,
-            &graph_path,
+            &graph.handle,
             range,
-            bounded.zip(bounded_path.as_ref()),
+            has_bounded_graph.then_some(&bounded_graph.handle),
         )
         .map(GeometryOptions::from_options)
         .map_err(coordinate_failure)

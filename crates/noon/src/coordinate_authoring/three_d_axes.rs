@@ -543,6 +543,19 @@ impl Scene {
         ManimThreeDAxes::from_family(family)
     }
 
+    /// Observe this coordinate family through the Scene in setup or playback.
+    pub fn three_d_axes_frame(
+        &self,
+        coordinates: &ManimThreeDAxes,
+    ) -> Result<ManimThreeDAxesFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(coordinates.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_three_d_axes_frame(coordinates)
+        } else {
+            coordinates.authored_frame()
+        }
+    }
+
     pub fn effective_three_d_axes_frame(
         &self,
         axes: &ManimThreeDAxes,

@@ -115,28 +115,29 @@ impl HostGraph {
         }
     }
 }
+type PositionedVertex = (u32, (f64, f64));
+
 pub fn pairs(
     values: &[u32],
     name: &str,
 ) -> Result<Vec<(u32, u32)>, crate::integration::AuthoringFailure> {
-    let chunks = values.chunks_exact(2);
-    if !chunks.remainder().is_empty() {
+    let (pairs, trailing) = values.as_chunks::<2>();
+    if !trailing.is_empty() {
         return Err(format!("{name} requires pairs of vertex IDs").into());
     }
-    Ok(chunks.map(|pair| (pair[0], pair[1])).collect())
+    Ok(pairs.iter().map(|&[from, to]| (from, to)).collect())
 }
 
 pub fn vertices(
     ids: &[u32],
     positions: &[f64],
-) -> Result<Vec<(u32, (f64, f64))>, crate::integration::AuthoringFailure> {
+) -> Result<Vec<PositionedVertex>, crate::integration::AuthoringFailure> {
     if positions.len() != ids.len() * 2 {
         return Err("Graph positions require exactly two finite values per vertex".into());
     }
     ids.iter()
-        .zip(positions.chunks_exact(2))
-        .map(|(&id, position)| {
-            let (x, y) = (position[0], position[1]);
+        .zip(positions.as_chunks::<2>().0)
+        .map(|(&id, &[x, y])| {
             if !x.is_finite() || !y.is_finite() {
                 return Err("Graph positions must be finite".into());
             }
