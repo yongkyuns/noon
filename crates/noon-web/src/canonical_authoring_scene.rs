@@ -8,8 +8,6 @@ mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::scene_execution;
-#[cfg(target_arch = "wasm32")]
-mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod camera_profile;
 #[cfg(target_arch = "wasm32")]

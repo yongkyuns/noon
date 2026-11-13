@@ -1284,6 +1284,24 @@ impl MobjectHandle {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "beginBrace")]
+    fn begin_brace(
+        &self,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        noon::ManimGeometryOptions::brace(
+            &noon::LayoutAnchor::from(&self.handle),
+            (x, y),
+            buff,
+            sharpness,
+        )
+        .map(crate::geometry::GeometryOptions::from_options)
+        .map_err(engine_error)
+    }
+
     #[getter(strokeCap)]
     fn stroke_cap(&self) -> PyResult<&'static str> {
         self.handle

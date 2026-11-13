@@ -48,6 +48,41 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "beginBrace")]
+    fn begin_brace(
+        &self,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        noon::ManimGeometryOptions::brace(
+            &noon::LayoutAnchor::from(&self.family),
+            (x, y),
+            buff,
+            sharpness,
+        )
+        .map(crate::geometry::GeometryOptions::from_options)
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "asBraceLabel")]
+    fn as_brace_label(
+        &self,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+        label_buff: f64,
+    ) -> PyResult<crate::brace::BraceLabelHandle> {
+        noon::BraceLabel::from_family(
+            self.family.clone(),
+            crate::brace::options(x, y, buff, sharpness, label_buff),
+        )
+        .map(crate::brace::BraceLabelHandle)
+        .map_err(engine_error)
+    }
+
     #[pyo3(name = "asSampleSpace")]
     fn as_sample_space(&self) -> PyResult<crate::sample_space::SampleSpaceHandle> {
         noon::SampleSpace::from_family(self.family.clone())

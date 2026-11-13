@@ -8,6 +8,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 mod arrow;
 mod audio;
+mod brace;
 mod callback;
 mod callback_values;
 #[cfg(feature = "code")]

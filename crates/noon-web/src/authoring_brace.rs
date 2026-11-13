@@ -29,8 +29,8 @@ impl WasmBraceLabelHandle {
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveBraceGeometryOptions)]
-    pub fn live_brace_geometry_options(
+    #[wasm_bindgen(js_name = braceGeometryOptions)]
+    pub fn brace_geometry_options(
         &mut self,
         target: &WasmLayoutAnchor,
         direction_x: f64,
@@ -39,7 +39,9 @@ impl CanonicalAuthoringSceneContext {
         sharpness: f64,
     ) -> Result<WasmManimGeometryOptions, JsValue> {
         self.inner
-            .live_brace_geometry_options(
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .brace_geometry_options(
                 &target.anchor,
                 noon::BraceOptions {
                     direction: (direction_x, direction_y),
@@ -49,12 +51,17 @@ impl CanonicalAuthoringSceneContext {
                 },
             )
             .map(WasmManimGeometryOptions::from_options)
-            .map_err(js_error)
+            .map_err(|error| {
+                js_error(crate::AuthoringFailure::unclassified(
+                    "brace.prepare",
+                    &error,
+                ))
+            })
     }
 
-    /// Create the retained Brace/label relationship through the active live owner.
-    #[wasm_bindgen(js_name = liveCreateBraceLabel)]
-    pub fn live_create_brace_label(
+    /// Create the retained Brace/label relationship through the owning Scene.
+    #[wasm_bindgen(js_name = createBraceLabel)]
+    pub fn create_brace_label(
         &mut self,
         target: &WasmLayoutAnchor,
         label: &WasmLayoutAnchor,
@@ -64,7 +71,8 @@ impl CanonicalAuthoringSceneContext {
         sharpness: f64,
         label_buff: f64,
     ) -> Result<WasmBraceLabelHandle, JsValue> {
-        self.create_live_brace_label(
+        noon::BraceLabel::new(
+            self.inner.local_authoring_scene().map_err(js_error)?,
             &target.anchor,
             label.anchor.clone(),
             noon::BraceOptions {
@@ -75,38 +83,64 @@ impl CanonicalAuthoringSceneContext {
             },
         )
         .map(|inner| WasmBraceLabelHandle { inner })
-        .map_err(js_error)
+        .map_err(|error| {
+            js_error(crate::AuthoringFailure::unclassified(
+                "brace.create",
+                &error,
+            ))
+        })
     }
 
-    #[wasm_bindgen(js_name = liveShiftBraceLabel)]
-    pub fn live_shift_brace_label(
+    #[wasm_bindgen(js_name = shiftBraceLabel)]
+    pub fn shift_brace_label(
         &mut self,
         brace: &mut WasmBraceLabelHandle,
         target: &WasmLayoutAnchor,
     ) -> Result<(), JsValue> {
-        self.shift_live_brace_label(&mut brace.inner, &target.anchor)
-            .map_err(js_error)
+        brace
+            .inner
+            .shift_brace(
+                self.inner.local_authoring_scene().map_err(js_error)?,
+                &target.anchor,
+            )
+            .map_err(|error| js_error(crate::AuthoringFailure::unclassified("brace.shift", &error)))
     }
 
-    #[wasm_bindgen(js_name = liveReplaceBraceLabel)]
-    pub fn live_replace_brace_label(
+    #[wasm_bindgen(js_name = replaceBraceLabel)]
+    pub fn replace_brace_label(
         &mut self,
         brace: &mut WasmBraceLabelHandle,
         label: &WasmLayoutAnchor,
     ) -> Result<(), JsValue> {
-        self.replace_live_brace_label(&mut brace.inner, label.anchor.clone())
-            .map_err(js_error)
+        brace
+            .inner
+            .change_label(
+                self.inner.local_authoring_scene().map_err(js_error)?,
+                label.anchor.clone(),
+            )
+            .map_err(|error| js_error(crate::AuthoringFailure::unclassified("brace.label", &error)))
     }
 
-    #[wasm_bindgen(js_name = liveChangeBraceLabel)]
-    pub fn live_change_brace_label(
+    #[wasm_bindgen(js_name = changeBraceLabel)]
+    pub fn change_brace_label(
         &mut self,
         brace: &mut WasmBraceLabelHandle,
         target: &WasmLayoutAnchor,
         label: &WasmLayoutAnchor,
     ) -> Result<(), JsValue> {
-        self.change_live_brace_label(&mut brace.inner, &target.anchor, label.anchor.clone())
-            .map_err(js_error)
+        let code = if self.inner.requires_live_mutation_routing() {
+            "brace.change"
+        } else {
+            "brace.replace"
+        };
+        brace
+            .inner
+            .change_brace_label(
+                self.inner.local_authoring_scene().map_err(js_error)?,
+                &target.anchor,
+                label.anchor.clone(),
+            )
+            .map_err(|error| js_error(crate::AuthoringFailure::unclassified(code, &error)))
     }
 }
 

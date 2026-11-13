@@ -316,6 +316,30 @@ impl GeometryOptions {
             stroke_width,
         )
     }
+    #[staticmethod]
+    #[pyo3(name = "braceBetweenPoints")]
+    #[allow(clippy::too_many_arguments)]
+    fn brace_between_points(
+        first_x: f64,
+        first_y: f64,
+        second_x: f64,
+        second_y: f64,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<Self> {
+        noon::ManimGeometryOptions::brace_between_points(
+            (first_x, first_y),
+            (second_x, second_y),
+            (direction_x, direction_y),
+            buff,
+            sharpness,
+        )
+        .map(Self::from_options)
+        .map_err(engine_error)
+    }
+
     #[pyo3(name = "setSheenDirection")]
     fn set_sheen_direction(&mut self, x: f64, y: f64, z: f64, dimensions: u8) -> PyResult<()> {
         self.options
