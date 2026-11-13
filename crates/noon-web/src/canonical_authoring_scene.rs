@@ -893,7 +893,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn edit_gradient<T>(
+    fn edit_scene<T>(
         &mut self,
         edit: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
     ) -> Result<(), AuthoringFailure> {
@@ -9051,7 +9051,7 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let colors = noon::integration::gradient_colors(values).map_err(typed_js_error)?;
             self.inner
-                .edit_gradient(|scene| {
+                .edit_scene(|scene| {
                     scene.set_color_by_gradient(&target.semantic_mobject(), &colors)
                 })
                 .map_err(typed_js_error)
@@ -9065,7 +9065,7 @@ mod wasm {
             let colors = noon::integration::gradient_colors(values).map_err(typed_js_error)?;
             let family = target.semantic_family()?;
             self.inner
-                .edit_gradient(|scene| scene.set_family_color_by_gradient(&family, &colors))
+                .edit_scene(|scene| scene.set_family_color_by_gradient(&family, &colors))
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = setColorRadialGradient)]
@@ -9081,7 +9081,7 @@ mod wasm {
             let (inner, outer) =
                 noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.inner
-                .edit_gradient(|scene| {
+                .edit_scene(|scene| {
                     scene.set_color_by_radial_gradient(
                         &target.semantic_mobject(),
                         (center_x, center_y, center_z),
@@ -9106,7 +9106,7 @@ mod wasm {
                 noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             let family = target.semantic_family()?;
             self.inner
-                .edit_gradient(|scene| {
+                .edit_scene(|scene| {
                     scene.set_family_color_by_radial_gradient(
                         &family,
                         (center_x, center_y, center_z),
@@ -10752,126 +10752,100 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillImage)]
-        pub fn live_set_fill_image(
+        #[wasm_bindgen(js_name = setFillImage)]
+        pub fn set_fill_image(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             paint: &crate::WasmImagePaintOptions,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_image(handle.semantic_mobject(), paint.options.clone(), opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.set_fill_image(handle.semantic_mobject(), paint.options.clone(), opacity)
+                })
+                .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFillImageMapping)]
-        pub fn live_set_fill_image_mapping(
+        #[wasm_bindgen(js_name = setFillImageMapping)]
+        pub fn set_fill_image_mapping(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             mapping: &crate::WasmImageMapping,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_image_mapping(handle.semantic_mobject(), mapping.value, opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.set_fill_image_mapping(handle.semantic_mobject(), mapping.value, opacity)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillHatch)]
-        pub fn live_set_fill_hatch(
+        #[wasm_bindgen(js_name = setFillHatch)]
+        pub fn set_fill_hatch(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             paint: &crate::WasmHatchPaint,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillNoise)]
-        pub fn live_set_fill_noise(
+        #[wasm_bindgen(js_name = setFillNoise)]
+        pub fn set_fill_noise(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             gradient: &crate::WasmNoisePaint,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillRadialGradient)]
-        pub fn live_set_fill_radial_gradient(
+        #[wasm_bindgen(js_name = setFillRadialGradient)]
+        pub fn set_fill_radial_gradient(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             gradient: &crate::WasmRadialGradient,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_radial_gradient(
-                    handle.semantic_mobject(),
-                    gradient.value.clone(),
-                    opacity,
-                )
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_radial_gradient(
+                        handle.semantic_mobject(),
+                        gradient.value.clone(),
+                        opacity,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillGradient)]
-        pub fn live_set_fill_gradient(
+        #[wasm_bindgen(js_name = setFillGradient)]
+        pub fn set_fill_gradient(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             gradient: &crate::WasmLinearGradient,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_gradient(handle.semantic_mobject(), gradient.value.clone(), opacity)
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_gradient(
+                        handle.semantic_mobject(),
+                        gradient.value.clone(),
+                        opacity,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
