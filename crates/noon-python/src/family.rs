@@ -41,6 +41,28 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "becomeFamily")]
+    fn become_family(
+        &self,
+        other: &Self,
+        match_height: bool,
+        match_width: bool,
+        match_center: bool,
+        stretch: bool,
+    ) -> PyResult<()> {
+        self.family
+            .become_family(
+                &other.family,
+                noon::ManimBecomeOptions {
+                    match_height,
+                    match_width,
+                    match_center,
+                    stretch,
+                },
+            )
+            .map_err(engine_error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="setStyle",signature=(fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     pub fn set_style(

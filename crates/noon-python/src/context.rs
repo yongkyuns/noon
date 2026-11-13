@@ -405,14 +405,19 @@ impl Context {
             .map_err(engine_error)
     }
 
-    fn edit_running_scene<T>(
-        &mut self,
-        edit: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
-    ) -> PyResult<T> {
+    fn require_execution(&self) -> PyResult<()> {
         self.require_active()?;
         if !self.has_execution() {
             return Err(engine_error("no execution session"));
         }
+        Ok(())
+    }
+
+    fn edit_running_scene<T>(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<T> {
+        self.require_execution()?;
         edit(&mut self.scene)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
@@ -3547,10 +3552,7 @@ impl Context {
     fn replace_content(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
         self.same_store(target)?;
         self.same_store(source)?;
-        self.with_live(|live| {
-            live.replace_content(&target.handle, &source.handle)
-                .map(|_| ())
-        })
+        self.edit_running_scene(|scene| scene.replace_content(&target.handle, &source.handle))
     }
     #[pyo3(name = "liveRemove")]
     fn live_remove(&mut self, target: &MobjectHandle) -> PyResult<()> {
@@ -3576,11 +3578,41 @@ impl Context {
             match_center,
             stretch,
         };
-        self.with_live(|live| {
-            live.become_mobject(&target.handle, &source.handle, options)
-                .map(|_| ())
-        })
+        self.require_execution()?;
+        self.scene
+            .become_mobject(&target.handle, &source.handle, options)
+            .map(|_| ())
+            .map_err(engine_error)
     }
+    #[pyo3(name = "liveBecomeFamily")]
+    fn become_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        source: &crate::family::FamilyHandle,
+        match_height: bool,
+        match_width: bool,
+        match_center: bool,
+        stretch: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_family_store(source)?;
+        self.require_execution()?;
+        self.scene
+            .become_family(
+                &target.family,
+                &source.family,
+                noon::ManimBecomeOptions {
+                    match_height,
+                    match_width,
+                    match_center,
+                    stretch,
+                },
+            )
+            .map(|_| ())
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "beginOrdinaryWait")]
     fn wait(&mut self, duration: f64) -> PyResult<()> {
         self.available()?;

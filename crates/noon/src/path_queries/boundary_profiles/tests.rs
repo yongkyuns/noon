@@ -70,7 +70,10 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
     let publication = execution.session().publication_context();
     let revision = execution.scene().revision();
     let state = target.state().unwrap();
-    assert!(execution.live().replace_content(&target, &image).is_err());
+    assert!(execution
+        .scene_mut()
+        .replace_content(&target, &image)
+        .is_err());
     assert_eq!(execution.session().publication_context(), publication);
     assert_eq!(execution.scene().revision(), revision);
     assert_eq!(target.state().unwrap(), state);
@@ -94,7 +97,10 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
         execution.scene_mut().disable_stroke(&target).unwrap();
     }
     for source in [&image, &geometry, &image] {
-        execution.live().replace_content(&target, source).unwrap();
+        execution
+            .scene_mut()
+            .replace_content(&target, source)
+            .unwrap();
         let expected = MobjectTarget::from(source)
             .requires_content_boundary()
             .unwrap();
@@ -170,11 +176,19 @@ fn boundary_profile_tracks_text_content_without_host_type_or_identity_changes() 
     let text = scene.text("a").unwrap();
     scene.add(&target).unwrap();
     let id = target.node_id();
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
-    assert!(!live.requires_content_boundary((&target).into()).unwrap());
-    live.replace_content(&target, &text).unwrap();
-    assert!(live.requires_content_boundary((&target).into()).unwrap());
+    let mut execution = scene.into_execution().unwrap();
+    assert!(!execution
+        .live()
+        .requires_content_boundary((&target).into())
+        .unwrap());
+    execution
+        .scene_mut()
+        .replace_content(&target, &text)
+        .unwrap();
+    assert!(execution
+        .live()
+        .requires_content_boundary((&target).into())
+        .unwrap());
     assert_eq!(target.node_id(), id);
     assert_eq!(target.get_num_points().unwrap(), 0);
 }

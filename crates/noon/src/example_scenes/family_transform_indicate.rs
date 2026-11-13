@@ -86,7 +86,6 @@ impl LiveContinuation for FamilyTransformIndicate {
                     .shift(&left_target, 1.0, 0.0)
                     .map_err(|e| e.to_string())?;
                 scene
-                    .live()
                     .become_mobject(
                         &self.left,
                         &left_target,

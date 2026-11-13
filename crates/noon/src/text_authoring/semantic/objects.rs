@@ -984,42 +984,75 @@ mod tests {
         let unused_handle = unused_text.state().unwrap().content.text().unwrap();
         scene.add(&target).unwrap();
         scene.add(&untouched).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let target_slot = session.execution_slot_for_frame_index(0).unwrap();
-        let untouched_before = session.frame().objects[1].clone();
-        assert!(session.text_resources().get(text_handle).is_none());
-        assert!(session.text_resources().get(unused_handle).is_none());
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let target_slot = session.session().execution_slot_for_frame_index(0).unwrap();
+        let untouched_before = session.session().frame().objects[1].clone();
+        assert!(session
+            .session()
+            .text_resources()
+            .get(text_handle)
+            .is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unused_handle)
+            .is_none());
 
         {
-            let mut live = scene.live(&mut session);
-            live.set_translation(&target, 3.0, -2.0).unwrap();
-            live.replace_content(&target, &replacement_text).unwrap();
+            session.live().set_translation(&target, 3.0, -2.0).unwrap();
+            session
+                .scene_mut()
+                .replace_content(&target, &replacement_text)
+                .unwrap();
             assert_eq!(
-                live.authored(&target).unwrap().content.text(),
+                session.live().authored(&target).unwrap().content.text(),
                 Some(text_handle)
             );
             assert_eq!(
-                live.effective(&target).unwrap().transform.translation.x,
+                session
+                    .live()
+                    .effective(&target)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
                 3.0
             );
         }
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(target_slot));
-        assert_eq!(session.frame().objects[1], untouched_before);
-        assert_eq!(session.frame().objects[0].text(), Some(text_handle));
-        assert!(session.frame().objects[0].text_bounds.is_some());
-        assert!(session.text_resources().get(text_handle).is_some());
-        assert!(session.text_resources().get(unused_handle).is_none());
-        assert_eq!(session.last_patch_stats().objects_recomputed, 0);
-        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(target_slot)
+        );
+        assert_eq!(session.session().frame().objects[1], untouched_before);
+        assert_eq!(
+            session.session().frame().objects[0].text(),
+            Some(text_handle)
+        );
+        assert!(session.session().frame().objects[0].text_bounds.is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(text_handle)
+            .is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unused_handle)
+            .is_none());
+        assert_eq!(session.session().last_patch_stats().objects_recomputed, 0);
+        assert_eq!(
+            session.session_mut().take_frame_changes().object_indices(),
+            &[0]
+        );
 
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .replace_content(&target, &replacement_geometry)
             .unwrap();
-        assert!(session.frame().objects[0].geometry().is_some());
-        assert!(session.frame().objects[0].text_bounds.is_none());
-        assert_eq!(session.frame().objects[1], untouched_before);
+        assert!(session.session().frame().objects[0].geometry().is_some());
+        assert!(session.session().frame().objects[0].text_bounds.is_none());
+        assert_eq!(session.session().frame().objects[1], untouched_before);
     }
 
     #[test]

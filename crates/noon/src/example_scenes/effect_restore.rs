@@ -74,11 +74,9 @@ impl LiveContinuation for EffectRestore {
             3 | 5 => {
                 let (leaf, group) = self.saved()?;
                 scene
-                    .live()
                     .become_mobject(&self.leaf, leaf, Default::default())
                     .map_err(message)?;
                 scene
-                    .live()
                     .become_family(&self.group, group, Default::default())
                     .map_err(message)?;
             }
