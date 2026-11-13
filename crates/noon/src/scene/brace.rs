@@ -1,4 +1,4 @@
-//! Scene-owned Brace queries share the explicit live-session observation policy.
+//! Brace geometry uses the Scene's coherent layout observation.
 use super::*;
 
 impl Scene {
