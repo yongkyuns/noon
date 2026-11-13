@@ -719,14 +719,10 @@ impl Scene {
     /// effective Runtime publication while running. Resource admission and publication
     /// stay owned by this Scene; no borrowed LiveSession facade is created.
     pub fn align_points(&mut self, left: &Mobject, right: &Mobject) -> Result<(), AuthoringError> {
-        let root = self.root;
-        let store = &self.store;
-        if let Some(execution) = self.execution.as_mut() {
-            return crate::path_alignment::publish_alignment(store, root, execution, left, right);
-        }
-        self.require_object(left)?;
-        self.require_object(right)?;
-        left.align_points(right)
+        self.align_path_points(
+            &crate::LayoutAnchor::from(left),
+            &crate::LayoutAnchor::from(right),
+        )
     }
 
     /// Create one detached subcurve from the current coherent effective source state.

@@ -48,8 +48,6 @@ fn scalar_planar_line_preserves_xyz_prefix_from_actual_ce() {
     );
 }
 
-use crate::integration::{publish_borrowed_path_edit, BorrowedPathEdit};
-
 fn edit_xyz_object(
     object: &mut Mobject,
     method: &str,
@@ -103,62 +101,6 @@ fn edit_xyz_scene(
         _ => panic!("unhandled CE method {method}"),
     }
 }
-fn borrowed_xyz_edit<'a>(
-    object: &'a Mobject,
-    method: &str,
-    points: &'a [SemanticVec3],
-    stride: i32,
-) -> BorrowedPathEdit<'a> {
-    match method {
-        "start_new_path" => BorrowedPathEdit::Start3dWithStride {
-            object,
-            point: points[2],
-            stride,
-        },
-        "add_line_to" => BorrowedPathEdit::Line3dWithStride {
-            object,
-            point: points[2],
-            stride,
-        },
-        "add_cubic_bezier_curve_to" => BorrowedPathEdit::Cubic3dWithStride {
-            object,
-            control1: points[0],
-            control2: points[1],
-            anchor: points[2],
-            stride,
-        },
-        "add_cubic_bezier_curve" => BorrowedPathEdit::CubicCurve3d {
-            object,
-            anchor1: points[0],
-            handle1: points[1],
-            handle2: points[2],
-            anchor2: points[3],
-        },
-        "set_points_as_corners" => BorrowedPathEdit::Corners3d {
-            object,
-            points: &points[2..],
-        },
-        "add_points_as_corners" => BorrowedPathEdit::AppendCorners3dWithStride {
-            object,
-            points: &points[2..],
-            stride,
-            bezier_t_values: &LINE_SAMPLES,
-        },
-        "add_quadratic_bezier_curve_to" => BorrowedPathEdit::Quadratic3dWithStride {
-            object,
-            control: points[0],
-            anchor: points[2],
-            stride,
-        },
-        "close_path" => BorrowedPathEdit::CloseWithStride {
-            object,
-            stride,
-            tolerance: 1e-6,
-            bezier_t_values: &LINE_SAMPLES,
-        },
-        _ => panic!("unhandled CE method {method}"),
-    }
-}
 fn assert_xyz_close(actual: &[SemanticVec3], expected: &serde_json::Value, context: &str) {
     let expected = xyz(expected);
     assert_eq!(actual.len(), expected.len(), "{context}");
@@ -173,14 +115,14 @@ fn assert_xyz_close(actual: &[SemanticVec3], expected: &serde_json::Value, conte
 }
 
 #[test]
-fn scalar_xyz_edits_match_all_pinned_ce_controls_in_three_execution_modes() {
+fn scalar_xyz_edits_match_all_pinned_ce_controls_in_authored_and_running() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../fixtures/manim-v0.21/scalar-xyz.json"
     ))
     .unwrap();
     let cases = fixture["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 225);
-    for mode in 0..3 {
+    for mode in 0..2 {
         for case in cases {
             let spec = &case["spec"];
             let method = spec["method"].as_str().unwrap();
@@ -217,24 +159,12 @@ fn scalar_xyz_edits_match_all_pinned_ce_controls_in_three_execution_modes() {
                 .geometry_resources()
                 .len();
             let id = object.node_id();
-            let mut borrowed = None;
             let result = match mode {
                 0 => edit_xyz_object(&mut object, method, &inputs, stride),
-                1 => {
+                _ => {
                     let execution = scene.execution_session().unwrap();
                     scene.install_execution(execution);
                     edit_xyz_scene(&mut scene, &object, method, &inputs, stride)
-                }
-                _ => {
-                    let mut execution = scene.execution_session().unwrap();
-                    let result = publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut execution,
-                        borrowed_xyz_edit(&object, method, &inputs, stride),
-                    );
-                    borrowed = Some(execution);
-                    result
                 }
             };
             if case["outcome"]["kind"] == "raised" {
@@ -261,17 +191,16 @@ fn scalar_xyz_edits_match_all_pinned_ce_controls_in_three_execution_modes() {
             } else {
                 result.unwrap_or_else(|e| panic!("{context}: {e}"));
             }
-            let actual =
-                if let Some(execution) = borrowed.as_ref().or_else(|| scene.running_execution()) {
-                    crate::path_queries::effective_path_query(
-                        scene.integration_store(),
-                        execution,
-                        &object,
-                    )
-                    .unwrap()
-                } else {
-                    object.path_query().unwrap()
-                };
+            let actual = if let Some(execution) = scene.running_execution() {
+                crate::path_queries::effective_path_query(
+                    scene.integration_store(),
+                    execution,
+                    &object,
+                )
+                .unwrap()
+            } else {
+                object.path_query().unwrap()
+            };
             assert_xyz_close(&actual.points_3d().unwrap(), &case["pointsXYZ"], &context);
             assert_xyz_close(&snapshot.points_3d().unwrap(), &case["beforeXYZ"], &context);
             assert_eq!(object.node_id(), id);
@@ -282,7 +211,7 @@ fn scalar_xyz_edits_match_all_pinned_ce_controls_in_three_execution_modes() {
 
 #[test]
 fn invalid_scalar_xyz_inputs_preserve_identity_payload_revision_and_resources() {
-    for mode in 0..3 {
+    for mode in 0..2 {
         for method in [
             "start_new_path",
             "add_line_to",
@@ -311,19 +240,10 @@ fn invalid_scalar_xyz_inputs_preserve_identity_payload_revision_and_resources() 
             points[2].z = f64::NAN;
             let result = match mode {
                 0 => edit_xyz_object(&mut object, method, &points, 4),
-                1 => {
+                _ => {
                     let execution = scene.execution_session().unwrap();
                     scene.install_execution(execution);
                     edit_xyz_scene(&mut scene, &object, method, &points, 4)
-                }
-                _ => {
-                    let mut execution = scene.execution_session().unwrap();
-                    publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut execution,
-                        borrowed_xyz_edit(&object, method, &points, 4),
-                    )
                 }
             };
             assert!(result.is_err(), "mode={mode}, method={method}");
@@ -345,7 +265,7 @@ fn invalid_scalar_xyz_inputs_preserve_identity_payload_revision_and_resources() 
 fn command_only_path_depth_is_captured_before_scalar_edits_and_empty_corners_are_a_noop() {
     // Actual CE Line([0,0,0], [1,0,0]).shift([0,0,3]).add_line_to([2,0,0])
     // interpolates Z from 3 to 0; an empty corner append preserves the array.
-    for mode in 0..3 {
+    for mode in 0..2 {
         for empty in [false, true] {
             let mut scene = crate::Scene::new();
             let path = VectorPath::new()
@@ -368,7 +288,6 @@ fn command_only_path_depth_is_captured_before_scalar_edits_and_empty_corners_are
                 .borrow()
                 .geometry_resources()
                 .len();
-            let mut borrowed = None;
             let endpoint = SemanticVec3::new(2., 0., 0.);
             match mode {
                 0 => {
@@ -378,7 +297,7 @@ fn command_only_path_depth_is_captured_before_scalar_edits_and_empty_corners_are
                         object.add_line_to_3d(endpoint)
                     }
                 }
-                1 => {
+                _ => {
                     let session = scene.execution_session().unwrap();
                     scene.install_execution(session);
                     if empty {
@@ -386,29 +305,6 @@ fn command_only_path_depth_is_captured_before_scalar_edits_and_empty_corners_are
                     } else {
                         scene.add_line_to_3d(&object, endpoint)
                     }
-                }
-                _ => {
-                    let mut session = scene.execution_session().unwrap();
-                    let edit = if empty {
-                        BorrowedPathEdit::AppendCorners3d {
-                            object: &object,
-                            points: &[],
-                        }
-                    } else {
-                        BorrowedPathEdit::Line3dWithStride {
-                            object: &object,
-                            point: endpoint,
-                            stride: 4,
-                        }
-                    };
-                    let result = publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut session,
-                        edit,
-                    );
-                    borrowed = Some(session);
-                    result
                 }
             }
             .unwrap();
@@ -424,17 +320,16 @@ fn command_only_path_depth_is_captured_before_scalar_edits_and_empty_corners_are
                     resources
                 );
             }
-            let query =
-                if let Some(session) = borrowed.as_ref().or_else(|| scene.running_execution()) {
-                    crate::path_queries::effective_path_query(
-                        scene.integration_store(),
-                        session,
-                        &object,
-                    )
-                    .unwrap()
-                } else {
-                    object.path_query().unwrap()
-                };
+            let query = if let Some(session) = scene.running_execution() {
+                crate::path_queries::effective_path_query(
+                    scene.integration_store(),
+                    session,
+                    &object,
+                )
+                .unwrap()
+            } else {
+                object.path_query().unwrap()
+            };
             let points = query.points_3d().unwrap();
             assert_eq!(
                 points.iter().take(4).map(|p| p.z).collect::<Vec<_>>(),

@@ -7,7 +7,7 @@ mod quadratic;
 mod scalar;
 mod scalar_authoring;
 mod scalar_authoring_3d;
-pub(crate) use scalar::{ScalarPathEdit, LINE_SAMPLES};
+use scalar::ScalarPathEdit;
 mod transaction;
 use crate::{AuthoringError, ExecutionSession, Mobject, MobjectFamily};
 use noon_core::{
@@ -589,14 +589,26 @@ impl crate::Scene {
     }
 
     pub fn make_smooth(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::AnchorMode(true))
-        })
+        self.change_anchor_mode(object, true)
     }
 
     pub fn make_jagged(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.change_anchor_mode(object, false)
+    }
+
+    pub fn change_anchor_mode(
+        &mut self,
+        object: &Mobject,
+        smooth: bool,
+    ) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::AnchorMode(false))
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::AnchorMode(smooth),
+            )
         })
     }
 
@@ -697,6 +709,23 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_line_to_with_stride(
+        &mut self,
+        object: &Mobject,
+        point: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::LineWithStride(point, stride),
+            )
+        })
+    }
+
     pub fn add_line_to_with_stride_and_samples(
         &mut self,
         object: &Mobject,
@@ -739,13 +768,23 @@ impl crate::Scene {
         control: (f64, f64),
         anchor: (f64, f64),
     ) -> Result<(), AuthoringError> {
+        self.add_quadratic_bezier_curve_to_f64_with_stride(object, control, anchor, 4)
+    }
+
+    pub fn add_quadratic_bezier_curve_to_f64_with_stride(
+        &mut self,
+        object: &Mobject,
+        control: (f64, f64),
+        anchor: (f64, f64),
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
             publish_running_object_edit(
                 store,
                 root,
                 execution,
                 object,
-                PathEdit::QuadraticWithStride(control, anchor, 4),
+                PathEdit::QuadraticWithStride(control, anchor, stride),
             )
         })
     }
@@ -774,6 +813,25 @@ impl crate::Scene {
         })
     }
 
+    pub fn add_cubic_bezier_curve_to_with_stride(
+        &mut self,
+        object: &Mobject,
+        control1: Vec2,
+        control2: Vec2,
+        anchor: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::CubicWithStride(control1, control2, anchor, stride),
+            )
+        })
+    }
+
     pub fn add_smooth_curve_to(
         &mut self,
         object: &Mobject,
@@ -787,6 +845,28 @@ impl crate::Scene {
                 execution,
                 object,
                 PathEdit::SmoothCurve { handle2, anchor },
+            )
+        })
+    }
+
+    pub fn add_smooth_curve_to_with_stride(
+        &mut self,
+        object: &Mobject,
+        handle2: Option<Vec2>,
+        anchor: Vec2,
+        stride: i32,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_edit(
+                store,
+                root,
+                execution,
+                object,
+                PathEdit::SmoothCurveWithStride {
+                    handle2,
+                    anchor,
+                    stride,
+                },
             )
         })
     }
@@ -951,14 +1031,48 @@ impl crate::Scene {
     }
 
     pub fn make_family_smooth(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_family_anchor_mode(store, root, execution, family, true)
-        })
+        self.change_family_anchor_mode(family, true)
     }
 
     pub fn make_family_jagged(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+        self.change_family_anchor_mode(family, false)
+    }
+
+    pub fn change_family_anchor_mode(
+        &mut self,
+        family: &MobjectFamily,
+        smooth: bool,
+    ) -> Result<(), AuthoringError> {
         self.with_running_execution(|store, root, execution| {
-            publish_running_family_anchor_mode(store, root, execution, family, false)
+            publish_running_family_anchor_mode(store, root, execution, family, smooth)
+        })
+    }
+
+    pub fn reverse_family_points(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_family_reverse_points(store, root, execution, family)
+        })
+    }
+
+    pub fn reverse_points(&mut self, object: &Mobject) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_reverse_points(store, root, execution, object)
+        })
+    }
+
+    pub fn repeat_family_points(
+        &mut self,
+        family: &MobjectFamily,
+        count: usize,
+    ) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_family_repeat_points(store, root, execution, family, count)
+        })
+    }
+
+    pub fn repeat_points(&mut self, object: &Mobject, count: usize) -> Result<(), AuthoringError> {
+        self.with_running_execution(|store, root, execution| {
+            publish_running_object_repeat_points(store, root, execution, object, count)
         })
     }
 }

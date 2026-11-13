@@ -21,7 +21,8 @@ impl CanonicalAuthoringSceneContext {
         self.inner
             .active_live_player()
             .map_err(js_error)?
-            .live_apply_matrix_to_family(
+            .scene_mut()
+            .apply_matrix_to_family(
                 &family,
                 &values,
                 rows as usize,
@@ -29,6 +30,7 @@ impl CanonicalAuthoringSceneContext {
                 about_x,
                 about_y,
             )
+            .map_err(noon::LiveSessionError::from)
             .map_err(js_error)
     }
 }

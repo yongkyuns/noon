@@ -3,18 +3,16 @@ mod append;
 mod empty_arrays;
 mod xyz;
 use crate::{AuthoringError, Mobject, MobjectFamily, PathQuery};
-pub use append::publish_append_family_points;
-pub use empty_arrays::publish_empty_family_point_array;
 use noon_core::{
     SemanticMutationTransaction, SemanticStore, SemanticTransform2_5D, StoredGeometry, Vec2,
     VectorPath,
 };
 use std::rc::Rc;
-pub use xyz::{publish_append_family_points_3d, publish_family_points_3d};
+use xyz::publish_family_points_3d;
 
 /// Publish root point content through an integration-owned coherent execution.
 /// The existing family identity, presentation and member edges stay in place.
-pub fn publish_family_points(
+pub(crate) fn publish_family_points(
     store: &Rc<std::cell::RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
     execution: &mut crate::ExecutionSession,
@@ -31,7 +29,7 @@ pub fn publish_family_points(
 }
 
 /// Clearing an unmaterialized root validates coherence without creating a payload.
-pub fn publish_clear_family_points(
+fn publish_clear_family_points(
     store: &Rc<std::cell::RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
     execution: &mut crate::ExecutionSession,
@@ -50,6 +48,31 @@ pub fn publish_clear_family_points(
         &object.expect("owned root was checked"),
         crate::path_editing::PathEdit::Clear,
     )
+}
+
+impl crate::Scene {
+    /// Clear a family's own points while keeping its identity and members.
+    pub fn clear_family_points(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        if self.running_execution().is_none() {
+            return family.clear_points();
+        }
+        self.with_running_execution(|store, root, execution| {
+            publish_clear_family_points(store, root, execution, family)
+        })
+    }
+
+    /// Read the root's own effective path, excluding all descendants.
+    pub fn effective_family_own_path_query(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<PathQuery, AuthoringError> {
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        family.effective_own_path_query(execution)
+    }
 }
 
 impl MobjectFamily {
@@ -86,7 +109,7 @@ impl MobjectFamily {
 
     /// Read only the root's own current path through a coherent execution.
     /// Empty roots validate the same store/publication contract as owned roots.
-    pub fn effective_own_path_query(
+    pub(crate) fn effective_own_path_query(
         &self,
         execution: &crate::ExecutionSession,
     ) -> Result<PathQuery, AuthoringError> {
@@ -110,7 +133,7 @@ impl MobjectFamily {
 
     /// Replace this root's owned cubic point array in authored state. The
     /// existing root style, presentation, identity and members are retained.
-    /// Use Scene/LiveSession publication for changes after execution bootstrap.
+    /// Use Scene publication for changes after execution bootstrap.
     pub fn set_points_f64(&self, points: &[(f64, f64)]) -> Result<(), AuthoringError> {
         self.set_points_3d(&crate::path_editing::promote_raw_points_3d(points))
     }

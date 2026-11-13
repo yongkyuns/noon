@@ -23,7 +23,6 @@ impl LiveContinuation for FamilyRootPoints {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         if self.stage == 3 {
             return Ok(ContinuationStep::Finished);
         }
@@ -31,9 +30,9 @@ impl LiveContinuation for FamilyRootPoints {
             match self.stage {
                 0 => {}
                 1 => {
-                    live.clear_family_points(&self.group)?;
-                    live.clear_family_points(&self.vector)?;
-                    live.align_path_points(
+                    scene.clear_family_points(&self.group)?;
+                    scene.clear_family_points(&self.vector)?;
+                    scene.align_path_points(
                         &LayoutAnchor::from(&self.vector),
                         &LayoutAnchor::from(&self.alignment_peer),
                     )?;
@@ -41,30 +40,38 @@ impl LiveContinuation for FamilyRootPoints {
                 2 => {
                     // Replay the same authored data and child presentation;
                     // clearing the roots did not undo their family transforms.
-                    live.become_mobject(&self.left, &self.left_seed, Default::default())?;
-                    live.become_mobject(&self.right, &self.right_seed, Default::default())?;
+                    scene
+                        .live()
+                        .become_mobject(&self.left, &self.left_seed, Default::default())?;
+                    scene.live().become_mobject(
+                        &self.right,
+                        &self.right_seed,
+                        Default::default(),
+                    )?;
                     self.left_points.clone_from(&self.left_source_points);
-                    live.set_family_points_3d(&self.group, &self.left_points)?;
-                    live.stretch(
+                    scene.set_family_points_3d(&self.group, &self.left_points)?;
+                    scene.live().stretch(
                         &LayoutAnchor::from(&self.group),
                         2.0,
                         crate::LayoutDimension::Depth,
                         ManimRotationPivot::Point3d(SemanticVec3::ZERO),
                     )?;
-                    live.shift_family_3d(&self.group, SemanticVec3::new(0.0, 0.0, 0.25))?;
+                    scene.shift_family_3d(&self.group, SemanticVec3::new(0.0, 0.0, 0.25))?;
                     for point in &mut self.left_points {
                         point.z = point.z * 2.0 + 0.25;
                     }
                     let anchor = LayoutAnchor::from(&self.group);
-                    let extent = live.dimension_length(&anchor, crate::LayoutDimension::Depth)?;
-                    live.rescale_to_fit_with_pivot(
+                    let extent = scene
+                        .live()
+                        .dimension_length(&anchor, crate::LayoutDimension::Depth)?;
+                    scene.live().rescale_to_fit_with_pivot(
                         &anchor,
                         2.0,
                         crate::LayoutDimension::Depth,
                         true,
                         ManimRotationPivot::Point3d(SemanticVec3::ZERO),
                     )?;
-                    live.rescale_to_fit_with_pivot(
+                    scene.live().rescale_to_fit_with_pivot(
                         &anchor,
                         4.0,
                         crate::LayoutDimension::Depth,
@@ -73,23 +80,29 @@ impl LiveContinuation for FamilyRootPoints {
                     )?;
                     adjust_fitting_reference(&mut self.left_points, extent);
                     assert_eq!(
-                        live.dimension_length(&anchor, crate::LayoutDimension::Depth)?,
+                        scene
+                            .live()
+                            .dimension_length(&anchor, crate::LayoutDimension::Depth)?,
                         4.0
                     );
-                    live.append_family_points_f64(&self.vector, &self.right_points)?;
-                    live.align_path_points(
+                    scene.append_family_points_f64(&self.vector, &self.right_points)?;
+                    scene.align_path_points(
                         &LayoutAnchor::from(&self.vector),
                         &LayoutAnchor::from(&self.alignment_leaf),
                     )?;
                     let rotated = LayoutAnchor::from(&self.vector);
-                    live.rotate_layout(&rotated, 0.37, ManimRotationPivot::Point(2.0, 0.0))?;
-                    live.stretch(
+                    scene.live().rotate_layout(
+                        &rotated,
+                        0.37,
+                        ManimRotationPivot::Point(2.0, 0.0),
+                    )?;
+                    scene.live().stretch(
                         &rotated,
                         1.1234567890123,
                         crate::LayoutDimension::Width,
                         ManimRotationPivot::Point3d(SemanticVec3::new(2.0, 0.0, 0.0)),
                     )?;
-                    live.scale_layout_3d(
+                    scene.live().scale_layout_3d(
                         &rotated,
                         SemanticVec3::new(0.9, 1.1, 1.25),
                         ManimRotationPivot::Point3d(SemanticVec3::new(2.0, 0.0, 0.5)),
@@ -114,7 +127,7 @@ impl LiveContinuation for FamilyRootPoints {
             assert_eq!(self.group.member_count()?, 1);
             assert_eq!(self.vector.member_count()?, 1);
             self.stage += 1;
-            live.wait_segment(0.25).map(ContinuationStep::Await)
+            scene.live().wait_segment(0.25).map(ContinuationStep::Await)
         })();
         step.map_err(|error| error.to_string())
     }
@@ -263,14 +276,16 @@ mod tests {
         let local = scene.family(&[]).unwrap();
         scene.add_many(&[(&local).into()]).unwrap();
         let foreign = Scene::new().family(&[]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let context = session.publication_context();
-        let revision = scene.revision();
-        let mut live = scene.live(&mut session);
-        assert!(live.set_family_points_f64(&foreign, &[(0.0, 0.0)]).is_err());
-        assert!(live.clear_family_points(&foreign).is_err());
-        assert_eq!(session.publication_context(), context);
-        assert_eq!(scene.revision(), revision);
+        let mut scene = scene.into_execution().unwrap();
+        let context = scene.session().publication_context();
+        let revision = scene.scene().revision();
+        assert!(scene
+            .scene_mut()
+            .set_family_points_f64(&foreign, &[(0.0, 0.0)])
+            .is_err());
+        assert!(scene.scene_mut().clear_family_points(&foreign).is_err());
+        assert_eq!(scene.session().publication_context(), context);
+        assert_eq!(scene.scene().revision(), revision);
         assert!(local.own_object().unwrap().is_none());
     }
 }

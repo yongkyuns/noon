@@ -13,9 +13,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             1.,
         )?;
         scene.add(&source)?;
-        let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
-        let selected = live.subcurve(&source, 0.875, 0.375)?;
+        let mut running = scene.into_execution()?;
+        let selected = running.scene_mut().subcurve(&source, 0.875, 0.375)?;
+        let mut live = running.live();
         live.shift(&selected, 4., 0.)?;
         live.set_stroke_color(
             &selected,
@@ -27,11 +27,12 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let query = selected.path_query()?;
         assert_eq!(query.subpaths().len(), 1);
         assert!(!query.is_closed()?);
-        live.add(&selected)?;
+        running.scene_mut().add(&selected)?;
+        let mut live = running.live();
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(running)
     };
     build().map_err(|error| error.to_string())
 }

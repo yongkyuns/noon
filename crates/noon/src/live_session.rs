@@ -1131,13 +1131,6 @@ impl<'a> LiveSession<'a> {
         })
     }
 
-    /// Count the addressed object's own points in the current publication.
-    pub fn get_num_points(&self, mobject: &Mobject) -> Result<usize, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        crate::path_queries::effective_mobject_point_count(self.store, self.session, mobject)
-            .map_err(Into::into)
-    }
-
     /// Capture full-coordinate owned points and ordered child occurrences from
     /// this session's coherent publication, retaining recursive alias order.
     pub fn point_reduction_tree(
@@ -1145,14 +1138,6 @@ impl<'a> LiveSession<'a> {
         target: MobjectTarget<'_>,
     ) -> Result<crate::PointReductionTree, LiveSessionError> {
         crate::path_queries::effective_point_reduction_tree(self.store, self.session, target)
-            .map_err(Into::into)
-    }
-
-    pub fn point_array(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<crate::PointArrayObservation, LiveSessionError> {
-        crate::path_queries::effective_point_array(self.store, self.session, target)
             .map_err(Into::into)
     }
 

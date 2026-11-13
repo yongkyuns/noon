@@ -487,8 +487,8 @@ fn animate_rotation_interpolates_points_while_explicit_rotate_follows_an_arc() {
         let mut scene = Scene::new();
         let square = scene.square(2.0).unwrap();
         scene.add(&square).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
+        let mut running = scene.into_execution().unwrap();
+        let mut live = running.live();
         let segment = if procedural {
             live.declare_and_activate_composition(
                 &AnimationCompositionRequest::ManimRotate {
@@ -510,7 +510,10 @@ fn animate_rotation_interpolates_points_while_explicit_rotate_follows_an_arc() {
         };
         live.advance_segment_to(segment, segment.start_time() + 0.5)
             .unwrap();
-        let points = live.point_array((&square).into()).unwrap();
+        let points = running
+            .scene()
+            .effective_point_array((&square).into())
+            .unwrap();
         assert!(!points.points().is_empty());
         let radius = points
             .points()
@@ -522,7 +525,7 @@ fn animate_rotation_interpolates_points_while_explicit_rotate_follows_an_arc() {
         } else {
             assert!(radius < 1e-5, "method target midpoint radius was {radius}");
         }
-        finish(&mut live, segment);
+        finish(&mut running.live(), segment);
         assert!(
             (square.state().unwrap().transform.planar_rotation().unwrap() - std::f64::consts::PI)
                 .abs()
