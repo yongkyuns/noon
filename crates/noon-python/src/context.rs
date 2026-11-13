@@ -265,6 +265,8 @@ pub struct Context {
     pub(crate) requested_sample: Option<f64>,
     pub(crate) pending_ack: Option<noon::integration::CallbackPhaseToken>,
     pub(crate) callback_regions: u64,
+    pub(crate) callback_membership: Option<noon::integration::CallbackMembershipCollector>,
+    pub(crate) callback_geometry_sources: noon_core::GeometryResourceArena,
 }
 impl Context {
     fn new(scene: Scene) -> Self {
@@ -286,6 +288,8 @@ impl Context {
             requested_sample: None,
             pending_ack: None,
             callback_regions: 0,
+            callback_membership: None,
+            callback_geometry_sources: noon_core::GeometryResourceArena::new(),
         }
     }
     fn staged(
@@ -4387,6 +4391,7 @@ impl Context {
         self.terminal = true;
         self.segment = None;
         self.pending_ack = None;
+        self.callback_membership = None;
         self.requested_sample = None;
         Ok(())
     }
@@ -4794,6 +4799,50 @@ impl Context {
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Py<pyo3::types::PyDict>> {
         self.read_callback_impl(py, token, request)
+    }
+    fn stage_callback_provisional_geometry(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        options: &GeometryOptions,
+    ) -> PyResult<crate::callback::ProvisionalMobject> {
+        self.stage_provisional_geometry(py, token, options.options.clone())
+    }
+    fn stage_callback_provisional_shift(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        object: &crate::callback::ProvisionalMobject,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.with_provisional(py, token, object, |collector, store, local| {
+            collector.stage_provisional_shift(store, local, x, y)
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn stage_callback_provisional_fill(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        object: &crate::callback::ProvisionalMobject,
+        rgba: [f64; 4],
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.with_provisional(py, token, object, |collector, store, local| {
+            collector.stage_provisional_fill(store, local, rgba, opacity)
+        })
+    }
+    fn callback_provisional_center(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        object: &crate::callback::ProvisionalMobject,
+    ) -> PyResult<crate::callback::ProvisionalPoint> {
+        let (x, y) = self.with_provisional(py, token, object, |collector, store, local| {
+            collector.callback_provisional_center(store, local)
+        })?;
+        Ok(crate::callback::ProvisionalPoint { x, y })
     }
     fn fail_callback(
         &mut self,

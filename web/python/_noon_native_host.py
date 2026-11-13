@@ -242,6 +242,22 @@ def noonReadSemanticContinuationCallback(context, token, request):
     return _NativeCompletion(context.read_callback, token, request)
 
 
+def noonStageSemanticContinuationProvisionalGeometry(context, token, options):
+    return context.stage_callback_provisional_geometry(token, options)
+
+
+def noonStageSemanticContinuationProvisionalShift(context, token, mobject, x, y):
+    context.stage_callback_provisional_shift(token, mobject, x, y)
+
+
+def noonStageSemanticContinuationProvisionalFill(context, token, mobject, r, g, b, a, opacity):
+    context.stage_callback_provisional_fill(token, mobject, (r, g, b, a), opacity)
+
+
+def noonSemanticContinuationProvisionalCenter(context, token, mobject):
+    return context.callback_provisional_center(token, mobject)
+
+
 def noonCompleteSemanticContinuationCallback(context, token, batch):
     return _NativeCompletion(context.submit_callback, token, batch)
 
