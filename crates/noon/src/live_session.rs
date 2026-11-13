@@ -816,22 +816,6 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
-    pub fn declare_and_activate_source_matching_family_transform_to(
-        &mut self,
-        source: &MobjectFamily,
-        target_state: &MobjectFamily,
-        options: AnimationOptions,
-    ) -> Result<ExecutionSegment, LiveSessionError> {
-        self.declare_and_activate_composition(
-            &AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
-                source,
-                target_state,
-                options,
-            },
-            AnimationOptions::new(),
-        )
-    }
-
     /// Indicate one object and restore its activation-effective source state.
     pub fn declare_and_activate_indicate(
         &mut self,
@@ -876,21 +860,6 @@ impl<'a> LiveSession<'a> {
         let request = AnimationCompositionRequest::FamilyIndicate {
             target,
             indication,
-            options,
-        };
-        self.declare_and_activate_composition(&request, AnimationOptions::new())
-    }
-
-    /// Reveal one vector outline and restore its activation-effective final style.
-    pub fn declare_and_activate_draw_border_then_fill(
-        &mut self,
-        target: &Mobject,
-        outline: DrawBorderThenFillOptions,
-        options: AnimationOptions,
-    ) -> Result<ExecutionSegment, LiveSessionError> {
-        let request = AnimationCompositionRequest::DrawBorderThenFill {
-            target,
-            outline,
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
@@ -981,22 +950,6 @@ impl<'a> LiveSession<'a> {
             options,
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
-    }
-
-    pub fn declare_and_activate_text_reveal(
-        &mut self,
-        target: &Mobject,
-        reverse: bool,
-        options: AnimationOptions,
-    ) -> Result<ExecutionSegment, LiveSessionError> {
-        self.declare_and_activate_composition(
-            &AnimationCompositionRequest::TextReveal {
-                target,
-                reverse,
-                options,
-            },
-            AnimationOptions::new(),
-        )
     }
 
     pub fn declare_and_activate_family_reveal(
@@ -5736,13 +5689,16 @@ mod recursive_composition_tests {
         let mut session = scene.execution_session().unwrap();
         let mut live = scene.live(&mut session);
         let segment = live
-            .declare_and_activate_draw_border_then_fill(
-                &square,
-                DrawBorderThenFillOptions::new(0.04, Some(Color::YELLOW)),
-                AnimationOptions::new()
-                    .run_time(2.0)
-                    .rate_func(RateFunction::Linear)
-                    .introducer(true),
+            .declare_and_activate_composition(
+                &AnimationCompositionRequest::DrawBorderThenFill {
+                    target: &square,
+                    outline: DrawBorderThenFillOptions::new(0.04, Some(Color::YELLOW)),
+                    options: AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::Linear)
+                        .introducer(true),
+                },
+                AnimationOptions::new(),
             )
             .unwrap();
 

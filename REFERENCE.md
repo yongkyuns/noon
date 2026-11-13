@@ -443,7 +443,14 @@ same scene through direct Rust/WASM and the production Python worker.
 
 ### LaTeX in a scene
 
-The browser loads the optional compiler when scene source references TeX APIs such as `MathTex`, or requests TeX-backed numeric labels. Use these APIs directly from ordinary Python. See the [LaTeX lesson](web/python/examples/showcase_latex_create.py).
+The browser loads the optional compiler when a scene uses TeX APIs such as
+`MathTex` or requests TeX-backed numeric labels. Native CPython uses the
+system TeX compiler and BaKoMa TrueType outlines. Set `NOON_LATEX_FONT_DIR`
+to the BaKoMa TTF directory and `NOON_LATEX_RESOURCE_IDENTITY` to a version
+label for that compiler and font set. Noon finds `latex` and `kpsewhich`
+through `PATH` or the standard macOS TeX directory. Set
+`NOON_LATEX_EXECUTABLE` and `NOON_KPSEWHICH_EXECUTABLE` for custom locations.
+See the [LaTeX lesson](web/python/examples/showcase_latex_create.py).
 
 ### Source-declared click indication
 
