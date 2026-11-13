@@ -221,7 +221,7 @@ pub use plot_error::{
     live_coordinate_publication_failure, plot_failure, sampling_failure,
 };
 mod plot_input;
-pub use plot_input::{data_points as plot_data_points, PlotSamplingInput};
+pub use plot_input::{data_points as plot_data_points, PlotSamplingInput, RiemannInput};
 
 /// Decode the optional frontend spelling of an existing camera working profile.
 pub fn camera_color_profile(value: &str) -> Result<noon_core::ViewColorProfile, AuthoringFailure> {

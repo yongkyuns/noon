@@ -25,14 +25,33 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn live_create_path_family(
+    pub(crate) fn prepare_riemann_plan(
         &mut self,
-        paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+        axes: &noon::ManimAxes,
+        graph: &noon::Mobject,
+        options: noon::RiemannRectangleOptions,
+    ) -> Result<noon::RiemannRectanglePlan, AuthoringFailure> {
+        self.local_authoring_scene()?
+            .riemann_plan(axes, graph, options)
+            .map_err(crate::plot_error::coordinate_failure)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn publish_riemann_plan(
+        &mut self,
+        plan: &noon::RiemannRectanglePlan,
+        top: Option<&[f64]>,
+        baseline: Option<&[f64]>,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?
-            .scene_mut()
-            .path_family(paths)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .publish_riemann_plan(plan, top, baseline)
+            .map_err(|error| match error {
+                noon::CoordinateAuthoringError::Authoring(error) => {
+                    AuthoringFailure::from_scene_mutation(error, running)
+                }
+                error => crate::plot_error::coordinate_failure(error),
+            })
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -1107,7 +1107,8 @@ class Axes(_compat.Group):
                                color=(_base.BLUE, _base.GREEN), show_signed_area=True,
                                bounded_graph=None, blend=False, width_scale_factor=1.001):
         """Sample original scalar callables against one Rust-captured snapshot."""
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        _outside_callback()
+        context = _shared._path_authoring_context(self, graph, bounded_graph)
         sample = {"left": 0, "right": 1, "center": 2}.get(input_sample_type)
         if sample is None:
             raise ValueError("input_sample_type must be 'left', 'right', or 'center'")
@@ -1120,7 +1121,7 @@ class Axes(_compat.Group):
             prepare = self._semantic_family_handle.riemannSamplePlan
             prepare_args = (graph_handle,)
         else:
-            prepare = context.liveEffectiveRiemannSamplePlan
+            prepare = context.prepareRiemannPlan
             prepare_args = (self._semantic_family_handle, graph_handle)
         options = engine_call(_coordinate_options.riemann, _array(() if x_range is None else x_range),
                               float(dx), sample, float(width_scale_factor))
@@ -1147,7 +1148,7 @@ class Axes(_compat.Group):
                     baseline_values.append(float(bounded_function(float(x))))
             values = (_array(top_values), _array(baseline_values))
             handle = (engine_call(plan.publish, *values) if context is None else
-                      engine_call(context.livePublishRiemannPlan, plan, *values))
+                      engine_call(context.publishRiemannPlan, plan, *values))
         members = [_leaf(member, _compat.Rectangle) for member in engine_call(handle.directMobjects)]
         return _family(object.__new__(_compat.VGroup), handle, members)
 

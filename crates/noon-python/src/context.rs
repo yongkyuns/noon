@@ -2079,6 +2079,36 @@ impl Context {
         ))
     }
 
+    #[pyo3(name = "prepareRiemannPlan")]
+    fn prepare_riemann_plan(
+        &self,
+        axes: &crate::family::FamilyHandle,
+        graph: &MobjectHandle,
+        mut options: PyRefMut<'_, crate::riemann::RiemannOptions>,
+        bounded: &MobjectHandle,
+        has_bounded: bool,
+    ) -> PyResult<crate::riemann::RiemannPlan> {
+        self.available()?;
+        let axes = crate::riemann::axes(axes)?;
+        let options = options.take(graph, has_bounded.then_some(bounded))?;
+        self.scene
+            .riemann_plan(&axes, &graph.handle, options)
+            .map(crate::riemann::RiemannPlan)
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "publishRiemannPlan")]
+    fn publish_riemann_plan(
+        &mut self,
+        plan: &crate::riemann::RiemannPlan,
+        top: Vec<f64>,
+        baseline: Vec<f64>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        plan.publish_on_scene(&mut self.scene, &top, &baseline)
+    }
+
     #[pyo3(name = "createCoordinates")]
     fn coordinates(
         &mut self,

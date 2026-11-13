@@ -48,6 +48,22 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "riemannSamplePlan")]
+    fn riemann_sample_plan(
+        &self,
+        graph: &MobjectHandle,
+        mut options: PyRefMut<'_, crate::riemann::RiemannOptions>,
+        bounded: &MobjectHandle,
+        has_bounded: bool,
+    ) -> PyResult<crate::riemann::RiemannPlan> {
+        let axes = crate::riemann::axes(self)?;
+        let options = options.take(graph, has_bounded.then_some(bounded))?;
+        axes.riemann_plan(&graph.handle, options)
+            .map(crate::riemann::RiemannPlan)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
     #[cfg(feature = "latex")]
     #[pyo3(name = "barChart")]
     fn bar_chart(&self) -> PyResult<crate::bar_chart::BarChartHandle> {

@@ -4484,13 +4484,6 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
-        pub(crate) fn publish_live_path_family(
-            &mut self,
-            paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
-        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-            self.inner.live_create_path_family(paths)
-        }
-
         /// Reconcile wrapper IDs only after Rust has published the completion.
         #[wasm_bindgen(js_name = associatePublishedMobjects)]
         pub fn associate_published_mobjects(

@@ -815,19 +815,41 @@ impl Scene {
         Ok(self.geometry(options)?)
     }
 
-    /// Capture the axes and graph paths from one Runtime publication, prepare
-    /// every rectangle without rereading authored state, then publish the whole
-    /// family through one Scene-owned resource/semantic transaction.
+    /// Prepare one Riemann snapshot from authored or currently published paths.
+    /// Host callables run after capture and before `publish_riemann_plan`.
+    pub fn riemann_plan(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_riemann_plan(axes, graph, options);
+        }
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
+        Ok(axes.riemann_plan(graph, options)?.for_scene(self.root()))
+    }
+
+    /// Publish all rectangles from a snapshot prepared by this Scene.
+    pub fn publish_riemann_plan(
+        &mut self,
+        plan: &RiemannRectanglePlan,
+        top_values: Option<&[f64]>,
+        baseline_values: Option<&[f64]>,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        plan.require_scene(self)?;
+        Ok(self.path_family(plan.paths(top_values, baseline_values)?)?)
+    }
+
+    /// Materialize rectangles from the current Runtime publication.
     pub fn effective_riemann_rectangles(
         &mut self,
         axes: &ManimAxes,
         graph: &Mobject,
         options: RiemannRectangleOptions,
     ) -> Result<MobjectFamily, CoordinateAuthoringError> {
-        let paths = self
-            .effective_riemann_plan(axes, graph, options)?
-            .paths(None, None)?;
-        self.path_family(paths).map_err(Into::into)
+        let plan = self.effective_riemann_plan(axes, graph, options)?;
+        self.publish_riemann_plan(&plan, None, None)
     }
 
     /// Immutable effective source snapshot for exact scalar callback evaluation.
@@ -837,34 +859,25 @@ impl Scene {
         graph: &Mobject,
         options: RiemannRectangleOptions,
     ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
-            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
-        {
-            return Err(AuthoringError::ForeignStore.into());
-        }
+        let store = self.integration_store();
+        crate::MobjectTarget::from(graph).require_store(store)?;
+        let execution = self.coordinate_query_execution(axes.family())?;
+        let mut query = |object: &Mobject| coordinate_path_query(store, execution, object);
+        let frame = axes.snapshot_with(&mut query)?;
+        let graph_path = query(graph)?;
         let bounded = options
             .bounded_graph
-            .map(|id| Mobject::from_node(Rc::clone(self.integration_store()), id))
+            .map(|id| Mobject::from_node(Rc::clone(store), id))
             .transpose()?;
-        if bounded
-            .as_ref()
-            .is_some_and(|bound| !Rc::ptr_eq(self.integration_store(), bound.integration_store()))
-        {
-            return Err(AuthoringError::ForeignStore.into());
-        }
-        let frame = self.effective_axes_frame(axes)?;
-        let graph_path = self.effective_path_query(graph)?;
-        let bounded_path = bounded
-            .as_ref()
-            .map(|bound| self.effective_path_query(bound))
-            .transpose()?;
-        RiemannRectanglePlan::from_snapshot(
+        let bounded_path = bounded.as_ref().map(query).transpose()?;
+        Ok(RiemannRectanglePlan::from_snapshot(
             frame,
             graph,
             &graph_path,
             bounded.as_ref().zip(bounded_path.as_ref()),
             options,
-        )
+        )?
+        .for_scene(self.root()))
     }
 }
 
@@ -927,20 +940,6 @@ impl ManimGeometryOptions {
             mapped.push(frame.coords_to_point(x, y)?);
         }
         Ok(Self::sampled_plot(&mapped)?)
-    }
-}
-
-impl ManimAxes {
-    /// Prepare rectangle paths from already captured axes and graph snapshots.
-    /// Publication remains owned by `Scene` or `LiveSession`.
-    pub fn riemann_rectangle_paths(
-        frame: AxesFrame,
-        graph: &Mobject,
-        graph_path: &PathQuery,
-        bounded: Option<(&Mobject, &PathQuery)>,
-        options: RiemannRectangleOptions,
-    ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
-        area::prepare_riemann_paths(frame, graph, graph_path, bounded, options)
     }
 }
 

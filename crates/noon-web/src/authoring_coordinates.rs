@@ -8,7 +8,6 @@ use noon::{
     AxesFrame, CoordinateAuthoringError, CoordinateTicks, ManimAxes, ManimAxesOptions,
     ManimGeometryOptions, ManimNumberLine, ManimNumberLineOptions, ManimThreeDAxes,
     ManimThreeDAxesFrame, ManimThreeDAxesOptions, NumberLineFrame, PlotSamplingOptions,
-    RiemannRectangleOptions, RiemannSample,
 };
 use noon_core::SemanticNumberLineScale;
 use wasm_bindgen::prelude::*;
