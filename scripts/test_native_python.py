@@ -276,6 +276,31 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_family_root_style_uses_the_same_scene_before_and_after_wait(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        leaf = Square().set_fill(WHITE, opacity=1)
+        family = VGroup(leaf)
+        detached = VGroup()
+        detached.set_stroke(RED, width=3, family=False)
+        assert abs(detached.get_stroke_width() - 3) < 1e-5
+        self.add(family)
+        for width in (4, 8):
+            family.set_fill(RED, 0.3, family=False)
+            family.set_stroke(BLUE, width=width, opacity=0.4, family=False)
+            family.set_background_stroke(GREEN, width=2, opacity=0.5, family=False)
+            family.set_cap_style(CapStyleType.ROUND)
+            assert abs(family.get_fill_opacity() - 0.3) < 1e-6
+            assert abs(family.get_stroke_width() - width) < 1e-5
+            assert abs(family.get_stroke_width(background=True) - 2) < 1e-5
+            assert family.cap_style is CapStyleType.ROUND
+            assert leaf.get_fill_opacity() == 1
+            self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_native_style_edits_preserve_replay(self):
         source = """from noon import *
 class Demo(Scene):

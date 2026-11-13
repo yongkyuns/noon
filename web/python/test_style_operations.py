@@ -536,7 +536,7 @@ class StyleOperationsTests(unittest.TestCase):
 
         obj = identity_only_wrapper(compat.VMobject)
         detached = SimpleNamespace(setStrokeCap=Mock(), strokeCap="square")
-        with patch.object(handles, "_style_target", return_value=(detached, None, "")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(detached, None, "")):
             self.assertIs(obj.set_cap_style(cap.SQUARE), obj)
             self.assertIs(obj.cap_style, cap.SQUARE)
             obj.cap_style = cap.ROUND
@@ -546,29 +546,29 @@ class StyleOperationsTests(unittest.TestCase):
         )
 
         live_context = SimpleNamespace(
-            liveSetStrokeCap=Mock(), queryMobjectStrokeCap=Mock(return_value="butt")
+            setStrokeCap=Mock(), queryMobjectStrokeCap=Mock(return_value="butt")
         )
-        with patch.object(handles, "_style_target", return_value=(detached, live_context, "")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(detached, live_context, "")):
             self.assertIs(obj.set_cap_style(cap.BUTT), obj)
             self.assertIs(obj.cap_style, cap.BUTT)
-        live_context.liveSetStrokeCap.assert_called_once_with(detached, "butt")
+        live_context.setStrokeCap.assert_called_once_with(detached, "butt")
         live_context.queryMobjectStrokeCap.assert_called_once_with(detached)
 
         family = identity_only_wrapper(compat.VGroup)
         family_handle = SimpleNamespace(
             setStrokeCap=Mock(), ownStrokeCap=Mock(return_value="butt")
         )
-        with patch.object(handles, "_style_target", return_value=(family_handle, None, "Family")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(family_handle, None, "Family")):
             self.assertIs(family.set_cap_style(cap.BUTT), family)
             self.assertIs(family.cap_style, cap.BUTT)
         family_handle.setStrokeCap.assert_called_once_with("butt")
 
-        family_context = SimpleNamespace(liveSetFamilyOwnStrokeCap=Mock())
+        family_context = SimpleNamespace(setFamilyOwnStrokeCap=Mock())
         with patch.object(
-            handles, "_style_target", return_value=(family_handle, family_context, "Family")
+            handles, "_paint_authoring_target", return_value=(family_handle, family_context, "Family")
         ):
             self.assertIs(family.set_cap_style(cap.ROUND), family)
-        family_context.liveSetFamilyOwnStrokeCap.assert_called_once_with(family_handle, "round")
+        family_context.setFamilyOwnStrokeCap.assert_called_once_with(family_handle, "round")
 
     def test_none_background_image_helpers_restore_white_through_shared_color(self):
         obj = identity_only_wrapper(compat.VMobject)

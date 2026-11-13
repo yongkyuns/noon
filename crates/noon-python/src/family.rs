@@ -29,6 +29,13 @@ impl From<noon::Color> for ColorObservation {
     }
 }
 
+fn solid_color(paint: noon_core::SemanticPaint) -> Option<ColorObservation> {
+    match paint {
+        noon_core::SemanticPaint::Solid(color) => Some(color.into()),
+        _ => None,
+    }
+}
+
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 #[derive(Clone)]
 pub struct FamilyHandle {
@@ -81,6 +88,183 @@ impl FamilyHandle {
             noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
         self.family
             .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setOwnStyle", signature = (fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_own_style(
+        &self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.family.set_own_style(update).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setOwnStyleWithBackgroundStroke", signature = (fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity, background_stroke_color_enabled, background_stroke_red, background_stroke_green, background_stroke_blue, background_stroke_alpha, background_stroke_width, background_stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_own_style_with_background_stroke(
+        &self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_color_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let background_stroke_color = noon::integration::family_color(
+            background_stroke_color_enabled,
+            background_stroke_red,
+            background_stroke_green,
+            background_stroke_blue,
+            background_stroke_alpha,
+        )
+        .map_err(engine_error)?;
+        self.family
+            .set_own_style_with_background_stroke(
+                update,
+                background_stroke_color,
+                background_stroke_width,
+                background_stroke_opacity,
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setOwnOpacity")]
+    fn set_own_opacity(&self, opacity: f64) -> PyResult<()> {
+        self.family.set_own_opacity(opacity).map_err(engine_error)
+    }
+
+    #[pyo3(name = "fadeOwn")]
+    fn fade_own(&self, darkness: f64) -> PyResult<()> {
+        self.family.fade_own(darkness).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setStrokeCap")]
+    fn set_stroke_cap(&self, cap: &str) -> PyResult<()> {
+        self.family.set_own_stroke_cap(cap).map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownFillColor")]
+    fn own_fill_color(&self) -> PyResult<Option<ColorObservation>> {
+        let style = self.family.own_style().map_err(engine_error)?;
+        Ok(style.fill.and_then(solid_color))
+    }
+
+    #[pyo3(name = "ownStrokeColor")]
+    fn own_stroke_color(&self) -> PyResult<Option<ColorObservation>> {
+        let style = self.family.own_style().map_err(engine_error)?;
+        Ok(style.stroke.and_then(solid_color))
+    }
+
+    #[pyo3(name = "ownFillOpacity")]
+    fn own_fill_opacity(&self) -> PyResult<f64> {
+        self.family
+            .own_style()
+            .map(|style| style.fill_opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownStrokeOpacity")]
+    fn own_stroke_opacity(&self) -> PyResult<f64> {
+        self.family
+            .own_style()
+            .map(|style| style.stroke_opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownStrokeWidth")]
+    fn own_stroke_width(&self) -> PyResult<f64> {
+        self.family
+            .own_style()
+            .map(|style| style.stroke_width)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownBackgroundStrokeColor")]
+    fn own_background_stroke_color(&self) -> PyResult<ColorObservation> {
+        self.family
+            .own_background_stroke_color()
+            .map(Into::into)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownBackgroundStrokeOpacity")]
+    fn own_background_stroke_opacity(&self) -> PyResult<f64> {
+        self.family
+            .own_background_stroke_opacity()
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownBackgroundStrokeWidth")]
+    fn own_background_stroke_width(&self) -> PyResult<f64> {
+        self.family
+            .own_background_stroke_width()
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownStrokeCap")]
+    fn own_stroke_cap(&self) -> PyResult<&'static str> {
+        self.family
+            .own_stroke_cap()
+            .map(|cap| cap.as_str())
             .map_err(engine_error)
     }
 

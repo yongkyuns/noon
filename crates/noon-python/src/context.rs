@@ -1770,6 +1770,161 @@ impl Context {
         Ok(())
     }
 
+    #[pyo3(name = "setFamilyOwnStyle", signature = (source, fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_family_own_style(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.set_family_own_style(&source.family, update))
+    }
+
+    #[pyo3(name = "setFamilyOwnStyleWithBackgroundStroke", signature = (source, fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity, background_stroke_color_enabled, background_stroke_red, background_stroke_green, background_stroke_blue, background_stroke_alpha, background_stroke_width, background_stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_family_own_style_with_background_stroke(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_color_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let background_stroke_color = noon::integration::family_color(
+            background_stroke_color_enabled,
+            background_stroke_red,
+            background_stroke_green,
+            background_stroke_blue,
+            background_stroke_alpha,
+        )
+        .map_err(engine_error)?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| {
+            scene.set_family_own_style_with_background_stroke(
+                &source.family,
+                update,
+                background_stroke_color,
+                background_stroke_width,
+                background_stroke_opacity,
+            )
+        })
+    }
+
+    #[pyo3(name = "setFamilyOwnOpacity")]
+    fn set_family_own_opacity(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        opacity: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.set_family_own_opacity(&source.family, opacity))
+    }
+
+    #[pyo3(name = "fadeFamilyOwn")]
+    fn fade_family_own(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        darkness: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.fade_family_own(&source.family, darkness))
+    }
+
+    #[pyo3(name = "setFamilyOwnStrokeCap")]
+    fn set_family_own_stroke_cap(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        cap: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.set_family_own_stroke_cap(&source.family, cap))
+    }
+
+    #[pyo3(name = "setStrokeCap")]
+    fn set_stroke_cap(&mut self, handle: &MobjectHandle, cap: &str) -> PyResult<()> {
+        self.available()?;
+        self.same_store(handle)?;
+        self.edit_scene(|scene| scene.set_stroke_cap(&handle.handle, cap))
+    }
+
+    #[pyo3(name = "queryMobjectStrokeCap")]
+    fn query_stroke_cap(&self, target: &MobjectHandle) -> PyResult<&'static str> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let cap = if self.has_execution() {
+            self.scene.effective_stroke_cap(&target.handle)
+        } else {
+            target.handle.stroke_cap()
+        };
+        cap.map(|cap| cap.as_str()).map_err(engine_error)
+    }
+
     #[pyo3(name = "liveSetFamilyFade")]
     fn fade_family(&mut self, target: &crate::family::FamilyHandle, darkness: f64) -> PyResult<()> {
         self.available()?;

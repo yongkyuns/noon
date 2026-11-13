@@ -1230,6 +1230,13 @@ impl MobjectHandle {
     pub fn set_stroke_join(&mut self, join: &str) -> Result<(), PyErr> {
         self.handle.set_stroke_join(join).map_err(engine_error)
     }
+    #[getter(strokeCap)]
+    fn stroke_cap(&self) -> PyResult<&'static str> {
+        self.handle
+            .stroke_cap()
+            .map(|cap| cap.as_str())
+            .map_err(engine_error)
+    }
     #[pyo3(name = "setStrokeCap")]
     pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), PyErr> {
         self.handle.set_stroke_cap(cap).map_err(engine_error)
