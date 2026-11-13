@@ -60,7 +60,6 @@ impl LiveContinuation for ImageGlow {
                     .shift_3d(&target, crate::SemanticVec3::new(0.0, 0.6, 0.0))
                     .map_err(message)?;
                 scene
-                    .live()
                     .rotate(&target, std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene
@@ -83,7 +82,6 @@ impl LiveContinuation for ImageGlow {
                     .shift_3d(&target, crate::SemanticVec3::new(0.0, -0.6, 0.0))
                     .map_err(message)?;
                 scene
-                    .live()
                     .rotate(&target, -std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene

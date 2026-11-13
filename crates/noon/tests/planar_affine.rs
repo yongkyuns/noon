@@ -65,7 +65,7 @@ fn family_flip_visits_aliases_once_and_invalid_or_foreign_edits_are_atomic() {
     let mut session = scene.into_execution().unwrap();
     let anchor = LayoutAnchor::from(&family);
     let result = session
-        .live()
+        .scene_mut()
         .flip_layout(&anchor, SemanticVec3::new(0., 1., 0.), Pivot::Center)
         .unwrap();
     // Two unique leaves each change their affine fields, never a duplicated alias write.
@@ -86,14 +86,14 @@ fn family_flip_visits_aliases_once_and_invalid_or_foreign_edits_are_atomic() {
         SemanticVec3::new(f64::NAN, 1., 0.),
     ] {
         assert!(session
-            .live()
+            .scene_mut()
             .flip_layout(&anchor, axis, Pivot::Center)
             .is_err());
         assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
     }
     let foreign = Scene::new().square(1.).unwrap();
     assert!(session
-        .live()
+        .scene_mut()
         .rotate_layout(&LayoutAnchor::from(&foreign), 1., Pivot::Center)
         .is_err());
     assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
@@ -106,19 +106,19 @@ fn live_offset_line_rotation_resolves_center_edge_and_origin_in_shared_rust() {
     scene.add(&line).unwrap();
     let mut session = scene.into_execution().unwrap();
     let anchor = LayoutAnchor::from(&line);
-    session.live().rotate(&line, FRAC_PI_2).unwrap();
+    session.scene_mut().rotate(&line, FRAC_PI_2).unwrap();
     let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (2., -1.));
     close(endpoints.end, (2., 1.));
     session
-        .live()
+        .scene_mut()
         .rotate_layout(&anchor, FRAC_PI_2, Pivot::Point(0., 0.))
         .unwrap();
     let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (1., 2.));
     close(endpoints.end, (-1., 2.));
     session
-        .live()
+        .scene_mut()
         .rotate_layout(&anchor, FRAC_PI_2, Pivot::Edge(1., 0.))
         .unwrap();
     let endpoints = session.scene().effective_line_endpoints(&line).unwrap();

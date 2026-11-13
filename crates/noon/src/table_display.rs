@@ -2324,11 +2324,10 @@ mod tests {
         let store = Rc::clone(scene.integration_store());
         let first = circle(&store, 0.5);
         let second = circle(&store, 1.0);
-        let mut execution = scene.execution_session().unwrap();
+        let mut execution = scene.into_execution().unwrap();
         let table = {
-            let mut live = scene.live(&mut execution);
             let table = MobjectTable::from_rows_in_live_session(
-                &mut live,
+                &mut execution.live(),
                 vec![vec![first, second]],
                 TableOptions {
                     h_buff: 1.25,
@@ -2338,7 +2337,10 @@ mod tests {
             )
             .unwrap()
             .into_table();
-            live.scale_family(table.family(), 0.8, 0.8).unwrap();
+            execution
+                .scene_mut()
+                .scale_family(table.family(), 0.8, 0.8)
+                .unwrap();
             table
         };
         let alias = Table::from_family(table.family().clone()).unwrap();

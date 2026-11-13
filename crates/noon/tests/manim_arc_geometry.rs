@@ -218,7 +218,7 @@ fn arc_family_and_live_layout_share_anchor_centers_and_handle_extents() {
     close64(initial.center.0, family.center.0);
     close64(initial.width, family.width);
     session
-        .live()
+        .scene_mut()
         .rescale_to_fit(&(&group).into(), 2., noon::LayoutDimension::Width, false)
         .unwrap();
     let after = session.scene().effective_family_layout(&group).unwrap();

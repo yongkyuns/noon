@@ -88,7 +88,6 @@ impl LiveContinuation for MovingZoomedSceneAround {
                 }
                 let saved_display = scene.target_editor(&self.display).map_err(message)?;
                 scene
-                    .live()
                     .replace_layout(
                         &LayoutAnchor::from(&self.display),
                         &LayoutAnchor::from(&self.frame),
@@ -159,12 +158,10 @@ impl LiveContinuation for MovingZoomedSceneAround {
             3 => {
                 let frame_target = scene.target_editor(&self.frame).map_err(message)?;
                 scene
-                    .live()
                     .manim_scale(&frame_target, 0.5, 1.5)
                     .map_err(message)?;
                 let display_target = scene.target_editor(&self.display).map_err(message)?;
                 scene
-                    .live()
                     .manim_scale(&display_target, 0.5, 1.5)
                     .map_err(message)?;
                 let options = smooth(STEP_DURATION);
@@ -214,10 +211,7 @@ impl LiveContinuation for MovingZoomedSceneAround {
             }
             5 => {
                 let target = scene.target_editor(&self.display).map_err(message)?;
-                scene
-                    .live()
-                    .manim_scale(&target, 2.0, 2.0)
-                    .map_err(message)?;
+                scene.manim_scale(&target, 2.0, 2.0).map_err(message)?;
                 self.stage = 6;
                 scene
                     .live()

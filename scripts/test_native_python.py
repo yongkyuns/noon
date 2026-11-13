@@ -29,6 +29,8 @@ class NativePythonTests(unittest.TestCase):
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
                      "showcase_glass_lens", "showcase_camera_follows_path",
                      "ordinary_family_arrangement", "top_level_family_arrangement", "ordinary_family_grid",
+                     "ordinary_planar_affine", "ordinary_dimension_fitting",
+                     "ordinary_circle_surround", "ordinary_family_replacement",
                      "tutorial_positioning", "tutorial_composition", "ordinary_value_tracker_continuation",
                      "ordinary_mixed_scalar_composition", "tutorial_value_tracker",
                      "manim_example_grow_from_point", "manim_example_grow_from_edge",

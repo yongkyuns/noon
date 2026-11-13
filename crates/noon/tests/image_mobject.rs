@@ -75,7 +75,7 @@ fn image_sizing_layout_copy_and_compilation_share_pixels() -> TestResult {
             session.scene().effective_layout(&a)?.width
         );
         session
-            .live()
+            .scene_mut()
             .rescale_to_fit(&anchor, f64::NAN, LayoutDimension::Depth, false)?;
     }
     assert_eq!(session.scene().revision(), revision);

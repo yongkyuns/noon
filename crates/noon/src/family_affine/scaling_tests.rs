@@ -17,15 +17,9 @@ fn points(value: &serde_json::Value) -> Vec<SemanticVec3> {
         .collect()
 }
 
-fn compare(
-    scene: &Scene,
-    borrowed: Option<&crate::ExecutionSession>,
-    leaves: &[Mobject],
-    expected: &serde_json::Value,
-    context: &str,
-) {
+fn compare(scene: &Scene, leaves: &[Mobject], expected: &serde_json::Value, context: &str) {
     for (leaf, expected) in leaves.iter().zip(expected.as_array().unwrap()) {
-        let query = if let Some(execution) = borrowed.or_else(|| scene.running_execution()) {
+        let query = if let Some(execution) = scene.running_execution() {
             crate::path_queries::effective_path_query(scene.integration_store(), execution, leaf)
                 .unwrap()
         } else {
@@ -99,12 +93,10 @@ fn generic_scale_xyz_matches_ce_in_all_native_hosts() {
             scene.add(&unrelated).unwrap();
             let untouched = unrelated.state().unwrap();
             let ids = leaves.iter().map(Mobject::node_id).collect::<Vec<_>>();
-            let mut borrowed = None;
+
             if mode == 1 {
                 let execution = scene.execution_session().unwrap();
                 scene.install_execution(execution);
-            } else if mode == 2 {
-                borrowed = Some(scene.execution_session().unwrap());
             }
             let delta = SemanticVec3::new(1.5, -2.5, 3.125);
             let angle = case["spec"]["angle"].as_f64().unwrap();
@@ -121,50 +113,18 @@ fn generic_scale_xyz_matches_ce_in_all_native_hosts() {
                 }
             } else {
                 if let Some(family) = &family {
-                    if let Some(execution) = borrowed.as_mut() {
-                        crate::family_layout::publish_shift_family(
-                            scene.integration_store(),
-                            scene.root(),
-                            execution,
-                            family,
-                            delta,
-                        )
-                        .unwrap();
-                    } else {
-                        scene.shift_family_3d(family, delta).unwrap();
-                    }
+                    scene.shift_family_3d(family, delta).unwrap();
                 } else {
-                    if let Some(execution) = borrowed.as_mut() {
-                        crate::family_layout::publish_shift_root(
-                            scene.integration_store(),
-                            scene.root(),
-                            execution,
-                            leaves[0].node_id(),
-                            delta,
-                        )
-                        .unwrap();
-                    } else {
-                        scene.shift_3d(&leaves[0], delta).unwrap();
-                    }
+                    scene.shift_3d(&leaves[0], delta).unwrap();
                 }
-                let mut live = if let Some(execution) = borrowed.as_mut() {
-                    scene.live(execution)
-                } else {
-                    scene.owned_live()
-                };
                 if angle != 0. {
-                    live.rotate_layout(&anchor, angle, ManimRotationPivot::Point(0.25, -0.75))
+                    scene
+                        .rotate_layout(&anchor, angle, ManimRotationPivot::Point(0.25, -0.75))
                         .unwrap();
                 }
             }
             let context = format!("mode={mode},spec={}", case["spec"]);
-            compare(
-                &scene,
-                borrowed.as_ref(),
-                &leaves,
-                &case["beforeXYZ"],
-                &context,
-            );
+            compare(&scene, &leaves, &case["beforeXYZ"], &context);
             let pivot = match case["spec"]["pivot"].as_str().unwrap() {
                 "center" => ManimRotationPivot::Center,
                 "point" => ManimRotationPivot::Point3d(SemanticVec3::new(
@@ -191,20 +151,14 @@ fn generic_scale_xyz_matches_ce_in_all_native_hosts() {
                 .borrow()
                 .geometry_resources()
                 .len();
-            let publication = borrowed
-                .as_ref()
-                .or_else(|| scene.running_execution())
+            let publication = scene
+                .running_execution()
                 .map(|execution| execution.publication_context());
             let nodes = scene.integration_store().borrow().len();
             let rejected = if mode == 0 {
                 anchor.scale_3d(factors, pivot).is_err()
             } else {
-                let mut live = if let Some(execution) = borrowed.as_mut() {
-                    scene.live(execution)
-                } else {
-                    scene.owned_live()
-                };
-                live.scale_layout_3d(&anchor, factors, pivot).is_err()
+                scene.scale_layout_3d(&anchor, factors, pivot).is_err()
             };
             assert_eq!(rejected, case["outcome"]["kind"] == "raised", "{context}");
             if rejected {
@@ -227,21 +181,14 @@ fn generic_scale_xyz_matches_ce_in_all_native_hosts() {
                     "{context}"
                 );
                 assert_eq!(
-                    borrowed
-                        .as_ref()
-                        .or_else(|| scene.running_execution())
+                    scene
+                        .running_execution()
                         .map(|execution| execution.publication_context()),
                     publication,
                     "{context}"
                 );
             }
-            compare(
-                &scene,
-                borrowed.as_ref(),
-                &leaves,
-                &case["pointsXYZ"],
-                &context,
-            );
+            compare(&scene, &leaves, &case["pointsXYZ"], &context);
             assert_eq!(scene.integration_store().borrow().len(), nodes);
             assert_eq!(leaves.iter().map(Mobject::node_id).collect::<Vec<_>>(), ids);
             assert_eq!(unrelated.state().unwrap(), untouched);

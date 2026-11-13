@@ -48,7 +48,6 @@ impl LiveContinuation for RasterImage {
                 let target = scene.target_editor(&self.image).map_err(message)?;
                 scene.set_translation(&target, 0.0, 0.0).map_err(message)?;
                 scene
-                    .live()
                     .rotate(&target, std::f64::consts::FRAC_PI_4)
                     .map_err(message)?;
                 scene.scale(&target, 0.75, 0.75).map_err(message)?;

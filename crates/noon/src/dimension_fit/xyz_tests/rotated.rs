@@ -82,12 +82,10 @@ fn rotated_xyz_fitting_matches_ce_through_all_native_hosts() {
                 .iter()
                 .map(crate::Mobject::node_id)
                 .collect::<Vec<_>>();
-            let mut borrowed = None;
+
             if mode == 1 {
                 let execution = scene.execution_session().unwrap();
                 scene.install_execution(execution);
-            } else if mode == 2 {
-                borrowed = Some(scene.execution_session().unwrap());
             }
             let angle = case["spec"]["angle"].as_f64().unwrap();
             let delta = SemanticVec3::new(1.5, -2.5, 3.125);
@@ -106,61 +104,27 @@ fn rotated_xyz_fitting_matches_ce_through_all_native_hosts() {
                 }
                 anchor.rotate(angle, Pivot::Point(0.25, -0.75)).unwrap();
             } else {
-                let mut live = if let Some(execution) = borrowed.as_mut() {
-                    scene.live(execution)
-                } else {
-                    scene.owned_live()
-                };
-                live.stretch(
-                    &anchor,
-                    2.,
-                    LayoutDimension::Depth,
-                    Pivot::Point3d(SemanticVec3::ZERO),
-                )
-                .unwrap();
+                scene
+                    .stretch(
+                        &anchor,
+                        2.,
+                        LayoutDimension::Depth,
+                        Pivot::Point3d(SemanticVec3::ZERO),
+                    )
+                    .unwrap();
                 if let Some(family) = &family {
-                    if let Some(execution) = borrowed.as_mut() {
-                        crate::family_layout::publish_shift_family(
-                            scene.integration_store(),
-                            scene.root(),
-                            execution,
-                            family,
-                            delta,
-                        )
-                        .unwrap();
-                    } else {
-                        scene.shift_family_3d(family, delta).unwrap();
-                    }
+                    scene.shift_family_3d(family, delta).unwrap();
                 } else {
-                    if let Some(execution) = borrowed.as_mut() {
-                        crate::family_layout::publish_shift_root(
-                            scene.integration_store(),
-                            scene.root(),
-                            execution,
-                            leaves[0].node_id(),
-                            delta,
-                        )
-                        .unwrap();
-                    } else {
-                        scene.shift_3d(&leaves[0], delta).unwrap();
-                    }
+                    scene.shift_3d(&leaves[0], delta).unwrap();
                 }
-                let mut live = if let Some(execution) = borrowed.as_mut() {
-                    scene.live(execution)
-                } else {
-                    scene.owned_live()
-                };
-                live.rotate_layout(&anchor, angle, Pivot::Point(0.25, -0.75))
+                scene
+                    .rotate_layout(&anchor, angle, Pivot::Point(0.25, -0.75))
                     .unwrap();
             }
             let context = format!("mode={mode},spec={}", case["spec"]);
             for (index, leaf) in leaves.iter().enumerate() {
                 compare(
-                    observe(
-                        &scene,
-                        borrowed.as_ref().or_else(|| scene.running_execution()),
-                        leaf,
-                    ),
+                    observe(&scene, scene.running_execution(), leaf),
                     &case["beforeXYZ"][index],
                     &context,
                 );
@@ -184,21 +148,13 @@ fn rotated_xyz_fitting_matches_ce_through_all_native_hosts() {
                     .rescale_to_fit_with_pivot(length, dimension, stretch, pivot)
                     .unwrap();
             } else {
-                let mut live = if let Some(execution) = borrowed.as_mut() {
-                    scene.live(execution)
-                } else {
-                    scene.owned_live()
-                };
-                live.rescale_to_fit_with_pivot(&anchor, length, dimension, stretch, pivot)
+                scene
+                    .rescale_to_fit_with_pivot(&anchor, length, dimension, stretch, pivot)
                     .unwrap();
             }
             for (index, leaf) in leaves.iter().enumerate() {
                 compare(
-                    observe(
-                        &scene,
-                        borrowed.as_ref().or_else(|| scene.running_execution()),
-                        leaf,
-                    ),
+                    observe(&scene, scene.running_execution(), leaf),
                     &case["pointsXYZ"][index],
                     &context,
                 );
@@ -229,20 +185,14 @@ fn rotated_xyz_planar_command_baking_matches_actual_ce_precision() {
         line.rotate_with_pivot(0.37, Pivot::Point(0., 0.)).unwrap();
         scene.add(&line).unwrap();
         let anchor = LayoutAnchor::from(&line);
-        let mut borrowed = None;
+
         if mode == 1 {
             let execution = scene.execution_session().unwrap();
             scene.install_execution(execution);
-        } else if mode == 2 {
-            borrowed = Some(scene.execution_session().unwrap());
         }
         let context = format!("planar command mode={mode}");
         compare(
-            observe(
-                &scene,
-                borrowed.as_ref().or_else(|| scene.running_execution()),
-                &line,
-            ),
+            observe(&scene, scene.running_execution(), &line),
             &reference["beforeXYZ"],
             &context,
         );
@@ -253,20 +203,12 @@ fn rotated_xyz_planar_command_baking_matches_actual_ce_precision() {
                 .rescale_to_fit_with_pivot(length, LayoutDimension::Width, true, pivot)
                 .unwrap();
         } else {
-            let mut live = if let Some(execution) = borrowed.as_mut() {
-                scene.live(execution)
-            } else {
-                scene.owned_live()
-            };
-            live.rescale_to_fit_with_pivot(&anchor, length, LayoutDimension::Width, true, pivot)
+            scene
+                .rescale_to_fit_with_pivot(&anchor, length, LayoutDimension::Width, true, pivot)
                 .unwrap();
         }
         compare(
-            observe(
-                &scene,
-                borrowed.as_ref().or_else(|| scene.running_execution()),
-                &line,
-            ),
+            observe(&scene, scene.running_execution(), &line),
             &reference["pointsXYZ"],
             &context,
         );

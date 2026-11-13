@@ -70,17 +70,17 @@ fn aliased_family_stretch_is_one_atomic_publication_and_keeps_shared_pivot() {
     scene.add_many(&[(&family).into()]).unwrap();
     let b_content = b.state().unwrap().content;
     let revision = scene.revision();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
         .stretch(&(&family).into(), 2., Width, Pivot::Point(0., 0.))
         .unwrap();
     near(a.center().unwrap(), (-2., 0.));
     near(b.center().unwrap(), (2., 0.));
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_eq!(b.state().unwrap().content, b_content);
-    assert_eq!(session.frame().objects.len(), 2);
-    assert_eq!(session.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.session().frame().objects.len(), 2);
+    assert_eq!(session.session().last_patch_stats().full_seeks, 0);
 }
 
 #[test]

@@ -316,7 +316,7 @@ fn live_edge_placement_observes_effective_target_and_publishes_once() {
     execution.scene_mut().set_value(&tracker, 2.0).unwrap();
     let revision = execution.scene().revision();
     let result = execution
-        .live()
+        .scene_mut()
         .next_layout_to_edge_in_frame(
             &source,
             &target_anchor,

@@ -151,7 +151,7 @@ fn live_replacement_uses_completed_effective_bounds_and_preserves_other_objects(
     session.live().advance_segment_to(segment, 1.0).unwrap();
     let before = session.live().effective(&target).unwrap();
     assert!(session
-        .live()
+        .scene_mut()
         .replace_layout(&(&target).into(), &(&family).into(), Width, false)
         .is_err());
     assert_eq!(session.live().effective(&target).unwrap(), before);
@@ -162,7 +162,7 @@ fn live_replacement_uses_completed_effective_bounds_and_preserves_other_objects(
     session.live().complete_segment(segment).unwrap();
     let before_unrelated = session.live().effective(&unrelated).unwrap();
     session
-        .live()
+        .scene_mut()
         .replace_layout(&(&family).into(), &(&target).into(), Width, true)
         .unwrap();
     let source_bounds = session.scene().effective_family_layout(&family).unwrap();

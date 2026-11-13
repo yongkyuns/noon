@@ -24,48 +24,48 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         LayoutAnchor::from(&family).scale(1.25, 1.25, Pivot::Point(0., 0.))?;
         scene.add_many(&[(&line).into(), (&other).into(), (&family).into()])?;
         let mut session = scene.into_execution()?;
-        session.live().manim_scale(&line, 0.8, 0.8)?;
+        session.scene_mut().manim_scale(&line, 0.8, 0.8)?;
         session
-            .live()
+            .scene_mut()
             .manim_scale_about_point(&other, 0.8, 0.8, 2., 1.)?;
-        session.live().scale_layout(
+        session.scene_mut().scale_layout(
             &LayoutAnchor::from(&family),
             1.2,
             1.2,
             Pivot::Edge(-1., 0.),
         )?;
-        session.live().rescale_to_fit_with_pivot(
+        session.scene_mut().rescale_to_fit_with_pivot(
             &LayoutAnchor::from(&line),
             2.,
             crate::LayoutDimension::Width,
             false,
             Pivot::Edge(-1., 0.),
         )?;
-        session.live().match_dim_size_with_pivot(
+        session.scene_mut().match_dim_size_with_pivot(
             &LayoutAnchor::from(&other),
             &LayoutAnchor::from(&line),
             crate::LayoutDimension::Height,
             false,
             Pivot::Point(2., 1.),
         )?;
-        session.live().rescale_to_fit_with_pivot(
+        session.scene_mut().rescale_to_fit_with_pivot(
             &LayoutAnchor::from(&family),
             4.,
             crate::LayoutDimension::Width,
             false,
             Pivot::Edge(1., 0.),
         )?;
-        session.live().stretch(
+        session.scene_mut().stretch(
             &LayoutAnchor::from(&family),
             0.8,
             crate::LayoutDimension::Height,
             Pivot::Point(0., 0.),
         )?;
         session
-            .live()
+            .scene_mut()
             .rotate_layout(&LayoutAnchor::from(&b), 0.27, Pivot::Center)?;
         let target = session.scene_mut().target_editor(&b)?;
-        session.live().stretch(
+        session.scene_mut().stretch(
             &LayoutAnchor::from(&target),
             1.3,
             crate::LayoutDimension::Width,

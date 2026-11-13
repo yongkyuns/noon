@@ -1,30 +1,14 @@
-//! Family affine edits and compatibility placement forwarding during control migration.
+//! Scene-owned affine placement and fitting over authored or effective layout.
 use super::*;
-use crate::semantic_mobject::ManimNextToArgs;
+use crate::{
+    family_layout::{
+        effective_anchor_layout_measure, effective_family_member_measure,
+        placement_authored_transform,
+    },
+    semantic_mobject::ManimNextToArgs,
+};
 
-impl LiveSession<'_> {
-    // Running fit uses the same extent query as Scene.
-    pub(crate) fn dimension_length(
-        &self,
-        source: &crate::LayoutAnchor,
-        dimension: crate::LayoutDimension,
-    ) -> Result<f64, LiveSessionError> {
-        crate::family_layout::effective_dimension_length(
-            self.store,
-            self.session,
-            source,
-            dimension,
-        )
-        .map_err(|error| match error {
-            crate::AuthoringError::ExecutionPublication(error)
-                if dimension == crate::LayoutDimension::Depth =>
-            {
-                LiveSessionError::Publication(error)
-            }
-            other => other.into(),
-        })
-    }
-
+impl Scene {
     /// Place and fit from one effective snapshot, then publish one local edit.
     pub fn next_layout_to_edge_in_frame(
         &mut self,
@@ -33,18 +17,25 @@ impl LiveSession<'_> {
         edge: (f64, f64),
         args: ManimNextToArgs,
         frame_buff: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::family_layout::publish_next_layout_to_edge_in_frame(
-            self.store,
-            self.root,
-            self.session,
-            source,
-            target,
-            edge,
-            args,
-            frame_buff,
-        )
-        .map_err(LiveSessionError::from)
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_layout_anchor(source)?;
+        self.require_layout_anchor(target)?;
+        if self.running_execution().is_none() {
+            let transaction = crate::family_layout::prepare_next_layout_to_edge_in_frame(
+                &self.store,
+                source,
+                target,
+                edge,
+                args,
+                frame_buff,
+            )?;
+            return self.apply_semantic_transaction(transaction);
+        }
+        self.with_running_execution(|store, root, execution| {
+            crate::family_layout::publish_next_layout_to_edge_in_frame(
+                store, root, execution, source, target, edge, args, frame_buff,
+            )
+        })
     }
 
     /// Stretch a selected live object/family through the shared world-axis operation.
@@ -54,7 +45,7 @@ impl LiveSession<'_> {
         factor: f64,
         dimension: crate::LayoutDimension,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         let (x, y) = match dimension {
             crate::LayoutDimension::Width => (factor, 1.0),
             crate::LayoutDimension::Height => (1.0, factor),
@@ -81,7 +72,7 @@ impl LiveSession<'_> {
         length: f64,
         dimension: crate::LayoutDimension,
         stretch: bool,
-    ) -> Result<(), LiveSessionError> {
+    ) -> Result<(), AuthoringError> {
         self.rescale_to_fit_with_pivot(
             source,
             length,
@@ -99,18 +90,14 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<(), LiveSessionError> {
-        let previous = self.dimension_length(source, dimension)?;
-        let Some(factor) = crate::dimension_fit::fitting_factor(previous, length)
-            .map_err(LiveSessionError::from)?
-        else {
+    ) -> Result<(), AuthoringError> {
+        self.require_layout_anchor(source)?;
+        let previous = self.layout_dimension_length(source, dimension)?;
+        let Some(factor) = crate::dimension_fit::fitting_factor(previous, length)? else {
             return Ok(());
         };
         let factors = crate::dimension_fit::fitting_factors(factor, dimension, stretch);
-        let table_layout_scope = (!stretch)
-            .then(|| source.resolve())
-            .transpose()
-            .map_err(LiveSessionError::from)?;
+        let table_layout_scope = (!stretch).then(|| source.resolve()).transpose()?;
         self.affine_layout(
             source,
             crate::family_affine::FamilyAffine::Scale3d(factors, pivot),
@@ -126,7 +113,7 @@ impl LiveSession<'_> {
         target: &crate::LayoutAnchor,
         dimension: crate::LayoutDimension,
         stretch: bool,
-    ) -> Result<(), LiveSessionError> {
+    ) -> Result<(), AuthoringError> {
         self.match_dim_size_with_pivot(
             source,
             target,
@@ -144,8 +131,9 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<(), LiveSessionError> {
-        let length = self.dimension_length(target, dimension)?;
+    ) -> Result<(), AuthoringError> {
+        self.require_layout_anchor(target)?;
+        let length = self.layout_dimension_length(target, dimension)?;
         self.rescale_to_fit_with_pivot(source, length, dimension, stretch, pivot)
     }
 
@@ -158,7 +146,7 @@ impl LiveSession<'_> {
         target: &crate::LayoutAnchor,
         dimension: crate::LayoutDimension,
         stretch: bool,
-    ) -> Result<(), LiveSessionError> {
+    ) -> Result<(), AuthoringError> {
         self.replace_layout_with_circle_buffer(source, target, dimension, stretch, None)
     }
 
@@ -171,7 +159,7 @@ impl LiveSession<'_> {
         dimension: u32,
         stretch: bool,
         buffer_factor: f64,
-    ) -> Result<(), LiveSessionError> {
+    ) -> Result<(), AuthoringError> {
         let dimension = crate::dimension_fit::circle_surround_dimension(dimension, stretch)?;
         self.replace_layout_with_circle_buffer(
             source,
@@ -189,33 +177,37 @@ impl LiveSession<'_> {
         dimension: crate::LayoutDimension,
         stretch: bool,
         circle_buffer_factor: Option<f64>,
-    ) -> Result<(), LiveSessionError> {
-        let (leaves, bounds) = self.anchor_layout_members(source)?;
-        let (target_nodes, target_bounds) = self.anchor_layout_members(target)?;
+    ) -> Result<(), AuthoringError> {
+        self.require_layout_anchor(source)?;
+        self.require_layout_anchor(target)?;
+        let Some(execution) = self.running_execution() else {
+            return source.replace_layout_with_circle_buffer(
+                target,
+                dimension,
+                stretch,
+                circle_buffer_factor,
+            );
+        };
+        let (leaves, bounds) =
+            effective_anchor_layout_measure(&self.store, execution, source, false)?;
+        let (target_nodes, target_bounds) =
+            effective_anchor_layout_measure(&self.store, execution, target, false)?;
         if target_bounds.is_none() {
-            return Err(crate::AuthoringError::MissingLayoutBounds(
-                target.resolve().map_err(LiveSessionError::from)?,
-            )
-            .into());
+            return Err(AuthoringError::MissingLayoutBounds(target.resolve()?));
         }
-        for &leaf in &leaves {
-            let object =
-                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
-            self.placement_authored_transform(&object)?;
-        }
+        validate_layout_drivers(&self.store, execution, &leaves)?;
         let target_leaves = target_nodes
             .into_iter()
             .map(|node| {
-                let object = Mobject::from_node(Rc::clone(self.store), node)
-                    .map_err(LiveSessionError::from)?;
+                let object = Mobject::from_node(Rc::clone(&self.store), node)?;
                 Ok((
                     node,
-                    self.family_member_bounds(&object)?,
-                    self.family_member_measure(&object, true)?,
+                    effective_family_member_measure(&self.store, execution, &object, false)?,
+                    effective_family_member_measure(&self.store, execution, &object, true)?,
                 ))
             })
-            .collect::<Result<Vec<_>, LiveSessionError>>()?;
-        let (_, boundary) = self.anchor_layout_measure(source, true)?;
+            .collect::<Result<Vec<_>, AuthoringError>>()?;
+        let (_, boundary) = effective_anchor_layout_measure(&self.store, execution, source, true)?;
         let prepared = crate::dimension_fit::replacement_transaction(
             &self.store.borrow(),
             &leaves,
@@ -224,8 +216,7 @@ impl LiveSession<'_> {
             dimension,
             stretch,
             circle_buffer_factor,
-        )
-        .map_err(LiveSessionError::from)?;
+        )?;
         self.publish_path_edits(prepared).map(|_| ())
     }
 
@@ -235,9 +226,9 @@ impl LiveSession<'_> {
         family: &MobjectFamily,
         x: f64,
         y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.affine_family_with_table_layout(
-            family,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.affine_layout(
+            &crate::LayoutAnchor::from(family),
             crate::family_affine::FamilyAffine::Scale(x, y, crate::ManimRotationPivot::Center),
             Some(family.node_id()),
         )
@@ -245,15 +236,13 @@ impl LiveSession<'_> {
 
     /// Apply Manim's default center-pivot scale through one coherent live publication.
     ///
-    /// Native [`crate::Scene::scale`] remains the origin-space affine primitive. This
-    /// compatibility operation reuses the same atomic affine transaction used for
-    /// families so Python never reconstructs a pivot or publishes a follow-up move.
+    /// Uses the shared layout transaction to capture the pivot before publishing.
     pub fn manim_scale(
         &mut self,
         mobject: &Mobject,
         x: f64,
         y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.manim_scale_with_pivot(mobject, x, y, crate::ManimRotationPivot::Center)
     }
 
@@ -265,7 +254,7 @@ impl LiveSession<'_> {
         y: f64,
         point_x: f64,
         point_y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.manim_scale_with_pivot(
             mobject,
             x,
@@ -282,7 +271,7 @@ impl LiveSession<'_> {
         y: f64,
         edge_x: f64,
         edge_y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.manim_scale_with_pivot(
             mobject,
             x,
@@ -297,7 +286,7 @@ impl LiveSession<'_> {
         x: f64,
         y: f64,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.scale_layout(&crate::LayoutAnchor::from(mobject), x, y, pivot)
     }
 
@@ -308,8 +297,8 @@ impl LiveSession<'_> {
         x: f64,
         y: f64,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let table_layout_scope = anchor.resolve().map_err(LiveSessionError::from)?;
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        let table_layout_scope = anchor.resolve()?;
         self.affine_layout(
             anchor,
             crate::family_affine::FamilyAffine::Scale(x, y, pivot),
@@ -323,8 +312,8 @@ impl LiveSession<'_> {
         anchor: &crate::LayoutAnchor,
         factors: crate::SemanticVec3,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let table_layout_scope = anchor.resolve().map_err(LiveSessionError::from)?;
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        let table_layout_scope = anchor.resolve()?;
         self.affine_layout(
             anchor,
             crate::family_affine::FamilyAffine::Scale3d(factors, pivot),
@@ -338,32 +327,8 @@ impl LiveSession<'_> {
         family: &MobjectFamily,
         angle: f64,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.affine_family(
-            family,
-            crate::family_affine::FamilyAffine::Rotate(angle, pivot),
-        )
-    }
-
-    fn affine_family(
-        &mut self,
-        family: &MobjectFamily,
-        operation: crate::family_affine::FamilyAffine,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.affine_family_with_table_layout(family, operation, None)
-    }
-
-    fn affine_family_with_table_layout(
-        &mut self,
-        family: &MobjectFamily,
-        operation: crate::family_affine::FamilyAffine,
-        table_layout_scope: Option<SemanticNodeId>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.affine_layout(
-            &crate::LayoutAnchor::from(family),
-            operation,
-            table_layout_scope,
-        )
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.rotate_layout(&crate::LayoutAnchor::from(family), angle, pivot)
     }
 
     /// Rotate a selected object or family using coherent live pivot bounds.
@@ -372,11 +337,24 @@ impl LiveSession<'_> {
         anchor: &crate::LayoutAnchor,
         angle: f64,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.affine_layout(
             anchor,
             crate::family_affine::FamilyAffine::Rotate(angle, pivot),
             None,
+        )
+    }
+
+    /// Rotate an object about its effective geometry center.
+    pub fn rotate(
+        &mut self,
+        object: &Mobject,
+        angle: f64,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.rotate_layout(
+            &crate::LayoutAnchor::from(object),
+            angle,
+            crate::ManimRotationPivot::Center,
         )
     }
 
@@ -386,7 +364,7 @@ impl LiveSession<'_> {
         anchor: &crate::LayoutAnchor,
         axis: crate::SemanticVec3,
         pivot: crate::ManimRotationPivot,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.affine_layout(
             anchor,
             crate::family_affine::FamilyAffine::Flip(axis, pivot),
@@ -399,79 +377,69 @@ impl LiveSession<'_> {
         anchor: &crate::LayoutAnchor,
         operation: crate::family_affine::FamilyAffine,
         table_layout_scope: Option<SemanticNodeId>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let (leaves, bounds) = if operation.needs_xy_bounds() {
-            self.anchor_layout_measure(anchor, true)?
-        } else {
-            if !anchor.belongs_to_store(self.store) {
-                return Err(LiveSessionError::from(crate::AuthoringError::ForeignStore));
-            }
-            self.session.require_published_store(&self.store.borrow())?;
-            let root = anchor.resolve().map_err(LiveSessionError::from)?;
-            let leaves = self
-                .store
-                .borrow()
-                .ordered_leaf_nodes(root)
-                .map_err(crate::AuthoringError::from)
-                .map_err(LiveSessionError::from)?;
-            (leaves, None)
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
+        self.require_layout_anchor(anchor)?;
+        let prepared = match self.running_execution() {
+            Some(execution) => prepare_effective_affine(
+                &self.store,
+                execution,
+                anchor,
+                operation,
+                table_layout_scope,
+            )?,
+            None => anchor.prepare_affine(operation, table_layout_scope)?,
         };
-        // As with placement, resolve an active affine driver at its logical
-        // completion barrier before a persistent edit; never overwrite it midway.
-        for &leaf in &leaves {
-            let object =
-                Mobject::from_node(Rc::clone(self.store), leaf).map_err(LiveSessionError::from)?;
-            self.placement_authored_transform(&object)?;
-        }
-        let prepared = operation.prepare_for_scope(
-            &self.store.borrow(),
-            &leaves,
-            bounds,
-            table_layout_scope,
-        )?;
         self.publish_path_edits(prepared)
     }
 
-    pub(super) fn family_member_bounds(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<Option<Bounds2D64>, LiveSessionError> {
-        self.family_member_measure(mobject, false)
+    fn require_layout_anchor(&self, anchor: &crate::LayoutAnchor) -> Result<(), AuthoringError> {
+        if !anchor.belongs_to_store(&self.store) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        Ok(())
     }
 
-    pub(super) fn family_member_measure(
-        &self,
-        mobject: &Mobject,
-        boundary: bool,
-    ) -> Result<Option<Bounds2D64>, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        crate::family_layout::effective_family_member_measure(
-            self.store,
-            self.session,
-            mobject,
-            boundary,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    fn anchor_layout_members(
+    fn layout_dimension_length(
         &self,
         anchor: &crate::LayoutAnchor,
-    ) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
-        self.anchor_layout_measure(anchor, false)
+        dimension: crate::LayoutDimension,
+    ) -> Result<f64, AuthoringError> {
+        match self.running_execution() {
+            Some(_) => self.effective_dimension_length(anchor, dimension),
+            None => anchor.dimension_length(dimension),
+        }
     }
+}
 
-    fn anchor_layout_measure(
-        &self,
-        anchor: &crate::LayoutAnchor,
-        boundary: bool,
-    ) -> Result<(Vec<SemanticNodeId>, Option<Bounds2D64>), LiveSessionError> {
-        crate::family_layout::effective_anchor_layout_measure(
-            self.store,
-            self.session,
-            anchor,
-            boundary,
-        )
-        .map_err(LiveSessionError::from)
+fn prepare_effective_affine(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    anchor: &crate::LayoutAnchor,
+    operation: crate::family_affine::FamilyAffine,
+    table_layout_scope: Option<SemanticNodeId>,
+) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
+    let (leaves, bounds) = if operation.needs_xy_bounds() {
+        effective_anchor_layout_measure(store, execution, anchor, true)?
+    } else {
+        if !anchor.belongs_to_store(store) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        execution.require_published_store(&store.borrow())?;
+        let root = anchor.resolve()?;
+        (store.borrow().ordered_leaf_nodes(root)?, None)
+    };
+    validate_layout_drivers(store, execution, &leaves)?;
+    operation.prepare_for_scope(&store.borrow(), &leaves, bounds, table_layout_scope)
+}
+
+fn validate_layout_drivers(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    leaves: &[SemanticNodeId],
+) -> Result<(), AuthoringError> {
+    for &leaf in leaves {
+        let object = Mobject::from_node(Rc::clone(store), leaf)?;
+        placement_authored_transform(store, execution, &object)?;
     }
+    Ok(())
 }

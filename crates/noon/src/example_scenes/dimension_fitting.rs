@@ -43,19 +43,19 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     let mut session = scene.into_execution().map_err(|e| e.to_string())?;
     {
         session
-            .live()
+            .scene_mut()
             .rescale_to_fit(&group, f64::INFINITY, Depth, true)
             .map_err(|e| e.to_string())?;
         session
-            .live()
+            .scene_mut()
             .match_dim_size(&source, &target, Depth, false)
             .map_err(|e| e.to_string())?;
         session
-            .live()
+            .scene_mut()
             .match_dim_size(&source, &target, Width, true)
             .map_err(|e| e.to_string())?;
         session
-            .live()
+            .scene_mut()
             .rescale_to_fit(&group, 2.0, Height, false)
             .map_err(|e| e.to_string())?;
         assert!(
