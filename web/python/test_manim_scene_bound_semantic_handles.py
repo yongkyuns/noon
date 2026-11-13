@@ -317,7 +317,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 def liveExecutionOwnership(self):
                     return "transferred" if self.transferred else "returned"
 
-                def liveShift(self, source, x, y):
+                def shift(self, source, x, y):
                     self.live_calls.append(("shift", source, x, y))
 
                 def becomeMobject(self, source, target, *flags):
@@ -380,7 +380,7 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             # its handle behind the runtime's publication revision.
             context.transferred = False
             live_calls = []
-            context.liveShift = lambda target, x, y: live_calls.append((target, x, y))
+            context.shift = lambda target, x, y: live_calls.append((target, x, y))
             context.targetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
             square.shift(RIGHT)
             target = square.copy()

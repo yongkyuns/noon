@@ -24,9 +24,9 @@ class SharedFamilyAffineTests(unittest.TestCase):
                 anchor = family._semantic_family_handle.layoutAnchor.return_value
                 owner = context if live else anchor
                 prefix = (anchor,) if live else ()
-                getattr(owner, "liveScaleLayout3d" if live else "scale3d").assert_called_once_with(
+                getattr(owner, "scaleLayout3d" if live else "scale3d").assert_called_once_with(
                     *prefix, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, False)
-                self.assertEqual(getattr(owner, "liveRotateLayout" if live else "rotate").call_args_list,
+                self.assertEqual(getattr(owner, "rotateLayout" if live else "rotate").call_args_list,
                                  [unittest.mock.call(*prefix, 0.5, 1.0, -1.0, False),
                                   unittest.mock.call(*prefix, 0.25, 4.0, 5.0, True)])
 

@@ -595,6 +595,16 @@ impl Context {
             }
         })
     }
+    fn edit_scene_property(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+    ) -> PyResult<()> {
+        self.require_active()?;
+        let running = self.has_execution();
+        edit(&mut self.scene)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
     fn edit_scene<T>(
         &mut self,
         edit: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
@@ -2035,7 +2045,7 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
 
-    #[pyo3(name = "liveApplyMatrixFamily")]
+    #[pyo3(name = "applyMatrixFamily")]
     fn apply_matrix_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -2145,7 +2155,7 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 
-    #[pyo3(name = "liveStretchLayout")]
+    #[pyo3(name = "stretchLayout")]
     fn stretch_layout(
         &mut self,
         target: &LayoutAnchor,
@@ -2724,7 +2734,7 @@ impl Context {
         )
     }
 
-    #[pyo3(name = "liveScaleLayout3d")]
+    #[pyo3(name = "scaleLayout3d")]
     #[allow(clippy::too_many_arguments)]
     fn scale_layout_3d(
         &mut self,
@@ -3309,7 +3319,7 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
 
-    #[pyo3(name = "liveShiftFamily", signature = (target, x, y, z=0.0))]
+    #[pyo3(name = "shiftFamily", signature = (target, x, y, z=0.0))]
     fn shift_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3320,17 +3330,6 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.place(|scene| scene.shift_family_3d(&target.family, noon::SemanticVec3::new(x, y, z)))
-    }
-    #[pyo3(name = "liveScaleFamily")]
-    fn scale_family(
-        &mut self,
-        target: &crate::family::FamilyHandle,
-        x: f64,
-        y: f64,
-    ) -> PyResult<()> {
-        self.available()?;
-        self.same_family_store(target)?;
-        self.place(|scene| scene.scale_family(&target.family, x, y))
     }
     #[pyo3(name = "setFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
     #[allow(clippy::too_many_arguments)]
@@ -3948,7 +3947,7 @@ impl Context {
             .repeat_family_points(&family.family, count)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveApplyMatrix")]
+    #[pyo3(name = "applyMatrix")]
     #[allow(clippy::too_many_arguments)]
     fn apply_matrix(
         &mut self,
@@ -3962,21 +3961,14 @@ impl Context {
         self.same_store(target)?;
         self.place(|scene| scene.apply_matrix(&target.handle, &values, rows, columns, x, y))
     }
-    #[pyo3(name = "liveShift", signature = (target, x, y, z = None))]
+    #[pyo3(name = "shift", signature = (target, x, y, z = None))]
     fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64, z: Option<f64>) -> PyResult<()> {
-        self.available()?;
-        self.edit_running_scene(|scene| {
+        self.edit_scene_property(|scene| {
             scene.shift_3d(
                 &target.handle,
                 noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)),
             )
         })
-    }
-    #[pyo3(name = "liveScale")]
-    fn scale_mobject(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
-        self.available()?;
-        self.same_store(target)?;
-        self.place(|scene| scene.manim_scale(&target.handle, x, y))
     }
     #[pyo3(name = "setFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
@@ -4081,40 +4073,19 @@ impl Context {
         self.available()?;
         self.edit_scene(|scene| scene.set_object_opacity(&target.handle, a))
     }
-    #[pyo3(name = "liveZIndex")]
+    #[pyo3(name = "zIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
         self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .effective_z_index(&target.anchor)
-            .map_err(engine_error)
+        self.scene.z_index(&target.anchor).map_err(engine_error)
     }
-    #[pyo3(name = "liveSetZIndex")]
+    #[pyo3(name = "setZIndex")]
     fn set_z_index(&mut self, target: &LayoutAnchor, value: f64, family: bool) -> PyResult<()> {
         self.available()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .set_z_index(&target.anchor, value, family)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveScaleLayout")]
-    fn scale(
-        &mut self,
-        target: &LayoutAnchor,
-        sx: f64,
-        sy: f64,
-        x: f64,
-        y: f64,
-        point: bool,
-    ) -> PyResult<()> {
-        self.available()?;
-        self.place(|scene| scene.scale_layout(&target.anchor, sx, sy, pivot(x, y, point)))
-    }
-    #[pyo3(name = "liveRotateLayout")]
+    #[pyo3(name = "rotateLayout")]
     fn rotate(
         &mut self,
         target: &LayoutAnchor,
@@ -4126,7 +4097,7 @@ impl Context {
         self.available()?;
         self.place(|scene| scene.rotate_layout(&target.anchor, angle, pivot(x, y, point)))
     }
-    #[pyo3(name = "liveFlipLayout")]
+    #[pyo3(name = "flipLayout")]
     #[allow(clippy::too_many_arguments)]
     fn flip_layout(
         &mut self,
@@ -4478,20 +4449,20 @@ impl Context {
                 transform: value.transform,
             })
     }
-    #[pyo3(name = "liveSetTranslation")]
+    #[pyo3(name = "setTranslation")]
     fn set_translation(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.set_translation(&target.handle, x, y))
+        self.edit_scene_property(|scene| scene.set_translation(&target.handle, x, y))
     }
-    #[pyo3(name = "liveSetScale")]
+    #[pyo3(name = "setScale")]
     fn set_scale(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.set_scale(&target.handle, x, y))
+        self.edit_scene_property(|scene| scene.set_scale(&target.handle, x, y))
     }
-    #[pyo3(name = "liveSetRotation")]
+    #[pyo3(name = "setRotation")]
     fn set_rotation(&mut self, target: &MobjectHandle, angle: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.edit_running_scene(|scene| scene.set_rotation(&target.handle, angle))
+        self.edit_scene_property(|scene| scene.set_rotation(&target.handle, angle))
     }
     #[pyo3(name = "liveReplaceContent")]
     fn replace_content(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {

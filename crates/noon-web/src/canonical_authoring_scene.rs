@@ -3534,7 +3534,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_shift_family(
+    fn shift_family(
         &mut self,
         family: &noon::MobjectFamily,
         x: f64,
@@ -10463,23 +10463,16 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetTranslation)]
-        pub fn live_set_translation(
+        #[wasm_bindgen(js_name = setTranslation)]
+        pub fn set_translation(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_translation(handle.semantic_mobject(), x, y)
-                .map_err(running_scene_error)
+                .edit_scene(|scene| scene.set_translation(handle.semantic_mobject(), x, y))
                 .map_err(typed_js_error)
         }
 
@@ -10945,27 +10938,22 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveShift)]
-        pub fn live_shift(
+        #[wasm_bindgen(js_name = shift)]
+        pub fn shift(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
             z: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .shift_3d(
-                    handle.semantic_mobject(),
-                    noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)),
-                )
-                .map_err(running_scene_error)
+                .edit_scene(|scene| {
+                    scene.shift_3d(
+                        handle.semantic_mobject(),
+                        noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -11137,8 +11125,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveShiftFamily)]
-        pub fn live_shift_family(
+        #[wasm_bindgen(js_name = shiftFamily)]
+        pub fn shift_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -11155,7 +11143,7 @@ mod wasm {
                 ));
             }
             self.inner
-                .live_shift_family(&family, x, y, z.unwrap_or(0.0))
+                .shift_family(&family, x, y, z.unwrap_or(0.0))
                 .map_err(typed_js_error)
         }
 
@@ -11817,23 +11805,6 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleFamily)]
-        pub fn live_scale_family(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            x: f64,
-            y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .scale_family(&family, x, y)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
-        }
-
         #[wasm_bindgen(js_name = liveArrangeFamily)]
         pub fn live_arrange_family(
             &mut self,
@@ -11846,28 +11817,21 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetScale)]
-        pub fn live_set_scale(
+        #[wasm_bindgen(js_name = setScale)]
+        pub fn set_scale(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_scale(handle.semantic_mobject(), x, y)
-                .map_err(running_scene_error)
+                .edit_scene(|scene| scene.set_scale(handle.semantic_mobject(), x, y))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveApplyMatrix)]
-        pub fn live_apply_matrix(
+        #[wasm_bindgen(js_name = applyMatrix)]
+        pub fn apply_matrix(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -11876,68 +11840,36 @@ mod wasm {
             about_x: f64,
             about_y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .apply_matrix(
-                    handle.semantic_mobject(),
-                    &values,
-                    rows as usize,
-                    columns as usize,
-                    about_x,
-                    about_y,
-                )
-                .map_err(noon::LiveSessionError::from)
+                .place(|scene| {
+                    scene.apply_matrix(
+                        handle.semantic_mobject(),
+                        &values,
+                        rows as usize,
+                        columns as usize,
+                        about_x,
+                        about_y,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScale)]
-        pub fn live_scale(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            x: f64,
-            y: f64,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .manim_scale(handle.semantic_mobject(), x, y)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
-        }
-
-        #[wasm_bindgen(js_name = liveSetRotation)]
-        pub fn live_set_rotation(
+        #[wasm_bindgen(js_name = setRotation)]
+        pub fn set_rotation(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             angle: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_rotation(handle.semantic_mobject(), angle)
-                .map_err(running_scene_error)
+                .edit_scene(|scene| scene.set_rotation(handle.semantic_mobject(), angle))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveStretchLayout)]
+        #[wasm_bindgen(js_name = stretchLayout)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_stretch_layout(
+        pub fn stretch_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             factor: f64,
@@ -11960,9 +11892,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleLayout3d)]
+        #[wasm_bindgen(js_name = scaleLayout3d)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_scale_layout_3d(
+        pub fn scale_layout_3d(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             scale_x: f64,
@@ -11974,44 +11906,18 @@ mod wasm {
             about_point: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .scale_layout_3d(
-                    &source.anchor,
-                    noon::SemanticVec3::new(scale_x, scale_y, scale_z),
-                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.scale_layout_3d(
+                        &source.anchor,
+                        noon::SemanticVec3::new(scale_x, scale_y, scale_z),
+                        crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleLayout)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_scale_layout(
-            &mut self,
-            source: &crate::authoring_mobject::WasmLayoutAnchor,
-            scale_x: f64,
-            scale_y: f64,
-            x: f64,
-            y: f64,
-            about_point: bool,
-        ) -> Result<(), JsValue> {
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .scale_layout(&source.anchor, scale_x, scale_y, pivot)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
-        }
-        #[wasm_bindgen(js_name = liveRotateLayout)]
-        pub fn live_rotate_layout(
+        #[wasm_bindgen(js_name = rotateLayout)]
+        pub fn rotate_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             angle: f64,
@@ -12025,46 +11931,38 @@ mod wasm {
                 noon::ManimRotationPivot::Edge(x, y)
             };
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .rotate_layout(&source.anchor, angle, pivot)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| scene.rotate_layout(&source.anchor, angle, pivot))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveZIndex)]
-        pub fn live_z_index(
+        #[wasm_bindgen(js_name = zIndex)]
+        pub fn z_index(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
         ) -> Result<f64, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene()
-                .effective_z_index(&source.anchor)
+                .z_index(&source.anchor)
                 .map_err(AuthoringFailure::from)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetZIndex)]
-        pub fn live_set_z_index(
+        #[wasm_bindgen(js_name = setZIndex)]
+        pub fn set_z_index(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             value: f64,
             family: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_z_index(&source.anchor, value, family)
+                .edit_scene(|scene| scene.set_z_index(&source.anchor, value, family))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveFlipLayout)]
+        #[wasm_bindgen(js_name = flipLayout)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_flip_layout(
+        pub fn flip_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             axis_x: f64,
@@ -12080,16 +11978,14 @@ mod wasm {
                 noon::ManimRotationPivot::Edge(x, y)
             };
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .flip_layout(
-                    &source.anchor,
-                    noon::SemanticVec3::new(axis_x, axis_y, axis_z),
-                    pivot,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_placement_error(error)))
+                .place(|scene| {
+                    scene.flip_layout(
+                        &source.anchor,
+                        noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                        pivot,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveEffectiveMobject)]
@@ -13354,17 +13250,17 @@ mod tests {
         let child = context.scene.square(1.0).unwrap();
         let family = context.scene.family(&[(&child).into()]).unwrap();
         context.scene.add_many(&[(&family).into()]).unwrap();
-        context.live_shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        context.shift_family(&family, 1.0, 0.0, 0.25).unwrap();
         context.live_player(1.0).unwrap();
-        context.live_shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        context.shift_family(&family, 1.0, 0.0, 0.25).unwrap();
         let player = context.take_execution_player(1.0, 42).unwrap();
-        assert!(context.live_shift_family(&family, 1.0, 0.0, 0.25).is_err());
+        assert!(context.shift_family(&family, 1.0, 0.0, 0.25).is_err());
         assert_eq!(
             child.state().unwrap().transform.translation,
             noon::SemanticVec3::new(2.0, 0.0, 0.5)
         );
         context.return_execution_player(player).unwrap();
-        context.live_shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        context.shift_family(&family, 1.0, 0.0, 0.25).unwrap();
         assert_eq!(
             child.state().unwrap().transform.translation,
             noon::SemanticVec3::new(3.0, 0.0, 0.75)
@@ -13747,9 +13643,7 @@ mod tests {
         assert_ne!(left_target.node_id(), left.node_id());
         assert_ne!(right_target.node_id(), right.node_id());
         let target_pair = copied.root().clone();
-        context
-            .live_shift_family(&target_pair, 0.0, 1.0, 0.0)
-            .unwrap();
+        context.shift_family(&target_pair, 0.0, 1.0, 0.0).unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
             method_target: false,

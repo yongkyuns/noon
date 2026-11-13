@@ -907,10 +907,10 @@ def _shift(self: _base.Mobject, direction: object) -> _base.Mobject:
     from _manim_path_editing import _raw_point3
     offset = _raw_point3(direction)
     arguments = offset if offset[2] != 0.0 else offset[:2]
-    context = _live_mutation_context(self)
+    context = _path_authoring_context(self)
     if context is not None:
         try:
-            engine_call(context.liveShift, handle, *arguments)
+            engine_call(context.shift, handle, *arguments)
         except Exception as error:
             raise_engine_error(error)
         return self
@@ -973,7 +973,7 @@ def _stretch(self, factor, dim, *, about_point=None, about_edge=None):
         if context is None:
             engine_call(anchor.stretch, *arguments)
         else:
-            engine_call(context.liveStretchLayout, anchor, *arguments)
+            engine_call(context.stretchLayout, anchor, *arguments)
     finally:
         anchor.free()
     return self
@@ -1081,14 +1081,13 @@ def _scale_xyz(self, factor, about_point, about_edge):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("scale requires the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if _is_shared_family(self)
-               else _live_mutation_context(self))
+    context = _layout_authoring_context(self)
     arguments = (*_scale_factors_xyz(factor), *_pivot_arguments_3d(about_point, about_edge))
     try:
         if context is None:
             engine_call(anchor.scale3d, *arguments)
         else:
-            engine_call(context.liveScaleLayout3d, anchor, *arguments)
+            engine_call(context.scaleLayout3d, anchor, *arguments)
     except Exception as error:
         _raise_boundary_error(error)
     return self
@@ -1140,13 +1139,12 @@ def _planar_affine(self, operation, arguments, about_point, about_edge):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("affine edits require the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if _is_shared_family(self)
-               else _live_mutation_context(self))
+    context = _layout_authoring_context(self)
     arguments = (*arguments, *_pivot_arguments(about_point, about_edge))
     if context is None:
         engine_call(getattr(anchor, operation), *arguments)
     else:
-        engine_call(getattr(context, f"live{operation.title()}Layout"), anchor, *arguments)
+        engine_call(getattr(context, f"{operation}Layout"), anchor, *arguments)
     return self
 
 
@@ -1154,10 +1152,9 @@ def _get_z_index(self):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if _is_shared_family(self)
-               else _live_mutation_context(self))
+    context = _layout_authoring_context(self)
     if context is not None:
-        return float(engine_call(context.liveZIndex, anchor))
+        return float(engine_call(context.zIndex, anchor))
     return float(engine_call(anchor.zIndex))
 
 
@@ -1169,12 +1166,11 @@ def _set_z_index(self, value, family=True):
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("painter priority requires the shared Rust authoring host")
-    context = (_group_live_layout_context(self) if _is_shared_family(self)
-               else _live_mutation_context(self))
+    context = _layout_authoring_context(self)
     if context is None:
         engine_call(anchor.setZIndex, value, bool(family))
     else:
-        engine_call(context.liveSetZIndex, anchor, value, bool(family))
+        engine_call(context.setZIndex, anchor, value, bool(family))
     return self
 
 
@@ -2558,7 +2554,7 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     context = _group_target_context(self, include_setup=True)
     if context is not None:
         try:
-            engine_call(context.liveShiftFamily, self._semantic_family_handle, *arguments)
+            engine_call(context.shiftFamily, self._semantic_family_handle, *arguments)
         except Exception as error:
             raise_engine_error(error)
         return self

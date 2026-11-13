@@ -67,7 +67,7 @@ class DimensionFittingTests(unittest.TestCase):
         source.stretch(-2, 2, about_point=(1, 2, 3.125))
         source.stretch(0, 2, about_edge=(0, 0, -1))
         context = types.SimpleNamespace(
-            liveStretchLayout=lambda *args: self.calls.append(("live stretch", args)),
+            stretchLayout=lambda *args: self.calls.append(("live stretch", args)),
         )
         with patch.object(semantic, "_path_authoring_context", return_value=context):
             self.assertIs(source.stretch(2, 2), source)
@@ -82,9 +82,9 @@ class DimensionFittingTests(unittest.TestCase):
         source._semantic_handle.shift = lambda *args: self.calls.append(("shift", args))
         self.assertIs(source.shift((1, -2, 3.125)), source)
         context = types.SimpleNamespace(
-            liveShift=lambda *args: self.calls.append(("live shift", args)),
+            shift=lambda *args: self.calls.append(("live shift", args)),
         )
-        with patch.object(semantic, "_live_mutation_context", return_value=context):
+        with patch.object(semantic, "_path_authoring_context", return_value=context):
             source.shift((4, 5, -6.25))
         self.assertEqual(self.calls, [
             ("shift", (1., -2., 3.125)),

@@ -2294,7 +2294,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
     context = (
         _semantic_handles._group_target_context(target, include_setup=True)
         if is_family
-        else getattr(target, "_canonical_live_target_context", None)
+        else _semantic_handles._path_authoring_context(target)
     )
     if context is None:
         engine_call(
@@ -2308,7 +2308,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
         )
     else:
         engine_call(
-            context.liveApplyMatrixFamily if is_family else context.liveApplyMatrix,
+            context.applyMatrixFamily if is_family else context.applyMatrix,
             handle,
             values,
             len(rows),
@@ -3563,25 +3563,25 @@ class LiveExecution:
 
     def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
         engine_call(
-            self._context.liveSetTranslation, self._handle(mobject), float(x), float(y),
+            self._context.setTranslation, self._handle(mobject), float(x), float(y),
             operation="LiveExecution.set_translation",
         )
 
     def shift(self, mobject: _base.Mobject, x: float, y: float) -> None:
         engine_call(
-            self._context.liveShift, self._handle(mobject), float(x), float(y),
+            self._context.shift, self._handle(mobject), float(x), float(y),
             operation="LiveExecution.shift",
         )
 
     def set_scale(self, mobject: _base.Mobject, x: float, y: float) -> None:
         engine_call(
-            self._context.liveSetScale, self._handle(mobject), float(x), float(y),
+            self._context.setScale, self._handle(mobject), float(x), float(y),
             operation="LiveExecution.set_scale",
         )
 
     def set_rotation(self, mobject: _base.Mobject, angle: float) -> None:
         engine_call(
-            self._context.liveSetRotation, self._handle(mobject), float(angle),
+            self._context.setRotation, self._handle(mobject), float(angle),
             operation="LiveExecution.set_rotation",
         )
 
