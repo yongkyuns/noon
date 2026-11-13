@@ -27,7 +27,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                     Color::rgb(0.0, 0.0, 1.0),
                 ],
             )?;
-            let color = session.live().effective_manim_color(&boxes[0])?;
+            let color = session.scene().effective_manim_color(&boxes[0])?;
             session.scene_mut().set_color_rgba(
                 &boxes[0],
                 color.red.into(),
@@ -35,10 +35,10 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 color.blue.into(),
                 color.alpha.into(),
             )?;
-            session.live().match_color(&boxes[0], &boxes[4])?;
+            session.scene_mut().match_color(&boxes[0], &boxes[4])?;
             assert_eq!(
-                session.live().effective_manim_color(&boxes[0])?,
-                session.live().effective_manim_color(&boxes[4])?
+                session.scene().effective_manim_color(&boxes[0])?,
+                session.scene().effective_manim_color(&boxes[4])?
             );
             session.scene_mut().set_color_rgba(
                 &boxes[0],
@@ -48,7 +48,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 1.0,
             )?;
             assert!((session.live().effective(&boxes[0])?.fill_opacity() - 0.7).abs() < 1e-6);
-            assert!((session.live().effective_stroke_width(&boxes[0])? - 0.02).abs() < 1e-6);
+            assert!((session.scene().effective_stroke_width(&boxes[0])? - 0.02).abs() < 1e-6);
             let segment = session.live().wait_segment(0.2)?;
             session
                 .live()

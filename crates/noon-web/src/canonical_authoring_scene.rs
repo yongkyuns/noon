@@ -11050,12 +11050,13 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_fade_to(
+                .scene_mut()
+                .fade_to(
                     handle.semantic_mobject(),
                     noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
                     amount,
                 )
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetEmission)]

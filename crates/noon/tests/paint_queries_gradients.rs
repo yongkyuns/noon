@@ -47,9 +47,8 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
         .scene_mut()
         .set_color(&donor, Color::rgb(0.0, 0.0, 1.0))
         .unwrap();
-    let mut live = running.live();
     let revision = family.integration_store().borrow().scene_revision();
-    let result = live.match_family_color(&family, &donor).unwrap();
+    let result = running.live().match_family_color(&family, &donor).unwrap();
     assert_eq!(result.impacts().len(), 2);
     assert!(result.impacts().iter().any(|impact| matches!(impact,
         noon_core::SemanticMutationImpact::FamilyColor { node } if *node == family.node_id())));
@@ -59,11 +58,14 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
         revision.checked_next().unwrap()
     );
     assert_eq!(
-        live.effective_manim_color(&recipient).unwrap(),
+        running.scene().effective_manim_color(&recipient).unwrap(),
         Color::rgb(0.0, 0.0, 1.0)
     );
     let before = recipient.state().unwrap();
-    assert!(live.match_color(&recipient, &foreign).is_err());
+    assert!(running
+        .scene_mut()
+        .match_color(&recipient, &foreign)
+        .is_err());
     assert_eq!(recipient.state().unwrap(), before);
 }
 
@@ -163,18 +165,20 @@ fn color_observation_prefers_visible_fill_and_does_not_reapply_opacity() {
         .unwrap();
     assert_eq!(object.manim_color().unwrap(), Color::BLUE);
     scene.add(&object).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let live = scene.live(&mut session);
-    assert_eq!(live.effective_manim_color(&object).unwrap(), Color::BLUE);
+    let running = scene.into_execution().unwrap();
     assert_eq!(
-        live.effective_fill_color(&object).unwrap(),
+        running.scene().effective_manim_color(&object).unwrap(),
+        Color::BLUE
+    );
+    assert_eq!(
+        running.scene().effective_fill_color(&object).unwrap(),
         Some(Color::RED)
     );
     assert_eq!(
-        live.effective_stroke_color(&object).unwrap(),
+        running.scene().effective_stroke_color(&object).unwrap(),
         Some(Color::BLUE)
     );
-    assert!((live.effective_stroke_width(&object).unwrap() - 0.09).abs() < 1e-7);
+    assert!((running.scene().effective_stroke_width(&object).unwrap() - 0.09).abs() < 1e-7);
 }
 
 #[test]
@@ -212,9 +216,9 @@ fn aliased_family_gradient_is_one_local_publication_and_preserves_content_and_op
     scene
         .add_many(&[(&family).into(), (&unrelated).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let result = live
+    let mut running = scene.into_execution().unwrap();
+    let result = running
+        .live()
         .set_family_color_by_gradient(
             &family,
             &[Color::rgb(1.0, 0.0, 0.0), Color::rgb(0.0, 0.0, 1.0)],
@@ -222,14 +226,17 @@ fn aliased_family_gradient_is_one_local_publication_and_preserves_content_and_op
         .unwrap();
     assert_eq!(result.impacts().len(), 3);
     assert_eq!(
-        live.effective_manim_color(&b).unwrap(),
+        running.scene().effective_manim_color(&b).unwrap(),
         Color::rgb(0.5, 0.0, 0.5)
     );
     assert_eq!(a.fill_opacity().unwrap(), 0.4);
     assert_eq!(a.state().unwrap().content, content);
     assert_eq!(unrelated.state().unwrap(), untouched);
     let before = a.state().unwrap();
-    assert!(live.set_family_color_by_gradient(&family, &[]).is_err());
+    assert!(running
+        .live()
+        .set_family_color_by_gradient(&family, &[])
+        .is_err());
     assert_eq!(a.state().unwrap(), before);
     assert_eq!(
         before.style.fill,
@@ -257,18 +264,25 @@ fn late_alias_gradient_uses_last_occurrence_order_authored_and_live_atomically()
     scene
         .add_many(&[(&family).into(), (&unrelated).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let result = live
+    let mut running = scene.into_execution().unwrap();
+    let result = running
+        .live()
         .set_family_color_by_gradient(&family, &[Color::BLUE, Color::RED])
         .unwrap();
     assert_eq!(result.impacts().len(), 2);
-    assert_eq!(live.effective_manim_color(&a).unwrap(), Color::RED);
-    assert_eq!(live.effective_manim_color(&b).unwrap(), Color::BLUE);
+    assert_eq!(
+        running.scene().effective_manim_color(&a).unwrap(),
+        Color::RED
+    );
+    assert_eq!(
+        running.scene().effective_manim_color(&b).unwrap(),
+        Color::BLUE
+    );
     assert_eq!(a.fill_opacity().unwrap(), 0.4);
     assert_eq!(unrelated.state().unwrap(), unchanged);
     let before = (a.state().unwrap(), b.state().unwrap());
-    assert!(live
+    assert!(running
+        .live()
         .set_family_color_by_gradient(&family, &[Color::rgb(f32::NAN, 0.0, 0.0)])
         .is_err());
     assert_eq!((a.state().unwrap(), b.state().unwrap()), before);

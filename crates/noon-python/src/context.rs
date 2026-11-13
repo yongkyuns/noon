@@ -2422,7 +2422,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.has_execution() {
-            self.with_live(|live| live.effective_manim_color(&target.handle))?
+            self.scene
+                .effective_manim_color(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
         } else {
             target.handle.manim_color().map_err(engine_error)?
         };
@@ -3859,7 +3861,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.has_execution() {
-            self.with_live(|live| live.effective_fill_color(&target.handle))?
+            self.scene
+                .effective_fill_color(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
         } else {
             target.handle.fill_color().map_err(engine_error)?
         };
@@ -3876,7 +3880,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let color = if self.has_execution() {
-            self.with_live(|live| live.effective_stroke_color(&target.handle))?
+            self.scene
+                .effective_stroke_color(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
         } else {
             target.handle.stroke_color().map_err(engine_error)?
         };
@@ -3906,7 +3912,10 @@ impl Context {
     fn query_stroke_width(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective_stroke_width(&target.handle))
+            self.require_active()?;
+            self.scene
+                .effective_stroke_width(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
         } else {
             target.handle.stroke_width().map_err(engine_error)
         }

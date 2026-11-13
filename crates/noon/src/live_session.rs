@@ -15,7 +15,7 @@ pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
 use crate::effective_capture::target_style_from_effective;
-use crate::execution_session::{EffectiveSemanticObject, NativePointerInputToken};
+use crate::execution_session::NativePointerInputToken;
 use crate::{
     semantic_mobject::authoring_render_f64, semantic_mobject::edit_color,
     state_replacement::prepare_become, DeclaredAnimation, ExecutionSegment,
@@ -1108,22 +1108,7 @@ impl<'a> LiveSession<'a> {
     /// Read the current effective runtime value at the session's publication.
     pub fn effective(&self, mobject: &Mobject) -> Result<EffectiveMobjectState, LiveSessionError> {
         self.require_mobject(mobject)?;
-        let store = self.store.borrow();
-        let EffectiveSemanticObject {
-            object,
-            publication,
-            ..
-        } = self
-            .session
-            .effective_semantic_object(&store, mobject.node_id())?;
-        Ok(EffectiveMobjectState {
-            fill_paint: object.fill_paint.clone(),
-            z_index: object.z_index,
-            transform: object.transform,
-            style: object.style,
-            appearance: object.appearance,
-            publication,
-        })
+        crate::Scene::observe_effective(self.store, self.session, mobject).map_err(Into::into)
     }
 
     /// Capture full-coordinate owned points and ordered child occurrences from
@@ -1216,81 +1201,6 @@ impl<'a> LiveSession<'a> {
         mobject
             .manim_line_endpoints_at(transform)
             .map_err(LiveSessionError::from)
-    }
-
-    pub fn effective_fill_color(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<Option<Color>, LiveSessionError> {
-        let effective = self.effective(mobject)?;
-        if effective.fill_paint.is_some()
-            || matches!(
-                mobject.state()?.style.fill,
-                Some(noon_core::SemanticPaint::Image(_))
-            )
-        {
-            return Err(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
-            )
-            .into());
-        }
-        Ok(effective
-            .style
-            .fill
-            .map(crate::semantic_mobject::opaque_paint_color))
-    }
-
-    pub fn effective_stroke_color(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<Option<Color>, LiveSessionError> {
-        mobject.stroke_color().map_err(LiveSessionError::from)?;
-        Ok(self
-            .effective(mobject)?
-            .style
-            .stroke
-            .map(crate::semantic_mobject::opaque_paint_color))
-    }
-
-    pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, LiveSessionError> {
-        Ok(f64::from(self.effective(mobject)?.style.stroke_width))
-    }
-
-    pub fn effective_stroke_cap(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<noon_core::StrokeCap, LiveSessionError> {
-        Ok(self.effective(mobject)?.style.stroke_cap)
-    }
-
-    /// Read visible fill RGB, falling back to stroke RGB, at the current publication.
-    pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, LiveSessionError> {
-        // Resource paints do not have a scalar Manim color representation. Check
-        // the selected authored channel before observing its lowered runtime style.
-        let effective = self.effective(mobject)?;
-        if effective.fill_paint.is_some()
-            && effective.style.fill.is_some_and(|color| color.alpha > 0.0)
-        {
-            return Err(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
-            )
-            .into());
-        }
-        if !matches!(
-            mobject.state()?.style.fill,
-            Some(
-                noon_core::SemanticPaint::LinearGradient(_)
-                    | noon_core::SemanticPaint::RadialGradient(_)
-                    | noon_core::SemanticPaint::Noise(_)
-                    | noon_core::SemanticPaint::Hatch(_)
-                    | noon_core::SemanticPaint::Image(_)
-            )
-        ) {
-            mobject.manim_color().map_err(LiveSessionError::from)?;
-        }
-        Ok(crate::semantic_mobject::manim_color_from_effective(
-            &effective.style,
-        ))
     }
 
     /// Activate one predeclared animation in this session.
@@ -2746,39 +2656,6 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| edit_color(style, red, green, blue, alpha))
     }
 
-    /// Capture the donor's coherent effective RGB before the recipient mutation.
-    pub fn match_color(
-        &mut self,
-        mobject: &Mobject,
-        donor: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let color = self.effective_manim_color(donor)?;
-        self.set_color(
-            mobject,
-            color.red.into(),
-            color.green.into(),
-            color.blue.into(),
-            1.0,
-        )
-    }
-
-    /// Publish one validated color interpolation for an object.
-    pub fn fade_to(
-        &mut self,
-        mobject: &Mobject,
-        target: Color,
-        amount: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        self.session.require_published_store(&self.store.borrow())?;
-        if !mobject.has_fade_to_points()? {
-            return self.replace_style(mobject, mobject.state()?.style);
-        }
-        self.edit_style(mobject, |style| {
-            crate::semantic_mobject::edit_fade_to(style, target, amount)
-        })
-    }
-
     pub fn set_family_style(
         &mut self,
         family: &MobjectFamily,
@@ -3092,7 +2969,8 @@ impl<'a> LiveSession<'a> {
         family: &MobjectFamily,
         donor: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let color = self.effective_manim_color(donor)?;
+        let color =
+            crate::scene::object_edits::effective_manim_color(donor, self.effective(donor)?)?;
         self.set_family_color(
             family,
             color.red.into(),
@@ -3746,10 +3624,9 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let segment = live.play_animation(&animation).unwrap();
-        live.advance_segment_to(segment, 1.0).unwrap();
+        let mut running = scene.into_execution().unwrap();
+        let segment = running.live().play_animation(&animation).unwrap();
+        running.live().advance_segment_to(segment, 1.0).unwrap();
 
         assert_eq!(
             line.manim_line_endpoints().unwrap(),
@@ -3759,7 +3636,7 @@ mod tests {
             }
         );
         assert_eq!(
-            live.effective_line_endpoints(&line).unwrap(),
+            running.live().effective_line_endpoints(&line).unwrap(),
             ManimLineEndpoints {
                 start: (-1.0, 1.0),
                 end: (1.0, 1.0),
@@ -3767,10 +3644,10 @@ mod tests {
         );
         assert_eq!(line.manim_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
         assert_eq!(
-            live.effective_manim_color(&line).unwrap(),
+            running.scene().effective_manim_color(&line).unwrap(),
             Color::rgb(0.5, 0.0, 0.5)
         );
-        let effective = live.effective(&line).unwrap();
+        let effective = running.live().effective(&line).unwrap();
         assert_eq!(effective.fill_opacity(), 0.0);
         assert_eq!(effective.stroke_opacity(), 0.5);
         assert_eq!(line.stroke_opacity().unwrap(), 0.25);
@@ -3780,18 +3657,22 @@ mod tests {
     fn live_line_endpoints_reject_active_content_overrides() {
         let mut scene = Scene::new();
         let line = scene.line((-1.0, 0.0), (1.0, 0.0)).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.declare_and_activate_create(
-            &line,
-            AnimationOptions::new()
-                .run_time(1.0)
-                .rate_func(RateFunction::Linear),
-        )
-        .unwrap();
+        let mut running = scene.into_execution().unwrap();
+        running
+            .live()
+            .declare_and_activate_create(
+                &line,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
 
-        assert!(live.effective_line_endpoints(&line).is_err());
-        assert_eq!(live.effective_manim_color(&line).unwrap(), Color::WHITE);
+        assert!(running.live().effective_line_endpoints(&line).is_err());
+        assert_eq!(
+            running.scene().effective_manim_color(&line).unwrap(),
+            Color::WHITE
+        );
     }
 
     #[test]

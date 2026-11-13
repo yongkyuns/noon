@@ -151,26 +151,15 @@ fn non_solid_effective_zero_fill_uses_the_current_stroke_color() {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 1.0)
-            .unwrap();
+        let mut running = scene.into_execution().unwrap();
+        let segment = running.live().play_animation(&animation).unwrap();
+        running.live().advance_segment_to(segment, 1.0).unwrap();
         assert_eq!(
-            scene
-                .live(&mut session)
-                .authored(&source)
-                .unwrap()
-                .style
-                .fill_opacity,
+            running.live().authored(&source).unwrap().style.fill_opacity,
             1.0
         );
         assert_eq!(
-            scene
-                .live(&mut session)
-                .effective_manim_color(&source)
-                .unwrap(),
+            running.scene().effective_manim_color(&source).unwrap(),
             Color::rgb(0.0, 1.0, 0.0)
         );
     }

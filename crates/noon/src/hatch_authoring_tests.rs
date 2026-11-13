@@ -156,17 +156,11 @@ fn zero_hatch_fill_observes_current_solid_stroke_color() {
     let animation = scene
         .declare_transform_to(&source, &target, AnimationOptions::new().run_time(1.0))
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 1.0).unwrap();
     assert_eq!(
-        scene
-            .live(&mut session)
-            .effective_manim_color(&source)
-            .unwrap(),
+        running.scene().effective_manim_color(&source).unwrap(),
         Color::rgb(0.0, 1.0, 0.0)
     );
 }

@@ -7,7 +7,7 @@ use crate::{
         edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
         edit_stroke_opacity, edit_stroke_width, prepare_fill_paint_value,
     },
-    AuthoringError, Mobject, Scene,
+    AuthoringError, EffectiveMobjectState, Mobject, Scene,
 };
 use noon_core::{
     Color, HatchPaint, LinearGradient, NoisePaint, RadialGradient, SemanticMutationTransaction,
@@ -228,6 +228,88 @@ impl Scene {
         self.set_fill_paint(object, SemanticPaint::Noise(paint.into()), opacity)
     }
 
+    pub fn effective_fill_color(&self, mobject: &Mobject) -> Result<Option<Color>, AuthoringError> {
+        let effective = self.effective(mobject)?;
+        if effective.fill_paint.is_some()
+            || matches!(
+                mobject.state()?.style.fill,
+                Some(noon_core::SemanticPaint::Image(_))
+            )
+        {
+            return Err(crate::AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+            ));
+        }
+        Ok(effective
+            .style
+            .fill
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    pub fn effective_stroke_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, AuthoringError> {
+        mobject.stroke_color()?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .stroke
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    pub fn effective_stroke_width(&self, mobject: &Mobject) -> Result<f64, AuthoringError> {
+        Ok(f64::from(self.effective(mobject)?.style.stroke_width))
+    }
+
+    pub fn effective_stroke_cap(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<noon_core::StrokeCap, AuthoringError> {
+        Ok(self.effective(mobject)?.style.stroke_cap)
+    }
+
+    /// Read visible fill RGB, falling back to stroke RGB.
+    pub fn effective_manim_color(&self, mobject: &Mobject) -> Result<Color, AuthoringError> {
+        effective_manim_color(mobject, self.effective(mobject)?)
+    }
+
+    /// Match the donor's authored or effective color while retaining recipient opacity.
+    pub fn match_color(&mut self, object: &Mobject, donor: &Mobject) -> Result<(), AuthoringError> {
+        let color = if self.running_execution().is_some() {
+            self.effective_manim_color(donor)?
+        } else {
+            self.require_object(donor)?;
+            donor.manim_color()?
+        };
+        self.set_color_rgba(
+            object,
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            1.0,
+        )
+    }
+
+    /// Interpolate authored paint toward a color using Manim's point-bearing rule.
+    pub fn fade_to(
+        &mut self,
+        object: &Mobject,
+        target: Color,
+        amount: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if let Some(execution) = self.running_execution() {
+            execution.require_published_store(&self.integration_store().borrow())?;
+        }
+        if !object.has_fade_to_points()? {
+            return self.publish_object_style(object, object.state()?.style);
+        }
+        self.edit_object_style(object, |style| {
+            crate::semantic_mobject::edit_fade_to(style, target, amount)
+        })
+    }
+
     fn set_fill_paint(
         &mut self,
         object: &Mobject,
@@ -242,9 +324,7 @@ impl Scene {
             paint,
             opacity,
         )?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.replace_style(object.node_id(), state.style);
-        self.apply_semantic_transaction(transaction).map(|_| ())
+        self.publish_object_style(object, state.style)
     }
 
     /// Translate an object's own content and unique descendants in one publication.
@@ -274,10 +354,45 @@ impl Scene {
         self.require_object(object)?;
         let mut style = object.state()?.style;
         edit(&mut style)?;
+        self.publish_object_style(object, style)
+    }
+
+    fn publish_object_style(
+        &mut self,
+        object: &Mobject,
+        style: SemanticStyle,
+    ) -> Result<(), AuthoringError> {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.replace_style(object.node_id(), style);
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
+}
+
+pub(crate) fn effective_manim_color(
+    mobject: &Mobject,
+    effective: EffectiveMobjectState,
+) -> Result<Color, AuthoringError> {
+    if effective.fill_paint.is_some() && effective.style.fill.is_some_and(|color| color.alpha > 0.0)
+    {
+        return Err(crate::AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::ResourcePaintColorQuery,
+        ));
+    }
+    if !matches!(
+        mobject.state()?.style.fill,
+        Some(
+            noon_core::SemanticPaint::LinearGradient(_)
+                | noon_core::SemanticPaint::RadialGradient(_)
+                | noon_core::SemanticPaint::Noise(_)
+                | noon_core::SemanticPaint::Hatch(_)
+                | noon_core::SemanticPaint::Image(_)
+        )
+    ) {
+        mobject.manim_color()?;
+    }
+    Ok(crate::semantic_mobject::manim_color_from_effective(
+        &effective.style,
+    ))
 }
 
 #[cfg(test)]
