@@ -145,6 +145,55 @@ pub mod host_execution {
         Some(scene.owned_live())
     }
 
+    /// Register a host callable at its authored time and occurrence position.
+    pub fn add_updater(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        callback: noon_core::HostCallbackId,
+        active_from: f64,
+        position: Option<usize>,
+    ) -> Result<(), crate::AuthoringError> {
+        edit_updaters(scene, target, |transaction| {
+            transaction.add_updater(target.node_id(), callback, active_from, position);
+        })
+    }
+
+    /// Close the first open occurrence of a host callable at an exclusive time.
+    pub fn remove_updater(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        callback: noon_core::HostCallbackId,
+        inactive_from: f64,
+    ) -> Result<(), crate::AuthoringError> {
+        edit_updaters(scene, target, |transaction| {
+            transaction.remove_updater(target.node_id(), callback, inactive_from);
+        })
+    }
+
+    /// Close all open occurrences on this object at an exclusive time.
+    pub fn clear_updaters(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        inactive_from: f64,
+    ) -> Result<(), crate::AuthoringError> {
+        edit_updaters(scene, target, |transaction| {
+            transaction.clear_updaters(target.node_id(), inactive_from);
+        })
+    }
+
+    fn edit_updaters(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        declare: impl FnOnce(&mut noon_core::SemanticMutationTransaction),
+    ) -> Result<(), crate::AuthoringError> {
+        if !Rc::ptr_eq(&scene.store, target.integration_store()) {
+            return Err(crate::AuthoringError::ForeignStore);
+        }
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        declare(&mut transaction);
+        scene.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     /// Publish a typed host semantic transaction through its owning Scene.
     pub fn publish(
         scene: &mut Scene,
