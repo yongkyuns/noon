@@ -301,6 +301,32 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_interpolation_preserves_root_scope_and_publishes_points_in_both_phases(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        start = Line(LEFT, RIGHT).set_stroke(RED, width=2)
+        end = Line(2 * LEFT + UP, 2 * RIGHT + UP).set_stroke(BLUE, width=6)
+        leaf = Line(LEFT, RIGHT)
+        group = VGroup(leaf)
+        start_group = VGroup().set_stroke(RED, width=2, family=False)
+        end_group = VGroup().set_stroke(BLUE, width=6, family=False)
+        original = leaf.get_stroke_width()
+        self.add(group)
+        for amount in (0.25, 0.75):
+            leaf.interpolate(start, end, amount)
+            assert abs(leaf.get_start()[1] - amount) < 1e-5
+            assert abs(leaf.get_stroke_width() - (2 + 4 * amount)) < 1e-5
+            child_width = leaf.get_stroke_width()
+            group.interpolate_color(start_group, end_group, amount)
+            assert abs(group.get_stroke_width() - (2 + 4 * amount)) < 1e-5
+            assert leaf.get_stroke_width() == child_width
+            self.wait(0.125)
+        assert leaf.get_stroke_width() != original
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_native_style_edits_preserve_replay(self):
         source = """from noon import *
 class Demo(Scene):

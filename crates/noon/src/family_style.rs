@@ -1259,8 +1259,8 @@ impl Scene {
         self.apply_semantic_transaction(transaction)
     }
 
-    /// Interpolate one VMobject's effective world-space points and supported
-    /// paint through one coherent live path/style publication.
+    /// Interpolate world-space paths and paint through one coherent publication.
+    /// Reachable donors contribute effective paths and detached donors contribute authored paths.
     pub fn interpolate_manim(
         &mut self,
         receiver: &Mobject,
@@ -1272,16 +1272,18 @@ impl Scene {
         self.require_object(start)?;
         self.require_object(end)?;
         self.require_resource_admission()?;
+        self.require_effective_capture()?;
 
         let receiver_state = self.capture_mobject_state(receiver)?;
         let start_state = self.capture_mobject_state(start)?;
         let end_state = self.capture_mobject_state(end)?;
         let points = |object: &Mobject| {
-            if self.running_execution().is_some() {
-                self.effective_path_query(object)?.points()
-            } else {
-                object.path_query()?.points()
-            }
+            crate::path_queries::captured_path_query(
+                self.integration_store(),
+                self.running_execution(),
+                object,
+            )?
+            .points()
         };
         let start_points = points(start)?;
         let end_points = points(end)?;

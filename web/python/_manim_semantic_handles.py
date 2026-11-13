@@ -1717,12 +1717,16 @@ def _interpolate_manim_style(self, mobject1, mobject2, alpha):
         receiver = self._semantic_family_handle
         start = mobject1._semantic_family_handle
         end = mobject2._semantic_family_handle
-        context = _group_target_context(self)
+        context = (
+            _paint_authoring_target(self)[1]
+            or _paint_authoring_target(mobject1)[1]
+            or _paint_authoring_target(mobject2)[1]
+        )
         if context is None:
             engine_call(receiver.interpolateManimStyle, start, end, amount)
         else:
             engine_call(
-                context.liveInterpolateFamilyManimStyle,
+                context.interpolateFamilyManimStyle,
                 receiver,
                 start,
                 end,
@@ -1738,12 +1742,12 @@ def _interpolate_manim_style(self, mobject1, mobject2, alpha):
             "VMobject.interpolate_color requires current shared Rust semantic handles"
         )
 
-    context = _live_mutation_context(self)
+    context = _path_authoring_context(self, mobject1, mobject2)
     if context is None:
         engine_call(target.interpolateManimStyle, start, end, amount)
     else:
         engine_call(
-            context.liveInterpolateMobjectStyle,
+            context.interpolateMobjectStyle,
             target,
             start,
             end,
@@ -1804,12 +1808,12 @@ def _interpolate_manim(self, mobject1, mobject2, alpha, path_func):
             "Mobject.interpolate requires current shared Rust semantic handles"
         )
 
-    context = _live_mutation_context(self)
+    context = _path_authoring_context(self, mobject1, mobject2)
     if context is None:
         engine_call(target.interpolateManim, start, end, amount)
     else:
         engine_call(
-            context.liveInterpolateMobject,
+            context.interpolateMobject,
             target,
             start,
             end,

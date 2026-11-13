@@ -1239,7 +1239,12 @@ pub fn effective_point_reduction_tree(
         point_reduction_topology(&semantics, target.node_id())?
     };
     point_reduction_tree_from_topology(&topology, &mut |id| {
-        family_point_path_query(store, execution, id)?.points_3d()
+        captured_path_query(
+            store,
+            Some(execution),
+            &Mobject::from_node(Rc::clone(store), id)?,
+        )?
+        .points_3d()
     })
 }
 
@@ -1303,25 +1308,26 @@ fn effective_point_observation_map<P>(
     let occurrences = observation.nodes(&store.borrow(), target.node_id())?;
     let mut result = Vec::new();
     for id in occurrences {
-        result.extend(point_reader(&family_point_path_query(
-            store, execution, id,
+        let object = Mobject::from_node(Rc::clone(store), id)?;
+        result.extend(point_reader(&captured_path_query(
+            store,
+            Some(execution),
+            &object,
         )?)?);
     }
     Ok(result)
 }
 
-// Membership/coherence is validated once by the recursive observation. A
-// detached node has no live execution value: its current authored path remains
-// queryable without admitting it to the scene. Reachable children still use the
-// same effective runtime publication, including animation/content overrides.
-fn family_point_path_query(
+// The caller checks publication coherence before observing a reachable or detached object.
+pub(crate) fn captured_path_query(
     store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    id: SemanticNodeId,
+    execution: Option<&ExecutionSession>,
+    object: &Mobject,
 ) -> Result<PathQuery, AuthoringError> {
-    let object = Mobject::from_node(Rc::clone(store), id)?;
-    if execution.semantic_object_is_reachable(id) {
-        effective_path_query(store, execution, &object)
+    if let Some(execution) =
+        execution.filter(|session| session.semantic_object_is_reachable(object.node_id()))
+    {
+        effective_path_query(store, execution, object)
     } else {
         object.path_query()
     }

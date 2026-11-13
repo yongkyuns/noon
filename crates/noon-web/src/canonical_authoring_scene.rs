@@ -11461,8 +11461,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveInterpolateMobjectStyle)]
-        pub fn live_interpolate_mobject_style(
+        #[wasm_bindgen(js_name = interpolateMobjectStyle)]
+        pub fn interpolate_mobject_style(
             &mut self,
             receiver: &crate::WasmAuthoringMobjectHandle,
             start: &crate::WasmAuthoringMobjectHandle,
@@ -11474,21 +11474,19 @@ mod wasm {
             start.id_in_store(store, "style interpolation start")?;
             end.id_in_store(store, "style interpolation end")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .interpolate_manim_style(
-                    receiver.semantic_mobject(),
-                    start.semantic_mobject(),
-                    end.semantic_mobject(),
-                    alpha,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.interpolate_manim_style(
+                        receiver.semantic_mobject(),
+                        start.semantic_mobject(),
+                        end.semantic_mobject(),
+                        alpha,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveInterpolateMobject)]
-        pub fn live_interpolate_mobject(
+        #[wasm_bindgen(js_name = interpolateMobject)]
+        pub fn interpolate_mobject(
             &mut self,
             receiver: &crate::WasmAuthoringMobjectHandle,
             start: &crate::WasmAuthoringMobjectHandle,
@@ -11500,17 +11498,15 @@ mod wasm {
             start.id_in_store(store, "interpolation start")?;
             end.id_in_store(store, "interpolation end")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .interpolate_manim(
-                    receiver.semantic_mobject(),
-                    start.semantic_mobject(),
-                    end.semantic_mobject(),
-                    alpha,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.interpolate_manim(
+                        receiver.semantic_mobject(),
+                        start.semantic_mobject(),
+                        end.semantic_mobject(),
+                        alpha,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = liveSetMobjectSheenDirection)]
@@ -11729,26 +11725,22 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveInterpolateFamilyManimStyle)]
-        pub fn live_interpolate_family_manim_style(
+        #[wasm_bindgen(js_name = interpolateFamilyManimStyle)]
+        pub fn interpolate_family_manim_style(
             &mut self,
             receiver: &crate::WasmAuthoringFamilyHandle,
             start: &crate::WasmAuthoringFamilyHandle,
             end: &crate::WasmAuthoringFamilyHandle,
             alpha: f64,
         ) -> Result<(), JsValue> {
+            let receiver = receiver.semantic_family()?;
+            let start = start.semantic_family()?;
+            let end = end.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .interpolate_family_manim_style(
-                    &receiver.semantic_family()?,
-                    &start.semantic_family()?,
-                    &end.semantic_family()?,
-                    alpha,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.interpolate_family_manim_style(&receiver, &start, &end, alpha)
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = setFamilyOwnStyleWithBackgroundStroke)]
