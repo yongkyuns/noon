@@ -21,8 +21,6 @@ mod provisional_geometry;
 mod spatial;
 #[cfg(target_arch = "wasm32")]
 mod table;
-#[cfg(any(target_arch = "wasm32", test))]
-mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;

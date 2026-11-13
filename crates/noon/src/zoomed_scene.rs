@@ -126,7 +126,6 @@ pub struct ZoomedView {
     camera_frame: Mobject,
     display: Mobject,
     capture_own_display: bool,
-    scene_root: noon_core::SemanticNodeId,
 }
 
 impl ZoomedView {
@@ -154,16 +153,20 @@ fn zoom_ratio(camera_height: f64, display_height: f64) -> Result<f64, AuthoringE
     Ok(camera_height / display_height)
 }
 
-impl crate::LiveSession<'_> {
-    /// Read both ordinary inset handles from the same effective publication.
-    pub fn zoom_factor(&self, view: &ZoomedView) -> Result<f64, crate::LiveSessionError> {
+impl Scene {
+    /// Read the camera-to-display height ratio at the Scene's current state.
+    /// Both heights come from the same effective publication when running.
+    pub fn zoom_factor(&self, view: &ZoomedView) -> Result<f64, AuthoringError> {
+        self.require_object(view.camera_frame())?;
+        self.require_object(view.display())?;
+        if self.running_execution().is_none() {
+            return view.zoom_factor();
+        }
         let frame = self.effective_layout(view.camera_frame())?;
         let display = self.effective_layout(view.display())?;
-        zoom_ratio(frame.height, display.height).map_err(Into::into)
+        zoom_ratio(frame.height, display.height)
     }
-}
 
-impl Scene {
     /// Create the two detached ordinary objects for a Manim-compatible zoomed view.
     pub fn zoomed_view(
         &mut self,
@@ -214,31 +217,13 @@ impl Scene {
             camera_frame: Mobject::from_node(Rc::clone(self.integration_store()), frame)?,
             display: Mobject::from_node(Rc::clone(self.integration_store()), display)?,
             capture_own_display: options.capture_own_display,
-            scene_root: self.root(),
         })
     }
 
     /// Atomically register the inset relation and add both ordinary handles to foreground.
     pub fn activate_zooming(&mut self, view: &ZoomedView) -> Result<(), AuthoringError> {
-        let transaction = self.prepare_zooming_activation(view)?;
-        self.apply_semantic_transaction(transaction)?;
-        Ok(())
-    }
-
-    /// Prepare the one authoritative relation/membership edit for cold or live publication.
-    pub fn prepare_zooming_activation(
-        &self,
-        view: &ZoomedView,
-    ) -> Result<SemanticMutationTransaction, AuthoringError> {
-        if !Rc::ptr_eq(
-            view.camera_frame.integration_store(),
-            self.integration_store(),
-        ) || !Rc::ptr_eq(view.display.integration_store(), self.integration_store())
-        {
-            return Err(AuthoringError::ForeignStore);
-        }
-        view.camera_frame.validate()?;
-        view.display.validate()?;
+        self.require_object(view.camera_frame())?;
+        self.require_object(view.display())?;
         let targets = [
             MobjectTarget::Object(view.camera_frame()),
             MobjectTarget::Object(view.display()),
@@ -253,40 +238,7 @@ impl Scene {
             view.camera_frame.node_id(),
             view.capture_own_display,
         );
-        Ok(transaction)
-    }
-}
-
-impl crate::LiveSession<'_> {
-    /// Activate an authored zoomed view at the current live publication.
-    ///
-    /// This lets a continuation defer foreground membership and the inset
-    /// relation until the same authored barrier as a source-level
-    /// `activate_zooming()` call.
-    pub fn activate_zooming(&mut self, view: &ZoomedView) -> Result<(), crate::LiveSessionError> {
-        if !Rc::ptr_eq(
-            view.camera_frame.integration_store(),
-            self.integration_store(),
-        ) || !Rc::ptr_eq(view.display.integration_store(), self.integration_store())
-        {
-            return Err(crate::AuthoringError::ForeignStore.into());
-        }
-        let store = view.camera_frame.integration_store();
-        let targets = [
-            crate::MobjectTarget::Object(view.camera_frame()),
-            crate::MobjectTarget::Object(view.display()),
-        ];
-        let mut transaction = crate::scene_membership::prepare_scene_membership(
-            store,
-            view.scene_root,
-            crate::SceneMembershipRequest::AddForeground(&targets),
-        )?;
-        transaction.set_inset_2d_view(
-            view.display.node_id(),
-            view.camera_frame.node_id(),
-            view.capture_own_display,
-        );
-        self.apply(transaction).map(|_| ())
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
 }
 
@@ -361,9 +313,10 @@ mod tests {
         let mut target = view.camera_frame().target_editor().unwrap();
         target.set_translation(2.0, -1.0).unwrap();
         target.scale(2.0, 2.0).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let session = scene.execution_session().unwrap();
+        scene.install_execution(session);
         let segment = scene
-            .live(&mut session)
+            .owned_live()
             .declare_and_activate_transform_to(
                 view.camera_frame(),
                 &target,
@@ -373,23 +326,20 @@ mod tests {
             )
             .unwrap();
 
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 0.5)
-            .unwrap();
-        assert!((scene.live(&mut session).zoom_factor(&view).unwrap() - 0.225).abs() < 1.0e-6);
+        scene.owned_live().advance_segment_to(segment, 0.5).unwrap();
+        assert!((scene.zoom_factor(&view).unwrap() - 0.225).abs() < 1.0e-6);
         assert!((view.zoom_factor().unwrap() - 0.15).abs() < 1.0e-6);
-        let midpoint = session.inset_2d_views().unwrap()[0];
+        let midpoint = scene.owned_execution().inset_2d_views().unwrap()[0];
         assert_eq!(midpoint.camera.center, Vec2::new(1.0, -0.5));
         assert!((midpoint.zoom_factor() - 0.225).abs() < 1.0e-6);
 
-        session.seek(0.25).unwrap();
-        assert!((scene.live(&mut session).zoom_factor(&view).unwrap() - 0.1875).abs() < 1.0e-6);
-        let rewind = session.inset_2d_views().unwrap()[0];
+        scene.owned_execution_mut().seek(0.25).unwrap();
+        assert!((scene.zoom_factor(&view).unwrap() - 0.1875).abs() < 1.0e-6);
+        let rewind = scene.owned_execution().inset_2d_views().unwrap()[0];
         assert_eq!(rewind.camera.center, Vec2::new(0.5, -0.25));
         assert!((rewind.zoom_factor() - 0.1875).abs() < 1.0e-6);
-        session.advance_to(1.0).unwrap();
-        let endpoint = session.inset_2d_views().unwrap()[0];
+        scene.owned_execution_mut().advance_to(1.0).unwrap();
+        let endpoint = scene.owned_execution().inset_2d_views().unwrap()[0];
         assert_eq!(endpoint.camera.center, Vec2::new(2.0, -1.0));
         assert!((endpoint.zoom_factor() - 0.3).abs() < 1.0e-6);
     }
