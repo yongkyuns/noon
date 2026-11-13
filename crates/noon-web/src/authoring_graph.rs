@@ -9,155 +9,10 @@ use crate::authoring_error::js_error;
 #[cfg(target_arch = "wasm32")]
 use crate::CanonicalAuthoringSceneContext;
 
-pub(crate) enum NativeGraph {
-    Undirected(noon::Graph<u32>),
-    Directed(noon::DiGraph<u32>),
-}
-
-// Native transport fixtures exercise explicit placement; browser bindings expose every operation.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) enum GraphOperation {
-    AddVertices(Vec<(u32, (f64, f64))>),
-    AddEdges(Vec<(u32, u32)>),
-    RemoveVertices(Vec<u32>),
-    RemoveEdges(Vec<(u32, u32)>),
-    Circular { scale: f64, center: (f64, f64) },
-    Explicit(Vec<(f64, f64)>),
-}
-
-impl NativeGraph {
-    pub(crate) fn new(
-        scene: &mut noon::Scene,
-        directed: bool,
-        vertices: Vec<(u32, (f64, f64))>,
-        edges: Vec<(u32, u32)>,
-        options: noon::GraphOptions,
-    ) -> Result<Self, noon::GraphAuthoringError> {
-        if directed {
-            noon::DiGraph::with_options(scene, vertices, edges, options).map(Self::Directed)
-        } else {
-            noon::Graph::with_options(scene, vertices, edges, options).map(Self::Undirected)
-        }
-    }
-
-    pub(crate) fn family(&self) -> &noon::MobjectFamily {
-        match self {
-            Self::Undirected(graph) => graph.family(),
-            Self::Directed(graph) => graph.family(),
-        }
-    }
-
-    pub(crate) fn apply(
-        &mut self,
-        scene: &mut noon::Scene,
-        operation: GraphOperation,
-    ) -> Result<(), noon::GraphAuthoringError> {
-        match (self, operation) {
-            (Self::Undirected(graph), GraphOperation::AddVertices(vertices)) => {
-                graph.add_vertices(scene, vertices)?;
-            }
-            (Self::Directed(graph), GraphOperation::AddVertices(vertices)) => {
-                graph.add_vertices(scene, vertices)?;
-            }
-            (Self::Undirected(graph), GraphOperation::AddEdges(edges)) => {
-                graph.add_edges(scene, edges)?;
-            }
-            (Self::Directed(graph), GraphOperation::AddEdges(edges)) => {
-                graph.add_edges(scene, edges)?;
-            }
-            (Self::Undirected(graph), GraphOperation::RemoveVertices(vertices)) => {
-                graph.remove_vertices(scene, vertices)?;
-            }
-            (Self::Directed(graph), GraphOperation::RemoveVertices(vertices)) => {
-                graph.remove_vertices(scene, vertices)?;
-            }
-            (Self::Undirected(graph), GraphOperation::RemoveEdges(edges)) => {
-                graph.remove_edges(scene, edges)?;
-            }
-            (Self::Directed(graph), GraphOperation::RemoveEdges(edges)) => {
-                graph.remove_edges(scene, edges)?;
-            }
-            (Self::Undirected(graph), GraphOperation::Circular { scale, center }) => {
-                graph.change_layout(
-                    scene,
-                    noon::GraphLayoutOptions {
-                        layout: noon::GraphLayout::Circular,
-                        scale,
-                        center,
-                        ..Default::default()
-                    },
-                )?;
-            }
-            (Self::Directed(graph), GraphOperation::Circular { scale, center }) => {
-                graph.change_layout(
-                    scene,
-                    noon::GraphLayoutOptions {
-                        layout: noon::GraphLayout::Circular,
-                        scale,
-                        center,
-                        ..Default::default()
-                    },
-                )?;
-            }
-            (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
-                graph.change_layout_positions(scene, &positions)?;
-            }
-            (Self::Directed(graph), GraphOperation::Explicit(positions)) => {
-                graph.change_layout_positions(scene, &positions)?;
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn copy_in_scene(
-        &self,
-        scene: &mut noon::Scene,
-    ) -> Result<Self, noon::GraphAuthoringError> {
-        match self {
-            Self::Undirected(graph) => graph.copy_in_scene(scene).map(Self::Undirected),
-            Self::Directed(graph) => graph.copy_in_scene(scene).map(Self::Directed),
-        }
-    }
-}
-
 #[cfg(target_arch = "wasm32")]
-fn pairs(values: &[u32], name: &str) -> Result<Vec<(u32, u32)>, JsValue> {
-    let chunks = values.chunks_exact(2);
-    if !chunks.remainder().is_empty() {
-        return Err(js_error(format!("{name} requires pairs of vertex IDs")));
-    }
-    Ok(chunks.map(|pair| (pair[0], pair[1])).collect())
-}
-
+use noon::integration::graph::{manim_stroke_width, pairs, vertices};
 #[cfg(target_arch = "wasm32")]
-fn vertices(ids: &[u32], positions: &[f64]) -> Result<Vec<(u32, (f64, f64))>, JsValue> {
-    if positions.len() != ids.len() * 2 {
-        return Err(js_error(
-            "Graph positions require exactly two finite values per vertex",
-        ));
-    }
-    ids.iter()
-        .zip(positions.chunks_exact(2))
-        .map(|(&id, position)| {
-            let (x, y) = (position[0], position[1]);
-            if !x.is_finite() || !y.is_finite() {
-                return Err(js_error("Graph positions must be finite"));
-            }
-            Ok((id, (x, y)))
-        })
-        .collect()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn manim_stroke_width(name: &str, width: f64) -> Result<f64, JsValue> {
-    if !width.is_finite() || width < 0.0 {
-        return Err(js_error(format!(
-            "{name} must be a finite non-negative number"
-        )));
-    }
-    Ok(width * noon::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE)
-}
+use noon::integration::graph::{GraphOperation, HostGraph};
 
 /// Typed global Graph/DiGraph appearance. Python converts public colors and
 /// names; this boundary validates components and converts Manim stroke widths
@@ -214,7 +69,8 @@ impl WasmGraphOptions {
 
     #[wasm_bindgen(js_name = setVertexStrokeWidth)]
     pub fn set_vertex_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
-        self.options.vertex_stroke_width = manim_stroke_width("vertex stroke width", width)?;
+        self.options.vertex_stroke_width =
+            manim_stroke_width("vertex stroke width", width).map_err(js_error)?;
         Ok(())
     }
 
@@ -232,7 +88,8 @@ impl WasmGraphOptions {
 
     #[wasm_bindgen(js_name = setEdgeStrokeWidth)]
     pub fn set_edge_stroke_width(&mut self, width: f64) -> Result<(), JsValue> {
-        self.options.edge_stroke_width = manim_stroke_width("edge stroke width", width)?;
+        self.options.edge_stroke_width =
+            manim_stroke_width("edge stroke width", width).map_err(js_error)?;
         Ok(())
     }
 }
@@ -247,7 +104,7 @@ fn graph_color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<noon::Colo
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct WasmGraphHandle {
-    inner: NativeGraph,
+    inner: HostGraph,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -260,10 +117,7 @@ impl WasmGraphHandle {
 
     /// Resolve one language key without traversing or copying the graph family.
     pub fn vertex(&self, key: u32) -> Option<crate::WasmAuthoringMobjectHandle> {
-        let vertex = match &self.inner {
-            NativeGraph::Undirected(graph) => graph.vertex(&key),
-            NativeGraph::Directed(graph) => graph.vertex(&key),
-        }?;
+        let vertex = self.inner.vertex(key)?;
         Some(crate::WasmAuthoringMobjectHandle::from_semantic_mobject(
             vertex.clone(),
         ))
@@ -273,10 +127,10 @@ impl WasmGraphHandle {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    /// Build an opaque native Graph/DiGraph through the active live player.
+    /// Build an opaque native Graph/DiGraph through the owning Scene.
     /// Key mapping belongs to the language facade; topology remains in Rust.
-    #[wasm_bindgen(js_name = liveCreateGraph)]
-    pub fn live_create_graph(
+    #[wasm_bindgen(js_name = createGraph)]
+    pub fn create_graph(
         &mut self,
         directed: bool,
         vertex_ids: &[u32],
@@ -284,16 +138,16 @@ impl CanonicalAuthoringSceneContext {
         edge_pairs: &[u32],
         options: WasmGraphOptions,
     ) -> Result<WasmGraphHandle, JsValue> {
-        let vertices = vertices(vertex_ids, positions)?;
-        let edges = pairs(edge_pairs, "Graph edges")?;
-        self.create_live_graph(directed, vertices, edges, options.options)
+        let vertices = vertices(vertex_ids, positions).map_err(js_error)?;
+        let edges = pairs(edge_pairs, "Graph edges").map_err(js_error)?;
+        self.create_graph_in_scene(directed, vertices, edges, options.options)
             .map(|inner| WasmGraphHandle { inner })
             .map_err(js_error)
     }
 
     /// Compute a circular layout before publishing any semantic nodes.
-    #[wasm_bindgen(js_name = liveCreateCircularGraph)]
-    pub fn live_create_circular_graph(
+    #[wasm_bindgen(js_name = createCircularGraph)]
+    pub fn create_circular_graph(
         &mut self,
         directed: bool,
         vertex_ids: &[u32],
@@ -303,7 +157,7 @@ impl CanonicalAuthoringSceneContext {
         center_y: f64,
         options: WasmGraphOptions,
     ) -> Result<WasmGraphHandle, JsValue> {
-        let edges = pairs(edge_pairs, "Graph edges")?;
+        let edges = pairs(edge_pairs, "Graph edges").map_err(js_error)?;
         let positions = noon::GraphLayoutOptions {
             layout: noon::GraphLayout::Circular,
             scale,
@@ -318,47 +172,47 @@ impl CanonicalAuthoringSceneContext {
             ))
         })?;
         let vertices = vertex_ids.iter().copied().zip(positions).collect();
-        self.create_live_graph(directed, vertices, edges, options.options)
+        self.create_graph_in_scene(directed, vertices, edges, options.options)
             .map(|inner| WasmGraphHandle { inner })
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGraphCopy)]
-    pub fn live_graph_copy(&mut self, graph: &WasmGraphHandle) -> Result<WasmGraphHandle, JsValue> {
-        self.copy_live_graph(&graph.inner)
+    #[wasm_bindgen(js_name = graphCopy)]
+    pub fn graph_copy(&mut self, graph: &WasmGraphHandle) -> Result<WasmGraphHandle, JsValue> {
+        self.copy_graph_in_scene(&graph.inner)
             .map(|inner| WasmGraphHandle { inner })
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGraphAddVertices)]
-    pub fn live_graph_add_vertices(
+    #[wasm_bindgen(js_name = graphAddVertices)]
+    pub fn graph_add_vertices(
         &mut self,
         graph: &mut WasmGraphHandle,
         vertex_ids: &[u32],
         positions: &[f64],
     ) -> Result<(), JsValue> {
-        self.mutate_live_graph(
+        self.mutate_graph_in_scene(
             &mut graph.inner,
-            GraphOperation::AddVertices(vertices(vertex_ids, positions)?),
+            GraphOperation::AddVertices(vertices(vertex_ids, positions).map_err(js_error)?),
         )
         .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGraphAddEdges)]
-    pub fn live_graph_add_edges(
+    #[wasm_bindgen(js_name = graphAddEdges)]
+    pub fn graph_add_edges(
         &mut self,
         graph: &mut WasmGraphHandle,
         edge_pairs: &[u32],
     ) -> Result<(), JsValue> {
-        self.mutate_live_graph(
+        self.mutate_graph_in_scene(
             &mut graph.inner,
-            GraphOperation::AddEdges(pairs(edge_pairs, "Graph edges")?),
+            GraphOperation::AddEdges(pairs(edge_pairs, "Graph edges").map_err(js_error)?),
         )
         .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGraphCircularLayout)]
-    pub fn live_graph_circular_layout(
+    #[wasm_bindgen(js_name = graphCircularLayout)]
+    pub fn graph_circular_layout(
         &mut self,
         graph: &mut WasmGraphHandle,
         scale: f64,
@@ -368,7 +222,7 @@ impl CanonicalAuthoringSceneContext {
         if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
             return Err(js_error("circular Graph layout values must be finite"));
         }
-        self.mutate_live_graph(
+        self.mutate_graph_in_scene(
             &mut graph.inner,
             GraphOperation::Circular {
                 scale,
@@ -378,8 +232,8 @@ impl CanonicalAuthoringSceneContext {
         .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGraphExplicitLayout)]
-    pub fn live_graph_explicit_layout(
+    #[wasm_bindgen(js_name = graphExplicitLayout)]
+    pub fn graph_explicit_layout(
         &mut self,
         graph: &mut WasmGraphHandle,
         positions: &[f64],
@@ -387,36 +241,37 @@ impl CanonicalAuthoringSceneContext {
         let ids = (0..positions.len() / 2)
             .map(|id| id as u32)
             .collect::<Vec<_>>();
-        let positions = vertices(&ids, positions)?
+        let positions = vertices(&ids, positions)
+            .map_err(js_error)?
             .into_iter()
             .map(|(_, point)| point)
             .collect();
-        self.mutate_live_graph(&mut graph.inner, GraphOperation::Explicit(positions))
+        self.mutate_graph_in_scene(&mut graph.inner, GraphOperation::Explicit(positions))
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGraphRemoveVertices)]
-    pub fn live_graph_remove_vertices(
+    #[wasm_bindgen(js_name = graphRemoveVertices)]
+    pub fn graph_remove_vertices(
         &mut self,
         graph: &mut WasmGraphHandle,
         vertex_ids: &[u32],
     ) -> Result<(), JsValue> {
-        self.mutate_live_graph(
+        self.mutate_graph_in_scene(
             &mut graph.inner,
             GraphOperation::RemoveVertices(vertex_ids.to_vec()),
         )
         .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveGraphRemoveEdges)]
-    pub fn live_graph_remove_edges(
+    #[wasm_bindgen(js_name = graphRemoveEdges)]
+    pub fn graph_remove_edges(
         &mut self,
         graph: &mut WasmGraphHandle,
         edge_pairs: &[u32],
     ) -> Result<(), JsValue> {
-        self.mutate_live_graph(
+        self.mutate_graph_in_scene(
             &mut graph.inner,
-            GraphOperation::RemoveEdges(pairs(edge_pairs, "Graph edges")?),
+            GraphOperation::RemoveEdges(pairs(edge_pairs, "Graph edges").map_err(js_error)?),
         )
         .map_err(js_error)
     }

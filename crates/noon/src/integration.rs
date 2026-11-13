@@ -122,6 +122,8 @@ pub use noon_runtime::{
     RuntimeWakeState, TimelineWakeState, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 
+pub mod graph;
+
 mod vector_path;
 pub use crate::binding_error::AuthoringFailure;
 

@@ -76,6 +76,7 @@ def noonCreateAuthoringMeshHandle(candidate):
 def noonCreateAuthoringMeshFamilyHandle(candidate):
     return _arena().mesh_family(candidate)
 
+noonAuthoringGraphOptions = _native.GraphOptions
 noonAuthoringSampleSpaceOptions = _native.SampleSpaceOptions
 
 

@@ -1805,6 +1805,188 @@ impl Context {
             .map_err(|error| crate::brace::failure(code, &error))
     }
 
+    /// Build an opaque native Graph/DiGraph through the owning Scene.
+    /// Key mapping belongs to the language facade; topology remains in Rust.
+    #[pyo3(name = "createGraph")]
+    fn create_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: Vec<u32>,
+        positions: Vec<f64>,
+        edge_pairs: Vec<u32>,
+        options: &crate::graph::GraphOptions,
+    ) -> Result<crate::graph::GraphHandle, PyErr> {
+        self.available()?;
+        let vertices =
+            noon::integration::graph::vertices(&vertex_ids, &positions).map_err(engine_error)?;
+        let edges =
+            noon::integration::graph::pairs(&edge_pairs, "Graph edges").map_err(engine_error)?;
+        crate::graph::create_graph(self, directed, vertices, edges, options.options.clone())
+            .map(|inner| crate::graph::GraphHandle { inner })
+            .map_err(engine_error)
+    }
+
+    /// Compute a circular layout before publishing any semantic nodes.
+    #[pyo3(name = "createCircularGraph")]
+    fn create_circular_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: Vec<u32>,
+        edge_pairs: Vec<u32>,
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        options: &crate::graph::GraphOptions,
+    ) -> Result<crate::graph::GraphHandle, PyErr> {
+        self.available()?;
+        let edges =
+            noon::integration::graph::pairs(&edge_pairs, "Graph edges").map_err(engine_error)?;
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Circular,
+            scale,
+            center: (center_x, center_y),
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &[])
+        .map_err(|error| {
+            engine_error(noon::integration::AuthoringFailure::unclassified(
+                "graph.layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        crate::graph::create_graph(self, directed, vertices, edges, options.options.clone())
+            .map(|inner| crate::graph::GraphHandle { inner })
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphCopy")]
+    fn graph_copy(
+        &mut self,
+        graph: &crate::graph::GraphHandle,
+    ) -> Result<crate::graph::GraphHandle, PyErr> {
+        self.available()?;
+        crate::graph::copy_graph(self, graph)
+            .map(|inner| crate::graph::GraphHandle { inner })
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphAddVertices")]
+    fn graph_add_vertices(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        vertex_ids: Vec<u32>,
+        positions: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::AddVertices(
+                noon::integration::graph::vertices(&vertex_ids, &positions)
+                    .map_err(engine_error)?,
+            ),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphAddEdges")]
+    fn graph_add_edges(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        edge_pairs: Vec<u32>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::AddEdges(
+                noon::integration::graph::pairs(&edge_pairs, "Graph edges")
+                    .map_err(engine_error)?,
+            ),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphCircularLayout")]
+    fn graph_circular_layout(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+            return Err(engine_error("circular Graph layout values must be finite"));
+        }
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::Circular {
+                scale,
+                center: (center_x, center_y),
+            },
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphExplicitLayout")]
+    fn graph_explicit_layout(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        positions: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        let ids = (0..positions.len() / 2)
+            .map(|id| id as u32)
+            .collect::<Vec<_>>();
+        let positions = noon::integration::graph::vertices(&ids, &positions)
+            .map_err(engine_error)?
+            .into_iter()
+            .map(|(_, point)| point)
+            .collect();
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::Explicit(positions),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphRemoveVertices")]
+    fn graph_remove_vertices(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        vertex_ids: Vec<u32>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::RemoveVertices(vertex_ids),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphRemoveEdges")]
+    fn graph_remove_edges(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        edge_pairs: Vec<u32>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::RemoveEdges(
+                noon::integration::graph::pairs(&edge_pairs, "Graph edges")
+                    .map_err(engine_error)?,
+            ),
+        )
+        .map_err(engine_error)
+    }
+
     #[pyo3(name = "createSampleSpace")]
     fn create_sample_space(
         &mut self,
