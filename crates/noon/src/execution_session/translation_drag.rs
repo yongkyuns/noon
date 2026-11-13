@@ -157,6 +157,10 @@ impl ExecutionSession {
         self.translation_drag.active.is_some()
     }
 
+    pub fn has_translation_drag_targets(&self) -> bool {
+        self.translation_drag.has_targets()
+    }
+
     pub(super) fn prepare_translation_drag_cancellation(
         &self,
     ) -> Result<Option<PreparedTranslationDragCancellation>, ExecutionSessionInputError> {

@@ -143,6 +143,43 @@ fn late_drag_requires_a_new_presented_frame_and_a_fresh_contact_after_handoff() 
     late_drag_handoff(true);
 }
 
+#[test]
+fn completed_static_source_drags_at_the_authored_endpoint() {
+    let mut scene = Scene::new();
+    let mut target = scene.circle(0.5).unwrap();
+    target.set_fill(0.0, 0.4, 1.0, 1.0).unwrap();
+    scene.add(&target).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let wait = execution.live().wait_segment(1.0).unwrap();
+    execution.session_mut().advance_to(1.0).unwrap();
+    execution.live().complete_segment(wait).unwrap();
+    execution
+        .live()
+        .set_translation_drag_targets([&target])
+        .unwrap();
+
+    let mut app = NativeApp::new(execution, NativeViewportConfig::default());
+    assert!(app.execution.finite_transport_end().is_none());
+    present(&mut app);
+    app.dispatch_pointer_position(PhysicalPosition::new(400.0, 200.0), SIZE, 1.0)
+        .unwrap();
+    present(&mut app);
+    app.dispatch_pointer_button(MouseButton::Left, ElementState::Pressed, SIZE, 1.0)
+        .unwrap();
+    present(&mut app);
+    app.dispatch_pointer_position(PhysicalPosition::new(475.0, 200.0), SIZE, 1.0)
+        .unwrap();
+    present(&mut app);
+    app.dispatch_pointer_button(MouseButton::Left, ElementState::Released, SIZE, 1.0)
+        .unwrap();
+    assert_eq!(app.execution.frame_time(), 1.0);
+    assert_eq!(
+        app.session().frame().objects[0].transform.translation.x,
+        1.5
+    );
+    assert!(!app.session().translation_drag_active());
+}
+
 fn late_drag_handoff(pause_at_frontier: bool) {
     let mut scene = Scene::new();
     let mut target = scene.circle(0.5).unwrap();

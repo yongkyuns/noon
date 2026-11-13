@@ -560,13 +560,13 @@ H.264 through the shared native Rust exporter and an installed FFmpeg. Rational
 an existing output only after a successful export. The source is evaluated once;
 export replays its sealed history. Export consumes the prepared view, including
 on cancellation or runtime failure, and leaves a previous destination intact
-when it fails. Native Python audio export is not part of this profile.
+when it fails. Predeclared audio is encoded as AAC alongside the video.
 
-Arbitrary Python callbacks support the sampled `--headless` profile; prepared
-window playback rejects unrecorded callbacks or external input. Advanced plotting,
-audio bindings and full gallery parity remain outside this CPython profile.
-Native Rust retains its existing broader support. A geometry-only build can omit
-native window/capture/resource dependencies with `--minimal`.
+Arbitrary Python callbacks use the sampled `--headless` profile. A completed
+scene with translation drag targets opens at its authored endpoint with pointer
+input. Its snapshot uses the endpoint time, available as `view.duration`. MP4
+export requires a finite playback scene. A geometry-only build can omit native
+window, capture, and resource dependencies with `--minimal`.
 
 Validate the real extension with `PYTHONPATH=build/python python3
 scripts/test_native_python.py` and `python3 scripts/python_host_conformance.py`.
