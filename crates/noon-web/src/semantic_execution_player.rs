@@ -896,21 +896,30 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_fill_color(target))
+        self.source
+            .scene()
+            .effective_fill_color(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_effective_stroke_color(
         &mut self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_stroke_color(target))
+        self.source
+            .scene()
+            .effective_stroke_color(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_stroke_width(
         &mut self,
         target: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_stroke_width(target))
+        self.source
+            .scene()
+            .effective_stroke_width(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_background_stroke_color(
@@ -959,7 +968,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: &noon::Mobject,
     ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_stroke_cap(target))
+        self.source
+            .scene()
+            .effective_stroke_cap(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_interpolate_manim_style(
@@ -1214,17 +1226,6 @@ impl SemanticExecutionPlayer {
         amount: f64,
     ) -> Result<(), AuthoringFailure> {
         self.with_live_session(|live| live.fade_to_family(family, color, amount))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_fade_to(
-        &mut self,
-        mobject: &noon::Mobject,
-        color: noon::Color,
-        amount: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.fade_to(mobject, color, amount))
             .map(|_| ())
     }
 
@@ -1936,9 +1937,9 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
     ) -> Result<noon_core::Color, AuthoringFailure> {
         self.source
-            .live()
+            .scene()
             .effective_manim_color(mobject)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     /// Publish one already validated scene-membership batch through the active

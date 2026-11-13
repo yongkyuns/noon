@@ -151,7 +151,6 @@ impl LiveContinuation for LiveGeometryConstruction {
                 )?;
                 assert_color(
                     scene
-                        .live()
                         .effective_manim_color(line)
                         .map_err(|error| error.to_string())?,
                     Color::rgb(1.0, 1.0, 0.0),

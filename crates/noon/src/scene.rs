@@ -3,7 +3,7 @@ mod audio;
 mod execution;
 mod family;
 mod image;
-mod object_edits;
+pub(crate) mod object_edits;
 mod sections;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
@@ -679,10 +679,16 @@ impl Scene {
         let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
         ))?;
-        let store = self.store.borrow();
-        let observed = execution
-            .effective_semantic_object(&store, object.node_id())
-            .map_err(AuthoringError::from)?;
+        Self::observe_effective(&self.store, execution, object).map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn observe_effective(
+        store: &Rc<RefCell<SemanticStore>>,
+        execution: &ExecutionSession,
+        object: &Mobject,
+    ) -> Result<crate::EffectiveMobjectState, crate::ExecutionSessionPublicationError> {
+        let store = store.borrow();
+        let observed = execution.effective_semantic_object(&store, object.node_id())?;
         Ok(crate::EffectiveMobjectState {
             fill_paint: observed.object.fill_paint.clone(),
             z_index: observed.object.z_index,
