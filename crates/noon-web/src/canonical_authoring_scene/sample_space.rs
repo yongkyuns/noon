@@ -1,4 +1,4 @@
-//! Live SampleSpace operations dispatch through the currently retained player.
+//! Browser SampleSpace authoring uses the running Scene.
 use super::*;
 
 impl CanonicalAuthoringScene {
@@ -6,7 +6,8 @@ impl CanonicalAuthoringScene {
         &mut self,
         options: &noon::SampleSpaceOptions,
     ) -> Result<noon::SampleSpace, AuthoringFailure> {
-        self.active_live_player()?.live_create_sample_space(options)
+        noon::SampleSpace::new_with_options(self.active_live_player()?.scene_mut(), options)
+            .map_err(sample_space_failure)
     }
 
     pub(crate) fn live_get_sample_space_division(
@@ -16,12 +17,14 @@ impl CanonicalAuthoringScene {
         colors: &[noon::Color],
         vertical: bool,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?.live_get_sample_space_division(
-            sample_space,
-            probabilities,
-            colors,
-            vertical,
-        )
+        let scene = self.active_live_player()?.scene_mut();
+        let probabilities = probabilities.iter().copied();
+        if vertical {
+            sample_space.get_vertical_division_in_scene(scene, probabilities, colors)
+        } else {
+            sample_space.get_horizontal_division_in_scene(scene, probabilities, colors)
+        }
+        .map_err(sample_space_failure)
     }
 
     pub(crate) fn live_divide_sample_space(
@@ -31,12 +34,24 @@ impl CanonicalAuthoringScene {
         colors: &[noon::Color],
         vertical: bool,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?.live_divide_sample_space(
-            sample_space,
-            probabilities,
-            colors,
-            vertical,
-        )
+        let scene = self.active_live_player()?.scene_mut();
+        let probabilities = probabilities.iter().copied();
+        if vertical {
+            sample_space.divide_vertically(scene, probabilities, colors)
+        } else {
+            sample_space.divide_horizontally(scene, probabilities, colors)
+        }
+        .map_err(sample_space_failure)
+    }
+}
+
+fn sample_space_failure(error: noon::SampleSpaceError) -> AuthoringFailure {
+    match error {
+        noon::SampleSpaceError::Authoring(error) => {
+            AuthoringFailure::from_scene_mutation(error, true)
+        }
+        noon::SampleSpaceError::Live(error) => error.into(),
+        other => AuthoringFailure::unclassified("live.unclassified", &other),
     }
 }
 

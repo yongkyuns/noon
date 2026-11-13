@@ -18,8 +18,6 @@ mod prepared;
 pub(crate) use prepared::PreparedPrefixAdvance;
 mod provisional_geometry;
 #[cfg(any(target_arch = "wasm32", test))]
-mod sample_space;
-#[cfg(any(target_arch = "wasm32", test))]
 mod spatial;
 #[cfg(target_arch = "wasm32")]
 mod table;
