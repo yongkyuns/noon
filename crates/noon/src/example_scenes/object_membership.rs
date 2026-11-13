@@ -62,13 +62,13 @@ fn build() -> Result<crate::SceneExecution, Box<dyn std::error::Error>> {
     session.scene_mut().apply_semantic_transaction(replace)?;
     let parent = copied_parent;
     let child = copied_child;
-    let baseline = session.live().effective_layout(&parent)?;
+    let baseline = session.scene().effective_layout(&parent)?;
     let child_pose = child.state()?.transform.translation;
     session
         .scene_mut()
         .shift_3d(&parent, crate::SemanticVec3::new(1.0, -0.25, 0.0))?;
     assert_eq!(child.state()?.transform.translation.x, child_pose.x + 1.0);
-    let shifted = session.live().effective_layout(&parent)?;
+    let shifted = session.scene().effective_layout(&parent)?;
     assert!((shifted.center.0 - baseline.center.0 - 1.0).abs() < 1e-6);
     assert!((shifted.center.1 - baseline.center.1 + 0.25).abs() < 1e-6);
     session

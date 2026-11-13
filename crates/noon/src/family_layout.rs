@@ -548,6 +548,39 @@ pub(crate) fn union_bounds(total: &mut Option<Bounds2D64>, next: Option<Bounds2D
     }
 }
 
+/// Read a fitting extent from the addressed layout scope.
+pub(crate) fn effective_dimension_length(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    anchor: &LayoutAnchor,
+    dimension: crate::LayoutDimension,
+) -> Result<f64, AuthoringError> {
+    if dimension != crate::LayoutDimension::Depth {
+        let (_, bounds) = effective_anchor_layout_measure(store, execution, anchor, false)?;
+        return Ok(dimension.length(bounds));
+    }
+    if !anchor.belongs_to_store(store) {
+        return Err(AuthoringError::ForeignStore);
+    }
+    execution.require_published_store(&store.borrow())?;
+    let root = anchor.resolve()?;
+    let store = store.borrow();
+    let leaves = store.ordered_leaf_nodes(root)?;
+    // The planar runtime has no independent depth driver. Validate the
+    // content publication before reading its canonical Z data.
+    for &leaf in &leaves {
+        if execution.semantic_object_is_reachable(leaf) {
+            let observed = execution.effective_semantic_object(&store, leaf)?;
+            if !observed.authored_content_layout_applicable() {
+                return Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
+                ));
+            }
+        }
+    }
+    crate::dimension_fit::depth_length_for_leaves(&store, &leaves)
+}
+
 /// Observe an object's own content and descendants at one effective publication.
 pub(crate) fn effective_mobject_layout(
     store: &Rc<RefCell<SemanticStore>>,

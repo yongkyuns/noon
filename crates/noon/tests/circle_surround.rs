@@ -112,22 +112,26 @@ fn live_circle_surround_rejects_unfinished_source_drivers_without_writes() {
             noon::AnimationOptions::new().run_time(2.0),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live.play_animation(&animation).unwrap();
-    live.advance_segment_to(segment, 1.0).unwrap();
-    let before = live.effective(&circle).unwrap();
-    assert!(live
+    let mut session = scene.into_execution().unwrap();
+    let segment = session.live().play_animation(&animation).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    let before = session.live().effective(&circle).unwrap();
+    assert!(session
+        .live()
         .surround_circle(&(&circle).into(), &(&target).into(), 0, false, 1.2)
         .is_err());
-    assert_eq!(live.effective(&circle).unwrap(), before);
-    live.advance_segment_to(segment, segment.end_time())
+    assert_eq!(session.live().effective(&circle).unwrap(), before);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    live.complete_segment(segment).unwrap();
-    live.surround_circle(&(&circle).into(), &(&target).into(), 0, false, 1.2)
+    session.live().complete_segment(segment).unwrap();
+    session
+        .live()
+        .surround_circle(&(&circle).into(), &(&target).into(), 0, false, 1.2)
         .unwrap();
     near(
-        live.effective_layout(&circle).unwrap().width,
+        session.scene().effective_layout(&circle).unwrap().width,
         20.0_f64.sqrt() * 1.2,
     );
 }
@@ -169,28 +173,30 @@ fn live_circle_surround_publishes_once_and_preserves_unrelated_objects() {
     scene
         .add_many(&[(&circle).into(), (&target).into(), (&other).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let revision = scene.revision();
+    let mut session = scene.into_execution().unwrap();
+    let revision = session.scene().revision();
     {
-        let mut live = scene.live(&mut session);
-        let before = live.effective(&other).unwrap();
-        live.surround_circle(&(&circle).into(), &(&target).into(), 1, true, 0.5)
+        let before = session.live().effective(&other).unwrap();
+        session
+            .live()
+            .surround_circle(&(&circle).into(), &(&target).into(), 1, true, 0.5)
             .unwrap();
-        let layout = live.effective_layout(&circle).unwrap();
+        let layout = session.scene().effective_layout(&circle).unwrap();
         near(layout.width, 2.5);
         near(layout.height, 10.0 / 3.0);
-        let after = live.effective(&other).unwrap();
+        let after = session.live().effective(&other).unwrap();
         assert_eq!(after.transform, before.transform);
         assert_eq!(after.style, before.style);
         assert_eq!(after.z_index, before.z_index);
         assert_eq!(after.appearance, before.appearance);
-        let before_circle = live.effective(&circle).unwrap();
-        assert!(live
+        let before_circle = session.live().effective(&circle).unwrap();
+        assert!(session
+            .live()
             .surround_circle(&(&circle).into(), &(&target).into(), 0, false, f64::NAN)
             .is_err());
-        assert_eq!(live.effective(&circle).unwrap(), before_circle);
+        assert_eq!(session.live().effective(&circle).unwrap(), before_circle);
     }
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
 }
 
 #[test]

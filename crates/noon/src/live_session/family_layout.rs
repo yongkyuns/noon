@@ -4,54 +4,26 @@ pub use crate::family_layout::LiveLayoutTarget;
 use crate::semantic_mobject::ManimNextToArgs;
 
 impl LiveSession<'_> {
-    /// Observe retained-content critical coordinates from a coherent layout read.
-    pub fn layout_critical_point_3d(
-        &self,
-        source: &crate::LayoutAnchor,
-        direction: crate::SemanticVec3,
-    ) -> Result<crate::SemanticVec3, LiveSessionError> {
-        crate::family_layout::effective_layout_critical_point_3d(
-            self.store,
-            self.session,
-            source,
-            direction,
-        )
-        .map_err(LiveSessionError::from)
-    }
-
-    /// Observe a fitting extent from this session's coherent layout snapshot.
-    pub fn dimension_length(
+    // Running fit uses the same extent query as Scene.
+    pub(crate) fn dimension_length(
         &self,
         source: &crate::LayoutAnchor,
         dimension: crate::LayoutDimension,
     ) -> Result<f64, LiveSessionError> {
-        if dimension == crate::LayoutDimension::Depth {
-            if !source.belongs_to_store(self.store) {
-                return Err(crate::AuthoringError::ForeignStore.into());
+        crate::family_layout::effective_dimension_length(
+            self.store,
+            self.session,
+            source,
+            dimension,
+        )
+        .map_err(|error| match error {
+            crate::AuthoringError::ExecutionPublication(error)
+                if dimension == crate::LayoutDimension::Depth =>
+            {
+                LiveSessionError::Publication(error)
             }
-            self.session.require_published_store(&self.store.borrow())?;
-            let root = source.resolve().map_err(LiveSessionError::from)?;
-            let store = self.store.borrow();
-            let leaves = store
-                .ordered_leaf_nodes(root)
-                .map_err(crate::AuthoringError::from)?;
-            // The planar runtime has no independent depth driver. Validate the
-            // current content publication before reading its canonical Z data.
-            for &leaf in &leaves {
-                if self.session.semantic_object_is_reachable(leaf) {
-                    let observed = self.session.effective_semantic_object(&store, leaf)?;
-                    if !observed.authored_content_layout_applicable() {
-                        return Err(crate::AuthoringError::Unsupported(
-                            crate::UnsupportedAuthoringOperation::EffectiveFamilyLayoutRenderOverride,
-                        ).into());
-                    }
-                }
-            }
-            return crate::dimension_fit::depth_length_for_leaves(&store, &leaves)
-                .map_err(LiveSessionError::from);
-        }
-        let (_, bounds) = self.anchor_layout_members(source)?;
-        Ok(dimension.length(bounds))
+            other => other.into(),
+        })
     }
 
     /// Place and fit from one effective snapshot, then publish one local edit.
@@ -459,17 +431,6 @@ impl LiveSession<'_> {
             table_layout_scope,
         )?;
         self.publish_path_edits(prepared)
-    }
-
-    /// Compatibility observation during the control-surface migration.
-    /// New application code should use [`crate::Scene::effective_family_layout`].
-    pub fn effective_family_layout(
-        &self,
-        family: &MobjectFamily,
-    ) -> Result<EffectiveMobjectLayout, LiveSessionError> {
-        self.require_family(family)?;
-        crate::family_layout::effective_family_layout(self.store, self.session, family)
-            .map_err(LiveSessionError::from)
     }
 
     pub(super) fn family_member_bounds(

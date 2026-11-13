@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let complete = (original.authored_definition()?).as_glow().unwrap();
         assert_eq!(complete.intensity(), 1.4);
         assert_eq!(complete.radius(), Pixels(6.5).into());
-        assert_eq!(session.live().effective_layout(&dot)?.center.0, 2.0);
+        assert_eq!(session.scene().effective_layout(&dot)?.center.0, 2.0);
 
         let path_target = session.scene_mut().target_editor(&path)?;
         session.scene_mut().set_glow(
@@ -163,7 +163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wait = session.live().wait_segment(0.25)?;
     session.live().advance_segment_to(wait, 3.25)?;
     session.live().complete_segment(wait)?;
-    assert_eq!(session.live().effective_layout(&dot)?.center.0, 2.0);
+    assert_eq!(session.scene().effective_layout(&dot)?.center.0, 2.0);
     println!("Rust public glow motion/completion/removal passed at t=3.25");
     Ok(())
 }

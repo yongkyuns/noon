@@ -1176,7 +1176,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         parts: &noon::LatexParts,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| live.latex_font_size(parts))
+        self.source
+            .scene()
+            .effective_latex_font_size(parts)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1326,7 +1329,16 @@ impl SemanticExecutionPlayer {
         source: &noon::LayoutAnchor,
         dimension: noon::LayoutDimension,
     ) -> Result<f64, AuthoringFailure> {
-        self.with_live_session(|live| live.dimension_length(source, dimension))
+        self.source
+            .scene()
+            .effective_dimension_length(source, dimension)
+            .map_err(|error| {
+                if dimension == noon::LayoutDimension::Depth {
+                    AuthoringFailure::from_scene_mutation(error, true)
+                } else {
+                    Self::live_placement_error(error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1335,7 +1347,10 @@ impl SemanticExecutionPlayer {
         source: &noon::LayoutAnchor,
         direction: noon::SemanticVec3,
     ) -> Result<noon::SemanticVec3, AuthoringFailure> {
-        self.with_live_session(|live| live.layout_critical_point_3d(source, direction))
+        self.source
+            .scene()
+            .effective_layout_critical_point_3d(source, direction)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1451,7 +1466,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
-        self.with_live_session(|live| live.effective_family_layout(family))
+        self.source
+            .scene()
+            .effective_family_layout(family)
+            .map_err(Self::live_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1663,9 +1681,9 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
     ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
         self.source
-            .live()
+            .scene()
             .effective_layout(mobject)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]

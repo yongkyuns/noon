@@ -34,9 +34,9 @@ fn pan_zoom_changes_effective_camera_not_authored_or_unrelated_state() {
     let mut target = frame.target_editor().unwrap();
     target.set_translation(2.0, -1.0).unwrap();
     target.set_scale(0.5, 0.5).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(
             &frame,
             &target,
@@ -46,42 +46,48 @@ fn pan_zoom_changes_effective_camera_not_authored_or_unrelated_state() {
         )
         .unwrap();
     let authored = frame.state().unwrap();
-    let revision = scene.revision();
-    let unrelated = session.frame().objects[1..].to_vec();
-    session.take_frame_changes();
+    let revision = session.scene().revision();
+    let unrelated = session.session().frame().objects[1..].to_vec();
+    session.session_mut().take_frame_changes();
 
     for time in SAMPLE_TIMES {
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, time)
-            .unwrap();
-        assert_projection(session.camera().unwrap(), time);
-        assert_eq!(scene.revision(), revision);
+        session.live().advance_segment_to(segment, time).unwrap();
+        assert_projection(session.session().camera().unwrap(), time);
+        assert_eq!(session.scene().revision(), revision);
         assert_eq!(frame.state().unwrap(), authored);
-        assert_eq!(&session.frame().objects[1..], unrelated.as_slice());
-        let changes = session.take_frame_changes();
+        assert_eq!(
+            &session.session().frame().objects[1..],
+            unrelated.as_slice()
+        );
+        let changes = session.session_mut().take_frame_changes();
         assert!(!changes.is_all());
         assert!(changes.object_indices().iter().all(|&index| index == 0));
-        let effective = scene.live(&mut session).effective_layout(&frame).unwrap();
+        let effective = session.scene().effective_layout(&frame).unwrap();
         assert!((effective.center.0 - 2.0 * time).abs() < 2.0e-6);
         assert!((effective.center.1 + time).abs() < 2.0e-6);
-        assert!((effective.height - f64::from(session.camera().unwrap().height)).abs() < 2.0e-6);
+        assert!(
+            (effective.height - f64::from(session.session().camera().unwrap().height)).abs()
+                < 2.0e-6
+        );
     }
 
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    assert_projection(session.camera().unwrap(), 1.0);
+    session.live().complete_segment(segment).unwrap();
+    assert_projection(session.session().camera().unwrap(), 1.0);
     assert_eq!(
         frame.state().unwrap().transform,
         target.state().unwrap().transform
     );
-    assert_eq!(&session.frame().objects[1..], unrelated.as_slice());
-    session.take_frame_changes();
-    let context = session.publication_context();
+    assert_eq!(
+        &session.session().frame().objects[1..],
+        unrelated.as_slice()
+    );
+    session.session_mut().take_frame_changes();
+    let context = session.session().publication_context();
     for _ in 0..10 {
-        assert_projection(session.camera().unwrap(), 1.0);
+        assert_projection(session.session().camera().unwrap(), 1.0);
     }
-    assert_eq!(session.publication_context(), context);
-    assert!(session.take_frame_changes().is_empty());
+    assert_eq!(session.session().publication_context(), context);
+    assert!(session.session_mut().take_frame_changes().is_empty());
 }
 
 #[test]

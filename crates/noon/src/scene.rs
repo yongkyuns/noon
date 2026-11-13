@@ -839,6 +839,41 @@ impl Scene {
         crate::family_layout::effective_family_layout(&self.store, execution, family)
     }
 
+    /// Read a fitting extent from the current effective layout publication.
+    pub fn effective_dimension_length(
+        &self,
+        anchor: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+    ) -> Result<f64, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::family_layout::effective_dimension_length(&self.store, execution, anchor, dimension)
+    }
+
+    /// Observe retained-content critical coordinates from one effective layout.
+    pub fn effective_layout_critical_point_3d(
+        &self,
+        anchor: &crate::LayoutAnchor,
+        direction: crate::SemanticVec3,
+    ) -> Result<crate::SemanticVec3, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::family_layout::effective_layout_critical_point_3d(
+            &self.store,
+            execution,
+            anchor,
+            direction,
+        )
+    }
+
+    /// Observe LaTeX font size from its retained family height.
+    #[cfg(feature = "latex")]
+    pub fn effective_latex_font_size(
+        &self,
+        parts: &crate::LatexParts,
+    ) -> Result<f64, AuthoringError> {
+        let layout = self.effective_family_layout(parts.family())?;
+        parts.font_size_for_height(layout.height)
+    }
+
     /// Shift a family through one persistent transaction before or after bootstrap.
     /// Each aliased leaf is translated once; running publication remains local.
     pub fn shift_family(

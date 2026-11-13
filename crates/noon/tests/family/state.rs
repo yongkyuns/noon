@@ -326,7 +326,7 @@ fn live_capture_restores_current_completed_state_in_one_publication() {
         .scene_mut()
         .become_family(&source, saved.root(), Default::default())
         .unwrap();
-    let layout = session.live().effective_family_layout(&source).unwrap();
+    let layout = session.scene().effective_family_layout(&source).unwrap();
     assert_eq!(layout.center, saved.root().layout().unwrap().center());
 }
 

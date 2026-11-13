@@ -65,9 +65,9 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
     let nested = scene.family(&[(&a).into(), (&b).into()]).unwrap();
     let family = scene.family(&[(&nested).into(), (&a).into()]).unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let result = live
+    let mut session = scene.into_execution().unwrap();
+    let result = session
+        .live()
         .arrange_family_in_grid_with_options(
             &family,
             &noon::FamilyGridOptions {
@@ -79,15 +79,26 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
         .unwrap();
     assert_eq!(result.impacts().len(), 2);
     assert_eq!(
-        live.effective_family_layout(&family).unwrap().center,
+        session
+            .scene()
+            .effective_family_layout(&family)
+            .unwrap()
+            .center,
         (0.0, 0.0)
     );
-    assert_eq!(live.effective_layout(&a).unwrap().center, (0.375, 0.0));
-    assert_eq!(live.effective_layout(&b).unwrap().center, (-0.375, 0.0));
-    let before = live.effective(&a).unwrap();
+    assert_eq!(
+        session.scene().effective_layout(&a).unwrap().center,
+        (0.375, 0.0)
+    );
+    assert_eq!(
+        session.scene().effective_layout(&b).unwrap().center,
+        (-0.375, 0.0)
+    );
+    let before = session.live().effective(&a).unwrap();
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.family(&[]).unwrap();
-    assert!(live
+    assert!(session
+        .live()
         .arrange_family_in_grid_with_options(
             &foreign,
             &noon::FamilyGridOptions {
@@ -96,7 +107,7 @@ fn nested_aliases_use_one_live_transaction_and_foreign_grids_are_rejected() {
             }
         )
         .is_err());
-    assert_eq!(live.effective(&a).unwrap(), before);
+    assert_eq!(session.live().effective(&a).unwrap(), before);
 }
 
 #[test]
@@ -217,23 +228,24 @@ fn explicit_sizes_and_alignments_infer_dimensions_and_publish_from_live_bounds()
     use noon::FamilyGridOptions;
     let (mut scene, family, members, unrelated) = fixture();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let before = unrelated.state().unwrap();
-    let mut live = scene.live(&mut session);
-    live.arrange_family_in_grid_with_options(
-        &family,
-        &FamilyGridOptions {
-            gap: (0.5, 0.25),
-            cell_alignment: (-1., -1.),
-            row_alignments: Some("ud".into()),
-            column_alignments: Some("lr".into()),
-            row_heights: Some(vec![Some(3.), None]),
-            column_widths: Some(vec![None, Some(2.)]),
-            flow: noon::GridFlow::DownRight,
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    session
+        .live()
+        .arrange_family_in_grid_with_options(
+            &family,
+            &FamilyGridOptions {
+                gap: (0.5, 0.25),
+                cell_alignment: (-1., -1.),
+                row_alignments: Some("ud".into()),
+                column_alignments: Some("lr".into()),
+                row_heights: Some(vec![Some(3.), None]),
+                column_widths: Some(vec![None, Some(2.)]),
+                flow: noon::GridFlow::DownRight,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     // Top-left a, bottom-left b, top-right c, bottom-right d. Explicit
     // alignment lists override the supplied default cell alignment.
     for (object, expected) in
@@ -241,10 +253,17 @@ fn explicit_sizes_and_alignments_infer_dimensions_and_publish_from_live_bounds()
             .iter()
             .zip([(1.75, 3.625), (1.25, 0.125), (5.0, 3.125), (4.75, 0.375)])
     {
-        assert_eq!(live.effective_layout(object).unwrap().center, expected);
+        assert_eq!(
+            session.scene().effective_layout(object).unwrap().center,
+            expected
+        );
     }
     assert_eq!(
-        live.effective_family_layout(&family).unwrap().center,
+        session
+            .scene()
+            .effective_family_layout(&family)
+            .unwrap()
+            .center,
         (3., 2.)
     );
     assert_eq!(unrelated.state().unwrap(), before);

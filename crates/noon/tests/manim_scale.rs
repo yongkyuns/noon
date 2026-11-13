@@ -23,19 +23,18 @@ fn live_manim_scale_preserves_center_in_one_atomic_publication() {
     let mut scene = Scene::new();
     let line = scene.line((1.0, -2.0), (3.0, -2.0)).unwrap();
     scene.add(&line).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = scene.revision();
+    let mut session = scene.into_execution().unwrap();
+    let before = session.scene().revision();
 
     {
-        let mut live = scene.live(&mut session);
-        live.manim_scale(&line, 2.0, 0.5).unwrap();
-        let layout = live.effective_layout(&line).unwrap();
+        session.live().manim_scale(&line, 2.0, 0.5).unwrap();
+        let layout = session.scene().effective_layout(&line).unwrap();
         assert!((layout.center.0 - 2.0).abs() < 1e-6);
         assert!((layout.center.1 + 2.0).abs() < 1e-6);
         assert!((layout.width - 4.0).abs() < 1e-6);
     }
 
-    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(session.scene().revision(), before.checked_next().unwrap());
 }
 
 #[test]

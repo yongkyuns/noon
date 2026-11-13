@@ -55,7 +55,6 @@ impl LiveContinuation for ApplyMatrix {
             }
             2 => {
                 let layout = scene
-                    .live()
                     .effective_layout(&self.square)
                     .map_err(|e| e.to_string())?;
                 if (layout.center.0 - 2.0).abs() > 1.0e-5

@@ -335,7 +335,7 @@ fn live_edge_placement_observes_effective_target_and_publishes_once() {
         execution.scene().revision(),
         revision.checked_next().unwrap()
     );
-    let layout = execution.live().effective_layout(&label).unwrap();
+    let layout = execution.scene().effective_layout(&label).unwrap();
     assert!(
         (layout.center.0 + layout.width * 0.5
             - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - 0.25))
@@ -344,7 +344,7 @@ fn live_edge_placement_observes_effective_target_and_publishes_once() {
     );
     assert_eq!(target.center().unwrap(), (0.0, 0.0));
     assert_eq!(
-        execution.live().effective_layout(&target).unwrap().center,
+        execution.scene().effective_layout(&target).unwrap().center,
         (7.0, 0.0)
     );
 }

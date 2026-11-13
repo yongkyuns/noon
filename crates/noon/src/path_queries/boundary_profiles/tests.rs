@@ -157,8 +157,8 @@ fn generic_table_entries_use_retained_text_layout_before_and_after_live_placemen
         .unwrap());
     assert_eq!(
         execution
-            .live()
-            .layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
+            .scene()
+            .effective_layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
             .unwrap(),
         authored
     );
@@ -171,8 +171,8 @@ fn generic_table_entries_use_retained_text_layout_before_and_after_live_placemen
         .effective_requires_content_boundary(target)
         .unwrap());
     let after = execution
-        .live()
-        .layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
+        .scene()
+        .effective_layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
         .unwrap();
     assert!((after.x - authored.x - 1.5).abs() < 1e-6);
     assert!((after.y - authored.y + 0.5).abs() < 1e-6);

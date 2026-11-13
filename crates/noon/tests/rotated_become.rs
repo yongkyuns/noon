@@ -91,7 +91,7 @@ fn live_become_publishes_new_content_once_and_leaves_unrelated_objects_untouched
         .scene_mut()
         .become_mobject(&source, &target, options())
         .unwrap();
-    let layout = session.live().effective_layout(&source).unwrap();
+    let layout = session.scene().effective_layout(&source).unwrap();
     near((layout.width, layout.height), (4., 1.));
     assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_eq!(unrelated.state().unwrap(), untouched);

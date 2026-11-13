@@ -166,7 +166,7 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
         .session()
         .execution_object_id(source.node_id())
         .unwrap();
-    let layout = session.live().effective_layout(&source).unwrap();
+    let layout = session.scene().effective_layout(&source).unwrap();
     session.session_mut().take_renderer_publication();
     session.scene_mut().set_glow(&source, initial()).unwrap();
     let original = source.get_effect("glow").unwrap();
@@ -191,7 +191,7 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
         session.session().execution_object_id(source.node_id()),
         Some(object_id)
     );
-    let after_layout = session.live().effective_layout(&source).unwrap();
+    let after_layout = session.scene().effective_layout(&source).unwrap();
     assert_eq!(
         (after_layout.center, after_layout.width, after_layout.height),
         (layout.center, layout.width, layout.height)

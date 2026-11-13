@@ -128,13 +128,14 @@ fn stretched_target_animates_and_reconciles_through_shared_transform() {
     let animation = scene
         .declare_transform_to(&object, &target, AnimationOptions::new())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live.play_animation(&animation).unwrap();
-    live.advance_segment_to(segment, segment.end_time())
+    let mut session = scene.into_execution().unwrap();
+    let segment = session.live().play_animation(&animation).unwrap();
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    live.complete_segment(segment).unwrap();
-    assert!((live.effective_layout(&object).unwrap().width - width).abs() < 2e-6);
+    session.live().complete_segment(segment).unwrap();
+    assert!((session.scene().effective_layout(&object).unwrap().width - width).abs() < 2e-6);
 }
 
 #[test]

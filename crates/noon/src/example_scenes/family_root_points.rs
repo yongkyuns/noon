@@ -55,9 +55,8 @@ impl LiveContinuation for FamilyRootPoints {
                         point.z = point.z * 2.0 + 0.25;
                     }
                     let anchor = LayoutAnchor::from(&self.group);
-                    let extent = scene
-                        .live()
-                        .dimension_length(&anchor, crate::LayoutDimension::Depth)?;
+                    let extent =
+                        scene.effective_dimension_length(&anchor, crate::LayoutDimension::Depth)?;
                     scene.live().rescale_to_fit_with_pivot(
                         &anchor,
                         2.0,
@@ -74,9 +73,7 @@ impl LiveContinuation for FamilyRootPoints {
                     )?;
                     adjust_fitting_reference(&mut self.left_points, extent);
                     assert_eq!(
-                        scene
-                            .live()
-                            .dimension_length(&anchor, crate::LayoutDimension::Depth)?,
+                        scene.effective_dimension_length(&anchor, crate::LayoutDimension::Depth)?,
                         4.0
                     );
                     scene.append_family_points_f64(&self.vector, &self.right_points)?;
