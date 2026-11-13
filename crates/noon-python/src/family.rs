@@ -902,6 +902,34 @@ impl FamilyHandle {
             .set_own_color(red, green, blue, alpha)
             .map_err(engine_error)
     }
+    #[pyo3(name = "extremumAlongDim")]
+    fn extremum_along_dim(&self, dim: usize, key: f64) -> PyResult<f64> {
+        noon::MobjectTarget::from(&self.family)
+            .extremum_along_dim(dim, key)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "lengthOverDim")]
+    fn length_over_dim(&self, dim: usize) -> PyResult<f64> {
+        noon::MobjectTarget::from(&self.family)
+            .length_over_dim(dim)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "centerOfMass")]
+    fn center_of_mass(&self) -> PyResult<(f64, f64)> {
+        noon::MobjectTarget::from(&self.family)
+            .center_of_mass()
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "boundaryPoint")]
+    fn boundary_point(&self, direction_x: f64, direction_y: f64) -> PyResult<(f64, f64)> {
+        noon::MobjectTarget::from(&self.family)
+            .boundary_point(direction_x, direction_y)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "extremumFromPoints")]
     fn extremum_from_points(
         &self,

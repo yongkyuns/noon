@@ -110,6 +110,33 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_scene_point_reducers_follow_path_and_family_placement(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        path = VMobject().set_points_as_corners([(0, 1, 0), (2, 1, 0)])
+        family = VGroup(path)
+
+        def check(shift):
+            for target in (path, family):
+                center = target.get_center_of_mass()
+                assert abs(center.x - (1 + shift)) < 1e-9 and center.y == 1
+                assert tuple(target.get_boundary_point(RIGHT)) == (2 + shift, 1)
+                assert target.length_over_dim(0) == 2
+                assert target.get_extremum_along_dim(dim=0, key=1) == 2 + shift
+            assert path.get_right()[0] == 2 + shift
+
+        check(0)
+        self.add(family)
+        check(0)
+        self.wait(0.125)
+        family.shift(RIGHT)
+        check(1)
+        self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_scene_family_shift_uses_all_three_coordinates_in_both_phases(self):
         source = """from noon import *
 class Demo(Scene):
