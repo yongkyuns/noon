@@ -244,5 +244,5 @@ def match_points(self: _base.Mobject, mobject: object) -> _base.Mobject:
     if context is None:
         engine_call(source_handle.matchPoints, target_handle, operation="VMobject.match_points")
     else:
-        engine_call(context.liveMatchPoints, source_handle, target_handle, operation="VMobject.match_points")
+        engine_call(context.matchPoints, source_handle, target_handle, operation="VMobject.match_points")
     return self

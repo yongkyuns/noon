@@ -17,11 +17,11 @@ class PathEditingTests(unittest.TestCase):
     def test_scene_bound_edits_use_scene_in_setup_and_playback(self):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
-        context = types.SimpleNamespace(liveClearPoints=Mock())
+        context = types.SimpleNamespace(clearPoints=Mock())
         value._scene = types.SimpleNamespace(_canonical_authoring_context=context)
         with patch.object(editing, "_handle_for", return_value=handle):
             self.assertIs(value.clear_points(), value)
-        context.liveClearPoints.assert_called_once_with(handle)
+        context.clearPoints.assert_called_once_with(handle)
         handle.clearPoints.assert_not_called()
 
     def test_family_raw_points_and_reset_dispatch_only_the_root_handle(self):
@@ -46,8 +46,8 @@ class PathEditingTests(unittest.TestCase):
                         self.assertIs(family.reset_points(), family)
                         leaf.assert_not_called()
                     if live:
-                        context.liveSetFamilyPoints3D.assert_called_once_with(handle, [0, 0, 0.0, 1, 2, 0.0])
-                        context.liveClearFamilyPoints.assert_called_once_with(handle)
+                        context.setFamilyPoints3D.assert_called_once_with(handle, [0, 0, 0.0, 1, 2, 0.0])
+                        context.clearFamilyPoints.assert_called_once_with(handle)
                     else:
                         handle.setPoints3D.assert_called_once_with([0, 0, 0.0, 1, 2, 0.0])
                         handle.clearPoints.assert_called_once_with()
@@ -70,7 +70,7 @@ class PathEditingTests(unittest.TestCase):
         with patch("_manim_semantic_handles._group_target_context", return_value=live_context), \
              patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
             self.assertIs(editing.repeat_points(family, 3), family)
-            live_context.liveRepeatFamilyPoints.assert_called_once_with(family_handle, 3)
+            live_context.repeatFamilyPoints.assert_called_once_with(family_handle, 3)
 
         with patch.object(editing, "_handle_for", return_value=value_handle), \
              patch.object(editing, "_path_authoring_context", return_value=None), \
@@ -109,7 +109,7 @@ class PathEditingTests(unittest.TestCase):
         with patch("_manim_semantic_handles._group_target_context", return_value=live_context), \
              patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
             self.assertIs(editing.reverse_points(family), family)
-            live_context.liveReverseFamilyPoints.assert_called_once_with(family_handle)
+            live_context.reverseFamilyPoints.assert_called_once_with(family_handle)
 
         with patch.object(editing, "_handle_for", return_value=value_handle), \
              patch.object(editing, "_path_authoring_context", return_value=None), \
@@ -145,8 +145,8 @@ class PathEditingTests(unittest.TestCase):
                     handle.setPointsAsCorners.assert_called_once_with([1.0, 2.0, 0.0, 3.0, 4.0, 0.0])
                     handle.clearPoints.assert_called_once_with()
                 else:
-                    context.liveSetPointsAsCorners.assert_called_once_with(handle, [1.0, 2.0, 0.0, 3.0, 4.0, 0.0])
-                    context.liveClearPoints.assert_called_once_with(handle)
+                    context.setPointsAsCorners.assert_called_once_with(handle, [1.0, 2.0, 0.0, 3.0, 4.0, 0.0])
+                    context.clearPoints.assert_called_once_with(handle)
 
     def test_set_points_as_corners_rejects_unstable_custom_stride_before_bridge(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -186,7 +186,7 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_handle_for', return_value=handle), \
              patch.object(editing, '_path_authoring_context', return_value=context):
             self.assertIs(value.set_points_as_corners([(0, 0), (2, 0)]), value)
-        context.liveSetPointsAsCornersWithSamples.assert_called_once_with(
+        context.setPointsAsCornersWithSamples.assert_called_once_with(
             handle, [0.0, 0.0, 0.0, 2.0, 0.0, 0.0], [0.0, 0.25, 0.75, 1.0]
         )
 
@@ -238,8 +238,8 @@ class PathEditingTests(unittest.TestCase):
                     handle.setPoints3D.assert_called_once_with([0.0, 1.0, 0.0, 2.0, 3.0, .625])
                     handle.appendPoints3D.assert_called_once_with([4.0, 5.0, -.375])
                 else:
-                    context.liveSetPoints3D.assert_called_once_with(handle, [0.0, 1.0, 0.0, 2.0, 3.0, .625])
-                    context.liveAppendPoints3D.assert_called_once_with(handle, [4.0, 5.0, -.375])
+                    context.setPoints3D.assert_called_once_with(handle, [0.0, 1.0, 0.0, 2.0, 3.0, .625])
+                    context.appendPoints3D.assert_called_once_with(handle, [4.0, 5.0, -.375])
                 handle.reset_mock()
 
     @unittest.skipIf(numpy is None, "NumPy coercion runs in the pinned qualification lane")
@@ -271,7 +271,7 @@ class PathEditingTests(unittest.TestCase):
             if context is None:
                 handle.startNewPathWithStride.assert_called_once_with(1., 2., 0.0, 5)
             else:
-                context.liveStartNewPathWithStride.assert_called_once_with(
+                context.startNewPathWithStride.assert_called_once_with(
                     handle, 1., 2., 0.0, 5
                 )
             handle.reset_mock()
@@ -289,33 +289,33 @@ class PathEditingTests(unittest.TestCase):
         ffi = types.ModuleType('pyodide.ffi')
         ffi.to_js = lambda values: values
         cases = [
-            (value.add_line_to, ((1, 2, 0),), 'addLineTo', 'liveAddLineTo', [1., 2., 0., 5]),
+            (value.add_line_to, ((1, 2, 0),), 'addLineTo', 'addLineTo', [1., 2., 0., 5]),
             (
                 value.add_quadratic_bezier_curve_to,
                 ((1, 2, 0), (3, 4, 0)),
                 'addQuadraticBezierCurveTo',
-                'liveAddQuadraticBezierCurveTo',
+                'addQuadraticBezierCurveTo',
                 [1., 2., 0., 3., 4., 0., 5],
             ),
             (
                 value.add_cubic_bezier_curve_to,
                 ((1, 2, 0), (3, 4, 0), (5, 6, 0)),
                 'addCubicBezierCurveTo',
-                'liveAddCubicBezierCurveTo',
+                'addCubicBezierCurveTo',
                 [1., 2., 0., 3., 4., 0., 5., 6., 0., 5],
             ),
             (
                 value.add_smooth_curve_to,
                 ((1, 2, 0),),
                 'addSmoothCurveTo',
-                'liveAddSmoothCurveTo',
+                'addSmoothCurveTo',
                 [[1., 2.], 5],
             ),
             (
                 value.add_smooth_curve_to,
                 ((1, 2, 0), (3, 4, 0)),
                 'addSmoothCurveTo',
-                'liveAddSmoothCurveTo',
+                'addSmoothCurveTo',
                 [[1., 2., 3., 4.], 5],
             ),
         ]
@@ -348,7 +348,7 @@ class PathEditingTests(unittest.TestCase):
                     9.0, -1.0, 0.0, 4, [0.0, 0.25, 0.75, 1.0]
                 )
             else:
-                context.liveAddLineToWithSamples.assert_called_once_with(
+                context.addLineToWithSamples.assert_called_once_with(
                     handle, 9.0, -1.0, 0.0, 4, [0.0, 0.25, 0.75, 1.0]
                 )
             handle.reset_mock()
@@ -387,7 +387,7 @@ class PathEditingTests(unittest.TestCase):
                         expected_points, 5, expected_samples
                     )
                 else:
-                    context.liveAddPointsAsCornersWithStride.assert_called_once_with(
+                    context.addPointsAsCornersWithStride.assert_called_once_with(
                         handle, expected_points, 5, expected_samples
                     )
                 handle.reset_mock()
@@ -475,7 +475,7 @@ class PathEditingTests(unittest.TestCase):
                     0., 1., 0.0, 2., 3., 0.0, 4., 5., 0.0, 6., 7., 0.0
                 )
             else:
-                context.liveAddCubicBezierCurve.assert_called_once_with(
+                context.addCubicBezierCurve.assert_called_once_with(
                     handle, 0., 1., 0.0, 2., 3., 0.0, 4., 5., 0.0, 6., 7., 0.0
                 )
 
@@ -498,7 +498,7 @@ class PathEditingTests(unittest.TestCase):
                     self.assertEqual(handle.addSmoothCurveTo.call_args.args, (expected,))
                 else:
                     self.assertEqual(
-                        context.liveAddSmoothCurveTo.call_args.args,
+                        context.addSmoothCurveTo.call_args.args,
                         (handle, expected),
                     )
                 handle.reset_mock()
@@ -522,7 +522,7 @@ class PathEditingTests(unittest.TestCase):
             if context is None:
                 handle.scaleHandleToAnchorDistances.assert_called_once_with(0.5)
             else:
-                context.liveScaleHandleToAnchorDistances.assert_called_once_with(handle, 0.5)
+                context.scaleHandleToAnchorDistances.assert_called_once_with(handle, 0.5)
             handle.reset_mock()
 
     def test_handle_distance_scaling_rejects_callback_before_resolving_handle(self):
@@ -586,7 +586,7 @@ class PathEditingTests(unittest.TestCase):
             if context is None:
                 handle.addPointsAsCorners.assert_called_once_with([1.0, 0.0, 0.0, 2.0, 1.0, 0.0])
             else:
-                context.liveAddPointsAsCorners.assert_called_once_with(
+                context.addPointsAsCorners.assert_called_once_with(
                     handle, [1.0, 0.0, 0.0, 2.0, 1.0, 0.0]
                 )
 
@@ -633,7 +633,7 @@ class PathEditingTests(unittest.TestCase):
             if context is None:
                 handle.setCubicBezierCurves.assert_called_once_with(expected)
             else:
-                context.liveSetCubicBezierCurves.assert_called_once_with(handle, expected)
+                context.setCubicBezierCurves.assert_called_once_with(handle, expected)
 
         with patch.object(editing, '_handle_for') as resolve:
             with self.assertRaises(AssertionError):
@@ -663,7 +663,7 @@ class PathEditingTests(unittest.TestCase):
         with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
              patch.object(editing, '_path_authoring_context', side_effect=lambda *args: context if source in args else None):
             self.assertIs(value.append_vectorized_mobject(source), value)
-        context.liveAppendVectorizedMobject.assert_called_once_with(handle, source_handle)
+        context.appendVectorizedMobject.assert_called_once_with(handle, source_handle)
 
     def test_append_vectorized_mobject_forwards_mutable_stride_in_authored_or_live_mode(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -679,7 +679,7 @@ class PathEditingTests(unittest.TestCase):
         with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
              patch.object(editing, '_path_authoring_context', side_effect=lambda *args: context if source in args else None):
             self.assertIs(value.append_vectorized_mobject(source), value)
-        context.liveAppendVectorizedMobjectWithStride.assert_called_once_with(
+        context.appendVectorizedMobjectWithStride.assert_called_once_with(
             handle, source_handle, 5
         )
 
@@ -716,7 +716,7 @@ class PathEditingTests(unittest.TestCase):
              patch.object(editing, '_path_authoring_context', return_value=context), \
              patch('_manim_path_queries.is_closed', return_value=False):
             self.assertIs(value.close_path(), value)
-        live_args = context.liveClosePathWithStride.call_args.args
+        live_args = context.closePathWithStride.call_args.args
         self.assertEqual(live_args[:3], (handle, 5, 2e-5))
         self.assertEqual(len(live_args[3]), 4)
 
@@ -816,8 +816,8 @@ class PathEditingTests(unittest.TestCase):
                     handle.pointwiseBecomePartial.assert_called_once_with(source_handle, 0.2, 0.8)
                     handle.reverseDirection.assert_called_once_with()
                 else:
-                    context.livePointwiseBecomePartial.assert_called_once_with(handle, source_handle, 0.2, 0.8)
-                    context.liveReverseDirection.assert_called_once_with(handle)
+                    context.pointwiseBecomePartial.assert_called_once_with(handle, source_handle, 0.2, 0.8)
+                    context.reverseDirection.assert_called_once_with(handle)
 
     def test_partial_rejects_nonvector_source_without_resolving_handles(self):
         value = identity_only_wrapper(compat.VMobject)
@@ -854,7 +854,7 @@ class SmoothingDispatchTests(unittest.TestCase):
                     handle.makeSmooth.assert_called_once_with()
                     handle.makeJagged.assert_called_once_with()
                 else:
-                    method = context.liveChangeFamilyAnchorMode if family else context.liveChangeAnchorMode
+                    method = context.changeFamilyAnchorMode if family else context.changeAnchorMode
                     self.assertEqual(method.call_args_list[0].args, (handle, True))
                     self.assertEqual(method.call_args_list[1].args, (handle, False))
         with patch.object(editing, '_handle_for') as resolve:
@@ -889,7 +889,7 @@ class AlignmentDispatchTests(unittest.TestCase):
                     left.layoutAnchor.assert_called_once_with(None)
                     right.layoutAnchor.assert_called_once_with(None)
                     if live:
-                        context.liveAlignRootPoints.assert_called_once_with(
+                        context.alignRootPoints.assert_called_once_with(
                             left.layoutAnchor.return_value, right.layoutAnchor.return_value)
                     else:
                         left.layoutAnchor.return_value.alignPathPoints.assert_called_once_with(
@@ -938,7 +938,7 @@ class AlignmentDispatchTests(unittest.TestCase):
                 if context is None:
                     left.alignPoints.assert_called_once_with(right)
                 else:
-                    context.liveAlignPoints.assert_called_once_with(left, right)
+                    context.alignPoints.assert_called_once_with(left, right)
 
     def test_invalid_pair_or_callback_rejects_before_resolving_handles(self):
         value = identity_only_wrapper(compat.VMobject)

@@ -653,7 +653,7 @@ def _clone_mobject(
     clone._object = None
     if subcurve is not None:
         clone._semantic_handle = (
-            engine_call(context.liveSubcurve, handle, *subcurve)
+            engine_call(context.subcurve, handle, *subcurve)
             if context is not None else engine_call(handle.subcurve, *subcurve)
         )
     elif context is not None:

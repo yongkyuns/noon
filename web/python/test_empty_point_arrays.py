@@ -27,7 +27,7 @@ class EmptyPointArrayTests(unittest.TestCase):
                          patch.object(editing, "_path_authoring_context", return_value=context):
                         self.assertIs(editing.set_points(value, points), value)
                     if live:
-                        name = "liveSetFamilyEmptyPointArray" if family else "liveSetEmptyPointArray"
+                        name = "setFamilyEmptyPointArray" if family else "setEmptyPointArray"
                         getattr(context, name).assert_called_once_with(handle, list(shape))
                         handle.setEmptyPointArray.assert_not_called()
                     else:
