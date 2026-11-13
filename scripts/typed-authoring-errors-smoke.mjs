@@ -292,8 +292,8 @@ try {
       };
     };
     const contentObservationCases = [
-      ...["foreign_target", "foreign_source", "stale_target", "stale_source", "stale_publication", "leased"].map(kind => ({method: "liveReplaceContent", kind})),
-      ...["foreign_target", "stale_target", "not_lowered", "stale_publication", "leased"].map(kind => ({method: "liveEffectiveMobject", kind})),
+      ...["foreign_target", "foreign_source", "stale_target", "stale_source", "stale_publication", "leased"].map(kind => ({method: "replaceContent", kind})),
+      ...["foreign_target", "stale_target", "not_lowered", "stale_publication", "leased"].map(kind => ({method: "queryEffectiveTranslation", kind})),
     ];
     const contentObservationFixture = ({method, kind}) => {
       const store = new wasm.WasmAuthoringStore(), otherStore = new wasm.WasmAuthoringStore();
@@ -334,9 +334,9 @@ try {
         : kind === "leased" ? ["unclassified"] : ["authoring.semantic", "semantic.unknown_node"];
       return {
         category,
-        reject: () => method === "liveReplaceContent"
-          ? context.liveReplaceContent(selectedTarget, selectedSource)
-          : context.liveEffectiveMobject(selectedTarget),
+        reject: () => method === "replaceContent"
+          ? context.replaceContent(selectedTarget, selectedSource)
+          : context.queryEffectiveTranslation(selectedTarget),
         assertDiagnostic: error => {
           const codes = [];
           for (let cause = error; cause; cause = cause.cause) {
@@ -358,8 +358,8 @@ try {
             context.prepareExecutionRun();
             context.beginLiveExecution(1);
           }
-          if (method === "liveReplaceContent") {
-            context.liveReplaceContent(target, source);
+          if (method === "replaceContent") {
+            context.replaceContent(target, source);
             const after = JSON.parse(target.snapshotJson()), prior = JSON.parse(before.target);
             check(Object.hasOwn(after, "geometry"), "snapshot geometry assertion must not be vacuous");
             equal(after.geometry, JSON.parse(before.source).geometry, "replacement lost source content");
@@ -373,11 +373,9 @@ try {
               context.liveCompleteSegment();
               context.bindMobject("1", source);
             }
-            const observed = context.liveEffectiveMobject(kind === "not_lowered" ? source : target);
-            try {
-              const transform = JSON.parse((kind === "not_lowered" ? source : target).snapshotJson()).transform;
-              equal([observed.translationX, observed.translationY], [transform.translation.x, transform.translation.y], "query returned the wrong object");
-            } finally { observed.free(); }
+            const observed = context.queryEffectiveTranslation(kind === "not_lowered" ? source : target);
+            const transform = JSON.parse((kind === "not_lowered" ? source : target).snapshotJson()).transform;
+            equal(Array.from(observed), [transform.translation.x, transform.translation.y], "query returned the wrong object");
           }
           if (kind !== "stale_publication" && kind !== "not_lowered") {
             context.liveAdvanceSegmentTo(0.25);

@@ -4038,27 +4038,6 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_remove_mobject(&mut self, handle: &noon::Mobject) -> Result<(), AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        let node = handle.node_id();
-        let id = *self
-            .identities
-            .get(&node)
-            .ok_or("live Mobject is not bound to this Scene")?;
-        self.edit_membership(SceneMembershipBatch {
-            kind: SceneMembershipBatchKind::Remove,
-            spatial_domain: None,
-            members: vec![OwnedSceneMembershipMember::Mobject {
-                wrapper_id: Some(id),
-                handle: handle.clone(),
-            }],
-            bindings: vec![(id, handle.clone())],
-        })
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
     fn scale_arrow(
         &mut self,
         arrow: &noon::ManimArrow,
@@ -4077,23 +4056,6 @@ impl CanonicalAuthoringScene {
                 }
                 other => AuthoringFailure::unclassified("live.unclassified", &other),
             })
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_replace_content(
-        &mut self,
-        target: &noon::Mobject,
-        source: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store())
-            || !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store())
-        {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        self.active_live_player()?
-            .scene_mut()
-            .replace_content(target, source)
-            .map_err(running_scene_error)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -4742,11 +4704,6 @@ mod wasm {
     }
 
     #[wasm_bindgen]
-    pub struct WasmLiveMobjectState {
-        state: noon::EffectiveMobjectState,
-    }
-
-    #[wasm_bindgen]
     pub struct WasmMobjectLayoutObservation {
         center_x: f64,
         center_y: f64,
@@ -4878,18 +4835,6 @@ mod wasm {
     pub struct WasmTrackerPositionHandle {
         position: noon::TrackerPosition,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    }
-
-    #[wasm_bindgen]
-    impl WasmLiveMobjectState {
-        #[wasm_bindgen(getter, js_name = translationX)]
-        pub fn translation_x(&self) -> f64 {
-            self.state.transform.translation.x as f64
-        }
-        #[wasm_bindgen(getter, js_name = translationY)]
-        pub fn translation_y(&self) -> f64 {
-            self.state.transform.translation.y as f64
-        }
     }
 
     #[wasm_bindgen]
@@ -10818,22 +10763,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRemove)]
-        pub fn live_remove(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .live_remove_mobject(handle.semantic_mobject())
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveReplaceContent)]
-        pub fn live_replace_content(
+        #[wasm_bindgen(js_name = replaceContent)]
+        pub fn replace_content(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
@@ -10847,7 +10778,9 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .live_replace_content(target.semantic_mobject(), source.semantic_mobject())
+                .edit_scene(|scene| {
+                    scene.replace_content(target.semantic_mobject(), source.semantic_mobject())
+                })
                 .map_err(typed_js_error)
         }
 
@@ -11908,25 +11841,25 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveEffectiveMobject)]
-        pub fn live_effective_mobject(
+        #[wasm_bindgen(js_name = queryEffectiveTranslation)]
+        pub fn query_effective_translation(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<WasmLiveMobjectState, JsValue> {
+        ) -> Result<Vec<f64>, JsValue> {
             handle.id_in_store(
                 self.inner.scene.integration_store(),
-                "live execution context",
+                "scene effective translation",
             )?;
-            Ok(WasmLiveMobjectState {
-                state: self
-                    .inner
-                    .active_live_player()
-                    .map_err(typed_js_error)?
-                    .scene()
-                    .effective(handle.semantic_mobject())
-                    .map_err(running_scene_error)
-                    .map_err(typed_js_error)?,
-            })
+            let translation = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .effective(handle.semantic_mobject())
+                .map_err(running_scene_error)
+                .map_err(typed_js_error)?
+                .transform
+                .translation;
+            Ok(vec![translation.x.into(), translation.y.into()])
         }
 
         #[wasm_bindgen(js_name = returnExecutionPlayer)]
@@ -12735,7 +12668,17 @@ mod tests {
             .live_effective(&collision)
             .is_err());
 
-        context.live_remove_mobject(&toggled).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Remove,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: toggled.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
         assert!(context
             .active_live_player()
             .unwrap()
@@ -12805,7 +12748,11 @@ mod tests {
             )
         };
 
-        context.live_replace_content(&target, &replacement).unwrap();
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .replace_content(&target, &replacement)
+            .unwrap();
         {
             let player = context.active_live_player().unwrap();
             let session = player.session_mut_for_test();
