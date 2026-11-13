@@ -194,6 +194,20 @@ impl AuthoringFailure {
         .into()
     }
 
+    /// Preserve numeric resource and formatting diagnostics across Scene phases.
+    #[cfg(feature = "latex")]
+    pub fn from_scene_number(error: crate::NumericAuthoringError, running: bool) -> Self {
+        use crate::NumericAuthoringError;
+        if !running {
+            return error.into();
+        }
+        match error {
+            NumericAuthoringError::Text(error) => Self::from_scene_text(error, true),
+            NumericAuthoringError::Semantic(error) => Self::from(error),
+            other => LiveSessionError::Mobject(other.to_string()).into(),
+        }
+    }
+
     /// Project a Scene mutation through the host's existing running error codes.
     pub fn from_scene_mutation(error: AuthoringError, running: bool) -> Self {
         if !running {

@@ -27,17 +27,25 @@ class ManimNumberWrapperTests(unittest.TestCase):
                 def __init__(self, value): self._value = value; self.semantic = Semantic()
                 def mobject(self): return self.semantic
                 def value(self, context=None):
-                    return context.queryMobjectDecimalValue(self.semantic) if context is not None else self._value
+                    return context.decimalValue(self) if context is not None else self._value
                 def text(self): return f"{self._value:.2f}"
                 def fontSize(self, context):
                     calls.append(("font-size", context))
                     return 96.0 if context is not None else 48.0
                 def integerValue(self, context=None):
-                    return context.queryMobjectIntegerValue(self.semantic) if context is not None else round(self._value)
-                def setValue(self, value): calls.append(("set", value)); self._value = value
-                def incrementValue(self, delta): calls.append(("increment", delta)); self._value += delta
-                def setValueLive(self, context, value): context.liveSetDecimalValue(self.semantic, value); self._value = value
-                def incrementValueLive(self, context, delta): context.liveIncrementDecimalValue(self.semantic, delta); self._value += delta
+                    return context.integerValue(self) if context is not None else round(self._value)
+                def setValue(self, value, context=None):
+                    if context is None:
+                        calls.append(("set", value))
+                    else:
+                        context.setDecimalValue(self, value)
+                    self._value = value
+                def incrementValue(self, delta, context=None):
+                    if context is None:
+                        calls.append(("increment", delta))
+                    else:
+                        context.incrementDecimalValue(self, delta)
+                    self._value += delta
 
             def create(*args):
                 calls.append(("create", args))
@@ -69,13 +77,13 @@ class ManimNumberWrapperTests(unittest.TestCase):
                 def liveExecutionOwnership(self): return "returned"
                 def setColor(self, *args): calls.append(("live-color", args))
                 def setObjectOpacity(self, *args): calls.append(("live-opacity", args))
-                def liveSetDecimalValue(self, semantic, value):
+                def setDecimalValue(self, semantic, value):
                     calls.append(("live-set", semantic, value))
-                def liveIncrementDecimalValue(self, semantic, value):
+                def incrementDecimalValue(self, semantic, value):
                     calls.append(("live-increment", semantic, value))
-                def queryMobjectDecimalValue(self, semantic):
+                def decimalValue(self, semantic):
                     calls.append(("live-value", semantic)); return 7.5
-                def queryMobjectIntegerValue(self, semantic):
+                def integerValue(self, semantic):
                     calls.append(("live-integer-value", semantic)); return 8
 
             context = Context()
@@ -113,7 +121,10 @@ class ManimNumberWrapperTests(unittest.TestCase):
             assert [entry for entry in calls if entry[0] == "create"][-1][1][-1] is cold_context
             wrapped = numbers.DecimalNumber._from_numeric_handle(Number(4), cold_context)
             assert wrapped._canonical_live_target_context is cold_context
-            assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is None
+            assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is cold_context
+            authored.set_value(5).increment_value(2)
+            writes = [entry for entry in calls if entry[0] in {"live-set", "live-increment"}]
+            assert writes[-2:] == [("live-set", authored._numeric_handle, 5), ("live-increment", authored._numeric_handle, 2)]
             wrapped_live = numbers.DecimalNumber._from_numeric_handle(Number(4), context)
             assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is context
             """

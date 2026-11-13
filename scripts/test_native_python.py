@@ -165,6 +165,35 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    @unittest.skipUnless(
+        os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
+        "requires an explicit native TeX compiler and BaKoMa font profile",
+    )
+    def test_numeric_scene_edits_preserve_text_size_and_rewind(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        await prepare_latex()
+        number = DecimalNumber(12.5, font_size=32, include_sign=True)
+        number.set_value(7).increment_value(0.5)
+        assert number.get_value() == 7.5
+        self.add(number)
+        await self.wait(0.1)
+        number.scale(1.5)
+        assert number.font_size == 48
+        number.set_value(1234).increment_value(0.75)
+        assert number.get_value() == 1234.75 and number._source == "+1,234.75"
+        assert number.font_size == 48
+        await self.wait(0.1)
+"""
+        view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
+        try:
+            first = view.capture(time=0.05, width=320, height=180)
+            self.assertNotEqual(first, view.capture(time=0.15, width=320, height=180))
+            self.assertEqual(first, view.capture(time=0.05, width=320, height=180))
+        finally:
+            view.close()
+
     def test_native_pointer_selection_gallery_prepares_retained_preview(self):
         path = ROOT / "web/python/examples/showcase_pointer_selection.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))

@@ -55,44 +55,47 @@ impl DecimalHandle {
         noon::integer_value(self.value(context)?).map_err(engine_error)
     }
 
-    #[pyo3(name = "setValue")]
-    fn set_value(&mut self, value: f64) -> PyResult<()> {
-        self.compiler.with_backend(|backend| {
-            self.number
+    #[pyo3(name = "setValue", signature = (value, context=None))]
+    fn set_value(&mut self, value: f64, context: Option<&mut Context>) -> PyResult<()> {
+        self.compiler.with_backend(|backend| match context {
+            Some(context) => {
+                context.available()?;
+                context
+                    .scene
+                    .set_decimal_value(&self.number, backend, value)
+                    .map_err(|error| numeric_failure(error, context.has_execution()))
+            }
+            None => self
+                .number
                 .set_value(backend, value)
                 .map(|_| ())
-                .map_err(engine_error)
+                .map_err(engine_error),
         })
     }
 
-    #[pyo3(name = "incrementValue")]
-    fn increment_value(&mut self, delta: f64) -> PyResult<()> {
-        self.set_value(self.number.value().map_err(engine_error)? + delta)
-    }
-
-    #[pyo3(name = "setValueLive")]
-    fn set_value_live(&self, context: &mut Context, value: f64) -> PyResult<()> {
-        context.available()?;
-        self.compiler.with_backend(|backend| {
-            context
-                .scene
-                .set_decimal_value(&self.number, backend, value)
-                .map_err(|error| numeric_failure(error, context.has_execution()))
+    #[pyo3(name = "incrementValue", signature = (delta, context=None))]
+    fn increment_value(&mut self, delta: f64, context: Option<&mut Context>) -> PyResult<()> {
+        self.compiler.with_backend(|backend| match context {
+            Some(context) => {
+                context.available()?;
+                context
+                    .scene
+                    .increment_decimal_value(&self.number, backend, delta)
+                    .map_err(|error| numeric_failure(error, context.has_execution()))
+            }
+            None => self
+                .number
+                .increment_value(backend, delta)
+                .map(|_| ())
+                .map_err(engine_error),
         })
-    }
-
-    #[pyo3(name = "incrementValueLive")]
-    fn increment_value_live(&self, context: &mut Context, delta: f64) -> PyResult<()> {
-        self.set_value_live(context, self.number.value().map_err(engine_error)? + delta)
     }
 }
 
 fn numeric_failure(error: NumericAuthoringError, running: bool) -> PyErr {
-    if running {
-        engine_error(noon::integration::live_numeric_failure(error))
-    } else {
-        engine_error(error)
-    }
+    engine_error(noon::integration::AuthoringFailure::from_scene_number(
+        error, running,
+    ))
 }
 
 #[pyfunction]

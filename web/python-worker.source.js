@@ -382,17 +382,15 @@ async function initializePyodide() {
   const numericHandle = (handle) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalNumber`);
     return {
-      // A detached number exposes its retained authored value. An attached
-      // number is queried through the current canonical execution session.
-      value: (context) => context == null ? handle.value : context.queryMobjectDecimalValue(handle.mobject()),
+      value: (context) => context == null ? handle.value : context.decimalValue(handle),
       text: () => handle.text,
-      fontSize: (context) => context == null ? handle.fontSize() : context.queryMobjectDecimalFontSize(handle.mobject()),
+      fontSize: (context) => context == null ? handle.fontSize() : context.decimalFontSize(handle),
       mobject: () => handle.mobject(),
-      integerValue: (context) => context == null ? handle.integerValue() : context.queryMobjectIntegerValue(handle.mobject()),
-      setValue: (value) => handle.setValue(latexCompiler, value),
-      incrementValue: (delta) => handle.incrementValue(latexCompiler, delta),
-      setValueLive: (context, value) => context.liveSetDecimalValue(handle.mobject(), latexCompiler, value),
-      incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
+      integerValue: (context) => context == null ? handle.integerValue() : context.integerValue(handle),
+      setValue: (value, context) => context == null ? handle.setValue(latexCompiler, value)
+        : context.setDecimalValue(handle, latexCompiler, value),
+      incrementValue: (delta, context) => context == null ? handle.incrementValue(latexCompiler, delta)
+        : context.incrementDecimalValue(handle, latexCompiler, delta),
     };
   };
   self.noonDecimalNumberLabelMembers = (family) =>
@@ -401,7 +399,7 @@ async function initializePyodide() {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalNumber`);
     const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];
     return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
-      : context.liveCreateDecimalNumber(...args));
+      : context.createDecimalNumber(...args));
   };
   const isFamilyHandle = (handle) => handle instanceof WasmAuthoringFamilyHandle;
   self.noonIsAuthoringFamilyHandle = isFamilyHandle;

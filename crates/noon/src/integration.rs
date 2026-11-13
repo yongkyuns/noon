@@ -125,27 +125,13 @@ pub use noon_runtime::{
 mod vector_path;
 pub use crate::binding_error::AuthoringFailure;
 
-/// Preserve the language host's live numeric errors when Scene owns publication.
-#[cfg(feature = "latex")]
-pub fn live_numeric_failure(error: crate::NumericAuthoringError) -> AuthoringFailure {
-    use crate::{AuthoringError, LiveSessionError, NumericAuthoringError, TextAuthoringError};
-    match error {
-        NumericAuthoringError::Text(TextAuthoringError::Semantic(
-            AuthoringError::ExecutionPublication(error),
-        )) => LiveSessionError::Publication(error),
-        NumericAuthoringError::Text(error) => LiveSessionError::Text(error),
-        NumericAuthoringError::Semantic(error) => error.into(),
-        other => LiveSessionError::Mobject(other.to_string()),
-    }
-    .into()
-}
 /// Preserve the language host's live Variable construction errors.
 #[cfg(feature = "latex")]
 pub fn live_variable_failure(error: crate::VariableAuthoringError) -> AuthoringFailure {
     use crate::{LiveSessionError, VariableAuthoringError};
     match error {
         VariableAuthoringError::Text(error) => LiveSessionError::Text(error).into(),
-        VariableAuthoringError::Numeric(error) => live_numeric_failure(error),
+        VariableAuthoringError::Numeric(error) => AuthoringFailure::from_scene_number(error, true),
         VariableAuthoringError::Authoring(error) => LiveSessionError::from(error).into(),
     }
 }
