@@ -123,7 +123,8 @@ fn late_compiler_failure_after_image_admission_rolls_back_and_recovers() -> Test
         } else {
             ImageMobjectOptions::rgba8(1, 1, vec![11, 22, 33, 44])?
         };
-        let mut execution = scene.into_execution_with_session(session)?;
+        let mut execution =
+            noon::integration::scene_execution::consume_with_session(scene, session)?;
         let retry = execution.scene_mut().image(retry_options)?;
         let scene = execution.scene();
         let session = execution.session();

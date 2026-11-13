@@ -130,9 +130,10 @@ export_session_file(&mut session, frame_options, capture_options, output_options
 
 Its error type is `SessionFileExportError`. Admission requires a session at time
 zero with a known finite immutable timeline and no required callbacks, pending
-segment completion or retained source history. Lower an authored scene with `Scene::execution_session()`
-or `Scene::execution_session_with_animation_root(...)` before calling it. The
-exporter borrows that session; it advances the existing runtime, consumes its
+segment completion or retained source history. For an authored Scene, use
+`Scene::into_execution()` or `Scene::into_execution_with_animation_root(...)`
+and pass the owner to `output::export_scene_file`. The session exporter borrows
+an already lowered runtime; it advances the existing runtime, consumes its
 publications through `SessionCapture`, and follows `ExportFramePolicy` for the
 same prefix, output and completion samples used by other export hosts. A finite
 range preflight determines staging size without running the scene a second time;

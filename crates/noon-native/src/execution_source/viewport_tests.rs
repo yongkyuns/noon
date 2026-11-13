@@ -68,7 +68,7 @@ fn expansion_source(with_second: bool) -> (StaticExecutionSource, noon::Executio
     };
     (
         StaticExecutionSource::new(
-            scene.into_execution_with_session(session).unwrap(),
+            noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
             RustHostCallbackTable::new(),
         ),
         segment,

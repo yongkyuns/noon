@@ -282,7 +282,8 @@ fn appended_binding_changes_preserve_active_effect_until_displayed_revision_chan
 #[test]
 fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_deletion() {
     let (scene, target, source, object, mut publisher, mut reader) = fixture(Some(A));
-    let mut source = scene.into_execution_with_session(source).unwrap();
+    let mut source =
+        noon::integration::scene_execution::consume_with_session(scene, source).unwrap();
     source.scene_mut().remove(&target).unwrap();
     append_interval(source.session_mut(), &mut publisher, &mut reader);
     let (indication, animation) = options(B);

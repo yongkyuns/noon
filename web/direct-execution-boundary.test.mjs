@@ -41,10 +41,10 @@ const browserSmokeRunner = await readFile(
 for (const required of [
   "SemanticStore::new()",
   "SemanticObjectRole::Camera2D",
-  "session.camera()",
+  "execution.session().camera()",
   "Scene::with_integration_store(Rc::clone(&store))",
-  "scene.execution_session()",
-  ".into_execution_with_session(session)",
+  "scene.into_execution()",
+  ".with_store_and_session(",
   "create_from_scene_execution",
   "createDirectTypstCanvasRenderer",
   "createDirectSingleTypstCanvasRenderer",

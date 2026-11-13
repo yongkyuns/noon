@@ -65,7 +65,8 @@ fn at_time(frame: &FrameState, time: f64) -> FrameState {
 #[test]
 fn historical_effect_survives_append_and_forward_playback_without_editing_source() {
     let (scene, target, source, object, mut publisher, mut reader) = fixture();
-    let mut source = scene.into_execution_with_session(source).unwrap();
+    let mut source =
+        noon::integration::scene_execution::consume_with_session(scene, source).unwrap();
     let baseline = reader.frame().clone();
     let source_before = source.session().frame().clone();
     let history = reader.replay_stats();
@@ -159,7 +160,8 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
 #[test]
 fn historical_target_remains_interactive_after_source_removal_and_destruction() {
     let (scene, target, source, object, mut publisher, mut reader) = fixture();
-    let mut source = scene.into_execution_with_session(source).unwrap();
+    let mut source =
+        noon::integration::scene_execution::consume_with_session(scene, source).unwrap();
     let baseline = reader.frame().clone();
     source.scene_mut().remove(&target).unwrap();
     assert!(!source.scene().contains_direct(&target).unwrap());
@@ -257,7 +259,8 @@ fn invalid_navigation_and_ticks_preserve_effect_but_explicit_seek_cancels_it() {
 fn prefix_indicate_pixels_change_and_restore_after_appends_source_drop_and_seek() {
     pollster::block_on(async {
         let (scene, target, source, object) = recorded_scene();
-        let mut source = scene.into_execution_with_session(source).unwrap();
+        let mut source =
+            noon::integration::scene_execution::consume_with_session(scene, source).unwrap();
         let initial = source.session().wait_segment(1.0).unwrap();
         let mut oracle = raster_support::Raster::new().await;
         source.session_mut().advance_to(0.5).unwrap();
