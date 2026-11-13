@@ -2738,16 +2738,17 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
 
-    #[pyo3(name = "liveShiftFamily")]
+    #[pyo3(name = "liveShiftFamily", signature = (target, x, y, z=0.0))]
     fn shift_family(
         &mut self,
         target: &crate::family::FamilyHandle,
         x: f64,
         y: f64,
+        z: f64,
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.place(|scene| scene.shift_family(&target.family, x, y))
+        self.place(|scene| scene.shift_family_3d(&target.family, noon::SemanticVec3::new(x, y, z)))
     }
     #[pyo3(name = "liveScaleFamily")]
     fn scale_family(
