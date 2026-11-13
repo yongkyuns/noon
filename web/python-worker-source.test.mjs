@@ -194,9 +194,9 @@ test("table cell selections dispatch through the cold store or owning live conte
   new Function("self", source.slice(begin, end))(worker);
   for (const contextKind of ["null", "undefined", "live"]) {
     for (const [bridge, cold, live, colors] of [
-      ["noonTableCell", "getCell", "liveTableCell", []],
-      ["noonGetHighlightedTableCell", "getHighlightedCell", "liveGetHighlightedTableCell", [1, 0, 0, 1, 0.75]],
-      ["noonHighlightTableCell", "highlightCell", "liveHighlightTableCell", [0, 1, 0, 1, 0.5]],
+      ["noonTableCell", "getCell", "tableCell", []],
+      ["noonGetHighlightedTableCell", "getHighlightedCell", "getHighlightedTableCell", [1, 0, 0, 1, 0.75]],
+      ["noonHighlightTableCell", "highlightCell", "highlightTableCell", [0, 1, 0, 1, 0.5]],
     ]) {
       const calls = [], result = {};
       const selection = { [cold]: (...args) => { calls.push(args); return result; } };
@@ -226,9 +226,9 @@ test("Table constructors use the existing store outside a Scene and retain live 
     worker, authoringStore, Options, value => value);
   const options = [0.8, 1.3, false, true, 1, 1, 1, 1, 4, 1, 0, 0, 0, 0];
   for (const [bridge, cold, live, labels] of [
-    ["noonCreateAuthoringTableHandle", "createTable", "liveCreateTable", []],
-    ["noonCreateAuthoringTableWithLabelsHandle", "createTableWithLabels", "liveCreateTableWithLabels", [null, null, []]],
-    ["noonCreateAuthoringMobjectTableHandle", "createMobjectTableWithLabels", "liveCreateMobjectTableWithLabels", [[], [], []]],
+    ["noonCreateAuthoringTableHandle", "createTable", "createTable", []],
+    ["noonCreateAuthoringTableWithLabelsHandle", "createTableWithLabels", "createTableWithLabels", [null, null, []]],
+    ["noonCreateAuthoringMobjectTableHandle", "createMobjectTableWithLabels", "createMobjectTableWithLabels", [[], [], []]],
   ]) {
     for (const active of [false, true]) {
       const context = active ? { [live]: (...args) => { calls.push({ name: live, args }); return result; } } : undefined;

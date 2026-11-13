@@ -425,12 +425,12 @@ async function initializePyodide() {
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
     context == null ? selection.highlightCell(column, red, green, blue, alpha, opacity)
-      : context.liveHighlightTableCell(selection, column, red, green, blue, alpha, opacity);
+      : context.highlightTableCell(selection, column, red, green, blue, alpha, opacity);
   self.noonGetHighlightedTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
     context == null ? selection.getHighlightedCell(column, red, green, blue, alpha, opacity)
-      : context.liveGetHighlightedTableCell(selection, column, red, green, blue, alpha, opacity);
+      : context.getHighlightedTableCell(selection, column, red, green, blue, alpha, opacity);
   self.noonTableCell = (context, selection, column) => context == null
-    ? selection.getCell(column) : context.liveTableCell(selection, column);
+    ? selection.getCell(column) : context.tableCell(selection, column);
   const tableOptions = (v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY) => {
     const options = new WasmTableOptions(v, h, outer);
     options.setIncludeInnerLines(inner);
@@ -444,7 +444,7 @@ async function initializePyodide() {
   };
   self.noonCreateAuthoringTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     const args = [Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
-    return context == null ? authoringStore.createTable(...args) : context.liveCreateTable(...args);
+    return context == null ? authoringStore.createTable(...args) : context.createTable(...args);
   };
   self.noonCreateAuthoringTableWithLabelsHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     const args = [
@@ -454,20 +454,20 @@ async function initializePyodide() {
       compositeRows(topLeftEntry.length ? [topLeftEntry] : []),
       tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
     return context == null ? authoringStore.createTableWithLabels(...args)
-      : context.liveCreateTableWithLabels(...args);
+      : context.createTableWithLabels(...args);
   };
   self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing MathTable`);
-    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
+    return context.createMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
   self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing IntegerTable`);
-    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
+    return context.createIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
   self.noonCreateAuthoringDecimalTableHandle = (rows, decimalPlaces, includeSign, groupWithCommas, showEllipsis, unit,
     v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalTable`);
-    return context.liveCreateDecimalTable(
+    return context.createDecimalTable(
       Array.from(rows, row => Array.from(row)), decimalPlaces, includeSign, groupWithCommas,
       showEllipsis, unit, tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
@@ -480,7 +480,7 @@ async function initializePyodide() {
       entries, rowLabelEntries, columnLabelEntries, topLeftEntryRows,
       tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
     return context == null ? authoringStore.createMobjectTableWithLabels(...args)
-      : context.liveCreateMobjectTableWithLabels(...args);
+      : context.createMobjectTableWithLabels(...args);
   };
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
     if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Variable`);

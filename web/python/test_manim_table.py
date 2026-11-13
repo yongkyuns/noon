@@ -137,15 +137,15 @@ class _Context:
         self.handle = handle
         self.calls = []
 
-    def liveCreateTable(self, *args):
+    def createTable(self, *args):
         self.calls.append(("create", args))
         return self.handle
 
-    def liveCreateTableWithLabels(self, *args):
+    def createTableWithLabels(self, *args):
         self.calls.append(("create_with_labels", args))
         return self.handle
 
-    def liveCreateDecimalTable(self, *args):
+    def createDecimalTable(self, *args):
         self.calls.append(("create_decimal", args))
         return self.handle
 
@@ -197,9 +197,9 @@ class TableFacadeTests(unittest.TestCase):
 
         self.patches = [
             patch.object(table, "_is_family_handle", side_effect=lambda handle: isinstance(handle, _Family), create=True),
-            patch.object(table, "_create_table", side_effect=self.context.liveCreateTable),
-            patch.object(table, "_create_table_with_labels", side_effect=self.context.liveCreateTableWithLabels),
-            patch.object(table, "_create_decimal_table", side_effect=self.context.liveCreateDecimalTable),
+            patch.object(table, "_create_table", side_effect=self.context.createTable),
+            patch.object(table, "_create_table_with_labels", side_effect=self.context.createTableWithLabels),
+            patch.object(table, "_create_decimal_table", side_effect=self.context.createDecimalTable),
             patch.object(table, "_live_constructor_context", return_value=self.context),
             patch.object(table, "engine_call", side_effect=lambda method, *args, **_: method(*args)),
             patch.object(table, "_attach_shared_family", side_effect=attach_family),
