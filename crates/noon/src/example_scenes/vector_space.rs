@@ -64,11 +64,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             MobjectTarget::Family(&target_vectors),
         ])
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
     {
-        let mut live = scene.live(&mut session);
+        let mut live = execution.live();
         let intro = live
             .declare_and_activate_arrow_grow(
                 &vector,
@@ -87,10 +85,8 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     // The builder activated both segments while constructing the timeline.
     // Return at authored time zero so direct and browser consumers see the
     // Arrow entrance before the following matrix transform.
-    session.seek(0.0).map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    execution.seek(0.0).map_err(|error| error.to_string())?;
+    Ok(execution)
 }
 
 #[cfg(test)]

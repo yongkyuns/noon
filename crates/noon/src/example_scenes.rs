@@ -353,12 +353,9 @@ pub fn live_affine_callbacks(
         callbacks.add_updater(&mut store, drift.node_id(), ACCUMULATE_DT, 0.0, None)?;
     }
 
-    let mut session = scene.execution_session()?;
-    {
-        let mut live = scene.live(&mut session);
-        live.play_animation(&animation)?;
-    }
-    Ok((scene.into_execution_with_session(session)?, callbacks))
+    let mut execution = scene.into_execution()?;
+    execution.live().play_animation(&animation)?;
+    Ok((execution, callbacks))
 }
 
 /// Build the paired callback paint example over the canonical effective-style batch.
@@ -443,9 +440,9 @@ pub fn live_callback_paint(
         )?;
     }
 
-    let mut session = scene.execution_session()?;
-    scene.live(&mut session).play_animation(&animation)?;
-    Ok((scene.into_execution_with_session(session)?, callbacks))
+    let mut execution = scene.into_execution()?;
+    execution.live().play_animation(&animation)?;
+    Ok((execution, callbacks))
 }
 
 /// Build the paired Line callback example used by renderer-observation proofs.

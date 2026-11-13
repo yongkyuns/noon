@@ -82,10 +82,10 @@
 //! its persistent edits to these Scene-owned operations. Raw handle edits remain authored
 //! operations; they do not publish to an already running execution.
 //!
-//! [`Scene::live`] and [`LiveContinuation`] are explicit execution integration
-//! facilities. A Rust continuation receives the owning [`ContinuationScene`] and
-//! borrows [`ContinuationScene::live`] for segment control. Scene scripts handle
-//! their segment and callback plumbing internally.
+//! [`Scene::into_execution`] keeps authoring and execution together. Borrow
+//! [`SceneExecution::live`] or [`ContinuationScene::live`] for segment control.
+//! Scene scripts manage segments and callback phases internally. Hosts with a
+//! standalone runtime can use [`Scene::live`] during a checked handoff.
 //!
 //! # Public surface
 //!

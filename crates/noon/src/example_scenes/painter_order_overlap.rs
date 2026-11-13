@@ -54,15 +54,13 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .run_time(1.0)
             .rate_func(RateFunction::Linear),
     )?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
-    let mut live = scene.live(&mut session);
+    let mut execution = scene.into_execution().map_err(|e| e.to_string())?;
+    let mut live = execution.live();
     let segment = live.play_animation(&rotation).map_err(|e| e.to_string())?;
     live.advance_segment_to(segment, segment.end_time())
         .map_err(|e| e.to_string())?;
     live.complete_segment(segment).map_err(|e| e.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 #[cfg(test)]

@@ -174,11 +174,11 @@ fn build_session_with_reverse_create(
             children,
             options: AnimationOptions::new().rate_func(RateFunction::Linear),
         };
-        let mut session = scene.execution_session()?;
-        scene
-            .live(&mut session)
+        let mut execution = scene.into_execution()?;
+        execution
+            .live()
             .declare_and_activate_composition(&request, AnimationOptions::new())?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(execution)
     };
     build().map_err(|error| error.to_string())
 }
