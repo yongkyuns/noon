@@ -46,8 +46,8 @@ class DimensionFittingTests(unittest.TestCase):
         source, target = self.wrapper(), self.wrapper()
         context = types.SimpleNamespace(
             queryLayoutDimensionLength=lambda *args: 1.0,
-            liveRescaleToFit=lambda *args: self.calls.append(("live fit", args)),
-            liveMatchDimSize=lambda *args: self.calls.append(("live match", args)),
+            rescaleToFit=lambda *args: self.calls.append(("live fit", args)),
+            matchDimSize=lambda *args: self.calls.append(("live match", args)),
         )
         source._scene = types.SimpleNamespace(_canonical_authoring_context=context)
         source.stretch_to_fit_height(3)

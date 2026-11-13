@@ -670,7 +670,7 @@ fn scene_move_to_matches_authored_and_running_placement_for_stable_state() {
     let (mut cold, cold_source, cold_target) = make_scene();
     cold.move_to(
         &cold_source,
-        crate::LiveLayoutTarget::Mobject(&cold_target),
+        crate::LayoutTarget::Mobject(&cold_target),
         (0.0, 0.0),
         (1.0, 1.0),
     )
@@ -683,7 +683,7 @@ fn scene_move_to_matches_authored_and_running_placement_for_stable_state() {
     running
         .move_to(
             &running_source,
-            crate::LiveLayoutTarget::Mobject(&running_target),
+            crate::LayoutTarget::Mobject(&running_target),
             (0.0, 0.0),
             (1.0, 1.0),
         )
@@ -766,7 +766,7 @@ fn assert_scene_family_placement(running: bool) {
     scene
         .move_family_to(
             &family,
-            crate::LiveLayoutTarget::Point(1.0, 2.0),
+            crate::LayoutTarget::Point(1.0, 2.0),
             (0.0, 0.0),
             (1.0, 1.0),
         )
@@ -776,7 +776,7 @@ fn assert_scene_family_placement(running: bool) {
     scene
         .next_family_to(
             &family,
-            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            crate::LayoutTarget::Point(0.0, 0.0),
             crate::ManimNextToArgs {
                 direction: (1.0, 0.0),
                 buff: 0.25,
@@ -787,11 +787,7 @@ fn assert_scene_family_placement(running: bool) {
         .unwrap();
 
     scene
-        .align_family_to(
-            &family,
-            crate::LiveLayoutTarget::Point(0.0, 0.0),
-            (0.0, 1.0),
-        )
+        .align_family_to(&family, crate::LayoutTarget::Point(0.0, 0.0), (0.0, 1.0))
         .unwrap();
 
     scene
@@ -801,7 +797,7 @@ fn assert_scene_family_placement(running: bool) {
     scene
         .next_layout_to_aligned(
             &source_anchor,
-            crate::LiveLayoutTarget::Point(0.0, 0.0),
+            crate::LayoutTarget::Point(0.0, 0.0),
             &aligner,
             crate::ManimNextToArgs {
                 direction: (0.0, 1.0),

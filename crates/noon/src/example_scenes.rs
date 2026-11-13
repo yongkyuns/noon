@@ -1377,7 +1377,7 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 scene
                     .next_layout_to_aligned(
                         &source,
-                        crate::LiveLayoutTarget::Mobject(&self.circle),
+                        crate::LayoutTarget::Mobject(&self.circle),
                         &source,
                         args,
                     )
@@ -1392,7 +1392,7 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                 let error = scene
                     .next_layout_to_aligned(
                         &source,
-                        crate::LiveLayoutTarget::Mobject(&probe),
+                        crate::LayoutTarget::Mobject(&probe),
                         &source,
                         args,
                     )

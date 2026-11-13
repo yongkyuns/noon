@@ -169,7 +169,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 .scene_mut()
                 .move_family_to(
                     &family,
-                    crate::LiveLayoutTarget::Point(point.0, point.1),
+                    crate::LayoutTarget::Point(point.0, point.1),
                     edge,
                     mask,
                 )
@@ -188,7 +188,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .scene_mut()
             .move_family_to(
                 &family,
-                crate::LiveLayoutTarget::Point(center.0, center.1),
+                crate::LayoutTarget::Point(center.0, center.1),
                 (0.0, 0.0),
                 (1.0, 1.0),
             )
@@ -208,7 +208,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 .scene_mut()
                 .move_to(
                     &first,
-                    crate::LiveLayoutTarget::Anchor(&target_anchor),
+                    crate::LayoutTarget::Anchor(&target_anchor),
                     (0.0, 0.0),
                     (mask, 0.0),
                 )

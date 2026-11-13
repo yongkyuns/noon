@@ -903,7 +903,7 @@ impl Scene {
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.move_to(
             object,
-            crate::LiveLayoutTarget::Point(x, y),
+            crate::LayoutTarget::Point(x, y),
             (0.0, 0.0),
             (1.0, 1.0),
         )

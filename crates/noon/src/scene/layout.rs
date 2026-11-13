@@ -9,7 +9,7 @@ use crate::{
         placement_authored_transform, placement_target_point, RelativePlacement,
     },
     semantic_mobject::{authoring_xy_f64, ManimNextToArgs},
-    Bounds2D64, LayoutAnchor, LiveLayoutTarget, SemanticVec3,
+    Bounds2D64, LayoutAnchor, LayoutTarget, SemanticVec3,
 };
 
 impl Scene {
@@ -17,7 +17,7 @@ impl Scene {
     pub fn move_to(
         &mut self,
         object: &Mobject,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
@@ -82,14 +82,14 @@ impl Scene {
             if direction.0 == 0.0 { 0.0 } else { 1.0 },
             if direction.1 == 0.0 { 0.0 } else { 1.0 },
         );
-        self.move_to(object, LiveLayoutTarget::Point(x, y), direction, mask)
+        self.move_to(object, LayoutTarget::Point(x, y), direction, mask)
     }
 
     /// Move a family using authored layout while cold or coherent effective layout while running.
     pub fn move_family_to(
         &mut self,
         family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
@@ -100,7 +100,7 @@ impl Scene {
     pub fn next_family_to(
         &mut self,
         family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         args: ManimNextToArgs,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.place_family(family, target, RelativePlacement::Next(args))
@@ -114,14 +114,14 @@ impl Scene {
         buff: f64,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         let (x, y) = frame_alignment_target(direction, buff)?;
-        self.align_family_to(family, LiveLayoutTarget::Point(x, y), direction)
+        self.align_family_to(family, LayoutTarget::Point(x, y), direction)
     }
 
     /// Align a family to an authored target while cold or effective target while running.
     pub fn align_family_to(
         &mut self,
         family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         axis: (f64, f64),
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.place_family(family, target, RelativePlacement::Align(axis))
@@ -131,7 +131,7 @@ impl Scene {
     pub fn next_layout_to_aligned(
         &mut self,
         source: &LayoutAnchor,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         aligner: &LayoutAnchor,
         args: ManimNextToArgs,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
@@ -169,7 +169,7 @@ impl Scene {
         };
         self.place_layout(
             layout,
-            LiveLayoutTarget::Anchor(target),
+            LayoutTarget::Anchor(target),
             RelativePlacement::NextInFrame {
                 args,
                 edge,
@@ -181,7 +181,7 @@ impl Scene {
     fn place_family(
         &mut self,
         family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         placement: RelativePlacement,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         let layout = match self.running_execution() {
@@ -201,7 +201,7 @@ impl Scene {
     fn place_layout(
         &mut self,
         (leaves, bounds): (Vec<SemanticNodeId>, Option<Bounds2D64>),
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         placement: RelativePlacement,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         let execution = self.running_execution();

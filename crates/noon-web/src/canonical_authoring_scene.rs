@@ -3562,7 +3562,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_arrange_family(
+    fn arrange_family(
         &mut self,
         family: &noon::MobjectFamily,
         options: &noon::FamilyArrangeOptions,
@@ -8189,9 +8189,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveFamilyToPoint)]
+        #[wasm_bindgen(js_name = moveFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_family_to_point(
+        pub fn move_family_to_point(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -8207,7 +8207,7 @@ mod wasm {
                 .place(|scene| {
                     scene.move_family_to(
                         &family,
-                        noon::LiveLayoutTarget::Point(x, y),
+                        noon::LayoutTarget::Point(x, y),
                         (edge_x, edge_y),
                         (mask_x, mask_y),
                     )
@@ -8215,9 +8215,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveFamilyToMobject)]
+        #[wasm_bindgen(js_name = moveFamilyToMobject)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_family_to_mobject(
+        pub fn move_family_to_mobject(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringMobjectHandle,
@@ -8232,7 +8232,7 @@ mod wasm {
                 .place(|scene| {
                     scene.move_family_to(
                         &family,
-                        noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                        noon::LayoutTarget::Mobject(target.semantic_mobject()),
                         (edge_x, edge_y),
                         (mask_x, mask_y),
                     )
@@ -8240,9 +8240,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveFamilyToFamily)]
+        #[wasm_bindgen(js_name = moveFamilyToFamily)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_family_to_family(
+        pub fn move_family_to_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
@@ -8257,7 +8257,7 @@ mod wasm {
                 .place(|scene| {
                     scene.move_family_to(
                         &family,
-                        noon::LiveLayoutTarget::Family(&target),
+                        noon::LayoutTarget::Family(&target),
                         (edge_x, edge_y),
                         (mask_x, mask_y),
                     )
@@ -8305,9 +8305,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRescaleToFit)]
+        #[wasm_bindgen(js_name = rescaleToFit)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_rescale_to_fit(
+        pub fn rescale_to_fit(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             length: f64,
@@ -8333,8 +8333,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveReplaceLayout)]
-        pub fn live_replace_layout(
+        #[wasm_bindgen(js_name = replaceLayout)]
+        pub fn replace_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8349,8 +8349,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSurroundCircle)]
-        pub fn live_surround_circle(
+        #[wasm_bindgen(js_name = surroundCircle)]
+        pub fn surround_circle(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8371,9 +8371,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMatchDimSize)]
+        #[wasm_bindgen(js_name = matchDimSize)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_match_dim_size(
+        pub fn match_dim_size(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8399,9 +8399,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextLayoutTo)]
+        #[wasm_bindgen(js_name = nextLayoutTo)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_next_layout_to(
+        pub fn next_layout_to(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8418,7 +8418,7 @@ mod wasm {
                 .place(|scene| {
                     scene.next_layout_to_aligned(
                         &source.anchor,
-                        noon::LiveLayoutTarget::Anchor(&target.anchor),
+                        noon::LayoutTarget::Anchor(&target.anchor),
                         &aligner.anchor,
                         noon::ManimNextToArgs {
                             direction: (direction_x, direction_y),
@@ -8431,9 +8431,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextLayoutToEdgeInFrame)]
+        #[wasm_bindgen(js_name = nextLayoutToEdgeInFrame)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_next_layout_to_edge_in_frame(
+        pub fn next_layout_to_edge_in_frame(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8462,9 +8462,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextLayoutToPoint)]
+        #[wasm_bindgen(js_name = nextLayoutToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_next_layout_to_point(
+        pub fn next_layout_to_point(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             x: f64,
@@ -8482,7 +8482,7 @@ mod wasm {
                 .place(|scene| {
                     scene.next_layout_to_aligned(
                         &source.anchor,
-                        noon::LiveLayoutTarget::Point(x, y),
+                        noon::LayoutTarget::Point(x, y),
                         &aligner.anchor,
                         noon::ManimNextToArgs {
                             direction: (direction_x, direction_y),
@@ -8495,8 +8495,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyOnFrame)]
-        pub fn live_align_family_on_frame(
+        #[wasm_bindgen(js_name = alignFamilyOnFrame)]
+        pub fn align_family_on_frame(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             direction_x: f64,
@@ -8511,8 +8511,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignMobjectOnFrame)]
-        pub fn live_align_mobject_on_frame(
+        #[wasm_bindgen(js_name = alignMobjectOnFrame)]
+        pub fn align_mobject_on_frame(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             direction_x: f64,
@@ -8534,9 +8534,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
+        #[wasm_bindgen(js_name = alignFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_align_family_to_point(
+        pub fn align_family_to_point(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -8550,16 +8550,16 @@ mod wasm {
                 .place(|scene| {
                     scene.align_family_to(
                         &family,
-                        noon::LiveLayoutTarget::Point(x, y),
+                        noon::LayoutTarget::Point(x, y),
                         (axis_x, axis_y),
                     )
                 })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyToMobject)]
+        #[wasm_bindgen(js_name = alignFamilyToMobject)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_align_family_to_mobject(
+        pub fn align_family_to_mobject(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringMobjectHandle,
@@ -8572,16 +8572,16 @@ mod wasm {
                 .place(|scene| {
                     scene.align_family_to(
                         &family,
-                        noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                        noon::LayoutTarget::Mobject(target.semantic_mobject()),
                         (axis_x, axis_y),
                     )
                 })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyToFamily)]
+        #[wasm_bindgen(js_name = alignFamilyToFamily)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_align_family_to_family(
+        pub fn align_family_to_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
@@ -8594,7 +8594,7 @@ mod wasm {
                 .place(|scene| {
                     scene.align_family_to(
                         &family,
-                        noon::LiveLayoutTarget::Family(&target),
+                        noon::LayoutTarget::Family(&target),
                         (axis_x, axis_y),
                     )
                 })
@@ -10436,8 +10436,8 @@ mod wasm {
                 .map_err(|error| typed_js_error(running_scene_error(error)))
         }
 
-        #[wasm_bindgen(js_name = liveMoveToLayout)]
-        pub fn live_move_to_layout(
+        #[wasm_bindgen(js_name = moveToLayout)]
+        pub fn move_to_layout(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -10454,7 +10454,7 @@ mod wasm {
                 .place(|scene| {
                     scene.move_to(
                         handle.semantic_mobject(),
-                        noon::LiveLayoutTarget::Anchor(&target.anchor),
+                        noon::LayoutTarget::Anchor(&target.anchor),
                         (edge_x, edge_y),
                         (mask_x, mask_y),
                     )
@@ -10462,9 +10462,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveToPoint)]
+        #[wasm_bindgen(js_name = moveToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_to_point(
+        pub fn move_to_point(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
@@ -10482,7 +10482,7 @@ mod wasm {
                 .place(|scene| {
                     scene.move_to(
                         handle.semantic_mobject(),
-                        noon::LiveLayoutTarget::Point(x, y),
+                        noon::LayoutTarget::Point(x, y),
                         (edge_x, edge_y),
                         (mask_x, mask_y),
                     )
@@ -10490,8 +10490,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveToMobject)]
-        pub fn live_move_to_mobject(
+        #[wasm_bindgen(js_name = moveToMobject)]
+        pub fn move_to_mobject(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
@@ -10512,7 +10512,7 @@ mod wasm {
                 .place(|scene| {
                     scene.move_to(
                         handle.semantic_mobject(),
-                        noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
+                        noon::LayoutTarget::Mobject(target.semantic_mobject()),
                         (edge_x, edge_y),
                         (mask_x, mask_y),
                     )
@@ -11700,8 +11700,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
-        pub fn live_arrange_family_in_grid(
+        #[wasm_bindgen(js_name = arrangeFamilyInGrid)]
+        pub fn arrange_family_in_grid(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             options: &crate::authoring_mobject::WasmFamilyGridOptions,
@@ -11725,15 +11725,15 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveArrangeFamily)]
-        pub fn live_arrange_family(
+        #[wasm_bindgen(js_name = arrangeFamily)]
+        pub fn arrange_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             options: &crate::authoring_mobject::WasmFamilyArrangeOptions,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .live_arrange_family(&family, &options.options)
+                .arrange_family(&family, &options.options)
                 .map_err(typed_js_error)
         }
 
@@ -13500,7 +13500,7 @@ mod tests {
             vec![false, true]
         );
         context
-            .live_arrange_family(
+            .arrange_family(
                 &pair,
                 &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.15, true),
             )
@@ -13511,7 +13511,7 @@ mod tests {
             .scene_mut()
             .move_family_to(
                 &pair,
-                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                noon::LayoutTarget::Point(before.center.0, before.center.1),
                 (0.0, 0.0),
                 (1.0, 1.0),
             )
@@ -13521,7 +13521,7 @@ mod tests {
             .scene_mut()
             .next_layout_to_aligned(
                 &placement,
-                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                noon::LayoutTarget::Point(before.center.0, before.center.1),
                 &placement,
                 noon::ManimNextToArgs {
                     direction: (0.0, 0.0),
@@ -13533,7 +13533,7 @@ mod tests {
             .unwrap();
         player
             .scene_mut()
-            .align_family_to(&pair, noon::LiveLayoutTarget::Family(&pair), (1.0, 1.0))
+            .align_family_to(&pair, noon::LayoutTarget::Family(&pair), (1.0, 1.0))
             .unwrap();
         assert_eq!(
             player.scene().effective_family_layout(&pair).unwrap(),
@@ -15653,7 +15653,7 @@ mod tests {
             .scene_mut()
             .move_to(
                 &pulse,
-                noon::LiveLayoutTarget::Point(2.0, -1.0),
+                noon::LayoutTarget::Point(2.0, -1.0),
                 (0.0, 0.0),
                 (1.0, 1.0),
             )

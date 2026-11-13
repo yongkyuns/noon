@@ -49,10 +49,10 @@ class CircleSurroundTests(unittest.TestCase):
         self.source_anchor.surroundCircle.assert_called_once_with(self.target_anchor, 0, True, 1.2)
 
     def test_live_operation_uses_the_selected_owner_once(self):
-        context = types.SimpleNamespace(liveSurroundCircle=Mock())
+        context = types.SimpleNamespace(surroundCircle=Mock())
         with patch.object(semantic, "_replacement_anchors", return_value=(self.source_anchor, self.target_anchor, context)):
             self.assertIs(self.circle.surround(self.target, 1, True, 0.8), self.circle)
-        context.liveSurroundCircle.assert_called_once_with(self.source_anchor, self.target_anchor, 0, True, 0.8)
+        context.surroundCircle.assert_called_once_with(self.source_anchor, self.target_anchor, 0, True, 0.8)
         self.source_anchor.surroundCircle.assert_not_called()
 
     def test_generic_buff_keyword_and_invalid_dimensions_reject_before_rust(self):

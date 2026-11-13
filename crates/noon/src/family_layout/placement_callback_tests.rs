@@ -2,8 +2,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    AnimationOptions, AuthoringError, LiveLayoutTarget, Mobject, RateFunction,
-    RustHostCallbackTable, Scene, Transform2D, UnsupportedAuthoringOperation, Vec2,
+    AnimationOptions, AuthoringError, LayoutTarget, Mobject, RateFunction, RustHostCallbackTable,
+    Scene, Transform2D, UnsupportedAuthoringOperation, Vec2,
 };
 use noon_core::{HostCallbackId, SemanticObjectProperty, SemanticVec3};
 
@@ -247,7 +247,7 @@ fn callback_move_to_keeps_masked_axes_and_rejects_invalid_targets_atomically() {
     assert!(scene
         .move_to(
             &marker,
-            LiveLayoutTarget::Mobject(&foreign),
+            LayoutTarget::Mobject(&foreign),
             (0.0, 0.0),
             (1.0, 1.0),
         )
@@ -255,7 +255,7 @@ fn callback_move_to_keeps_masked_axes_and_rejects_invalid_targets_atomically() {
     assert!(scene
         .move_to(
             &marker,
-            LiveLayoutTarget::Point(1.0, 2.0),
+            LayoutTarget::Point(1.0, 2.0),
             (0.0, 0.0),
             (f64::NAN, 1.0),
         )
@@ -266,7 +266,7 @@ fn callback_move_to_keeps_masked_axes_and_rejects_invalid_targets_atomically() {
     scene
         .move_to(
             &marker,
-            LiveLayoutTarget::Point(4.0, 99.0),
+            LayoutTarget::Point(4.0, 99.0),
             (0.0, 0.0),
             (1.0, 0.0),
         )
@@ -425,12 +425,7 @@ fn consecutive_live_placements_preserve_one_completed_callback_phase() {
     // time; neither may invent a new zero-dt updater invocation.
     for (x, y) in [(0.0, 0.0), (0.5, 1.0)] {
         scene
-            .move_to(
-                &marker,
-                LiveLayoutTarget::Point(x, y),
-                (0.0, 0.0),
-                (1.0, 1.0),
-            )
+            .move_to(&marker, LayoutTarget::Point(x, y), (0.0, 0.0), (1.0, 1.0))
             .unwrap();
     }
     assert_eq!(scene.owned_execution().frame().time, 0.25);

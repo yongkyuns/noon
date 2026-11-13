@@ -1,6 +1,6 @@
 //! Paired with web/python/examples/live_masked_placement.py.
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveLayoutTarget, Mobject, RateFunction,
+    AnimationOptions, ContinuationStep, LayoutTarget, LiveContinuation, Mobject, RateFunction,
     Scene,
 };
 
@@ -29,9 +29,9 @@ impl LiveContinuation for Placement {
             .target_editor(&self.source)
             .map_err(|error| error.to_string())?;
         let (destination, mask) = if self.stage == 1 {
-            (LiveLayoutTarget::Point(99.0, 5.0), (0.0, 1.0))
+            (LayoutTarget::Point(99.0, 5.0), (0.0, 1.0))
         } else {
-            (LiveLayoutTarget::Mobject(&self.reference), (0.5, 1.0))
+            (LayoutTarget::Mobject(&self.reference), (0.5, 1.0))
         };
         scene
             .move_to(&target, destination, (0.0, 1.0), mask)

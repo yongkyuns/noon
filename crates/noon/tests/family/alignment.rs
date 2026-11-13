@@ -1,7 +1,5 @@
 use noon::ManimNextToArgs;
-use noon::{
-    FamilyLayoutTarget as AuthoredTarget, LayoutAnchor, LiveLayoutTarget, Scene, SemanticVec3,
-};
+use noon::{FamilyLayoutTarget as AuthoredTarget, LayoutAnchor, LayoutTarget, Scene, SemanticVec3};
 
 fn args() -> ManimNextToArgs {
     ManimNextToArgs {
@@ -109,7 +107,7 @@ fn live_alignment_uses_effective_target_bounds_and_one_local_publication() {
         .scene_mut()
         .next_layout_to_aligned(
             &source,
-            LiveLayoutTarget::Anchor(&destination),
+            LayoutTarget::Anchor(&destination),
             &aligner,
             args(),
         )
@@ -141,7 +139,7 @@ fn live_alignment_uses_effective_target_bounds_and_one_local_publication() {
         .scene_mut()
         .next_layout_to_aligned(
             &source,
-            LiveLayoutTarget::Anchor(&destination.clone().member(1)),
+            LayoutTarget::Anchor(&destination.clone().member(1)),
             &aligner,
             args()
         )

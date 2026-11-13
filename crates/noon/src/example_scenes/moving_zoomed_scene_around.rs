@@ -7,8 +7,8 @@
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     FadeEndpoint, FadeTranslation, ImageMobjectOptions, LayoutAnchor, LayoutDimension,
-    LiveContinuation, LiveLayoutTarget, LiveProgram, ManimGeometryOptions, ManimNextToArgs,
-    Mobject, RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind as Kind,
+    LayoutTarget, LiveContinuation, LiveProgram, ManimGeometryOptions, ManimNextToArgs, Mobject,
+    RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind as Kind,
     SemanticFadeDirection, SemanticVec3, Text, TransformToRequest, ZoomedSceneOptions, ZoomedView,
 };
 use noon_core::HostCallbackId;
@@ -127,7 +127,7 @@ impl LiveContinuation for MovingZoomedSceneAround {
                 scene
                     .next_layout_to_aligned(
                         &caption_anchor,
-                        LiveLayoutTarget::Mobject(&self.display),
+                        LayoutTarget::Mobject(&self.display),
                         &caption_anchor,
                         ManimNextToArgs {
                             direction: (0.0, -1.0),

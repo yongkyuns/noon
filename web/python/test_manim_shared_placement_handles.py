@@ -133,9 +133,9 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
             class FakeLiveContext:
                 def __init__(self):
                     self.calls = []
-                def liveMoveToLayout(self, *args): self.calls.append(("layout", args))
-                def liveMoveToPoint(self, *args): self.calls.append(("point", args))
-                def liveAlignMobjectOnFrame(self, *args): self.calls.append(("frame", args))
+                def moveToLayout(self, *args): self.calls.append(("layout", args))
+                def moveToPoint(self, *args): self.calls.append(("point", args))
+                def alignMobjectOnFrame(self, *args): self.calls.append(("frame", args))
 
             live_context = FakeLiveContext()
             live_target = Square(2.0)

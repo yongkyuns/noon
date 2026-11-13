@@ -75,7 +75,7 @@ fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
         .scene_mut()
         .move_to(
             &circle,
-            noon::LiveLayoutTarget::Anchor(&foreign_anchor),
+            noon::LayoutTarget::Anchor(&foreign_anchor),
             (0.0, 0.0),
             (1.0, 1.0),
         )
@@ -88,7 +88,7 @@ fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
         .scene_mut()
         .move_to(
             &circle,
-            noon::LiveLayoutTarget::Point(3.0, -2.0),
+            noon::LayoutTarget::Point(3.0, -2.0),
             (0.0, 0.0),
             (1.0, 1.0),
         )
