@@ -45,7 +45,6 @@ pub(super) fn append_quadratic_3d(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integration::{publish_borrowed_path_edit, BorrowedPathEdit};
 
     #[test]
     fn quadratic_native_vec2_api_keeps_ce_degree_elevation_precision() {
@@ -79,8 +78,8 @@ mod tests {
     const ANCHOR: (f64, f64) = (1.23456789012345, -0.456789012345678);
 
     #[test]
-    fn quadratic_f64_authored_running_and_borrowed_paths_match_pinned_ce() {
-        for mode in 0..3 {
+    fn quadratic_f64_authored_and_running_paths_match_pinned_ce() {
+        for mode in 0..2 {
             let mut scene = crate::Scene::new();
             let mut object = scene.path(VectorPath::new(), Default::default()).unwrap();
             object.set_points_f64(&PREFIX).unwrap();
@@ -91,27 +90,12 @@ mod tests {
                 0 => object
                     .add_quadratic_bezier_curve_to_f64(CONTROL, ANCHOR)
                     .unwrap(),
-                1 => {
+                _ => {
                     let execution = scene.execution_session().unwrap();
                     scene.install_execution(execution);
                     scene
                         .add_quadratic_bezier_curve_to_f64(&object, CONTROL, ANCHOR)
                         .unwrap();
-                }
-                _ => {
-                    let mut execution = scene.execution_session().unwrap();
-                    publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut execution,
-                        BorrowedPathEdit::QuadraticF64WithStride {
-                            object: &object,
-                            control: CONTROL,
-                            anchor: ANCHOR,
-                            stride: 4,
-                        },
-                    )
-                    .unwrap();
                 }
             }
             let actual = object.path_query().unwrap().points().unwrap();

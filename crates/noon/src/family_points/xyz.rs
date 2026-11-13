@@ -2,7 +2,7 @@
 use super::*;
 use noon_core::SemanticVec3;
 
-pub fn publish_family_points_3d(
+pub(super) fn publish_family_points_3d(
     store: &Rc<std::cell::RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
     execution: &mut crate::ExecutionSession,
@@ -34,7 +34,7 @@ pub fn publish_family_points_3d(
     )
 }
 
-pub fn publish_append_family_points_3d(
+pub(super) fn publish_append_family_points_3d(
     store: &Rc<std::cell::RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
     execution: &mut crate::ExecutionSession,

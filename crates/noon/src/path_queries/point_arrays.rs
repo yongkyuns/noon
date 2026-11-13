@@ -100,7 +100,20 @@ impl MobjectTarget<'_> {
     }
 }
 
-pub fn effective_point_array(
+impl crate::Scene {
+    /// Observe the effective array, including its dimensions and family occurrences.
+    pub fn effective_point_array(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<PointArrayObservation, AuthoringError> {
+        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        effective_point_array(self.integration_store(), execution, target)
+    }
+}
+
+pub(crate) fn effective_point_array(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,

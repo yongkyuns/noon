@@ -31,7 +31,7 @@ impl crate::MobjectTarget<'_> {
     }
 }
 
-pub fn publish_empty_family_point_array(
+fn publish_empty_family_point_array(
     store: &Rc<std::cell::RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
     execution: &mut crate::ExecutionSession,
@@ -63,21 +63,29 @@ pub fn publish_empty_family_point_array(
     )
 }
 
-impl crate::LiveSession<'_> {
+impl crate::Scene {
     pub fn set_empty_point_array(
         &mut self,
         target: crate::MobjectTarget<'_>,
         shape: PointArrayShape,
-    ) -> Result<(), crate::LiveSessionError> {
-        // The typed target supplies the same store, root and publication owner
-        // used by every ordinary path edit; no separate array mutation lane.
-        match target {
+    ) -> Result<(), AuthoringError> {
+        target.require_store(self.integration_store())?;
+        if self.running_execution().is_none() {
+            return target.set_empty_point_array(shape);
+        }
+        self.with_running_execution(|store, root, execution| match target {
             crate::MobjectTarget::Object(object) => {
-                self.set_empty_mobject_point_array(object, &shape)
+                crate::path_editing::publish_running_object_edit(
+                    store,
+                    root,
+                    execution,
+                    object,
+                    crate::path_editing::PathEdit::EmptyPointArray(&shape),
+                )
             }
             crate::MobjectTarget::Family(family) => {
-                self.set_empty_family_point_array(family, &shape)
+                publish_empty_family_point_array(store, root, execution, family, &shape)
             }
-        }
+        })
     }
 }

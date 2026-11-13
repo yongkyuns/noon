@@ -27,22 +27,12 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
         scene
             .add_many(&[(&source).into(), (&destination).into()])
             .unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Partial {
-                    object: &destination,
-                    source: &source,
-                    a: 0.25,
-                    b: 0.75,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .pointwise_become_partial(&destination, &source, 0.25, 0.75)
+                .unwrap();
         } else {
             destination
                 .pointwise_become_partial(&source, 0.25, 0.75)
@@ -60,15 +50,7 @@ fn partial_uses_curve_count_and_preserves_destination_identity_and_style() {
         );
         assert_eq!(source.state().unwrap(), source_before);
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Reverse {
-                    object: &destination,
-                },
-            )
-            .unwrap();
+            running.scene_mut().reverse_direction(&destination).unwrap();
             assert_eq!(
                 running
                     .scene()
@@ -170,33 +152,22 @@ fn live_partial_rejects_unrepresentable_source_before_allocating() {
     let source = scene.circle(1.).unwrap();
     let destination = scene.square(1.).unwrap();
     scene.add(&destination).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut running = scene.into_execution().unwrap();
     let before = destination.state().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let segment = running
+        .live()
         .declare_and_activate_create(&source, AnimationOptions::new().run_time(1.))
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
+    running.live().advance_segment_to(segment, 0.5).unwrap();
     let count = source
         .integration_store()
         .borrow()
         .geometry_resources()
         .len();
-    assert!(noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Partial {
-            object: &destination,
-            source: &source,
-            a: 0.2,
-            b: 0.8,
-        },
-    )
-    .is_err());
+    assert!(running
+        .scene_mut()
+        .pointwise_become_partial(&destination, &source, 0.2, 0.8)
+        .is_err());
     assert_eq!(destination.state().unwrap(), before);
     assert_eq!(
         source

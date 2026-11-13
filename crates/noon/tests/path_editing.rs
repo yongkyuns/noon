@@ -37,19 +37,12 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
             .len();
         let corners = [Vec2::new(-2., -1.), Vec2::new(0., 1.), Vec2::new(2., -1.)];
         let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Corners {
-                    object: &source,
-                    points: &corners,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .set_points_as_corners(&source, &corners)
+                .unwrap();
         } else {
             source.set_points_as_corners(&corners).unwrap();
         }
@@ -75,16 +68,10 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
                     .unwrap(),
                 (2., -1.)
             );
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Corners {
-                    object: &source,
-                    points: &corners,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .set_points_as_corners(&source, &corners)
+                .unwrap();
         } else {
             source.set_points_as_corners(&corners).unwrap();
         }
@@ -107,22 +94,19 @@ fn raw_points_preserve_incomplete_arrays_and_append_through_shared_publication()
         let initial = (0..7)
             .map(|index| Vec2::new(index as f32, (index * 2) as f32))
             .collect::<Vec<_>>();
-        let mut execution = scene.execution_session().unwrap();
+        let mut running = scene.into_execution().unwrap();
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut execution,
-                noon::integration::BorrowedPathEdit::RawPoints {
-                    object: &object,
-                    points: &initial
+            running
+                .scene_mut()
+                .set_points_f64(
+                    &object,
+                    &initial
                         .iter()
                         .map(|p| (p.x as f64, p.y as f64))
                         .collect::<Vec<_>>(),
-                },
-            )
-            .unwrap();
+                )
+                .unwrap();
         } else {
             object.set_points(&initial).unwrap();
         }
@@ -143,19 +127,16 @@ fn raw_points_preserve_incomplete_arrays_and_append_through_shared_publication()
 
         let appended = [Vec2::new(7., 14.), Vec2::new(8., 16.)];
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut execution,
-                noon::integration::BorrowedPathEdit::AppendRawPoints {
-                    object: &object,
-                    points: &appended
+            running
+                .scene_mut()
+                .append_points_f64(
+                    &object,
+                    &appended
                         .iter()
                         .map(|p| (p.x as f64, p.y as f64))
                         .collect::<Vec<_>>(),
-                },
-            )
-            .unwrap();
+                )
+                .unwrap();
         } else {
             object.append_points(&appended).unwrap();
         }
@@ -216,17 +197,10 @@ fn family_reverse_points_is_atomic_and_preserves_member_transforms() {
             .geometry_resources()
             .len();
         let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::FamilyReversePoints { family: &family },
-            )
-            .unwrap();
+            running.scene_mut().reverse_family_points(&family).unwrap();
         } else {
             family.reverse_points().unwrap();
         }
@@ -255,13 +229,7 @@ fn family_reverse_points_is_atomic_and_preserves_member_transforms() {
                 .unwrap();
             assert!((effective_start.0 - first_end.0).abs() < 1e-6);
             assert!((effective_start.1 - first_end.1).abs() < 1e-6);
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::ReversePoints { object: &first },
-            )
-            .unwrap();
+            running.scene_mut().reverse_points(&first).unwrap();
         } else {
             first.reverse_points().unwrap();
         }
@@ -308,19 +276,13 @@ fn family_repeat_points_is_atomic_and_preserves_member_transforms() {
                 .flat_map(|_| points.iter().copied())
                 .collect::<Vec<_>>()
         };
-        let mut session = scene.execution_session().unwrap();
+        let mut running = scene.into_execution().unwrap();
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                noon::integration::BorrowedPathEdit::FamilyRepeatPoints {
-                    family: &family,
-                    count: 2,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .repeat_family_points(&family, 2)
+                .unwrap();
         } else {
             family.repeat_points(2).unwrap();
         }
@@ -337,16 +299,7 @@ fn family_repeat_points_is_atomic_and_preserves_member_transforms() {
         assert_eq!(second.state().unwrap().transform, second_state.transform);
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                noon::integration::BorrowedPathEdit::RepeatPoints {
-                    object: &first,
-                    count: 2,
-                },
-            )
-            .unwrap();
+            running.scene_mut().repeat_points(&first, 2).unwrap();
         } else {
             first.repeat_points(2).unwrap();
         }
@@ -368,21 +321,14 @@ fn start_new_path_preserves_raw_points_and_pads_by_the_configured_stride() {
                 .map(|index| Vec2::new(index as f32, (index * 2) as f32))
                 .collect::<Vec<_>>();
             object.set_points(&initial).unwrap();
-            let mut execution = scene.execution_session().unwrap();
+            let mut running = scene.into_execution().unwrap();
             let new_point = Vec2::new(9., 9.);
 
             if live_mode {
-                noon::integration::publish_borrowed_path_edit(
-                    scene.integration_store(),
-                    scene.root(),
-                    &mut execution,
-                    noon::integration::BorrowedPathEdit::StartWithStride {
-                        object: &object,
-                        point: new_point,
-                        stride,
-                    },
-                )
-                .unwrap();
+                running
+                    .scene_mut()
+                    .start_new_path_with_stride(&object, new_point, stride)
+                    .unwrap();
             } else {
                 object
                     .start_new_path_with_stride(new_point, stride)
@@ -443,19 +389,11 @@ fn clear_points_uses_shared_authored_and_live_transactions() {
         let original_id = object.node_id();
         let original_point_count = object.path_query().unwrap().point_count();
         assert!(original_point_count > 0);
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         let revision = running.scene().revision();
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Clear { object: &object },
-            )
-            .unwrap();
+            running.scene_mut().clear_points(&object).unwrap();
             assert_eq!(
                 running
                     .scene()
@@ -481,13 +419,7 @@ fn clear_points_uses_shared_authored_and_live_transactions() {
 
         let revision = running.scene().revision();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Clear { object: &object },
-            )
-            .unwrap();
+            running.scene_mut().clear_points(&object).unwrap();
         } else {
             object.clear_points().unwrap();
         }
@@ -507,36 +439,19 @@ fn cubic_curve_appends_connected_and_disconnected_segments_authored_and_live() {
             .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
             .unwrap();
         scene.add(&object).unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
-        let append = |object: &mut noon::Mobject,
-                      execution: &mut noon::ExecutionSession,
-                      anchor1,
-                      handle1,
-                      handle2,
-                      anchor2| {
-            if live_mode {
-                noon::integration::publish_borrowed_path_edit(
-                    &semantics,
-                    scene_root,
-                    execution,
-                    noon::integration::BorrowedPathEdit::CubicCurve {
-                        object,
-                        anchor1,
-                        handle1,
-                        handle2,
-                        anchor2,
-                    },
-                )
-            } else {
-                object.add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
-            }
-        };
+        let append =
+            |object: &mut noon::Mobject, scene: &mut Scene, anchor1, handle1, handle2, anchor2| {
+                if live_mode {
+                    scene.add_cubic_bezier_curve(object, anchor1, handle1, handle2, anchor2)
+                } else {
+                    object.add_cubic_bezier_curve(anchor1, handle1, handle2, anchor2)
+                }
+            };
 
         append(
             &mut object,
-            running.session_mut(),
+            running.scene_mut(),
             Vec2::new(0., 0.),
             Vec2::new(1., 0.),
             Vec2::new(1., 1.),
@@ -545,7 +460,7 @@ fn cubic_curve_appends_connected_and_disconnected_segments_authored_and_live() {
         .unwrap();
         append(
             &mut object,
-            running.session_mut(),
+            running.scene_mut(),
             Vec2::new(2., 1.),
             Vec2::new(3., 1.),
             Vec2::new(3., 2.),
@@ -554,7 +469,7 @@ fn cubic_curve_appends_connected_and_disconnected_segments_authored_and_live() {
         .unwrap();
         append(
             &mut object,
-            running.session_mut(),
+            running.scene_mut(),
             Vec2::new(6., 2.),
             Vec2::new(7., 2.),
             Vec2::new(7., 3.),
@@ -584,8 +499,6 @@ fn cubic_curve_batches_are_atomic_and_reject_nonfinite_points() {
             .geometry(ManimGeometryOptions::path(VectorPath::new()).unwrap())
             .unwrap();
         scene.add(&object).unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         let curves = [
             [
@@ -603,16 +516,10 @@ fn cubic_curve_batches_are_atomic_and_reject_nonfinite_points() {
         ];
         let revision = running.scene().revision();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::CubicCurves {
-                    object: &object,
-                    curves: &curves,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .add_cubic_bezier_curves(&object, &curves)
+                .unwrap();
         } else {
             object.add_cubic_bezier_curves(&curves).unwrap();
         }
@@ -635,15 +542,9 @@ fn cubic_curve_batches_are_atomic_and_reject_nonfinite_points() {
         ]];
         let revision = running.scene().revision();
         let result = if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::CubicCurves {
-                    object: &object,
-                    curves: &invalid,
-                },
-            )
+            running
+                .scene_mut()
+                .add_cubic_bezier_curves(&object, &invalid)
         } else {
             object.add_cubic_bezier_curves(&invalid)
         };
@@ -674,28 +575,16 @@ fn smooth_curve_to_calculates_or_accepts_the_second_handle_authored_and_live() {
             )
             .unwrap();
         scene.add(&object).unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
-        let publish =
-            |object: &mut noon::Mobject, session: &mut noon::ExecutionSession, handle2, anchor| {
-                if live_mode {
-                    noon::integration::publish_borrowed_path_edit(
-                        &semantics,
-                        scene_root,
-                        session,
-                        noon::integration::BorrowedPathEdit::SmoothCurve {
-                            object,
-                            handle2,
-                            anchor,
-                        },
-                    )
-                } else {
-                    object.add_smooth_curve_to(handle2, anchor)
-                }
-            };
+        let publish = |object: &mut noon::Mobject, scene: &mut Scene, handle2, anchor| {
+            if live_mode {
+                scene.add_smooth_curve_to(object, handle2, anchor)
+            } else {
+                object.add_smooth_curve_to(handle2, anchor)
+            }
+        };
 
-        publish(&mut object, running.session_mut(), None, Vec2::new(6., 3.)).unwrap();
+        publish(&mut object, running.scene_mut(), None, Vec2::new(6., 3.)).unwrap();
         let query = if live_mode {
             running.scene().effective_path_query(&object).unwrap()
         } else {
@@ -710,7 +599,7 @@ fn smooth_curve_to_calculates_or_accepts_the_second_handle_authored_and_live() {
 
         publish(
             &mut object,
-            running.session_mut(),
+            running.scene_mut(),
             Some(Vec2::new(6., 0.)),
             Vec2::new(7., -2.),
         )
@@ -774,8 +663,6 @@ fn set_cubic_bezier_curves_replaces_paths_authored_and_live() {
             )
             .unwrap();
         scene.add(&object).unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         let curves = [
             [
@@ -792,16 +679,10 @@ fn set_cubic_bezier_curves_replaces_paths_authored_and_live() {
             ],
         ];
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::SetCubicCurves {
-                    object: &object,
-                    curves: &curves,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .set_cubic_bezier_curves(&object, &curves)
+                .unwrap();
         } else {
             object.set_cubic_bezier_curves(&curves).unwrap();
         }
@@ -816,16 +697,10 @@ fn set_cubic_bezier_curves_replaces_paths_authored_and_live() {
         assert_eq!(query.end().unwrap(), (4., 2.));
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::SetCubicCurves {
-                    object: &object,
-                    curves: &[],
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .set_cubic_bezier_curves(&object, &[])
+                .unwrap();
             assert_eq!(
                 running
                     .scene()
@@ -856,22 +731,14 @@ fn add_points_as_corners_appends_atomically_authored_and_live() {
             )
             .unwrap();
         scene.add(&object).unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         let corners = [Vec2::new(2., 0.), Vec2::new(3., 1.)];
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::AppendCorners {
-                    object: &object,
-                    points: &corners,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .add_points_as_corners(&object, &corners)
+                .unwrap();
         } else {
             object.add_points_as_corners(&corners).unwrap();
         }
@@ -887,15 +754,7 @@ fn add_points_as_corners_appends_atomically_authored_and_live() {
         let invalid = [Vec2::new(4., 1.), Vec2::new(f32::NAN, 2.)];
         let revision = running.scene().revision();
         let result = if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::AppendCorners {
-                    object: &object,
-                    points: &invalid,
-                },
-            )
+            running.scene_mut().add_points_as_corners(&object, &invalid)
         } else {
             object.add_points_as_corners(&invalid)
         };
@@ -904,15 +763,7 @@ fn add_points_as_corners_appends_atomically_authored_and_live() {
 
         let empty_revision = running.scene().revision();
         let result = if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::AppendCorners {
-                    object: &object,
-                    points: &[],
-                },
-            )
+            running.scene_mut().add_points_as_corners(&object, &[])
         } else {
             object.add_points_as_corners(&[])
         };
@@ -972,21 +823,13 @@ fn append_vectorized_mobject_appends_source_and_drops_pending_destination_anchor
             .unwrap();
         scene.add(&destination).unwrap();
         scene.add(&source).unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
 
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::AppendVectorized {
-                    object: &destination,
-                    source: &source,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .append_vectorized_mobject(&destination, &source)
+                .unwrap();
         } else {
             destination.append_vectorized_mobject(&source).unwrap();
         }
@@ -1035,20 +878,11 @@ fn append_vectorized_mobject_uses_mutable_destination_stride_and_preserves_raw_p
             scene.add(&source).unwrap();
 
             let query = if live_mode {
-                let semantics = std::rc::Rc::clone(scene.integration_store());
-                let scene_root = scene.root();
                 let mut running = scene.into_execution().unwrap();
-                noon::integration::publish_borrowed_path_edit(
-                    &semantics,
-                    scene_root,
-                    running.session_mut(),
-                    noon::integration::BorrowedPathEdit::AppendVectorizedWithStride {
-                        object: &destination,
-                        source: &source,
-                        stride: 5,
-                    },
-                )
-                .unwrap();
+                running
+                    .scene_mut()
+                    .append_vectorized_mobject_with_stride(&destination, &source, 5)
+                    .unwrap();
                 running.scene().effective_path_query(&destination).unwrap()
             } else {
                 destination
@@ -1091,28 +925,12 @@ fn default_close_matches_default_manim_samples_authored_and_live() {
             .add_many(&[(&default).into(), (&explicit).into()])
             .unwrap();
         let (actual, expected) = if live_mode {
-            let semantics = std::rc::Rc::clone(scene.integration_store());
-            let scene_root = scene.root();
             let mut running = scene.into_execution().unwrap();
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Close { object: &default },
-            )
-            .unwrap();
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::CloseWithStride {
-                    object: &explicit,
-                    stride: 4,
-                    tolerance: 1e-6,
-                    bezier_t_values: &samples,
-                },
-            )
-            .unwrap();
+            running.scene_mut().close_path(&default).unwrap();
+            running
+                .scene_mut()
+                .close_path_with_stride(&explicit, 4, 1e-6, &samples)
+                .unwrap();
             (
                 running
                     .scene()
@@ -1184,21 +1002,11 @@ fn close_path_uses_mutable_stride_subpaths_and_constructor_samples_authored_and_
                 .unwrap();
             scene.add(&object).unwrap();
             let query = if live_mode {
-                let semantics = std::rc::Rc::clone(scene.integration_store());
-                let scene_root = scene.root();
                 let mut running = scene.into_execution().unwrap();
-                noon::integration::publish_borrowed_path_edit(
-                    &semantics,
-                    scene_root,
-                    running.session_mut(),
-                    noon::integration::BorrowedPathEdit::CloseWithStride {
-                        object: &object,
-                        stride: 5,
-                        tolerance: 1e-6,
-                        bezier_t_values: &samples,
-                    },
-                )
-                .unwrap();
+                running
+                    .scene_mut()
+                    .close_path_with_stride(&object, 5, 1e-6, &samples)
+                    .unwrap();
                 running.scene().effective_path_query(&object).unwrap()
             } else {
                 object.close_path_with_stride(5, 1e-6, &samples).unwrap();
@@ -1235,20 +1043,11 @@ fn set_points_as_corners_preserves_custom_constructor_samples_authored_and_live(
             .unwrap();
         scene.add(&object).unwrap();
         let query = if live_mode {
-            let semantics = std::rc::Rc::clone(scene.integration_store());
-            let scene_root = scene.root();
             let mut running = scene.into_execution().unwrap();
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::CornersWithSamples {
-                    object: &object,
-                    points: &corners,
-                    bezier_t_values: &samples,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .set_points_as_corners_with_samples(&object, &corners, &samples)
+                .unwrap();
             running.scene().effective_path_query(&object).unwrap()
         } else {
             object
@@ -1300,8 +1099,6 @@ fn empty_corner_inputs_and_nonfinite_rejection_follow_shared_semantics() {
 fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() {
     let mut scene = Scene::new();
     let object = scene.square(1.).unwrap();
-    let semantics = std::rc::Rc::clone(scene.integration_store());
-    let scene_root = scene.root();
     let mut running = scene.into_execution().unwrap();
     let segment = running
         .live()
@@ -1316,16 +1113,10 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
         .geometry_resources()
         .stats();
     let corners = [Vec2::ZERO, Vec2::new(1., 1.)];
-    assert!(noon::integration::publish_borrowed_path_edit(
-        &semantics,
-        scene_root,
-        running.session_mut(),
-        noon::integration::BorrowedPathEdit::Corners {
-            object: &object,
-            points: &corners,
-        },
-    )
-    .is_err());
+    assert!(running
+        .scene_mut()
+        .set_points_as_corners(&object, &corners)
+        .is_err());
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(
         object.integration_store().borrow().scene_revision(),
@@ -1344,16 +1135,10 @@ fn rejected_live_edit_does_not_allocate_or_publish_and_completion_allows_edit() 
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
     running.live().complete_segment(segment).unwrap();
-    noon::integration::publish_borrowed_path_edit(
-        &semantics,
-        scene_root,
-        running.session_mut(),
-        noon::integration::BorrowedPathEdit::Corners {
-            object: &object,
-            points: &corners,
-        },
-    )
-    .unwrap();
+    running
+        .scene_mut()
+        .set_points_as_corners(&object, &corners)
+        .unwrap();
     assert_eq!(
         running
             .scene()
@@ -1391,19 +1176,12 @@ fn handle_distance_scaling_matches_cubic_controls_in_authored_and_live_paths() {
             .unwrap();
         scene.add(&object).unwrap();
         let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::ScaleHandles {
-                    object: &object,
-                    factor: 0.5,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .scale_handle_to_anchor_distances(&object, 0.5)
+                .unwrap();
         } else {
             object.scale_handle_to_anchor_distances(0.5).unwrap();
         }
@@ -1450,22 +1228,12 @@ fn line_append_uses_custom_constructor_samples_authored_and_live() {
             if live_mode {
                 scene.add(&object).unwrap();
             }
-            let semantics = std::rc::Rc::clone(scene.integration_store());
-            let scene_root = scene.root();
             let mut running = scene.into_execution().unwrap();
             if live_mode {
-                noon::integration::publish_borrowed_path_edit(
-                    &semantics,
-                    scene_root,
-                    running.session_mut(),
-                    noon::integration::BorrowedPathEdit::LineWithSamples {
-                        object: &object,
-                        point: Vec2::new(9.0, -1.0),
-                        stride: 4,
-                        bezier_t_values: &samples,
-                    },
-                )
-                .unwrap();
+                running
+                    .scene_mut()
+                    .add_line_to_with_stride_and_samples(&object, Vec2::new(9.0, -1.0), 4, &samples)
+                    .unwrap();
             } else {
                 object
                     .add_line_to_with_stride_and_samples(Vec2::new(9.0, -1.0), 4, &samples)
