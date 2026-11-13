@@ -933,7 +933,7 @@ impl Scene {
 }
 
 impl MobjectFamily {
-    /// Authored world affine edit; Scene/LiveSession publish edits into execution.
+    /// Edit authored world placement. Use [`Scene::world_affine`] during playback.
     pub fn world_affine(&mut self, edit: crate::WorldAffineEdit) -> Result<(), AuthoringError> {
         let transaction = crate::world_affine::prepare_world_affine(
             self.integration_store(),
@@ -975,7 +975,7 @@ impl MobjectFamily {
 }
 
 impl Mobject {
-    /// Authored world affine edit; Scene/LiveSession publish edits into execution.
+    /// Edit authored world placement. Use [`Scene::world_affine`] during playback.
     pub fn world_affine(&mut self, edit: crate::WorldAffineEdit) -> Result<(), AuthoringError> {
         let transaction = crate::world_affine::prepare_world_affine(
             self.integration_store(),

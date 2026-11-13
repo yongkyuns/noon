@@ -22,7 +22,7 @@ The second map is the **internal Cargo dependency graph**. It is intentionally s
 
 A useful way to read the code is:
 
-1. `Scene`, `Mobject`, `MobjectFamily`, animation handles, signal handles, and `LiveSession` are ergonomic **authoring/orchestration handles** in `noon`. They should not become a second scene model.
+1. `Scene` owns construction and persistent edits. `Mobject`, `MobjectFamily`, animation handles, and signal handles identify authored values. `LiveSession` borrows execution controls for an already paired scene and runtime.
 2. `SemanticStore` in `noon-core` is the **authored Semantic Scene authority**. A `Mobject` is only a store pointer plus a generational `SemanticNodeId` into that store.
 3. `noon-compile` reads semantic state and derives an **Execution Plan**: execution identities/slots, compact values, tracks, reactive projections, painter order, and dependency-closed resources.
 4. `ExecutionSession` in `noon` owns the orchestration needed to keep that compiled projection coherent with one `SceneInstance`; it does not own a second copy of `SemanticStore`.
@@ -104,24 +104,18 @@ For geometry authoring, `ManimGeometryOptions` is inert typed input. It carries 
 The important construction sequence is:
 
 ```text
-Scene constructor / ManimGeometryOptions
+Scene::geometry(ManimGeometryOptions)
         ↓
-Mobject::from_manim_geometry(...)
+Scene checks resource admission
         ↓
-ManimGeometryOptions::into_state(store)
+ManimGeometryOptions prepares geometry and semantic state
         ↓
-import_geometry(store, GeometryRef)
-        ↓
-SemanticObjectState
-        ↓
-SemanticMutationTransaction::add_node(...)
-        ↓
-SemanticStore allocates SemanticNodeId
+Scene publishes the add-node transaction and resolves its SemanticNodeId
         ↓
 Mobject { store, id }
 ```
 
-`Mobject::new` gets the permanent identity from the committed transaction result. That is why code should not invent IDs in facade/frontend layers.
+The handle gets its identity from the committed transaction result.
 
 ### Mutation path
 
@@ -146,14 +140,9 @@ feature API. Authored/base queries and coherent effective queries remain explici
 `Scene::add_family_members` and `Scene::remove_family_members` prepare the existing
 shared family membership transaction and use that same publication route. Family
 creation, linear/grid arrangement, and anchored placement also remain Scene-owned
-operations. `Scene::effective_layout` and the external `LiveSession` query share
-one object-layout implementation, including descendant traversal and render-override
-admission; `effective_family_layout` uses the existing family query. These queries
-observe a coherent publication and do not store a second bounds representation.
-
-`Scene::live(&mut session)` is for an explicitly borrowed external execution
-component and callback/host integration. Raw mutable store access is an
-integration escape hatch, not a live-edit API.
+operations. `Scene::effective_layout` and `Scene::effective_family_layout` read
+bounds from the running Scene's coherent runtime publication. Raw mutable store
+access is reserved for integration.
 
 ## Semantic object representation
 
@@ -409,19 +398,20 @@ publishes those identities atomically at admission.
 
 ### `ExecutionSession`
 
-`ExecutionSession` is the typed orchestration bridge between the authored store and one runtime. Its fields are deliberately derived/runtime structures: store identity, `SemanticExecutionIndex`, reachability, execution slots, spatial index, reactive projection, signal timeline, one `SceneInstance`, callback/completion state, etc.
-
-It explicitly does **not** own or mirror `SemanticStore`. This matters for live mutation: semantic transactions remain the source of authored truth; execution publication updates the derived execution/runtime state only after preparation succeeds.
+`ExecutionSession` keeps one runtime coherent with its authored store. It owns
+the derived index, slots, reactive projection, signal timeline, `SceneInstance`,
+and callback and completion state. Semantic transactions remain the source of
+authored state, and execution publishes its derived changes after preparation
+succeeds. Hosts that manage a standalone runtime import `ExecutionSession`
+explicitly.
 
 ### `LiveSession`
 
-`Scene::live(&mut ExecutionSession)` returns the borrowed execution facade for
-external-session and callback/host integration. It supplies capabilities such as
-explicit animation activation/completion, and retains operations required by
-those integration callers. Ordinary supported construction, membership, persistent
-edits and queries use Scene-owned routes; sequential sources use `ScriptScene`.
-
-The facade should not accumulate a parallel scene model. If a new live feature seems to require copying semantic state into `LiveSession`, look for a semantic transaction + lowering/publication solution first.
+`SceneExecution::live` and `ContinuationScene::live` borrow segment controls
+from the owning Scene. `LiveSession` handles activation, progression, completion,
+input, and staged publication. `Scene::live(&mut ExecutionSession)` is available
+for hosts that explicitly manage a standalone runtime handoff. Sequential
+sources use `ScriptScene` for authoring and `play`/`wait`.
 
 ### `SceneInstance`
 

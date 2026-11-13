@@ -1,9 +1,8 @@
 //! Explicit low-level integration with Noon's existing authorities.
 //!
-//! Ordinary authoring uses [`Scene`](crate::Scene), [`Mobject`](crate::Mobject),
-//! and [`LiveSession`](crate::LiveSession). This module exposes only the specific
-//! types needed by language wrappers, platform hosts, resource adapters and
-//! diagnostics; it owns no scene, runtime, registry or scheduler.
+//! Ordinary authoring uses [`Scene`](crate::Scene) and its authored handles.
+//! This module exposes services for language wrappers, platform hosts,
+//! resource adapters and diagnostics.
 //!
 //! # Raw semantic access
 //!
