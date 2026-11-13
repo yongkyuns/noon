@@ -1,7 +1,6 @@
 //! Ordinary persistent object edits through the Scene-owned publication route.
 
 use crate::{
-    family_authoring::FamilyTranslation,
     semantic_mobject::{
         authoring_render_f64, edit_color, edit_disable_fill, edit_disable_stroke, edit_fade,
         edit_fill, edit_fill_color, edit_fill_opacity, edit_manim_opacity, edit_object_opacity,
@@ -427,34 +426,18 @@ impl Scene {
         delta: SemanticVec3,
     ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
-        if self.running_execution().is_some() {
-            if !delta.is_finite() {
-                let mut translation = object.state()?.transform.translation;
-                translation.x += delta.x;
-                translation.y += delta.y;
-                translation.z += delta.z;
-                return self.set_object_property(
-                    object,
-                    SemanticObjectProperty::Translation,
-                    translation,
-                );
-            }
-            return self.with_running_execution(|store, root, execution| {
-                crate::family_layout::publish_shift_root(
-                    store,
-                    root,
-                    execution,
-                    object.node_id(),
-                    delta,
-                )
-                .map(|_| ())
-            });
+        if self.running_execution().is_some() && !delta.is_finite() {
+            let mut translation = object.state()?.transform.translation;
+            translation.x += delta.x;
+            translation.y += delta.y;
+            translation.z += delta.z;
+            return self.set_object_property(
+                object,
+                SemanticObjectProperty::Translation,
+                translation,
+            );
         }
-        let transaction = {
-            let store = self.integration_store().borrow();
-            FamilyTranslation::begin_3d(&store, object.node_id(), delta)?.transaction(&store)?
-        };
-        self.apply_semantic_transaction(transaction).map(|_| ())
+        self.shift_layout_root(object.node_id(), delta).map(|_| ())
     }
 
     fn edit_object_style(
