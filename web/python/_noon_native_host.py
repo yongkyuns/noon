@@ -44,6 +44,9 @@ def _arena():
         _store.set(arena)
     return arena
 
+noonAudioSource = _native.AudioSource
+noonAudioClipOptions = _native.ClipOptions
+
 noonImageMapping = _native.ImageMapping
 noonImagePaintOptions = _native.ImagePaintOptions
 noonPlotSamplingPlan = _native.PlotSamplingPlan

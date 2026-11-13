@@ -7,6 +7,7 @@ use noon::integration::AuthoringFailure;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 mod arrow;
+mod audio;
 mod callback;
 mod callback_values;
 #[cfg(feature = "code")]
@@ -69,6 +70,7 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
     arrow::register(m)?;
+    audio::register(m)?;
     #[cfg(feature = "capture")]
     {
         m.add_class::<export::ExportCancellation>()?;

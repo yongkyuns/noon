@@ -301,7 +301,8 @@ impl Context {
             .execution_session()
             .map_err(|e| engine_error(e.to_string()))?;
         session.require_effect_resource_preparation();
-        if self.retain_history {
+        // Predeclared audio uses the immutable timeline for preview and export.
+        if self.retain_history && !session.has_audio() {
             session
                 .begin_replay_retention(Default::default())
                 .map_err(|e| engine_error(e.to_string()))?;
@@ -335,7 +336,7 @@ impl Context {
         }
         let (_, _, session) = scene_execution::parts_mut(&mut self.scene)
             .expect("viewer bootstrap installed execution");
-        if self.retain_history {
+        if session.replay_scope_active() {
             session.seal_replay_for_viewer().map_err(|error| {
                 engine_error(noon::integration::AuthoringFailure::new(
                     "unsupported_operation",
@@ -1092,6 +1093,63 @@ impl Context {
             .stop_3dillusion_camera_rotation(&target.handle)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
+    fn audio(
+        &mut self,
+        source: &crate::audio::AudioSource,
+        options: &crate::audio::ClipOptions,
+    ) -> PyResult<crate::audio::AudioClip> {
+        self.available()?;
+        if self.has_execution() {
+            return Err(engine_error(AuthoringFailure::new(
+                "unsupported_operation",
+                "authoring.finite_media_after_execution",
+                "audio and playback-control declarations must precede execution",
+            )));
+        }
+        let node = self
+            .scene
+            .audio(source.0.clone(), options.0)
+            .map_err(engine_error)?;
+        Ok(crate::audio::AudioClip {
+            store: Rc::clone(self.scene.integration_store()),
+            node,
+        })
+    }
+
+    #[pyo3(name = "authoredWait")]
+    fn authored_wait(&mut self, duration: f64) -> PyResult<f64> {
+        self.available()?;
+        if self.has_execution() {
+            return Err(engine_error(
+                "authored waits require a Scene before execution",
+            ));
+        }
+        self.scene.wait(duration).map_err(engine_error)?;
+        Ok(self.scene.time())
+    }
+
+    #[pyo3(name = "declareValue")]
+    fn declare_value(
+        &mut self,
+        tracker: &crate::signals::ValueTrackerHandle,
+        target: f64,
+        duration: f64,
+        easing: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        if self.has_execution() {
+            return Err(engine_error(
+                "scalar declarations require a Scene before execution",
+            ));
+        }
+        self.scene
+            .play_value(&tracker.value, target)
+            .rate_func(crate::composition::rate(easing)?)
+            .run_time(duration)
+            .map(|_| ())
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "createValueTracker")]
     fn create_tracker(&mut self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
         self.available()?;
