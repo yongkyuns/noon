@@ -532,9 +532,7 @@ impl Scene {
         &self,
         object: &Mobject,
     ) -> Result<crate::PathQuery, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_query(&self.store, execution, object)
     }
 
@@ -544,10 +542,95 @@ impl Scene {
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_all_points(&self.store, execution, target)
+    }
+
+    fn execution_for_observation(&self) -> Result<&ExecutionSession, AuthoringError> {
+        self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))
+    }
+
+    /// Capture full-coordinate points, retaining recursive child occurrences.
+    pub fn effective_all_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_all_points_3d(&self.store, execution, target)
+    }
+
+    /// Capture full-coordinate vector anchors in unique family order.
+    pub fn effective_vector_boundary_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_vector_boundary_points_3d(&self.store, execution, target)
+    }
+
+    /// Capture the planar projection of the effective vector anchors.
+    pub fn effective_vector_boundary_points(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_vector_boundary_points(&self.store, execution, target)
+    }
+
+    /// Capture owned points and ordered child occurrences for one target.
+    pub fn effective_point_reduction_tree(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointReductionTree, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_point_reduction_tree(&self.store, execution, target)
+    }
+
+    /// Select retained-content layout when the effective target has opaque content.
+    pub fn effective_requires_content_boundary(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<bool, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_requires_content_boundary(&self.store, execution, target)
+    }
+
+    /// Read the effective boundary coordinate along one direction.
+    pub fn effective_critical_point_3d(
+        &self,
+        target: MobjectTarget<'_>,
+        direction: noon_core::SemanticVec3,
+        vector_boundary: bool,
+    ) -> Result<noon_core::SemanticVec3, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_critical_point_3d(
+            &self.store,
+            execution,
+            target,
+            direction,
+            vector_boundary,
+        )
+    }
+
+    /// Read one analytic Line's world endpoints at the current publication.
+    pub fn effective_line_endpoints(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<crate::ManimLineEndpoints, AuthoringError> {
+        self.require_object(mobject)?;
+        let execution = self.execution_for_observation()?;
+        let store = self.store.borrow();
+        let observed = execution.effective_semantic_object(&store, mobject.node_id())?;
+        if !observed.authored_content_layout_applicable() {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLineRenderOverride,
+            ));
+        }
+        let transform = observed.object.transform;
+        drop(store);
+        mobject.manim_line_endpoints_at(transform)
     }
 
     /// Query the effective min, midpoint, or max boundary coordinate for a
@@ -558,9 +641,7 @@ impl Scene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_extremum_along_dim(&self.store, execution, target, dim, key)
     }
 
@@ -569,9 +650,7 @@ impl Scene {
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_center_of_mass(&self.store, execution, target)
     }
 
@@ -582,9 +661,7 @@ impl Scene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_boundary_point(
             &self.store,
             execution,
@@ -600,9 +677,7 @@ impl Scene {
         target: MobjectTarget<'_>,
         dim: usize,
     ) -> Result<f64, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_length_over_dim(&self.store, execution, target, dim)
     }
 
@@ -612,9 +687,7 @@ impl Scene {
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_boundary_points(&self.store, execution, target)
     }
 
@@ -623,9 +696,7 @@ impl Scene {
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
-        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_boundary_points_3d(&self.store, execution, target)
     }
 
@@ -636,9 +707,7 @@ impl Scene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_boundary_extremum_along_dim(
             &self.store,
             execution,
@@ -655,9 +724,7 @@ impl Scene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_boundary_point(
             &self.store,
             execution,
@@ -688,9 +755,7 @@ impl Scene {
         object: &Mobject,
     ) -> Result<crate::EffectiveMobjectState, AuthoringError> {
         self.require_object(object)?;
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         Self::observe_effective(&self.store, execution, object).map_err(AuthoringError::from)
     }
 
@@ -767,9 +832,7 @@ impl Scene {
         &self,
         family: &MobjectFamily,
     ) -> Result<crate::EffectiveMobjectLayout, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::family_layout::effective_family_layout(&self.store, execution, family)
     }
 

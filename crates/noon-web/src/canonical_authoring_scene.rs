@@ -1031,7 +1031,12 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).requires_content_boundary(),
-            |player, handle| player.live_requires_content_boundary(handle.into()),
+            |player, handle| {
+                player
+                    .scene()
+                    .effective_requires_content_boundary(handle.into())
+                    .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
+            },
         )
     }
 
@@ -1043,7 +1048,12 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).all_points_3d(),
-            |player, handle| player.live_effective_all_points_3d(noon::MobjectTarget::from(handle)),
+            |player, handle| {
+                player
+                    .scene()
+                    .effective_all_points_3d(handle.into())
+                    .map_err(Into::into)
+            },
         )
     }
 
@@ -1068,7 +1078,10 @@ impl CanonicalAuthoringScene {
             handle,
             |handle| noon::MobjectTarget::from(handle).point_reduction_tree(),
             |player, handle| {
-                player.live_effective_point_reduction_tree(noon::MobjectTarget::from(handle))
+                player
+                    .scene()
+                    .effective_point_reduction_tree(handle.into())
+                    .map_err(Into::into)
             },
         )
     }
@@ -1091,7 +1104,10 @@ impl CanonicalAuthoringScene {
                 }
             },
             |player, handle| {
-                player.live_effective_critical_point_3d(handle.into(), direction, vector_boundary)
+                player
+                    .scene()
+                    .effective_critical_point_3d(handle.into(), direction, vector_boundary)
+                    .map_err(Into::into)
             },
         )
     }
@@ -1255,7 +1271,12 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.all_points_3d(),
-            crate::SemanticExecutionPlayer::live_effective_all_points_3d,
+            |player, target| {
+                player
+                    .scene()
+                    .effective_all_points_3d(target)
+                    .map_err(Into::into)
+            },
         )
     }
 
@@ -1279,7 +1300,12 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.requires_content_boundary(),
-            crate::SemanticExecutionPlayer::live_requires_content_boundary,
+            |player, target| {
+                player
+                    .scene()
+                    .effective_requires_content_boundary(target)
+                    .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
+            },
         )
     }
 
@@ -1316,7 +1342,12 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.point_reduction_tree(),
-            crate::SemanticExecutionPlayer::live_effective_point_reduction_tree,
+            |player, target| {
+                player
+                    .scene()
+                    .effective_point_reduction_tree(target)
+                    .map_err(Into::into)
+            },
         )
     }
 
@@ -1337,7 +1368,10 @@ impl CanonicalAuthoringScene {
                 }
             },
             |player, target| {
-                player.live_effective_critical_point_3d(target, direction, vector_boundary)
+                player
+                    .scene()
+                    .effective_critical_point_3d(target, direction, vector_boundary)
+                    .map_err(Into::into)
             },
         )
     }
@@ -1350,7 +1384,12 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.vector_boundary_points_3d(),
-            crate::SemanticExecutionPlayer::live_effective_vector_boundary_points_3d,
+            |player, target| {
+                player
+                    .scene()
+                    .effective_vector_boundary_points_3d(target)
+                    .map_err(Into::into)
+            },
         )
     }
 
@@ -1362,7 +1401,12 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.vector_boundary_points(),
-            crate::SemanticExecutionPlayer::live_effective_vector_boundary_points,
+            |player, target| {
+                player
+                    .scene()
+                    .effective_vector_boundary_points(target)
+                    .map_err(Into::into)
+            },
         )
     }
 
@@ -1440,7 +1484,12 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             noon::Mobject::manim_line_endpoints,
-            crate::SemanticExecutionPlayer::live_effective_line_endpoints,
+            |player, handle| {
+                player
+                    .scene()
+                    .effective_line_endpoints(handle)
+                    .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+            },
         )
     }
 

@@ -242,18 +242,14 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<crate::SceneExecution,
             composite.family().into(),
         ])
         .map_err(|error| error.to_string())?;
-    let mut execution = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
+    let execution = scene.into_execution().map_err(|error| error.to_string())?;
     for entry in plain.get_entries().map_err(|error| error.to_string())? {
-        assert!(scene
-            .live(&mut execution)
-            .requires_content_boundary(entry.as_target())
+        assert!(execution
+            .scene()
+            .effective_requires_content_boundary(entry.as_target())
             .map_err(|error| error.to_string())?);
     }
-    scene
-        .into_execution_with_session(execution)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// DecimalTable counterpart for ManimCE's configurable DecimalNumber entries.

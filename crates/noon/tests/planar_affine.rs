@@ -94,21 +94,24 @@ fn live_offset_line_rotation_resolves_center_edge_and_origin_in_shared_rust() {
     let mut scene = Scene::new();
     let line = scene.line((1., 0.), (3., 0.)).unwrap();
     scene.add(&line).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
+    let mut session = scene.into_execution().unwrap();
     let anchor = LayoutAnchor::from(&line);
-    live.rotate(&line, FRAC_PI_2).unwrap();
-    let endpoints = live.effective_line_endpoints(&line).unwrap();
+    session.live().rotate(&line, FRAC_PI_2).unwrap();
+    let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (2., -1.));
     close(endpoints.end, (2., 1.));
-    live.rotate_layout(&anchor, FRAC_PI_2, Pivot::Point(0., 0.))
+    session
+        .live()
+        .rotate_layout(&anchor, FRAC_PI_2, Pivot::Point(0., 0.))
         .unwrap();
-    let endpoints = live.effective_line_endpoints(&line).unwrap();
+    let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (1., 2.));
     close(endpoints.end, (-1., 2.));
-    live.rotate_layout(&anchor, FRAC_PI_2, Pivot::Edge(1., 0.))
+    session
+        .live()
+        .rotate_layout(&anchor, FRAC_PI_2, Pivot::Edge(1., 0.))
         .unwrap();
-    let endpoints = live.effective_line_endpoints(&line).unwrap();
+    let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (1., 2.));
     close(endpoints.end, (1., 0.));
 }

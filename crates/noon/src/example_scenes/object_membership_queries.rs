@@ -1,8 +1,8 @@
 //! Public child edits and alias-preserving copies, paired with
 //! `web/python/examples/manim_parity_object_members.py` on the shared renderer.
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, LiveSessionError,
-    ManimGeometryOptions, Mobject, Scene,
+    ContinuationStep, LiveContinuation, LiveProgram, LiveSessionError, ManimGeometryOptions,
+    Mobject, Scene,
 };
 
 fn split_ids(root: &Mobject) -> Result<Vec<noon_core::SemanticNodeId>, crate::AuthoringError> {
@@ -15,13 +15,13 @@ fn split_ids(root: &Mobject) -> Result<Vec<noon_core::SemanticNodeId>, crate::Au
 }
 
 fn assert_depth(
-    live: &LiveSession<'_>,
+    scene: &Scene,
     root: &Mobject,
     own: f64,
     minimum: f64,
     maximum: f64,
 ) -> Result<(), LiveSessionError> {
-    let snapshot = live.point_reduction_tree(root.into())?;
+    let snapshot = scene.effective_point_reduction_tree(root.into())?;
     assert!(!snapshot.points.is_empty());
     assert!(snapshot.points.iter().all(|point| point.z == own));
     let coordinates = snapshot
@@ -57,7 +57,7 @@ impl LiveContinuation for ObjectMembershipQueries {
         }
         let step = (|| -> Result<_, LiveSessionError> {
             if self.stage == 0 {
-                assert_depth(&scene.live(), &self.root, 1.125, -3.5, 4.75)?;
+                assert_depth(scene, &self.root, 1.125, -3.5, 4.75)?;
             }
             if self.stage == 1 {
                 scene
@@ -65,8 +65,8 @@ impl LiveContinuation for ObjectMembershipQueries {
                 scene
                     .live()
                     .shift_3d(&self.root, noon_core::SemanticVec3::new(0., 0., 0.5))?;
-                assert_depth(&scene.live(), &self.root, 1.625, -3., 2.75)?;
-                assert_depth(&scene.live(), &self.c, 4.75, 4.75, 4.75)?;
+                assert_depth(scene, &self.root, 1.625, -3., 2.75)?;
+                assert_depth(scene, &self.c, 4.75, 4.75, 4.75)?;
                 // The Python metadata alias points to the same copied child.
                 let copied = scene.copy_mobject_with_references(&self.root, &[(&self.b).into()])?;
                 let copied_root = copied.root();
@@ -87,7 +87,7 @@ impl LiveContinuation for ObjectMembershipQueries {
                     [self.root.node_id(), self.a.node_id(), self.b.node_id()]
                 );
                 scene.add(copied_root)?;
-                assert_depth(&scene.live(), copied_root, 1.625, -3., 2.75)?;
+                assert_depth(scene, copied_root, 1.625, -3., 2.75)?;
             }
             self.stage += 1;
             scene.live().wait_segment(0.25).map(ContinuationStep::Await)
