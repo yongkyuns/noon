@@ -125,8 +125,8 @@
       "showcase-raster-images",
       "showcase-bezier-paths"
     ],
-    "runnerSha256": "20e394a847da9241283a90b323fa476b80819a692baa464add04248fa3405c62",
-    "workloadSha256": "5137eef8aa71b8d70df845ad769278d934fd8eca53f585ca09c4f8d5e3ddbe96",
+    "runnerSha256": "e2946d2b4b013f3ca6a7042ed65a86320ac230d8d25f21d137ae09a2f67370a1",
+    "workloadSha256": "07553a5abec67e89c731bfa881c0bfbb9ea6230ac98a0f405910ced79f01115b",
     "comparisonSha256": "94cf8fd9ecec1d4c7d4f7fe4af123595e7d0b7f788ed422187e650bda64125a0",
     "thresholds": {
       "maxLatencyRatio": 1.25,
