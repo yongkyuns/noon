@@ -371,7 +371,7 @@ try {
             if (kind === "not_lowered") {
               context.liveAdvanceSegmentTo(0.25);
               context.liveCompleteSegment();
-              context.liveAdd("1", source);
+              context.bindMobject("1", source);
             }
             const observed = context.liveEffectiveMobject(kind === "not_lowered" ? source : target);
             try {

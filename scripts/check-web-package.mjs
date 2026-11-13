@@ -354,6 +354,7 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "bindMobject(object_id: string, handle: WasmAuthoringMobjectHandle): void;",
   "setFillHatch(handle: WasmAuthoringMobjectHandle, paint: WasmHatchPaint, opacity?: number | null): void;",
   "setFillNoise(handle: WasmAuthoringMobjectHandle, gradient: WasmNoisePaint, opacity?: number | null): void;",
   "setFillRadialGradient(handle: WasmAuthoringMobjectHandle, gradient: WasmRadialGradient, opacity?: number | null): void;",
@@ -1006,6 +1007,7 @@ for (const retired of [
   "liveSetColorRadialGradient(", "liveSetFamilyColorRadialGradient(",
   "liveSetFillHatch(", "liveSetFillNoise(", "liveSetFillGradient(",
   "liveSetFillRadialGradient(", "liveSetFillImage(", "liveSetFillImageMapping(",
+  "liveAdd(",
   "liveContainsMobject(",
   "liveTargetEditor(", "liveCopyFamily(", "liveCopyMobjectFamily(",
   "liveCyclicReplaceTarget(", "liveBecomeMobject(", "liveBecomeFamily(",

@@ -94,7 +94,7 @@ def _reserve_typed_binding(
 
     # A completed canonical FadeOut removes shared root membership but retains
     # the semantic handle and this wrapper's derived ObjectId. Re-adding that
-    # exact handle must use liveAdd, not allocate a second export identity.
+    # exact handle reuses its original wrapper identity on re-entry.
     prior = getattr(mobject, "_object", None)
     if prior is not None and prior.id in scene._binding_handles:
         prior_key = scene._object_keys.get(prior.id)
@@ -142,15 +142,7 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
         raise NotImplementedError("shared Scene binding requires a typed semantic Mobject")
     reservation = _reserve_typed_binding(self, scene, handle, key)
     context = _context(scene)
-    if reservation.reuse_existing_identity:
-        engine_call(context.liveAdd, str(reservation.object.id), handle, operation="Scene.add")
-    elif context.requiresLiveMutationRouting():
-        # A resumed source continuation may introduce an object after a
-        # play/wait barrier. Rust atomically publishes both root membership and execution-slot
-        # enrollment before Python records its derived wrapper identity.
-        engine_call(context.liveAdd, str(reservation.object.id), handle, operation="Scene.add")
-    else:
-        engine_call(context.bindMobject, str(reservation.object.id), handle, operation="Scene.bind")
+    engine_call(context.bindMobject, str(reservation.object.id), handle, operation="Scene.add")
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
@@ -3551,10 +3543,10 @@ class LiveExecution:
     def add(self, mobject: _base.Mobject) -> None:
         handle = self._handle(mobject, allow_detached=True)
         if mobject._scene is self._scene:
-            engine_call(self._context.liveAdd, str(mobject.id), handle, operation="LiveExecution.add")
+            engine_call(self._context.bindMobject, str(mobject.id), handle, operation="LiveExecution.add")
             return
         reservation = _reserve_typed_binding(mobject, self._scene, handle, None)
-        engine_call(self._context.liveAdd, str(reservation.object.id), handle, operation="LiveExecution.add")
+        engine_call(self._context.bindMobject, str(reservation.object.id), handle, operation="LiveExecution.add")
         _commit_typed_binding(mobject, self._scene, reservation, handle)
 
     def remove(self, mobject: _base.Mobject) -> None:

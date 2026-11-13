@@ -2856,14 +2856,7 @@ impl Context {
     #[pyo3(name = "bindMobject")]
     fn bind(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
-        self.scene.add(&target.handle).map_err(engine_error)?;
-        self.bound_ids.insert(target.handle.node_id());
-        Ok(())
-    }
-    #[pyo3(name = "liveAdd")]
-    fn live_add(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {
-        self.available()?;
-        self.edit_running_scene(|scene| scene.add(&target.handle))?;
+        self.edit_scene(|scene| scene.add(&target.handle))?;
         self.bound_ids.insert(target.handle.node_id());
         Ok(())
     }
