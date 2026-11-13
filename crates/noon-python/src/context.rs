@@ -1177,7 +1177,7 @@ impl Context {
     }
 
     #[cfg(feature = "latex")]
-    #[pyo3(name = "liveSetLatexMemberColors")]
+    #[pyo3(name = "setLatexMemberColors")]
     fn set_latex_member_colors(
         &mut self,
         handle: &crate::latex::LatexHandle,
@@ -1193,7 +1193,7 @@ impl Context {
     }
 
     #[cfg(feature = "latex")]
-    #[pyo3(name = "liveLatexFontSize")]
+    #[pyo3(name = "latexFontSize")]
     fn latex_font_size(&self, handle: &crate::latex::LatexHandle) -> PyResult<f64> {
         self.require_active()?;
         self.scene.latex_font_size(&handle.0).map_err(engine_error)
@@ -2873,9 +2873,9 @@ impl Context {
         Ok(self.has_execution())
     }
     #[cfg(feature = "native-text")]
-    #[pyo3(name = "liveCreateManimText", signature = (source, family, size, spacing, r, g, b, a, opacity, colors=None, face=None))]
+    #[pyo3(name = "createManimText", signature = (source, family, size, spacing, r, g, b, a, opacity, colors=None, face=None))]
     #[allow(clippy::too_many_arguments)]
-    fn live_text(
+    fn create_text(
         &mut self,
         source: &str,
         family: &str,
@@ -2889,14 +2889,14 @@ impl Context {
         colors: Option<PyRefMut<'_, crate::text::TextColorBatch>>,
         face: Option<PyRef<'_, crate::text::FontFace>>,
     ) -> PyResult<MobjectHandle> {
-        crate::text::live(
+        crate::text::in_scene(
             self, source, family, size, spacing, r, g, b, a, opacity, colors, face, false,
         )
     }
     #[cfg(feature = "native-text")]
-    #[pyo3(name = "liveCreateManimMarkupText", signature = (source, family, size, spacing, r, g, b, a, opacity, face=None))]
+    #[pyo3(name = "createManimMarkupText", signature = (source, family, size, spacing, r, g, b, a, opacity, face=None))]
     #[allow(clippy::too_many_arguments)]
-    fn live_markup_text(
+    fn create_markup_text(
         &mut self,
         source: &str,
         family: &str,
@@ -2909,7 +2909,7 @@ impl Context {
         opacity: f64,
         face: Option<PyRef<'_, crate::text::FontFace>>,
     ) -> PyResult<MobjectHandle> {
-        crate::text::live(
+        crate::text::in_scene(
             self, source, family, size, spacing, r, g, b, a, opacity, None, face, true,
         )
     }
@@ -2923,7 +2923,7 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[cfg(feature = "typst")]
-    #[pyo3(name = "liveCreateManimTypst")]
+    #[pyo3(name = "createManimTypst")]
     #[allow(clippy::too_many_arguments)]
     fn typst(
         &mut self,
@@ -2936,7 +2936,7 @@ impl Context {
         alpha: f64,
         opacity: f64,
     ) -> PyResult<MobjectHandle> {
-        crate::typst::live(self, source, math, size, red, green, blue, alpha, opacity)
+        crate::typst::in_scene(self, source, math, size, red, green, blue, alpha, opacity)
     }
     #[pyo3(name = "liveExecutionOwnership")]
     fn ownership(&self) -> PyResult<&'static str> {

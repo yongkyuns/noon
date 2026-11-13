@@ -343,6 +343,9 @@ def _path_authoring_context(*operands):
     scene = None if reactive is None else reactive._current_authoring_scene()
     if scene is None:
         return None
+    context = getattr(scene, "_canonical_authoring_context", None)
+    if context is not None:
+        return context
     from _manim_scene import _context
     return _context(scene)
 

@@ -152,11 +152,9 @@ fn create_latex(
                 context.available()?;
                 let running = context.has_execution();
                 input.publish(&mut context.scene, backend).map_err(|error| {
-                    if running {
-                        engine_error(noon::integration::live_text_failure(error))
-                    } else {
-                        engine_error(error)
-                    }
+                    engine_error(noon::integration::AuthoringFailure::from_scene_text(
+                        error, running,
+                    ))
                 })
             }
             None => input

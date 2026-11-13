@@ -28,7 +28,7 @@ parts = noon.MathTex(r"x{{+}}y", r"{{ z }}")
 assert parts.source == r"x{{+}}y  z "
 assert calls[-1][:3] == ([r"x{{+}}y", r"{{ z }}"], True, 48.0)
 for ownership in ("none", "returned"):
-    context = SimpleNamespace(liveExecutionOwnership=lambda: ownership)
+    context = SimpleNamespace(phase=ownership)
     scene = SimpleNamespace(_canonical_authoring_context=context)
     reactive._current_authoring_scene = lambda: scene
     authored = noon.Tex("raw % source")
@@ -59,7 +59,7 @@ else: raise AssertionError("compiler error was swallowed")
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_markup_text_selects_raw_source_cold_and_live_routes(self) -> None:
+    def test_markup_text_passes_raw_source_to_the_store_or_scene(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         existing = env.get("PYTHONPATH")
@@ -87,7 +87,6 @@ else: raise AssertionError("compiler error was swallowed")
             typst._create_authoring_text_handle = lambda *args: (_ for _ in ()).throw(
                 AssertionError("MarkupText used the plain Text constructor")
             )
-            handles._live_constructor_context = lambda kind="primitive": None
             cold = typst.MarkupText("<b>é</b>", font="DejaVu Sans Mono", font_size=31, line_spacing=0.2)
             assert cold.source == "<b>é</b>"
             assert cold_calls == [("<b>é</b>", "DejaVu Sans Mono", 31.0, 0.2)]
@@ -106,19 +105,32 @@ else: raise AssertionError("compiler error was swallowed")
                     return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 
                 def liveExecutionOwnership(self): return "returned"
-                def liveCreateManimMarkupText(self, *args):
+                def createManimMarkupText(self, *args):
                     self.calls.append(args)
                     return object()
-                def liveCreateManimText(self, *args):
+                def createManimText(self, *args):
                     raise AssertionError("MarkupText used the plain live Text constructor")
 
             context = LiveContext()
-            handles._live_constructor_context = lambda kind="primitive": context
-            live = typst.MarkupText("<span>raw & source</span>", color=noon.BLUE, opacity=0.4)
-            assert live.source == "<span>raw & source</span>"
-            assert len(context.calls) == 1
-            assert context.calls[0][:4] == ("<span>raw & source</span>", "DejaVu Sans Mono", 48.0, -1.0)
-            assert context.calls[0][-1] == 0.4
+            from types import SimpleNamespace
+            import _manim_reactive as reactive
+
+            context.liveExecutionOwnership = lambda: (_ for _ in ()).throw(
+                AssertionError("Scene text construction must not query player ownership")
+            )
+            token = reactive._enter_authoring_scene(
+                SimpleNamespace(_canonical_authoring_context=context)
+            )
+            try:
+                label = typst.MarkupText("<span>raw & source</span>", color=noon.BLUE, opacity=0.4)
+            finally:
+                reactive._leave_authoring_scene(token)
+            assert label.source == "<span>raw & source</span>"
+            assert label._canonical_live_target_context is context
+            assert context.calls == [
+                ("<span>raw & source</span>", "DejaVu Sans Mono", 48.0, -1.0,
+                 noon.BLUE.red, noon.BLUE.green, noon.BLUE.blue, noon.BLUE.alpha, 0.4)
+            ]
             """
         )
         completed = subprocess.run(
@@ -135,7 +147,7 @@ else: raise AssertionError("compiler error was swallowed")
             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
         )
 
-    def test_live_text_routes_through_current_context_and_rejects_unsupported_kinds(self) -> None:
+    def test_text_and_typst_use_the_owning_scene_and_keep_the_context_on_copy(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
         existing = env.get("PYTHONPATH")
@@ -161,10 +173,10 @@ else: raise AssertionError("compiler error was swallowed")
                     return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 
                 def liveExecutionOwnership(self): return "returned"
-                def liveCreateManimText(self, *args):
+                def createManimText(self, *args):
                     self.calls.append(("text", args))
                     return object()
-                def liveCreateManimTypst(self, *args):
+                def createManimTypst(self, *args):
                     self.calls.append(("typst", args))
                     return object()
                 def targetEditor(self, handle):
@@ -172,7 +184,7 @@ else: raise AssertionError("compiler error was swallowed")
                     return object()
 
             context = LiveContext()
-            handles._live_constructor_context = lambda kind="primitive": context
+            typst._text_authoring_context = lambda: context
             typst._create_authoring_text_handle = lambda *args: (_ for _ in ()).throw(
                 AssertionError("live Text mutated the pre-execution authoring store")
             )
@@ -204,18 +216,18 @@ else: raise AssertionError("compiler error was swallowed")
             typst._create_authoring_typst_handle = lambda *args: (_ for _ in ()).throw(
                 AssertionError("live Typst reached direct authoring")
             )
-            handles._live_constructor_context = lambda kind="primitive": (_ for _ in ()).throw(
-                RuntimeError(f"live {kind} construction is unavailable while execution is transferred")
+            typst._text_authoring_context = lambda: (_ for _ in ()).throw(
+                RuntimeError("live execution session is running in the semantic engine")
             )
             try:
                 typst.Text("Late")
             except RuntimeError as error:
-                assert "while execution is transferred" in str(error)
+                assert "running in the semantic engine" in str(error)
             else:
                 raise AssertionError("transferred Text construction must reject")
 
             context = LiveContext()
-            handles._live_constructor_context = lambda kind="primitive": context
+            typst._text_authoring_context = lambda: context
             diagram = typst.Typst(
                 "#circle(radius: 1em)", font_size=30, color=noon.BLUE, opacity=0.6
             )
@@ -282,7 +294,7 @@ class Parts:
         calls.append(("select", needle)); return (0,) if needle == "x" else ()
     def setMemberColors(self, values): calls.append(("colors", tuple(values)))
 latex._create = lambda *args: Parts()
-latex._live_text_context = lambda: None
+latex._text_authoring_context = lambda: None
 value = noon.MathTex("x")
 assert value.font_size == 72.0
 part = value.get_part_by_tex("x")
@@ -380,7 +392,7 @@ class NativeFontFaceConstructorTests(unittest.TestCase):
             cold_calls = []
             text._create_authoring_text_handle = lambda *args: cold_calls.append(args) or Handle()
             text._create_authoring_markup_text_handle = lambda *args: cold_calls.append(args) or Handle()
-            text._live_text_context = lambda: None
+            text._text_authoring_context = lambda: None
             cold_plain = noon.Text("plain", font=face)
             cold_markup = noon.MarkupText("<b>markup</b>", font=face)
             bundled_text = noon.Text("bundled", font=bundled)
@@ -401,10 +413,10 @@ class NativeFontFaceConstructorTests(unittest.TestCase):
 
             class Live:
                 def __init__(self): self.calls = []
-                def liveCreateManimText(self, *args): self.calls.append(("text", args)); return Handle()
-                def liveCreateManimMarkupText(self, *args): self.calls.append(("markup", args)); return Handle()
+                def createManimText(self, *args): self.calls.append(("text", args)); return Handle()
+                def createManimMarkupText(self, *args): self.calls.append(("markup", args)); return Handle()
             context = Live()
-            text._live_text_context = lambda: context
+            text._text_authoring_context = lambda: context
             live_plain = noon.Text("live", font=face)
             live_markup = noon.MarkupText("<i>live</i>", font=face)
             assert [kind for kind, _ in context.calls] == ["text", "markup"]
@@ -420,7 +432,7 @@ class NativeFontFaceConstructorTests(unittest.TestCase):
             assert clone._font_face is face
             assert clone._font_face._handle is face._handle
 
-            text._live_text_context = lambda: None
+            text._text_authoring_context = lambda: None
             text._create_authoring_text_handle = lambda *args: Handle()
             text.Text.set_default(font=face)
             text.MarkupText.set_default(font="Custom Markup")

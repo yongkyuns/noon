@@ -41,7 +41,7 @@ class TextColorConstructorTests(unittest.TestCase):
                 return Handle()
             text._new_text_color_batch = Batch
             text._create_authoring_text_handle = construct
-            text._live_text_context = lambda: None
+            text._text_authoring_context = lambda: None
             cold = text.Text("é é", color=noon.BLUE, t2c={"ignored": noon.RED}, text2color={"é": "#FF0000", "[-1:]": noon.BLUE})
             assert batches[-1].values == [
                 ("é", 1., 0., 0., 1.),
@@ -53,8 +53,8 @@ class TextColorConstructorTests(unittest.TestCase):
             cold_values = batches[-1].values
 
             class Live:
-                liveCreateManimText = staticmethod(construct)
-            text._live_text_context = lambda: Live()
+                createManimText = staticmethod(construct)
+            text._text_authoring_context = lambda: Live()
             live = text.Text("é é", color=noon.BLUE, t2c={"é": "#FF0000", "[-1:]": noon.BLUE})
             assert batches[-1].values == cold_values
             assert calls[-1][:4] == calls[-2][:4]
@@ -125,7 +125,7 @@ class TextColorConstructorTests(unittest.TestCase):
                 def setObjectOpacity(self, *args): pass
 
             text._new_text_color_batch = Batch
-            text._live_text_context = lambda: None
+            text._text_authoring_context = lambda: None
             face_handle = FaceHandle()
             face = object.__new__(text.NativeFontFace)
             object.__setattr__(face, "_family", "Test")
@@ -148,11 +148,11 @@ class TextColorConstructorTests(unittest.TestCase):
 
             live_calls = []
             class Live:
-                def liveCreateManimText(self, *args):
+                def createManimText(self, *args):
                     live_calls.append(args)
                     args[-2].consumed = True
                     return Handle()
-            text._live_text_context = lambda: Live()
+            text._text_authoring_context = lambda: Live()
             live_face = FaceHandle()
             object.__setattr__(face, "_handle", live_face)
             live_value = text.Text("live colored", font=face, t2c={"x": noon.BLUE})
@@ -161,7 +161,7 @@ class TextColorConstructorTests(unittest.TestCase):
             assert live_calls[0][-1] is live_face.wrapper
             assert batches[-1].consumed and not batches[-1].freed
             assert not live_face.wrapper.freed
-            text._live_text_context = lambda: None
+            text._text_authoring_context = lambda: None
 
             push_failure_face = FaceHandle()
             object.__setattr__(face, "_handle", push_failure_face)

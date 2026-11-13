@@ -6,7 +6,7 @@ import _manim_compat as _compat
 from _noon_errors import engine_call, engine_await
 from _manim_typst import (
     _RetainedTextMobject, _validated_font_size, _validated_opacity,
-    _as_color, _copy_text_parts, TextSourcePart,
+    _as_color, _copy_text_parts, _text_authoring_context, TextSourcePart,
 )
 
 try:
@@ -100,7 +100,7 @@ class _TexBase(_compat.VGroup):
         context = getattr(self, "_canonical_live_target_context", None)
         if context is None:
             return float(engine_call(lambda: self._semantic_latex_handle.fontSize))
-        return float(engine_call(context.liveLatexFontSize, self._semantic_latex_handle))
+        return float(engine_call(context.latexFontSize, self._semantic_latex_handle))
 
     @property
     def tex_string(self) -> str:
@@ -139,8 +139,7 @@ class _TexBase(_compat.VGroup):
         font_size = _validated_font_size(font_size)
         opacity = _validated_opacity(opacity)
         color = _as_color(color)
-        from _manim_semantic_handles import _live_constructor_context
-        context = _live_constructor_context("LaTeX", allow_unstarted=True)
+        context = _text_authoring_context()
         create = _create if len(sources) == 1 else _create_strings
         if create is None:
             raise RuntimeError("LaTeX requires Noon's shared Rust authoring runtime")
@@ -220,7 +219,7 @@ class _TexBase(_compat.VGroup):
         if context is None:
             engine_call(self._semantic_latex_handle.setMemberColors, values)
         else:
-            engine_call(context.liveSetLatexMemberColors, self._semantic_latex_handle, values)
+            engine_call(context.setLatexMemberColors, self._semantic_latex_handle, values)
         return self
 
     def __len__(self) -> int:
