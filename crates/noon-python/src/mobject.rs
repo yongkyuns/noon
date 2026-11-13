@@ -1271,6 +1271,12 @@ impl MobjectHandle {
             .planar_rotation()
             .ok_or_else(|| engine_error("rotation getter is unsupported for spatial orientation"))
     }
+    #[pyo3(name = "alignOnFrame")]
+    fn align_on_frame(&mut self, direction_x: f64, direction_y: f64, buff: f64) -> PyResult<()> {
+        self.handle
+            .align_on_frame(direction_x, direction_y, buff)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "layoutAnchor")]
     fn layout_anchor(&self, index: Option<isize>) -> LayoutAnchor {
         LayoutAnchor::from_anchor(noon::LayoutAnchor::from(&self.handle), index)
