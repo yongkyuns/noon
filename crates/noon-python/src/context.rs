@@ -3498,13 +3498,13 @@ impl Context {
         let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
         self.edit_scene(|scene| scene.set_image_sampling(&target.handle, sampling))
     }
-    #[pyo3(name = "liveChangeAnchorMode")]
+    #[pyo3(name = "changeAnchorMode")]
     fn change_anchor_mode(&mut self, target: &MobjectHandle, smooth: bool) -> PyResult<()> {
         self.edit_path(target, |scene, object| {
             scene.change_anchor_mode(object, smooth)
         })
     }
-    #[pyo3(name = "liveChangeFamilyAnchorMode")]
+    #[pyo3(name = "changeFamilyAnchorMode")]
     fn change_family_anchor_mode(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3555,14 +3555,14 @@ impl Context {
             )
         })
     }
-    #[pyo3(name="liveStartNewPath", signature=(target ,x,y,z))]
+    #[pyo3(name="startNewPath", signature=(target ,x,y,z))]
     fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64, z: f64) -> PyResult<()> {
         let point = crate::path_input::point_3d(x, y, z)?;
         self.edit_path(target, |scene, object| {
             scene.start_new_path_3d(object, point)
         })
     }
-    #[pyo3(name="liveStartNewPathWithStride", signature=(target ,x,y,z,stride))]
+    #[pyo3(name="startNewPathWithStride", signature=(target ,x,y,z,stride))]
     fn start_new_path_stride(
         &mut self,
         target: &MobjectHandle,
@@ -3576,7 +3576,7 @@ impl Context {
             scene.start_new_path_3d_with_stride(object, point, stride)
         })
     }
-    #[pyo3(name="liveAddLineTo", signature=(target ,x,y,z,stride=None))]
+    #[pyo3(name="addLineTo", signature=(target ,x,y,z,stride=None))]
     fn add_line_to(
         &mut self,
         target: &MobjectHandle,
@@ -3590,7 +3590,7 @@ impl Context {
             scene.add_line_to_3d_with_stride(object, point, stride.unwrap_or(4))
         })
     }
-    #[pyo3(name="liveAddLineToWithSamples", signature=(target ,x,y,z,stride,samples))]
+    #[pyo3(name="addLineToWithSamples", signature=(target ,x,y,z,stride,samples))]
     fn add_line_samples(
         &mut self,
         target: &MobjectHandle,
@@ -3608,68 +3608,54 @@ impl Context {
             scene.add_line_to_3d_with_stride_and_samples(object, point, stride, &samples)
         })
     }
-    #[pyo3(name="liveSetPoints", signature=(target ,values))]
-    fn set_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
-        let points = crate::path_input::points_f64(&values)?;
-        self.edit_path(target, |scene, object| {
-            scene.set_points_f64(object, &points)
-        })
-    }
-    #[pyo3(name="liveSetPoints3D", signature=(target ,values))]
+    #[pyo3(name="setPoints3D", signature=(target ,values))]
     fn set_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| scene.set_points_3d(object, &points))
     }
-    #[pyo3(name="liveAppendPoints", signature=(target ,values))]
-    fn append_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
-        let points = crate::path_input::points_f64(&values)?;
-        self.edit_path(target, |scene, object| {
-            scene.append_points_f64(object, &points)
-        })
-    }
-    #[pyo3(name="liveAppendPoints3D", signature=(target ,values))]
+    #[pyo3(name="appendPoints3D", signature=(target ,values))]
     fn append_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.append_points_3d(object, &points)
         })
     }
-    #[pyo3(name="liveSetPointsAsCorners", signature=(target ,values))]
+    #[pyo3(name="setPointsAsCorners", signature=(target ,values))]
     fn corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.set_points_as_corners_3d(object, &points)
         })
     }
-    #[pyo3(name="liveAddPointsAsCorners", signature=(target ,values))]
+    #[pyo3(name="addPointsAsCorners", signature=(target ,values))]
     fn append_corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.add_points_as_corners_3d(object, &points)
         })
     }
-    #[pyo3(name="liveAddCubicBezierCurves", signature=(target ,values))]
+    #[pyo3(name="addCubicBezierCurves", signature=(target ,values))]
     fn cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let curves = crate::path_input::cubic_curves_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.add_cubic_bezier_curves_3d(object, &curves)
         })
     }
-    #[pyo3(name="liveSetCubicBezierCurves", signature=(target ,values))]
+    #[pyo3(name="setCubicBezierCurves", signature=(target ,values))]
     fn set_cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let curves = crate::path_input::cubic_curves_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.set_cubic_bezier_curves_3d(object, &curves)
         })
     }
-    #[pyo3(name="liveSetPointsSmoothly", signature=(target ,values))]
+    #[pyo3(name="setPointsSmoothly", signature=(target ,values))]
     fn smooth_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points(&values)?;
         self.edit_path(target, |scene, object| {
             scene.set_points_smoothly(object, &points)
         })
     }
-    #[pyo3(name="liveSetPointsAsCornersWithSamples", signature=(target ,values,samples))]
+    #[pyo3(name="setPointsAsCornersWithSamples", signature=(target ,values,samples))]
     fn corners_samples(
         &mut self,
         target: &MobjectHandle,
@@ -3684,7 +3670,7 @@ impl Context {
             scene.set_points_as_corners_3d_with_samples(object, &points, &samples)
         })
     }
-    #[pyo3(name="liveAddPointsAsCornersWithStride", signature=(target ,values,stride,samples))]
+    #[pyo3(name="addPointsAsCornersWithStride", signature=(target ,values,stride,samples))]
     fn append_corners_stride(
         &mut self,
         target: &MobjectHandle,
@@ -3697,51 +3683,39 @@ impl Context {
             scene.add_points_as_corners_3d_with_stride(object, &points, stride, &samples)
         })
     }
-    #[pyo3(name="liveClearPoints", signature=(target))]
+    #[pyo3(name="clearPoints", signature=(target))]
     fn clear_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.clear_points(object))
     }
-    #[pyo3(name="liveClosePath", signature=(target))]
+    #[pyo3(name="closePath", signature=(target))]
     fn close_path(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.close_path(object))
     }
-    #[pyo3(name="liveReverseDirection", signature=(target))]
+    #[pyo3(name="reverseDirection", signature=(target))]
     fn reverse_direction(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.reverse_direction(object))
     }
-    #[pyo3(name="liveReversePoints", signature=(target))]
+    #[pyo3(name="reversePoints", signature=(target))]
     fn reverse_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.reverse_points(object))
     }
-    #[pyo3(name="liveMakeSmooth", signature=(target))]
-    fn make_smooth(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.edit_path(target, |scene, object| {
-            scene.change_anchor_mode(object, true)
-        })
-    }
-    #[pyo3(name="liveMakeJagged", signature=(target))]
-    fn make_jagged(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.edit_path(target, |scene, object| {
-            scene.change_anchor_mode(object, false)
-        })
-    }
-    #[pyo3(name="liveRepeatPoints", signature=(target ,count))]
+    #[pyo3(name="repeatPoints", signature=(target ,count))]
     fn repeat_points(&mut self, target: &MobjectHandle, count: usize) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.repeat_points(object, count))
     }
-    #[pyo3(name="liveInsertNCurves", signature=(target ,additional))]
+    #[pyo3(name="insertNCurves", signature=(target ,additional))]
     fn insert_curves(&mut self, target: &MobjectHandle, additional: usize) -> PyResult<()> {
         self.edit_path(target, |scene, object| {
             scene.insert_n_curves(object, additional)
         })
     }
-    #[pyo3(name="liveScaleHandleToAnchorDistances", signature=(target ,factor))]
+    #[pyo3(name="scaleHandleToAnchorDistances", signature=(target ,factor))]
     fn scale_handles(&mut self, target: &MobjectHandle, factor: f64) -> PyResult<()> {
         self.edit_path(target, |scene, object| {
             scene.scale_handle_to_anchor_distances(object, factor)
         })
     }
-    #[pyo3(name="liveClosePathWithStride", signature=(target ,stride,tolerance,samples))]
+    #[pyo3(name="closePathWithStride", signature=(target ,stride,tolerance,samples))]
     fn close_path_stride(
         &mut self,
         target: &MobjectHandle,
@@ -3753,7 +3727,7 @@ impl Context {
             scene.close_path_with_stride(object, stride, tolerance, &samples)
         })
     }
-    #[pyo3(name="livePointwiseBecomePartial", signature=(target ,source,a,b))]
+    #[pyo3(name="pointwiseBecomePartial", signature=(target ,source,a,b))]
     fn partial(
         &mut self,
         target: &MobjectHandle,
@@ -3766,14 +3740,14 @@ impl Context {
             scene.pointwise_become_partial(object, &source.handle, a, b)
         })
     }
-    #[pyo3(name="liveAppendVectorizedMobject", signature=(target ,source))]
+    #[pyo3(name="appendVectorizedMobject", signature=(target ,source))]
     fn append_vector(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
         self.same_store(source)?;
         self.edit_path(target, |scene, object| {
             scene.append_vectorized_mobject(object, &source.handle)
         })
     }
-    #[pyo3(name="liveAppendVectorizedMobjectWithStride", signature=(target ,source,stride))]
+    #[pyo3(name="appendVectorizedMobjectWithStride", signature=(target ,source,stride))]
     fn append_vector_stride(
         &mut self,
         target: &MobjectHandle,
@@ -3785,7 +3759,7 @@ impl Context {
             scene.append_vectorized_mobject_with_stride(object, &source.handle, stride)
         })
     }
-    #[pyo3(name="liveAddQuadraticBezierCurveTo", signature=(target ,control_x,control_y,control_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    #[pyo3(name="addQuadraticBezierCurveTo", signature=(target ,control_x,control_y,control_z,anchor_x,anchor_y,anchor_z,stride=None))]
     fn path_quadratic(
         &mut self,
         target: &MobjectHandle,
@@ -3808,7 +3782,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name="liveAddCubicBezierCurveTo", signature=(target ,control1_x,control1_y,control1_z,control2_x,control2_y,control2_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    #[pyo3(name="addCubicBezierCurveTo", signature=(target ,control1_x,control1_y,control1_z,control2_x,control2_y,control2_z,anchor_x,anchor_y,anchor_z,stride=None))]
     fn path_cubic(
         &mut self,
         target: &MobjectHandle,
@@ -3836,7 +3810,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name="liveAddCubicBezierCurve", signature=(target ,anchor1_x,anchor1_y,anchor1_z,handle1_x,handle1_y,handle1_z,handle2_x,handle2_y,handle2_z,anchor2_x,anchor2_y,anchor2_z))]
+    #[pyo3(name="addCubicBezierCurve", signature=(target ,anchor1_x,anchor1_y,anchor1_z,handle1_x,handle1_y,handle1_z,handle2_x,handle2_y,handle2_z,anchor2_x,anchor2_y,anchor2_z))]
     fn path_curve(
         &mut self,
         target: &MobjectHandle,
@@ -3861,7 +3835,7 @@ impl Context {
             scene.add_cubic_bezier_curve_3d(object, anchor1, handle1, handle2, anchor2)
         })
     }
-    #[pyo3(name="liveAddSmoothCurveTo", signature=(target ,values,stride=None))]
+    #[pyo3(name="addSmoothCurveTo", signature=(target ,values,stride=None))]
     fn smooth_curve(
         &mut self,
         target: &MobjectHandle,
@@ -3882,7 +3856,7 @@ impl Context {
             scene.add_smooth_curve_to_with_stride(object, handle2, anchor, stride.unwrap_or(4))
         })
     }
-    #[pyo3(name = "liveSetFamilyPoints3D")]
+    #[pyo3(name = "setFamilyPoints3D")]
     fn set_family_points_3d(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3892,7 +3866,7 @@ impl Context {
         let values = crate::path_input::points_3d(&values)?;
         self.publish_path_edit(|scene| scene.set_family_points_3d(&target.family, &values))
     }
-    #[pyo3(name = "liveAppendFamilyPoints3D")]
+    #[pyo3(name = "appendFamilyPoints3D")]
     fn append_family_points_3d(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3902,12 +3876,12 @@ impl Context {
         let values = crate::path_input::points_3d(&values)?;
         self.publish_path_edit(|scene| scene.append_family_points_3d(&target.family, &values))
     }
-    #[pyo3(name = "liveClearFamilyPoints")]
+    #[pyo3(name = "clearFamilyPoints")]
     fn clear_family_points(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
         self.same_family_store(target)?;
         self.publish_path_edit(|scene| scene.clear_family_points(&target.family))
     }
-    #[pyo3(name = "liveSetFamilyEmptyPointArray")]
+    #[pyo3(name = "setFamilyEmptyPointArray")]
     fn empty_family_array(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3917,13 +3891,13 @@ impl Context {
         let shape = crate::path_input::point_array_shape(&values)?;
         self.publish_path_edit(|scene| scene.set_empty_point_array((&target.family).into(), shape))
     }
-    #[pyo3(name = "liveSetEmptyPointArray")]
+    #[pyo3(name = "setEmptyPointArray")]
     fn empty_point_array(&mut self, target: &MobjectHandle, dimensions: Vec<f64>) -> PyResult<()> {
         self.same_store(target)?;
         let shape = crate::path_input::point_array_shape(&dimensions)?;
         self.publish_path_edit(|scene| scene.set_empty_point_array((&target.handle).into(), shape))
     }
-    #[pyo3(name = "liveSubcurve")]
+    #[pyo3(name = "subcurve")]
     fn subcurve(&mut self, target: &MobjectHandle, a: f64, b: f64) -> PyResult<MobjectHandle> {
         self.same_store(target)?;
         self.require_active()?;
@@ -3933,30 +3907,30 @@ impl Context {
             .map_err(noon::LiveSessionError::from)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveAlignRootPoints")]
+    #[pyo3(name = "alignRootPoints")]
     fn align_root_points(&mut self, left: &LayoutAnchor, right: &LayoutAnchor) -> PyResult<()> {
         self.publish_path_edit(|scene| scene.align_path_points(&left.anchor, &right.anchor))
     }
-    #[pyo3(name = "liveAlignPoints")]
+    #[pyo3(name = "alignPoints")]
     fn align_points(&mut self, left: &MobjectHandle, right: &MobjectHandle) -> PyResult<()> {
         self.same_store(left)?;
         self.same_store(right)?;
         self.publish_path_edit(|scene| scene.align_points(&left.handle, &right.handle))
     }
-    #[pyo3(name = "liveMatchPoints")]
+    #[pyo3(name = "matchPoints")]
     fn match_points(&mut self, source: &MobjectHandle, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(source, |scene, source| {
             scene.match_points(source, &target.handle)
         })
     }
-    #[pyo3(name = "liveReverseFamilyPoints")]
+    #[pyo3(name = "reverseFamilyPoints")]
     fn reverse_family_points(&mut self, family: &crate::family::FamilyHandle) -> PyResult<()> {
         self.available()?;
         self.scene
             .reverse_family_points(&family.family)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveRepeatFamilyPoints")]
+    #[pyo3(name = "repeatFamilyPoints")]
     fn repeat_family_points(
         &mut self,
         family: &crate::family::FamilyHandle,

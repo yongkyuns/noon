@@ -551,7 +551,7 @@ def scale_handle_to_anchor_distances(value, factor):
         )
     else:
         engine_call(
-            context.liveScaleHandleToAnchorDistances,
+            context.scaleHandleToAnchorDistances,
             handle,
             factor,
             operation="VMobject.scale_handle_to_anchor_distances",
@@ -605,9 +605,9 @@ def append_vectorized_mobject(value, source):
         )
     else:
         method = (
-            context.liveAppendVectorizedMobject
+            context.appendVectorizedMobject
             if stride == 4
-            else context.liveAppendVectorizedMobjectWithStride
+            else context.appendVectorizedMobjectWithStride
         )
         engine_call(
             method,
@@ -737,7 +737,7 @@ def edit_points(value, method, points, *, array=False, suffix=()):
         )
     else:
         engine_call(
-            getattr(context, "live" + scene_method[0].upper() + scene_method[1:]),
+            getattr(context, scene_method),
             handle,
             *values,
             *suffix,
@@ -760,7 +760,7 @@ def pointwise_become_partial(value, source, a, b):
     if context is None:
         engine_call(handle.pointwiseBecomePartial, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
     else:
-        engine_call(context.livePointwiseBecomePartial, handle, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
+        engine_call(context.pointwiseBecomePartial, handle, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
     return value
 
 
@@ -779,7 +779,7 @@ def insert_n_curves(value, n):
     if context is None:
         engine_call(handle.insertNCurves, count, operation="VMobject.insert_n_curves")
     else:
-        engine_call(context.liveInsertNCurves, handle, count, operation="VMobject.insert_n_curves")
+        engine_call(context.insertNCurves, handle, count, operation="VMobject.insert_n_curves")
     return value
 
 
@@ -798,7 +798,7 @@ def change_anchor_mode(value, mode):
     if context is None:
         engine_call(handle.makeSmooth if mode == "smooth" else handle.makeJagged)
     else:
-        method = context.liveChangeFamilyAnchorMode if family else context.liveChangeAnchorMode
+        method = context.changeFamilyAnchorMode if family else context.changeAnchorMode
         engine_call(method, handle, mode == "smooth")
     return value
 
@@ -830,7 +830,7 @@ def reverse_points(value):
         )
     else:
         engine_call(
-            context.liveReverseFamilyPoints if family else context.liveReversePoints,
+            context.reverseFamilyPoints if family else context.reversePoints,
             handle,
             operation="Mobject.reverse_points",
         )
@@ -876,7 +876,7 @@ def repeat_points(value, count):
             operation="Mobject.repeat",
         )
     else:
-        method = context.liveRepeatFamilyPoints if family else context.liveRepeatPoints
+        method = context.repeatFamilyPoints if family else context.repeatPoints
         engine_call(method, handle, repeat_count, operation="Mobject.repeat")
     return value
 
@@ -905,7 +905,7 @@ def align_points(value, other):
         if context is None:
             engine_call(left.alignPathPoints, right, operation="VMobject.align_points")
         else:
-            engine_call(context.liveAlignRootPoints, left, right, operation="VMobject.align_points")
+            engine_call(context.alignRootPoints, left, right, operation="VMobject.align_points")
         return value
     handle, other_handle = _handle_for(value), _handle_for(other)
     if handle is None or other_handle is None:
@@ -914,7 +914,7 @@ def align_points(value, other):
     if context is None:
         engine_call(handle.alignPoints, other_handle, operation="VMobject.align_points")
     else:
-        engine_call(context.liveAlignPoints, handle, other_handle, operation="VMobject.align_points")
+        engine_call(context.alignPoints, handle, other_handle, operation="VMobject.align_points")
     return value
 
 

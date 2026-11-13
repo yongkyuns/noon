@@ -2242,11 +2242,11 @@ class SubpathQueryTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.object(handles, '_handle_for', return_value=source), patch.object(handles, '_path_authoring_context', return_value=context):
                 result = value.get_subcurve(0.8, 0.2)
-            expected = source.subcurve.return_value if context is None else context.liveSubcurve.return_value
+            expected = source.subcurve.return_value if context is None else context.subcurve.return_value
             self.assertIs(result._semantic_handle, expected)
             self.assertIsInstance(result, type(value))
             self.assertEqual(result.label, value.label)
             self.assertIsNot(result.label, value.label)
             if context is None: source.subcurve.assert_called_once_with(0.8, 0.2)
-            else: context.liveSubcurve.assert_called_once_with(source, 0.8, 0.2)
+            else: context.subcurve.assert_called_once_with(source, 0.8, 0.2)
         source.cloneHandle.assert_not_called()

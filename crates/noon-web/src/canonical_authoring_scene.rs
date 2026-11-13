@@ -9285,22 +9285,8 @@ mod wasm {
                 .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyPoints)]
-        pub fn live_set_family_points(
-            &mut self,
-            source: &crate::WasmAuthoringFamilyHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .local_authoring_scene()
-                .map_err(typed_js_error)?
-                .set_family_points_f64(&source.semantic_family()?, &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveSetFamilyEmptyPointArray)]
-        pub fn live_set_family_empty_point_array(
+        #[wasm_bindgen(js_name = setFamilyEmptyPointArray)]
+        pub fn set_family_empty_point_array(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             dimensions: Vec<f64>,
@@ -9314,8 +9300,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyPoints3D)]
-        pub fn live_set_family_points_3d(
+        #[wasm_bindgen(js_name = setFamilyPoints3D)]
+        pub fn set_family_points_3d(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             values: Vec<f64>,
@@ -9328,22 +9314,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendFamilyPoints)]
-        pub fn live_append_family_points(
-            &mut self,
-            source: &crate::WasmAuthoringFamilyHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .local_authoring_scene()
-                .map_err(typed_js_error)?
-                .append_family_points_f64(&source.semantic_family()?, &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveAppendFamilyPoints3D)]
-        pub fn live_append_family_points_3d(
+        #[wasm_bindgen(js_name = appendFamilyPoints3D)]
+        pub fn append_family_points_3d(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             values: Vec<f64>,
@@ -9356,8 +9328,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClearFamilyPoints)]
-        pub fn live_clear_family_points(
+        #[wasm_bindgen(js_name = clearFamilyPoints)]
+        pub fn clear_family_points(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
@@ -9368,22 +9340,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPoints)]
-        pub fn live_set_points(
-            &mut self,
-            source: &crate::WasmAuthoringMobjectHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .local_authoring_scene()
-                .map_err(typed_js_error)?
-                .set_points_f64(source.semantic_mobject(), &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveSetEmptyPointArray)]
-        pub fn live_set_empty_point_array(
+        #[wasm_bindgen(js_name = setEmptyPointArray)]
+        pub fn set_empty_point_array(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             dimensions: Vec<f64>,
@@ -9397,8 +9355,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPoints3D)]
-        pub fn live_set_points_3d(
+        #[wasm_bindgen(js_name = setPoints3D)]
+        pub fn set_points_3d(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9411,22 +9369,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendPoints)]
-        pub fn live_append_points(
-            &mut self,
-            source: &crate::WasmAuthoringMobjectHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .local_authoring_scene()
-                .map_err(typed_js_error)?
-                .append_points_f64(source.semantic_mobject(), &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveAppendPoints3D)]
-        pub fn live_append_points_3d(
+        #[wasm_bindgen(js_name = appendPoints3D)]
+        pub fn append_points_3d(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9439,8 +9383,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPointsAsCorners)]
-        pub fn live_set_points_as_corners(
+        #[wasm_bindgen(js_name = setPointsAsCorners)]
+        pub fn set_points_as_corners(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9453,8 +9397,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPointsAsCornersWithSamples)]
-        pub fn live_set_points_as_corners_with_samples(
+        #[wasm_bindgen(js_name = setPointsAsCornersWithSamples)]
+        pub fn set_points_as_corners_with_samples(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9477,8 +9421,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClearPoints)]
-        pub fn live_clear_points(
+        #[wasm_bindgen(js_name = clearPoints)]
+        pub fn clear_points(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
@@ -9489,8 +9433,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveStartNewPath)]
-        pub fn live_start_new_path(
+        #[wasm_bindgen(js_name = startNewPath)]
+        pub fn start_new_path(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9505,8 +9449,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveStartNewPathWithStride)]
-        pub fn live_start_new_path_with_stride(
+        #[wasm_bindgen(js_name = startNewPathWithStride)]
+        pub fn start_new_path_with_stride(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9522,8 +9466,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddLineTo)]
-        pub fn live_add_line_to(
+        #[wasm_bindgen(js_name = addLineTo)]
+        pub fn add_line_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9539,8 +9483,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddLineToWithSamples)]
-        pub fn live_add_line_to_with_samples(
+        #[wasm_bindgen(js_name = addLineToWithSamples)]
+        pub fn add_line_to_with_samples(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9565,8 +9509,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddQuadraticBezierCurveTo)]
-        pub fn live_add_quadratic_bezier_curve_to(
+        #[wasm_bindgen(js_name = addQuadraticBezierCurveTo)]
+        pub fn add_quadratic_bezier_curve_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             control_x: f64,
@@ -9591,8 +9535,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddCubicBezierCurveTo)]
-        pub fn live_add_cubic_bezier_curve_to(
+        #[wasm_bindgen(js_name = addCubicBezierCurveTo)]
+        pub fn add_cubic_bezier_curve_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             control1_x: f64,
@@ -9622,8 +9566,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddSmoothCurveTo)]
-        pub fn live_add_smooth_curve_to(
+        #[wasm_bindgen(js_name = addSmoothCurveTo)]
+        pub fn add_smooth_curve_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9651,8 +9595,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleHandleToAnchorDistances)]
-        pub fn live_scale_handle_to_anchor_distances(
+        #[wasm_bindgen(js_name = scaleHandleToAnchorDistances)]
+        pub fn scale_handle_to_anchor_distances(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             factor: f64,
@@ -9664,8 +9608,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddCubicBezierCurve)]
-        pub fn live_add_cubic_bezier_curve(
+        #[wasm_bindgen(js_name = addCubicBezierCurve)]
+        pub fn add_cubic_bezier_curve(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             anchor1_x: f64,
@@ -9698,8 +9642,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddCubicBezierCurves)]
-        pub fn live_add_cubic_bezier_curves(
+        #[wasm_bindgen(js_name = addCubicBezierCurves)]
+        pub fn add_cubic_bezier_curves(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9712,8 +9656,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetCubicBezierCurves)]
-        pub fn live_set_cubic_bezier_curves(
+        #[wasm_bindgen(js_name = setCubicBezierCurves)]
+        pub fn set_cubic_bezier_curves(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9726,8 +9670,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddPointsAsCorners)]
-        pub fn live_add_points_as_corners(
+        #[wasm_bindgen(js_name = addPointsAsCorners)]
+        pub fn add_points_as_corners(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9740,8 +9684,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddPointsAsCornersWithStride)]
-        pub fn live_add_points_as_corners_with_stride(
+        #[wasm_bindgen(js_name = addPointsAsCornersWithStride)]
+        pub fn add_points_as_corners_with_stride(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9761,8 +9705,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendVectorizedMobject)]
-        pub fn live_append_vectorized_mobject(
+        #[wasm_bindgen(js_name = appendVectorizedMobject)]
+        pub fn append_vectorized_mobject(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
@@ -9774,8 +9718,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendVectorizedMobjectWithStride)]
-        pub fn live_append_vectorized_mobject_with_stride(
+        #[wasm_bindgen(js_name = appendVectorizedMobjectWithStride)]
+        pub fn append_vectorized_mobject_with_stride(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
@@ -9792,8 +9736,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPointsSmoothly)]
-        pub fn live_set_points_smoothly(
+        #[wasm_bindgen(js_name = setPointsSmoothly)]
+        pub fn set_points_smoothly(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             coordinates: Vec<f64>,
@@ -9807,8 +9751,8 @@ mod wasm {
                 )
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveChangeAnchorMode)]
-        pub fn live_change_anchor_mode(
+        #[wasm_bindgen(js_name = changeAnchorMode)]
+        pub fn change_anchor_mode(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             smooth: bool,
@@ -9819,8 +9763,8 @@ mod wasm {
                 .change_anchor_mode(object.semantic_mobject(), smooth)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveChangeFamilyAnchorMode)]
-        pub fn live_change_family_anchor_mode(
+        #[wasm_bindgen(js_name = changeFamilyAnchorMode)]
+        pub fn change_family_anchor_mode(
             &mut self,
             family: &crate::WasmAuthoringFamilyHandle,
             smooth: bool,
@@ -9831,8 +9775,8 @@ mod wasm {
                 .change_family_anchor_mode(&family.semantic_family()?, smooth)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReverseFamilyPoints)]
-        pub fn live_reverse_family_points(
+        #[wasm_bindgen(js_name = reverseFamilyPoints)]
+        pub fn reverse_family_points(
             &mut self,
             family: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
@@ -9842,8 +9786,8 @@ mod wasm {
                 .reverse_family_points(&family.semantic_family()?)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveRepeatFamilyPoints)]
-        pub fn live_repeat_family_points(
+        #[wasm_bindgen(js_name = repeatFamilyPoints)]
+        pub fn repeat_family_points(
             &mut self,
             family: &crate::WasmAuthoringFamilyHandle,
             count: u32,
@@ -9854,8 +9798,8 @@ mod wasm {
                 .repeat_family_points(&family.semantic_family()?, count as usize)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveInsertNCurves)]
-        pub fn live_insert_n_curves(
+        #[wasm_bindgen(js_name = insertNCurves)]
+        pub fn insert_n_curves(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             additional: u32,
@@ -9866,8 +9810,8 @@ mod wasm {
                 .insert_n_curves(object.semantic_mobject(), additional as usize)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReverseDirection)]
-        pub fn live_reverse_direction(
+        #[wasm_bindgen(js_name = reverseDirection)]
+        pub fn reverse_direction(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
@@ -9877,8 +9821,8 @@ mod wasm {
                 .reverse_direction(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReversePoints)]
-        pub fn live_reverse_points(
+        #[wasm_bindgen(js_name = reversePoints)]
+        pub fn reverse_points(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
@@ -9888,8 +9832,8 @@ mod wasm {
                 .reverse_points(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveRepeatPoints)]
-        pub fn live_repeat_points(
+        #[wasm_bindgen(js_name = repeatPoints)]
+        pub fn repeat_points(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             count: u32,
@@ -9900,8 +9844,8 @@ mod wasm {
                 .repeat_points(object.semantic_mobject(), count as usize)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSubcurve)]
-        pub fn live_subcurve(
+        #[wasm_bindgen(js_name = subcurve)]
+        pub fn subcurve(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             a: f64,
@@ -9915,8 +9859,8 @@ mod wasm {
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveAlignPoints)]
-        pub fn live_align_points(
+        #[wasm_bindgen(js_name = alignPoints)]
+        pub fn align_points(
             &mut self,
             left: &crate::WasmAuthoringMobjectHandle,
             right: &crate::WasmAuthoringMobjectHandle,
@@ -9928,8 +9872,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignRootPoints)]
-        pub fn live_align_root_points(
+        #[wasm_bindgen(js_name = alignRootPoints)]
+        pub fn align_root_points(
             &mut self,
             left: &crate::WasmLayoutAnchor,
             right: &crate::WasmLayoutAnchor,
@@ -9942,8 +9886,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = livePointwiseBecomePartial)]
-        pub fn live_pointwise_become_partial(
+        #[wasm_bindgen(js_name = pointwiseBecomePartial)]
+        pub fn pointwise_become_partial(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
@@ -9962,8 +9906,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClosePath)]
-        pub fn live_close_path(
+        #[wasm_bindgen(js_name = closePath)]
+        pub fn close_path(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
@@ -9974,8 +9918,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClosePathWithStride)]
-        pub fn live_close_path_with_stride(
+        #[wasm_bindgen(js_name = closePathWithStride)]
+        pub fn close_path_with_stride(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             stride: i32,
@@ -9994,8 +9938,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMatchPoints)]
-        pub fn live_match_points(
+        #[wasm_bindgen(js_name = matchPoints)]
+        pub fn match_points(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
