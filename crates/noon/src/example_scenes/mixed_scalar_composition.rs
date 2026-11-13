@@ -4,7 +4,7 @@ use std::{f64::consts::PI, rc::Rc};
 
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
     SemanticAnimationCompositionKind as Kind, SemanticVec3, ValueTracker,
 };
 
@@ -18,7 +18,8 @@ pub struct MixedScalarComposition {
 impl LiveContinuation for MixedScalarComposition {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 let options = AnimationOptions::new()

@@ -83,7 +83,9 @@
 //! operations; they do not publish to an already running execution.
 //!
 //! [`Scene::live`] and [`LiveContinuation`] are explicit execution integration
-//! facilities. Scene scripts hide their segment and callback plumbing.
+//! facilities. A Rust continuation receives the owning [`ContinuationScene`] and
+//! borrows [`ContinuationScene::live`] for segment control. Scene scripts handle
+//! their segment and callback plumbing internally.
 //!
 //! # Public surface
 //!
@@ -359,11 +361,9 @@ pub use latex_authoring::{
     DviFontResource, LatexBackend, LatexDocument, LatexFormat, LatexParts, MathTex, Tex,
     DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
 };
-#[doc(hidden)]
-pub use live_program::ContinuationScene;
 pub use live_program::{
-    ContinuationEffects, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError,
-    LiveProgramStatus,
+    ContinuationEffects, ContinuationScene, ContinuationStep, LiveContinuation, LiveProgram,
+    LiveProgramError, LiveProgramStatus,
 };
 #[cfg(feature = "prepared-prefix")]
 pub use live_program::{
@@ -526,17 +526,17 @@ pub mod prelude {
     };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
-        BooleanOperation, Color, ContinuationEffects, ContinuationStep, DeclaredAnimation, DiGraph,
-        DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
-        FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphOptions,
-        LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
-        ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
-        NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
-        RateFunction, Scene, SceneSection, SceneSectionNavigation, SectionNavigation, SectionType,
-        SemanticObjectState, SemanticStyle, SpatialCompositionError, StoredGeometry, StyleUpdate,
-        SvgAuthoringError, SvgDefaultStyle, SvgImportOptions, SvgUnsupportedFeature,
-        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
-        VectorFieldRanges2D, VectorPath,
+        BooleanOperation, Color, ContinuationEffects, ContinuationScene, ContinuationStep,
+        DeclaredAnimation, DiGraph, DrawBorderThenFillOptions, EffectiveMobjectState,
+        ExecutionSession, FadeEndpoint, FadeTranslation, Graph, GraphAuthoringError,
+        GraphEdgeMobject, GraphOptions, LiveContinuation, LiveProgram, LiveSession,
+        LiveSessionError, ManimArrow, ManimArrowOptions, ManimArrowVectorField, Mobject,
+        MobjectFamily, MobjectTarget, NativeBoolSignal, NativeVectorSignal, PlotAuthoringError,
+        PlotSamplingOptions, RateFunction, Scene, SceneSection, SceneSectionNavigation,
+        SectionNavigation, SectionType, SemanticObjectState, SemanticStyle,
+        SpatialCompositionError, StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle,
+        SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
+        VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
     };
     pub use crate::{
         AudioClipOptions, AudioResource, PlaybackControl, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,

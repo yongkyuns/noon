@@ -294,7 +294,7 @@ fn audio_scene_cannot_enter_an_unqualified_source_continuation() {
         type Error = String;
         fn resume(
             &mut self,
-            _: &mut crate::LiveSession<'_>,
+            _scene: &mut crate::ContinuationScene,
         ) -> Result<crate::ContinuationStep, Self::Error> {
             panic!("unsupported audio continuation must never run");
         }

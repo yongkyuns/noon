@@ -139,7 +139,7 @@ fn qualify_export_sampling_pixels() {
         ExportFrameOptions, ExportFrameSummary, ExportFrames, ExportFramesStatus, ExportStop,
         FrameRate, HostCallbackId, SemanticMutationTransaction,
     };
-    use noon::{ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, Mobject};
+    use noon::{ContinuationStep, LiveContinuation, LiveSessionError, Mobject};
 
     struct Source {
         object: Mobject,
@@ -149,7 +149,11 @@ fn qualify_export_sampling_pixels() {
     impl LiveContinuation for Source {
         type Error = LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             let stage = self.stage;
             self.stage += 1;
             match stage {

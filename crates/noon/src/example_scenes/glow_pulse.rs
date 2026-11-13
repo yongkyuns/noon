@@ -4,8 +4,8 @@
 use crate::{
     effects::{Blur, EffectUpdate, Pixels},
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
-    SemanticAnimationCompositionKind, TransformToRequest,
+    LiveContinuation, LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    TransformToRequest,
 };
 
 pub struct GlowPulseScene {
@@ -23,7 +23,8 @@ fn linear(seconds: f64) -> AnimationOptions {
 impl LiveContinuation for GlowPulseScene {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 => live.wait_segment(0.5),
             1 => {

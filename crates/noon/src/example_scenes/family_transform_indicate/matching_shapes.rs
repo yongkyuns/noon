@@ -4,8 +4,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationOptions, Color, ContinuationStep, IndicateOptions, LiveContinuation, LiveProgram,
-    LiveSession, ManimGeometryOptions, Mobject, MobjectFamily, RateFunction, Scene, Vec2,
-    VectorPath,
+    ManimGeometryOptions, Mobject, MobjectFamily, RateFunction, Scene, Vec2, VectorPath,
 };
 
 pub struct MatchingShapesLifecycle {
@@ -18,7 +17,8 @@ impl LiveContinuation for MatchingShapesLifecycle {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 let segment = live

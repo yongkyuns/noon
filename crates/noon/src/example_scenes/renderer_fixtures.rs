@@ -1,8 +1,8 @@
 //! Filled morph and reveal-continuity examples shared by native and direct WASM.
 use crate::{
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticPaint, SemanticStyle,
-    TransformToRequest, Vec2, VectorPath, BLUE, PINK, PURPLE, WHITE,
+    LiveProgram, Mobject, RateFunction, Scene, SemanticPaint, SemanticStyle, TransformToRequest,
+    Vec2, VectorPath, BLUE, PINK, PURPLE, WHITE,
 };
 
 fn style(fill: Option<Color>, stroke: Color, width: f64) -> SemanticStyle {
@@ -154,7 +154,8 @@ pub struct MorphReveal {
 impl LiveContinuation for MorphReveal {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(ContinuationStep::Finished);
         }

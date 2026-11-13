@@ -18,7 +18,11 @@ fn completed_static_drag_retains_the_original_source_without_readable_interval()
     impl LiveContinuation for Static {
         const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut crate::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             let step = self.calls.get();
             self.calls.set(step + 1);
             if step == 0 && self.zero_wait {
@@ -72,7 +76,11 @@ fn terminal_drag_requirement_preserves_the_finished_rust_source() {
     impl LiveContinuation for Tail {
         const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut crate::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             let step = self.calls.get();
             self.calls.set(step + 1);
             match step {
@@ -138,7 +146,11 @@ impl Drop for Script {
 impl LiveContinuation for Script {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         match step {

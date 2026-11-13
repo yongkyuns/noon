@@ -2,8 +2,8 @@
 
 use crate::{
     bundled_native_font_face, AnimationCompositionRequest, AnimationOptions, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
-    SemanticAnimationCompositionKind, Text, TransformToRequest, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+    LiveContinuation, LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    Text, TransformToRequest, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
 };
 
 pub struct TextWrite {
@@ -16,7 +16,8 @@ pub struct TextWrite {
 impl LiveContinuation for TextWrite {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 let options = AnimationOptions::new()

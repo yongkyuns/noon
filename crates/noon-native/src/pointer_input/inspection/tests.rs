@@ -1,8 +1,6 @@
 use super::*;
 use crate::NativeViewportConfig;
-use noon::{
-    AnimationOptions, ContinuationStep, IndicateOptions, LiveContinuation, LiveSession, Scene,
-};
+use noon::{AnimationOptions, ContinuationStep, IndicateOptions, LiveContinuation, Scene};
 use noon_core::Vec2;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
@@ -311,7 +309,11 @@ struct IndicateOnce {
 }
 impl LiveContinuation for IndicateOnce {
     type Error = noon::LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(ContinuationStep::Finished);
         }

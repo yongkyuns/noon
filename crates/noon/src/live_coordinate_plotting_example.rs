@@ -18,8 +18,9 @@ impl LiveContinuation for LiveCoordinatePlayback {
     type Error = String;
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> std::result::Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         self.step(live).map_err(|error| error.to_string())
     }
 }

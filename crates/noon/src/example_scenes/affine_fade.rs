@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationOptions, Color, ContinuationStep, FadeEndpoint, FadeTranslation, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticFadeDirection, SemanticVec3,
+    LiveProgram, Mobject, RateFunction, Scene, SemanticFadeDirection, SemanticVec3,
 };
 
 pub struct AffineFade {
@@ -15,7 +15,8 @@ pub struct AffineFade {
 impl LiveContinuation for AffineFade {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);

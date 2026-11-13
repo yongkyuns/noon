@@ -26,7 +26,10 @@ fn press(token: &NativePointerInputToken, sequence: u64) -> NativePointerInput {
 struct Finish;
 impl LiveContinuation for Finish {
     type Error = std::convert::Infallible;
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Ok(ContinuationStep::Finished)
     }
 }
@@ -117,7 +120,11 @@ struct Animate {
 }
 impl LiveContinuation for Animate {
     type Error = crate::LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         Ok(ContinuationStep::Await(
             live.declare_and_activate_transform_to(
                 &self.source,
@@ -181,7 +188,10 @@ fn pointer_publication_refreshes_the_live_endpoint_fence_without_bypassing_it() 
 struct Fail;
 impl LiveContinuation for Fail {
     type Error = &'static str;
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Err("intentional terminal continuation")
     }
 }

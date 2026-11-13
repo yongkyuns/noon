@@ -1,7 +1,7 @@
 //! Shared family become, target animation, and restore on the ordinary live path.
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    LiveSessionError, ManimBecomeOptions, MobjectFamily, RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSessionError,
+    ManimBecomeOptions, MobjectFamily, RateFunction, Scene,
 };
 
 pub struct FamilyState {
@@ -14,7 +14,8 @@ pub struct FamilyState {
 impl LiveContinuation for FamilyState {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let step = (|| -> Result<ContinuationStep, LiveSessionError> {
             let segment = match self.stage {
                 0 => live.declare_and_activate_family_transform_to(

@@ -8,7 +8,7 @@ use noon::integration::{
 };
 use noon::{
     AnimationOptions, ContinuationStep, ExecutionSegment, ExecutionSession, LiveContinuation,
-    LiveSession, LiveSessionError, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    LiveSessionError, Mobject, RateFunction, RustHostCallbackTable, Scene,
 };
 use noon_export::{capture_frames, Backends, CaptureOptions, SessionCapture, SessionCaptureError};
 
@@ -53,7 +53,11 @@ struct Motion {
 impl LiveContinuation for Motion {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(ContinuationStep::Finished);
         }

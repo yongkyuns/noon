@@ -2,8 +2,8 @@
 use crate::{
     effects::{Blur, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, ImageMobjectOptions,
-    LiveContinuation, LiveProgram, LiveSession, MobjectFamily, RasterImageSampling, RateFunction,
-    Scene, SemanticAnimationCompositionKind,
+    LiveContinuation, LiveProgram, MobjectFamily, RasterImageSampling, RateFunction, Scene,
+    SemanticAnimationCompositionKind,
 };
 
 pub struct ComposedEffects {
@@ -20,7 +20,8 @@ fn message(error: impl std::fmt::Display) -> String {
 
 impl LiveContinuation for ComposedEffects {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.animated && self.stage == 1 {
             let reference = live.copy_family(&self.reference).map_err(message)?;
             let inner = live.copy_family(&self.inner).map_err(message)?;

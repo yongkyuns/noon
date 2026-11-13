@@ -8,8 +8,8 @@ use crate::integration::{
     SemanticMutationTransaction,
 };
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus, LiveSession,
-    LiveSessionError, Mobject, RustHostCallbackTable, Scene,
+    ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus, LiveSessionError, Mobject,
+    RustHostCallbackTable, Scene,
 };
 
 const CALLBACK: HostCallbackId = HostCallbackId::new(1_896);
@@ -25,7 +25,11 @@ struct Segments {
 impl LiveContinuation for Segments {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let stage = self.stage;
         self.stage += 1;
         self.resumes.borrow_mut().push(stage);
@@ -306,7 +310,11 @@ struct ZeroWaits;
 impl LiveContinuation for ZeroWaits {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         Ok(ContinuationStep::Await(live.wait_segment(0.0)?))
     }
 }

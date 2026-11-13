@@ -3,8 +3,8 @@
 //! The moving dot and camera frame remain ordinary semantic objects. Shared
 //! MoveAlongPath drives the dot and one host updater keeps the camera on it.
 use crate::{
-    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, ManimAxesOptions,
+    ManimGeometryOptions, Mobject, RateFunction, RustHostCallbackTable, Scene,
 };
 
 use noon_core::{HostCallbackId, SemanticMutationTransaction};
@@ -25,7 +25,8 @@ pub struct FollowingGraphCamera {
 impl LiveContinuation for FollowingGraphCamera {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;

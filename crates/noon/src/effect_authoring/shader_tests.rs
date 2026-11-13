@@ -971,9 +971,7 @@ fn declared_shader_time_invalidates_only_active_dependencies_and_prepared_commit
 
 #[test]
 fn shader_time_uses_live_wait_boundaries_and_stops_after_removal_or_source_completion() {
-    use crate::{
-        ContinuationStep, LiveContinuation, LiveProgramStatus, LiveSession, RustHostCallbackTable,
-    };
+    use crate::{ContinuationStep, LiveContinuation, LiveProgramStatus, RustHostCallbackTable};
     use noon_runtime::TimelineWakeState;
     struct Hold {
         source: Mobject,
@@ -982,7 +980,11 @@ fn shader_time_uses_live_wait_boundaries_and_stops_after_removal_or_source_compl
     }
     impl LiveContinuation for Hold {
         type Error = String;
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+        fn resume(
+            &mut self,
+            scene: &mut crate::ContinuationScene,
+        ) -> Result<ContinuationStep, String> {
+            let live = &mut scene.live();
             let step = self.stage;
             self.stage += 1;
             match step {

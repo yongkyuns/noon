@@ -1,5 +1,5 @@
 use super::*;
-use noon::{ContinuationStep, LiveSession, LiveSessionError, RateFunction, Scene, SemanticVec3};
+use noon::{ContinuationStep, LiveSessionError, RateFunction, Scene, SemanticVec3};
 use noon_core::{
     HostCallbackId, NativeInputModifiers, NativePointerInputKind, NativePointerPosition,
     PlaybackControl, SemanticMutationTransaction,
@@ -128,7 +128,10 @@ fn native_transport_adopts_a_completed_static_source_at_the_exact_zero_range() {
     impl LiveContinuation for Finished {
         const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
-        fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            _scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
             Ok(ContinuationStep::Finished)
         }
     }

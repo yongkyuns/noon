@@ -3,8 +3,8 @@
 use std::rc::Rc;
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    ManimGeometryOptions, Mobject, RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, ManimGeometryOptions,
+    Mobject, RateFunction, Scene,
 };
 
 pub struct LinePassingFlash {
@@ -16,7 +16,8 @@ pub struct LinePassingFlash {
 impl LiveContinuation for LinePassingFlash {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 if live
@@ -135,7 +136,8 @@ pub struct SignalTrains {
 impl LiveContinuation for SignalTrains {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         use crate::AnimationCompositionRequest as Request;
         use noon_core::SemanticAnimationCompositionKind as Kind;
 
@@ -246,22 +248,22 @@ pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
 /// After sealing, ordinary ExecutionSession::seek restores those revisions.
 pub fn train_playback() -> Result<crate::SceneExecution, String> {
     let record = || -> Result<_, Box<dyn std::error::Error>> {
-        let (scene, mut continuation) = train_scene()?;
+        let (mut scene, mut continuation) = train_scene()?;
         let mut execution = scene.execution_session()?;
         execution.begin_replay_retention(noon_runtime::ReplayLimits::default())?;
-        {
-            let mut live = scene.live(&mut execution);
-            loop {
-                let step = continuation.resume(&mut live)?;
-                let ContinuationStep::Await(segment) = step else {
-                    break;
-                };
-                live.advance_segment_to(segment, segment.end_time())?;
-                live.complete_segment(segment)?;
-            }
+        scene.install_execution(execution);
+        let mut scene = crate::ContinuationScene::new(scene);
+        loop {
+            let step = continuation.resume(&mut scene)?;
+            let ContinuationStep::Await(segment) = step else {
+                break;
+            };
+            let mut live = scene.live();
+            live.advance_segment_to(segment, segment.end_time())?;
+            live.complete_segment(segment)?;
         }
-        execution.seal_replay()?;
-        let mut source = scene.into_execution_with_session(execution)?;
+        scene.owned_execution_mut().seal_replay()?;
+        let mut source = scene.take().into_execution()?;
         source.seek(0.0)?;
         Ok(source)
     };
@@ -344,8 +346,9 @@ mod tests {
 
         fn resume(
             &mut self,
-            live: &mut crate::LiveSession<'_>,
+            scene: &mut crate::ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             if self.activated {
                 if live
                     .contains(&self.line)

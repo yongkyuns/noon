@@ -4,9 +4,9 @@
 use crate::plot_presentation::{NumberLabelOptions, TimeSeriesPlan, TimedPlotSample};
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions, Mobject,
-    RateFunction, Scene, SemanticAnimationCompositionKind as Kind, Text, TransformToRequest, BLUE,
-    GREEN, WHITE, YELLOW,
+    LiveContinuation, LiveProgram, ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction,
+    Scene, SemanticAnimationCompositionKind as Kind, Text, TransformToRequest, BLUE, GREEN, WHITE,
+    YELLOW,
 };
 
 pub const RUN_TIME: f64 = 6.0;
@@ -54,7 +54,8 @@ pub struct TimeSeriesPlayback {
 impl LiveContinuation for TimeSeriesPlayback {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let index = self.next_interval;
         if index == self.segments.len() {
             return Ok(ContinuationStep::Finished);

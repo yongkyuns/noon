@@ -8,8 +8,8 @@ use noon::integration::{
     ExportFrameOptions, ExportStop, FrameRate, HostCallbackId, SemanticMutationTransaction,
 };
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    LiveSessionError, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSessionError, Mobject,
+    RateFunction, RustHostCallbackTable, Scene,
 };
 use noon_export::{capture_frames, Backends, CaptureOptions, CaptureRunError, CaptureSummary};
 
@@ -24,7 +24,11 @@ struct Source {
 impl LiveContinuation for Source {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let stage = self.stage;
         self.stage += 1;
         match stage {

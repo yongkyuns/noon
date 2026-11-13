@@ -199,8 +199,9 @@ fn source_failure_never_replaces_an_existing_video() {
         type Error = io::Error;
         fn resume(
             &mut self,
-            live: &mut noon::LiveSession<'_>,
+            scene: &mut noon::ContinuationScene,
         ) -> Result<noon::ContinuationStep, io::Error> {
+            let live = &mut scene.live();
             if self.0 {
                 return Err(io::Error::other("intentional source failure"));
             }

@@ -2,7 +2,7 @@
 use crate::{
     effects::{EffectUpdate, Pixelate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, MobjectFamily, RateFunction, Scene,
+    MobjectFamily, RateFunction, Scene,
 };
 pub struct PixelDetail {
     source: MobjectFamily,
@@ -13,7 +13,8 @@ fn message(e: impl std::fmt::Display) -> String {
 }
 impl LiveContinuation for PixelDetail {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 | 2 => live.wait_segment(0.5),
             1 => {

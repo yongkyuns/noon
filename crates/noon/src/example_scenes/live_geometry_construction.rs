@@ -2,8 +2,8 @@
 
 use crate::{
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, ManimGeometryOptions, ManimLineEndpoints, Mobject, MobjectTarget,
-    RateFunction, Scene, SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
+    LiveProgram, ManimGeometryOptions, ManimLineEndpoints, Mobject, MobjectTarget, RateFunction,
+    Scene, SemanticAnimationCompositionKind, TransformToRequest, Vec2, VectorPath,
 };
 use std::rc::Rc;
 
@@ -21,7 +21,8 @@ pub struct LiveGeometryConstruction {
 impl LiveContinuation for LiveGeometryConstruction {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;

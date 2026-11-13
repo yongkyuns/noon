@@ -7,10 +7,9 @@
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     FadeEndpoint, FadeTranslation, ImageMobjectOptions, LayoutAnchor, LayoutDimension,
-    LiveContinuation, LiveLayoutTarget, LiveProgram, LiveSession, ManimGeometryOptions,
-    ManimNextToArgs, Mobject, RateFunction, RustHostCallbackTable, Scene,
-    SemanticAnimationCompositionKind as Kind, SemanticFadeDirection, SemanticVec3, Text,
-    TransformToRequest, ZoomedSceneOptions, ZoomedView,
+    LiveContinuation, LiveLayoutTarget, LiveProgram, ManimGeometryOptions, ManimNextToArgs,
+    Mobject, RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind as Kind,
+    SemanticFadeDirection, SemanticVec3, Text, TransformToRequest, ZoomedSceneOptions, ZoomedView,
 };
 use noon_core::HostCallbackId;
 
@@ -46,7 +45,8 @@ pub struct MovingZoomedSceneAround {
 impl LiveContinuation for MovingZoomedSceneAround {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
