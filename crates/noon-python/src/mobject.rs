@@ -2,8 +2,10 @@
 use crate::{context::MembershipBatch, engine_error};
 use pyo3::prelude::*;
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 type TextPart = (u32, u32, u32, u32, u32, u32, Option<String>);
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
 fn project_text_parts(parts: Vec<noon::TextPart>) -> Vec<TextPart> {
     parts
         .into_iter()
@@ -58,6 +60,7 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[cfg(any(feature = "native-text", feature = "typst"))]
     #[pyo3(name = "textSource")]
     fn text_source(&self) -> PyResult<String> {
         self.handle
@@ -66,6 +69,7 @@ impl MobjectHandle {
             .map_err(engine_error)
     }
 
+    #[cfg(any(feature = "native-text", feature = "typst"))]
     #[pyo3(name = "textParts")]
     fn text_parts(&self) -> PyResult<Vec<TextPart>> {
         self.handle
@@ -74,6 +78,7 @@ impl MobjectHandle {
             .map_err(engine_error)
     }
 
+    #[cfg(any(feature = "native-text", feature = "typst"))]
     #[pyo3(name = "textSourcePartsFor")]
     fn text_source_parts_for(&self, needle: &str) -> PyResult<Vec<TextPart>> {
         self.handle
