@@ -595,12 +595,13 @@ impl Context {
             }
         })
     }
-    fn edit_updaters(
+    fn edit_scene<T>(
         &mut self,
-        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+        edit: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<()> {
         let running = self.has_execution();
         edit(&mut self.scene)
+            .map(|_| ())
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 }
@@ -3813,6 +3814,72 @@ impl Context {
         self.available()?;
         self.edit_running_scene(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
     }
+    #[pyo3(name = "setColorGradient")]
+    fn set_color_gradient(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        self.available()?;
+        let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| scene.set_color_by_gradient(&target.handle, &colors))
+    }
+
+    #[pyo3(name = "setFamilyColorGradient")]
+    fn set_family_color_gradient(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| scene.set_family_color_by_gradient(&target.family, &colors))
+    }
+
+    #[pyo3(name = "setColorRadialGradient")]
+    fn set_color_radial_gradient(
+        &mut self,
+        target: &MobjectHandle,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let (inner, outer) =
+            noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| {
+            scene.set_color_by_radial_gradient(
+                &target.handle,
+                (center_x, center_y, center_z),
+                radius,
+                inner,
+                outer,
+            )
+        })
+    }
+
+    #[pyo3(name = "setFamilyColorRadialGradient")]
+    fn set_family_color_radial_gradient(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let (inner, outer) =
+            noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| {
+            scene.set_family_color_by_radial_gradient(
+                &target.family,
+                (center_x, center_y, center_z),
+                radius,
+                inner,
+                outer,
+            )
+        })
+    }
+
     #[pyo3(name = "liveSetOpacity")]
     fn opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
@@ -4323,7 +4390,7 @@ impl Context {
         let callback = id
             .parse()
             .map_err(|_| engine_error("invalid callback ID"))?;
-        self.edit_updaters(|scene| {
+        self.edit_scene(|scene| {
             scene_execution::add_updater(
                 scene,
                 &target.handle,
@@ -4341,7 +4408,7 @@ impl Context {
         let callback = id
             .parse()
             .map_err(|_| engine_error("invalid callback ID"))?;
-        self.edit_updaters(|scene| {
+        self.edit_scene(|scene| {
             scene_execution::remove_updater(
                 scene,
                 &target.handle,
@@ -4355,7 +4422,7 @@ impl Context {
     fn clear_updaters(&mut self, target: &MobjectHandle, time: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.edit_updaters(|scene| scene_execution::clear_updaters(scene, &target.handle, time))
+        self.edit_scene(|scene| scene_execution::clear_updaters(scene, &target.handle, time))
     }
 
     #[pyo3(signature = (sample_hz, retain_history=false, prepare_shaders=true))]

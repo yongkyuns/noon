@@ -1278,6 +1278,30 @@ impl MobjectHandle {
             .rotate_about_point(angle, point_x, point_y)
             .map_err(engine_error)
     }
+    #[pyo3(name = "setColorGradient")]
+    fn set_color_gradient(&mut self, values: Vec<f64>) -> PyResult<()> {
+        let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;
+        self.handle
+            .set_color_by_gradient(&colors)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setRadialColorGradient")]
+    fn set_radial_color_gradient(
+        &mut self,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        let (inner, outer) =
+            noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
+        self.handle
+            .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "setColor")]
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), PyErr> {
         self.handle

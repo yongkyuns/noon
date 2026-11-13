@@ -1,48 +1,6 @@
 #[cfg(target_arch = "wasm32")]
 pub(crate) use noon::integration::family_color;
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn gradient_colors(
-    values: &[f64],
-) -> Result<Vec<noon::Color>, crate::authoring_error::AuthoringFailure> {
-    if !values.len().is_multiple_of(4) {
-        return Err(crate::authoring_error::AuthoringFailure::new(
-            "invalid_input",
-            "gradient.invalid_components",
-            "gradient colors require RGBA components",
-        ));
-    }
-    values
-        .chunks_exact(4)
-        .map(|c| {
-            family_color(true, c[0], c[1], c[2], c[3])
-                .map(|color| color.expect("enabled color"))
-                .map_err(|error| {
-                    crate::authoring_error::AuthoringFailure::new(
-                        "invalid_input",
-                        "gradient.invalid_color",
-                        error,
-                    )
-                })
-        })
-        .collect()
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn radial_gradient_colors(
-    values: &[f64],
-) -> Result<(noon::Color, noon::Color), crate::authoring_error::AuthoringFailure> {
-    let colors = gradient_colors(values)?;
-    match colors.as_slice() {
-        [inner, outer] => Ok((*inner, *outer)),
-        _ => Err(crate::authoring_error::AuthoringFailure::new(
-            "invalid_input",
-            "radial_gradient.color_count",
-            "radial gradients require exactly two RGBA colors",
-        )),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
 pub(crate) use noon::integration::{style_update, style_update_with_background_stroke};
 
 #[cfg(target_arch = "wasm32")]
@@ -1763,7 +1721,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = setColorGradient)]
         pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
-            let colors = super::gradient_colors(values).map_err(js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(js_error)?;
             self.semantic_family()?
                 .set_color_by_gradient(&colors)
                 .map_err(js_error)
@@ -1778,7 +1736,8 @@ mod wasm {
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            let (inner, outer) =
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.semantic_family()?
                 .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
                 .map_err(js_error)
@@ -3293,7 +3252,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = setColorGradient)]
         pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
-            let colors = super::gradient_colors(values).map_err(js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(js_error)?;
             self.handle.set_color_by_gradient(&colors).map_err(js_error)
         }
 
@@ -3306,7 +3265,8 @@ mod wasm {
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            let (inner, outer) =
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.handle
                 .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
                 .map_err(js_error)
