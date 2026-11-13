@@ -100,6 +100,19 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_native_pointer_selection_gallery_prepares_retained_preview(self):
+        path = ROOT / "web/python/examples/showcase_pointer_selection.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        try:
+            self.assertAlmostEqual(view.duration, 2.6)
+            start = view.capture(time=0.0, width=320, height=180)
+            endpoint = view.capture(time=view.duration, width=320, height=180)
+            self.assertNotEqual(start, endpoint)
+            self.assertEqual(start, view.capture(time=0.0, width=320, height=180))
+        finally:
+            view.close()
+
     def test_scene_path_edits_match_during_setup_and_playback(self):
         source = """from noon import *
 class Demo(Scene):
