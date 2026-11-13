@@ -867,6 +867,19 @@ impl Scene {
         )
     }
 
+    /// Observe the current retained-content boundary before or during execution.
+    pub fn layout_critical_point_3d(
+        &self,
+        anchor: &crate::LayoutAnchor,
+        direction: crate::SemanticVec3,
+    ) -> Result<crate::SemanticVec3, AuthoringError> {
+        self.require_layout_anchor(anchor)?;
+        if self.running_execution().is_some() {
+            return self.effective_layout_critical_point_3d(anchor, direction);
+        }
+        anchor.critical_point_3d(direction)
+    }
+
     /// Observe LaTeX font size from its retained family height.
     #[cfg(feature = "latex")]
     pub fn effective_latex_font_size(

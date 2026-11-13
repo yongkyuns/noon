@@ -662,7 +662,10 @@ impl Scene {
         self.publish_path_edits(prepared)
     }
 
-    fn require_layout_anchor(&self, anchor: &crate::LayoutAnchor) -> Result<(), AuthoringError> {
+    pub(super) fn require_layout_anchor(
+        &self,
+        anchor: &crate::LayoutAnchor,
+    ) -> Result<(), AuthoringError> {
         if !anchor.belongs_to_store(&self.store) {
             return Err(AuthoringError::ForeignStore);
         }

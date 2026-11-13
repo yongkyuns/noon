@@ -420,8 +420,13 @@ class Demo(Scene):
 class Demo(Scene):
     def construct(self):
         self.next_section("Title")
-        self.add(Typst("*Native*", color=YELLOW).shift(LEFT))
+        title = Typst("*Native*", color=YELLOW).shift(LEFT)
+        family = Group(title)
+        self.add(family)
+        expected = tuple(title.get_center())
+        assert tuple(family.get_center()) == expected
         self.wait(1)
+        assert tuple(title.get_center()) == tuple(family.get_center()) == expected
         self.next_section("Math")
         self.add(MathTypst("frac(x, 2)", color=BLUE).shift(RIGHT))
         self.wait(1)
