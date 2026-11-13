@@ -1663,6 +1663,74 @@ impl Context {
         Ok(())
     }
 
+    #[pyo3(name = "liveBindClickIndicate")]
+    #[allow(clippy::too_many_arguments)]
+    fn bind_click_indicate(
+        &mut self,
+        target: &MobjectHandle,
+        scale_factor: f64,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        duration: f64,
+        easing: &str,
+        lag_ratio: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        let color = callback_color(
+            "indication color",
+            Some(red),
+            Some(green),
+            Some(blue),
+            Some(alpha),
+        )?
+        .expect("all indication color channels were supplied");
+        let options = noon::AnimationOptions::new()
+            .run_time(duration)
+            .rate_func(crate::composition::rate(easing)?)
+            .lag_ratio(lag_ratio);
+        let running = self.has_execution();
+        self.scene
+            .on_click_indicate(
+                &target.handle,
+                noon::IndicateOptions::new(scale_factor, color),
+                options,
+            )
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[pyo3(name = "liveBindClickGlowPulse")]
+    fn bind_click_glow_pulse(
+        &mut self,
+        target: &MobjectHandle,
+        intensity: f64,
+        duration: f64,
+        easing: &str,
+        lag_ratio: f64,
+        reverse_rate_function: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        let options = noon::AnimationOptions::new()
+            .run_time(duration)
+            .rate_func(crate::composition::rate(easing)?)
+            .lag_ratio(lag_ratio)
+            .reverse_rate_function(reverse_rate_function);
+        let running = self.has_execution();
+        self.scene
+            .on_click_glow_pulse(&target.handle, intensity, options)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[pyo3(name = "liveClearClickAction")]
+    fn clear_click_action(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.available()?;
+        let running = self.has_execution();
+        self.scene
+            .on_click(&target.handle, None)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
     #[pyo3(name = "liveStretchLayout")]
     fn stretch_layout(
         &mut self,
