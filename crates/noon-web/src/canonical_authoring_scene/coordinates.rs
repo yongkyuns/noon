@@ -4,7 +4,7 @@ use super::*;
 
 impl CanonicalAuthoringScene {
     pub(crate) fn number_line_frame(
-        &mut self,
+        &self,
         line: &noon::ManimNumberLine,
     ) -> Result<noon::NumberLineFrame, AuthoringFailure> {
         let shaft = line
@@ -16,9 +16,8 @@ impl CanonicalAuthoringScene {
                 line.authored_frame()
                     .map_err(crate::plot_error::coordinate_failure)
             },
-            |player, _| {
-                player
-                    .scene_mut()
+            |scene, _| {
+                scene
                     .effective_number_line_frame(line)
                     .map_err(crate::plot_error::coordinate_failure)
             },
@@ -173,7 +172,7 @@ mod tests {
                     scale.map(0.0).unwrap()
                 );
 
-                let mut foreign = CanonicalAuthoringScene::default();
+                let foreign = CanonicalAuthoringScene::default();
                 assert!(foreign.number_line_frame(&line).is_err(), "foreign store");
             }
         }

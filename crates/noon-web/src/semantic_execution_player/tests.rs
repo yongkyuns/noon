@@ -817,7 +817,7 @@ fn scalar_live_evaluate_backwards_retires_click_glow_and_commits_clock_after_suc
         SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 106)
             .unwrap();
     player.live_evaluate(1.0).unwrap();
-    assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
+    assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 2.0);
     player
         .source
         .session_mut()
@@ -878,7 +878,7 @@ fn scalar_live_evaluate_backwards_retires_click_glow_and_commits_clock_after_suc
 
     player.live_evaluate(0.25).unwrap();
     assert_eq!(player.time(), 0.25);
-    assert_eq!(player.live_effective_signal(&tracker).unwrap(), 0.5);
+    assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 0.5);
     assert_eq!(player.clock.scene_time(3_000.0).unwrap(), 0.25);
     assert!(!player.source.session().interactions_active());
     assert!(player.source.session().frame().objects[0].effects.is_none());
@@ -4386,7 +4386,7 @@ fn assert_late_text_resource_admission(
         mirror.apply_family(wait_delta).unwrap();
     }
     let label = create(&mut player).unwrap();
-    assert!(!player.live_contains(&label).unwrap());
+    assert!(!player.scene().contains_direct(&label).unwrap());
     if let Some(detached_delta) = player.delta(false).unwrap() {
         assert!(detached_delta.retained.objects.is_empty());
         assert!(detached_delta.resource_additions.is_none());

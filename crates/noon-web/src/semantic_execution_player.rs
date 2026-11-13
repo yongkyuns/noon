@@ -851,84 +851,6 @@ impl SemanticExecutionPlayer {
         .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_fill_color(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_fill_color(target)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
-    }
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_stroke_color(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_stroke_color(target)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_stroke_width(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_stroke_width(target)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_background_stroke_color(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        target.background_stroke_color()?;
-        Ok(self
-            .live_effective(target)?
-            .style
-            .background_stroke
-            .map(|color| noon_core::Color {
-                alpha: 1.0,
-                ..color
-            }))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_background_stroke_width(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<f64, AuthoringFailure> {
-        Ok(f64::from(
-            self.live_effective(target)?.style.background_stroke_width,
-        ))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_background_stroke_opacity(
-        &self,
-        target: &noon::Mobject,
-    ) -> Result<f64, AuthoringFailure> {
-        Ok(self
-            .live_effective(target)?
-            .style
-            .background_stroke
-            .map_or(1.0, |color| f64::from(color.alpha)))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_stroke_cap(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_stroke_cap(target)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
-    }
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_interpolate_manim_style(
         &mut self,
         receiver: &noon::Mobject,
@@ -1125,17 +1047,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_latex_font_size(
-        &mut self,
-        parts: &noon::LatexParts,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_latex_font_size(parts)
-            .map_err(Self::live_placement_error)
-    }
-
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_fill(
         &mut self,
         family: &noon::MobjectFamily,
@@ -1284,36 +1195,6 @@ impl SemanticExecutionPlayer {
             .map_err(Self::live_placement_error)
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_layout_dimension_length(
-        &mut self,
-        source: &noon::LayoutAnchor,
-        dimension: noon::LayoutDimension,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_dimension_length(source, dimension)
-            .map_err(|error| {
-                if dimension == noon::LayoutDimension::Depth {
-                    AuthoringFailure::from_scene_mutation(error, true)
-                } else {
-                    Self::live_placement_error(error)
-                }
-            })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_layout_critical_point_3d(
-        &mut self,
-        source: &noon::LayoutAnchor,
-        direction: noon::SemanticVec3,
-    ) -> Result<noon::SemanticVec3, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_layout_critical_point_3d(source, direction)
-            .map_err(Self::live_placement_error)
-    }
-
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_rescale_to_fit(
         &mut self,
@@ -1413,17 +1294,6 @@ impl SemanticExecutionPlayer {
             .scene_mut()
             .replace_members(root, members)
             .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_family_layout(
-        &mut self,
-        family: &noon::MobjectFamily,
-    ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_family_layout(family)
-            .map_err(Self::live_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1581,17 +1451,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_z_index(
-        &self,
-        anchor: &noon::LayoutAnchor,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_z_index(anchor)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_z_index(
         &mut self,
         anchor: &noon::LayoutAnchor,
@@ -1615,7 +1474,7 @@ impl SemanticExecutionPlayer {
             .map(|_| ())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg(test)]
     pub(crate) fn live_effective(
         &self,
         mobject: &noon::Mobject,
@@ -1623,192 +1482,6 @@ impl SemanticExecutionPlayer {
         self.source
             .scene()
             .effective(mobject)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_layout(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<noon::EffectiveMobjectLayout, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_layout(mobject)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_boolean_geometry_options(
-        &self,
-        operation: noon::BooleanOperation,
-        operands: &[noon::Mobject],
-    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_boolean_geometry_options(operation, operands)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn effective_point_count(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<usize, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_mobject_point_count(mobject)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn effective_family_own_path_query(
-        &mut self,
-        family: &noon::MobjectFamily,
-    ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_family_own_path_query(family)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn effective_path_query(
-        &self,
-        mobject: &noon::Mobject,
-    ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_path_query(mobject)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_all_points(
-        &self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_all_points(target)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_point_array(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_point_array(target)
-            .map_err(Self::live_placement_error)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_path_boundary_points_3d(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_path_boundary_points_3d(target)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_path_boundary_points(
-        &self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_path_boundary_points(target)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_extremum_along_dim(
-        &self,
-        target: noon::MobjectTarget<'_>,
-        dim: usize,
-        key: f64,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_extremum_along_dim(target, dim, key)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_path_boundary_extremum_along_dim(
-        &self,
-        target: noon::MobjectTarget<'_>,
-        dim: usize,
-        key: f64,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_path_boundary_extremum_along_dim(target, dim, key)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_length_over_dim(
-        &self,
-        target: noon::MobjectTarget<'_>,
-        dim: usize,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_length_over_dim(target, dim)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_center_of_mass(
-        &self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<(f64, f64), AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_center_of_mass(target)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_boundary_point(
-        &self,
-        target: noon::MobjectTarget<'_>,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(f64, f64), AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_boundary_point(target, direction_x, direction_y)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_path_boundary_point(
-        &self,
-        target: noon::MobjectTarget<'_>,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(f64, f64), AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_path_boundary_point(target, direction_x, direction_y)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_manim_color(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<noon_core::Color, AuthoringFailure> {
-        self.source
-            .scene()
-            .effective_manim_color(mobject)
             .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
@@ -2238,19 +1911,6 @@ impl SemanticExecutionPlayer {
         // authoring handoffs do not restart the wall-to-authored epoch.
         self.live_segment = Some(LiveSegmentReceipt::Pending(segment));
         Ok(end_time)
-    }
-
-    /// Query root membership from the exact shared live session. This is a
-    /// derived wrapper observation, never a frontend lifecycle authority.
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_contains(
-        &mut self,
-        target: &noon::Mobject,
-    ) -> Result<bool, AuthoringFailure> {
-        self.source
-            .scene()
-            .contains_direct(target)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     /// Atomically admit and activate one recursive composition request through the shared
@@ -2773,17 +2433,6 @@ impl SemanticExecutionPlayer {
         }
         self.clock = clock;
         Ok(())
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_signal(
-        &self,
-        tracker: &noon::ValueTracker,
-    ) -> Result<f64, AuthoringFailure> {
-        self.source
-            .scene()
-            .value_tracker_value(tracker)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
