@@ -735,7 +735,12 @@ fn scene_leaf_frame_alignment_matches_authored_and_running_placement() {
 }
 
 #[test]
-fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
+fn scene_family_placement_has_the_same_publications_before_and_after_bootstrap() {
+    assert_scene_family_placement(false);
+    assert_scene_family_placement(true);
+}
+
+fn assert_scene_family_placement(running: bool) {
     let mut scene = Scene::new();
     let mut left = scene.square(2.0).unwrap();
     let mut right = scene.square(2.0).unwrap();
@@ -749,6 +754,13 @@ fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
         .unwrap();
     let source_anchor = crate::LayoutAnchor::from(&family);
     let aligner = crate::LayoutAnchor::from(&left);
+    let mut target = scene.square(2.0).unwrap();
+    target.shift(-7.0, 0.0).unwrap();
+    scene.add_many(&[(&family).into()]).unwrap();
+    if running {
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+    }
     let revision = scene.revision();
 
     scene
@@ -800,7 +812,25 @@ fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
         )
         .unwrap();
 
-    assert!(scene.revision().get() > revision.get());
+    scene
+        .next_layout_to_edge_in_frame(
+            &source_anchor,
+            &crate::LayoutAnchor::from(&target),
+            (-1.0, 0.0),
+            crate::ManimNextToArgs {
+                direction: (-1.0, 0.0),
+                buff: 0.125,
+                aligned_edge: (0.0, 0.0),
+                mask: (1.0, 0.0),
+            },
+            0.25,
+        )
+        .unwrap();
+
+    assert_eq!(scene.revision().get() - revision.get(), 6);
+    let corner = family.layout().unwrap().critical_point(-1.0, 1.0);
+    assert!((corner.0 - (-f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 + 0.25)).abs() < 1e-6);
+    assert!((right.center().unwrap().0 - left.center().unwrap().0 - 4.0).abs() < 1e-6);
 }
 
 #[test]
