@@ -1,4 +1,4 @@
-//! Numeric constructors use the canonical cold scene or its active live player.
+//! Numeric constructors use the owning Scene.
 use super::CanonicalAuthoringSceneContext;
 use crate::{authoring_error::js_error, WasmDecimalNumberHandle, WasmVariableHandle};
 use wasm_bindgen::prelude::*;
@@ -46,9 +46,9 @@ impl CanonicalAuthoringSceneContext {
         Ok(WasmVariableHandle::new(variable, store))
     }
 
-    #[wasm_bindgen(js_name = liveCreateDecimalNumber)]
+    #[wasm_bindgen(js_name = createDecimalNumber)]
     #[allow(clippy::too_many_arguments)]
-    pub fn live_create_decimal_number(
+    pub fn create_decimal_number(
         &mut self,
         value: f64,
         decimal_places: u32,
@@ -61,30 +61,16 @@ impl CanonicalAuthoringSceneContext {
     ) -> Result<WasmDecimalNumberHandle, JsValue> {
         let font_size = crate::authoring_mobject::text_authoring_f32("font size", font_size)
             .map_err(js_error)?;
-        let running = !self.inner.player_ownership.is_unstarted();
+        let format = noon::DecimalFormat {
+            decimal_places,
+            include_sign,
+            group_with_commas,
+            show_ellipsis,
+            unit,
+        };
         self.inner
-            .local_authoring_scene()
-            .map_err(js_error)?
-            .decimal_number(
-                compiler,
-                value,
-                noon::DecimalFormat {
-                    decimal_places,
-                    include_sign,
-                    group_with_commas,
-                    show_ellipsis,
-                    unit,
-                },
-                font_size,
-            )
+            .author_number(|scene| scene.decimal_number(compiler, value, format, font_size))
             .map(WasmDecimalNumberHandle::from_number)
-            .map_err(|error| {
-                if running {
-                    noon::integration::live_numeric_failure(error)
-                } else {
-                    error.into()
-                }
-            })
             .map_err(js_error)
     }
 }

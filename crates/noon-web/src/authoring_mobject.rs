@@ -247,6 +247,10 @@ mod wasm {
         pub(crate) fn from_number(number: noon::DecimalNumber) -> Self {
             Self { number }
         }
+
+        pub(crate) fn number(&self) -> &noon::DecimalNumber {
+            &self.number
+        }
     }
 
     #[wasm_bindgen]

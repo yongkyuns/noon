@@ -1038,6 +1038,8 @@ for (const retired of [
   "liveCreateManimText(", "liveCreateManimMarkupText(", "liveCreateManimTypst(",
   "liveCreateLatex(", "liveSetLatexMemberColors(", "liveLatexFontSize(",
   "liveCreateManimArrow(", "liveScaleArrow(",
+  "liveCreateDecimalNumber(", "liveSetDecimalValue(", "liveIncrementDecimalValue(",
+  "queryMobjectDecimalValue(", "queryMobjectDecimalFontSize(", "queryMobjectIntegerValue(",
   "liveCreateFamily(", "liveCreateFamilyWithColor(",
   "liveEditFamilyMembership(", "liveEditObjectMembership(",
   "livePrependFamilyMembers(", "livePrependObjectMembers(",
@@ -1078,6 +1080,8 @@ const sceneSurface = declarations.slice(sceneStart, sceneEnd < 0 ? undefined : s
 for (const method of [
   "createManimText(", "createManimMarkupText(", "createManimTypst(", "createLatex(",
   "createManimArrow(", "scaleArrow(",
+  "createDecimalNumber(", "setDecimalValue(", "incrementDecimalValue(",
+  "decimalValue(", "decimalFontSize(", "integerValue(",
   "createFamily(", "editFamilyMembership(", "editObjectMembership(",
   "prependFamilyMembers(", "prependObjectMembers(", "insertFamilyMember(", "insertObjectMember(",
   "replaceFamilyMembers(", "replaceObjectMembers(", "invertFamilyMembers(",
