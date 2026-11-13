@@ -438,22 +438,6 @@ impl ManimNumberLine {
         self.snapshot_with(&mut Mobject::path_query)
     }
 
-    /// Read current path endpoints and transforms from one immutable execution
-    /// borrow. A stale/foreign execution or unsupported path override is an error;
-    /// this method never falls back to authored state.
-    pub fn effective_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
-        self.snapshot_with(&mut |shaft| {
-            crate::path_queries::effective_path_query(
-                self.family.integration_store(),
-                execution,
-                shaft,
-            )
-        })
-    }
-
     pub(crate) fn snapshot_with(
         &self,
         query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,
@@ -533,21 +517,6 @@ impl ManimAxes {
         self.snapshot_with(&mut Mobject::path_query)
     }
 
-    /// Both axes use the same immutable execution borrow. No host callback or
-    /// publication occurs between their observations, and no ranges are cached.
-    pub fn effective_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        self.snapshot_with(&mut |shaft| {
-            crate::path_queries::effective_path_query(
-                self.family.integration_store(),
-                execution,
-                shaft,
-            )
-        })
-    }
-
     pub fn plot_sampling(
         &self,
         range: Option<&[f64]>,
@@ -570,27 +539,12 @@ impl ManimAxes {
         Ok(self.authored_frame()?.coords_to_point(input, ordinate)?)
     }
 
-    /// The live counterpart of [`Self::input_to_graph_point`], observing both
-    /// shafts from the same effective publication after evaluating the callable.
-    pub fn effective_input_to_graph_point(
-        &self,
-        execution: &ExecutionSession,
-        input: f64,
-        function: impl FnOnce(f64) -> f64,
-    ) -> Result<[f64; 2], CoordinateAuthoringError> {
-        let ordinate = function(input);
-        Ok(self
-            .effective_frame(execution)?
-            .coords_to_point(input, ordinate)?)
-    }
-
     /// Construct a detached static y=f(x) path in this axes' semantic store.
     ///
     /// The authored coordinate frame is captured once before the callback runs,
     /// and the callback is evaluated only while preparing the ordinary retained
-    /// path. Add the returned [`Mobject`] to any family explicitly. Runtime
-    /// effective coordinates remain an explicit `effective_frame` capture rather
-    /// than an implicit live graph model.
+    /// path. Add the returned [`Mobject`] to any family explicitly.
+    /// Use `Scene::axes_frame` to capture the current runtime coordinates.
     pub fn plot(
         &self,
         function: impl FnMut(f64) -> f64,
@@ -768,6 +722,17 @@ impl Scene {
         } else {
             axes.authored_frame()
         }
+    }
+
+    /// Evaluate a scalar callable once and map it through this Scene's axes.
+    pub fn input_to_graph_point(
+        &self,
+        axes: &ManimAxes,
+        input: f64,
+        function: impl FnOnce(f64) -> f64,
+    ) -> Result<[f64; 2], CoordinateAuthoringError> {
+        let ordinate = function(input);
+        Ok(self.axes_frame(axes)?.coords_to_point(input, ordinate)?)
     }
 
     /// Read the current shaft, or its validated authored path while detached.
