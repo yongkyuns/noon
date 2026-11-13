@@ -73,42 +73,6 @@ pub(crate) fn click_indicate_declaration(
     ))
 }
 
-/// Publish a detached family of ordinary path leaves through this Scene's one
-/// semantic publication route. Paths are admitted only after preparation has
-/// completed, and admission, family creation, and leaf creation share one
-/// rollback boundary.
-pub(crate) fn publish_path_family(
-    scene: &mut Scene,
-    paths: Vec<(VectorPath, noon_core::SemanticStyle)>,
-) -> Result<MobjectFamily, AuthoringError> {
-    let root = scene.root;
-    let store_rc = Rc::clone(&scene.store);
-    if let Some(execution) = scene.execution.as_mut() {
-        {
-            let store = store_rc.borrow();
-            execution
-                .require_resource_creation_at_root(&store, root)
-                .map_err(AuthoringError::from)?;
-        }
-        let family = crate::family_authoring::publish_path_family_with(
-            &mut store_rc.borrow_mut(),
-            paths,
-            |store, transaction| {
-                execution
-                    .apply_semantic_transaction_at_root(store, root, transaction)
-                    .map_err(AuthoringError::from)
-            },
-        )?;
-        return MobjectFamily::from_node(store_rc, family);
-    }
-    let family = crate::family_authoring::publish_path_family_with(
-        &mut store_rc.borrow_mut(),
-        paths,
-        |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
-    )?;
-    MobjectFamily::from_node(store_rc, family)
-}
-
 /// A scene owns its shared semantic store/root and, after bootstrap, the one
 /// execution component lowered from them. The optional execution slot is control
 /// ownership only; Runtime state remains owned by the contained [`ExecutionSession`].
@@ -177,31 +141,23 @@ impl Scene {
         &mut self,
         options: crate::ManimGeometryOptions,
     ) -> Result<Mobject, crate::AuthoringError> {
-        let root = self.root;
-        let store_rc = Rc::clone(&self.store);
-        let node = match self.execution.as_mut() {
-            Some(execution) => {
-                {
-                    let store = store_rc.borrow();
-                    execution
-                        .require_resource_creation_at_root(&store, root)
-                        .map_err(AuthoringError::from)?;
-                }
-                let mut store = store_rc.borrow_mut();
-                publish_geometry_options(options, &mut store, |store, transaction| {
-                    execution
-                        .apply_semantic_transaction_at_root(store, root, transaction)
-                        .map_err(AuthoringError::from)
-                })?
-            }
-            None => {
-                let mut store = store_rc.borrow_mut();
-                publish_geometry_options(options, &mut store, |store, transaction| {
-                    transaction.apply(store).map_err(AuthoringError::from)
-                })?
-            }
-        };
-        Mobject::from_node(store_rc, node)
+        self.require_resource_admission()?;
+        let node = self.with_semantic_publication(|store, publish| {
+            publish_geometry_options(options, store, publish)
+        })?;
+        Mobject::from_node(Rc::clone(&self.store), node)
+    }
+
+    /// Construct a detached family of prepared path leaves in one publication.
+    pub fn path_family(
+        &mut self,
+        paths: Vec<(VectorPath, SemanticStyle)>,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        self.require_resource_admission()?;
+        let family = self.with_semantic_publication(|store, publish| {
+            crate::family_authoring::publish_path_family_with(store, paths, publish)
+        })?;
+        MobjectFamily::from_node(Rc::clone(&self.store), family)
     }
 
     /// Construct one detached Arrow family before or after execution bootstrap.
@@ -371,6 +327,13 @@ impl Scene {
         transaction
             .apply(&mut self.store.borrow_mut())
             .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn require_resource_admission(&self) -> Result<(), AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            execution.require_resource_creation_at_root(&self.store.borrow(), self.root)?;
+        }
+        Ok(())
     }
 
     /// Run fallible resource preparation and exactly one semantic transaction
@@ -1278,42 +1241,65 @@ impl Scene {
         )
     }
 
+    /// Compile TeX and construct its detached, individually addressable text parts.
+    pub fn tex_parts(
+        &mut self,
+        text: crate::Tex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, crate::TextAuthoringError> {
+        self.publish_latex_parts(crate::latex_authoring::prepare_tex(text, backend)?)
+    }
+
+    /// Compile display math and construct its detached text parts.
+    pub fn math_tex_parts(
+        &mut self,
+        text: crate::MathTex,
+        backend: &mut impl crate::LatexBackend,
+    ) -> Result<crate::LatexParts, crate::TextAuthoringError> {
+        self.publish_latex_parts(crate::latex_authoring::prepare_math_tex(text, backend)?)
+    }
+
+    fn publish_latex_parts(
+        &mut self,
+        admission: crate::latex_authoring::LatexAdmission,
+    ) -> Result<crate::LatexParts, crate::TextAuthoringError> {
+        use crate::TextAuthoringError;
+        self.require_resource_admission()
+            .map_err(TextAuthoringError::Semantic)?;
+        let (result, family, members, source, parts, _) = self
+            .with_semantic_publication(|store, publish| {
+                Ok(admission.publish_parts(store, |store, transaction| {
+                    publish(store, transaction).map_err(TextAuthoringError::Semantic)
+                }))
+            })
+            .map_err(TextAuthoringError::Semantic)??;
+        crate::latex_authoring::finish_latex_parts(
+            Rc::clone(&self.store),
+            &result,
+            family,
+            members,
+            source,
+            parts,
+        )
+    }
+
     fn publish_latex_admission(
         &mut self,
         admission: crate::latex_authoring::LatexAdmission,
     ) -> Result<Mobject, crate::TextAuthoringError> {
-        let root = self.root;
-        let store_rc = Rc::clone(&self.store);
-        let result = match self.execution.as_mut() {
-            Some(execution) => {
-                {
-                    let store = store_rc.borrow();
-                    execution
-                        .require_resource_creation_at_root(&store, root)
-                        .map_err(crate::AuthoringError::from)
-                        .map_err(crate::TextAuthoringError::Semantic)?;
-                }
-                let mut store = store_rc.borrow_mut();
-                admission.publish(&mut store, |store, transaction| {
-                    execution
-                        .apply_semantic_transaction_at_root(store, root, transaction)
-                        .map_err(crate::AuthoringError::from)
-                        .map_err(crate::TextAuthoringError::Semantic)
-                })?
-            }
-            None => {
-                let mut store = store_rc.borrow_mut();
-                admission.publish(&mut store, |store, transaction| {
-                    transaction
-                        .apply(store)
-                        .map_err(crate::AuthoringError::from)
-                        .map_err(crate::TextAuthoringError::Semantic)
-                })?
-            }
-        };
+        use crate::TextAuthoringError;
+        self.require_resource_admission()
+            .map_err(TextAuthoringError::Semantic)?;
+        let result = self
+            .with_semantic_publication(|store, publish| {
+                Ok(admission.publish(store, |store, transaction| {
+                    publish(store, transaction).map_err(TextAuthoringError::Semantic)
+                }))
+            })
+            .map_err(TextAuthoringError::Semantic)??;
         let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one LaTeX admission creates one detached semantic node")
         };
-        Mobject::from_node(store_rc, *node).map_err(crate::TextAuthoringError::Semantic)
+        Mobject::from_node(Rc::clone(&self.store), *node).map_err(TextAuthoringError::Semantic)
     }
 }

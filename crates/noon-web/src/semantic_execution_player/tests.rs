@@ -4277,12 +4277,12 @@ fn opaque_callback_history_is_explicitly_non_looping() {
 
 #[test]
 fn text_created_after_empty_wait_publishes_resources_once_on_admission() {
-    assert_late_text_resource_admission(|player| player.live_create_text(noon::Text::new("LATE")));
+    assert_late_text_resource_admission(|player| player.scene_mut().text(noon::Text::new("LATE")));
     assert_late_text_resource_admission(|player| {
-        player.live_create_typst(noon::Typst::new("LATE"))
+        player.scene_mut().typst(noon::Typst::new("LATE"))
     });
     assert_late_text_resource_admission(|player| {
-        player.live_create_math_typst(noon::MathTypst::new("x^2"))
+        player.scene_mut().math_typst(noon::MathTypst::new("x^2"))
     });
 }
 
@@ -4358,7 +4358,7 @@ fn live_variable_tracker_update_replaces_text_through_sparse_resource_delta() {
 }
 
 fn assert_late_text_resource_admission(
-    create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, AuthoringFailure>,
+    create: impl FnOnce(&mut SemanticExecutionPlayer) -> Result<noon::Mobject, noon::TextAuthoringError>,
 ) {
     let scene = noon::Scene::new();
     let mut player = SemanticExecutionPlayer::from_live_session(

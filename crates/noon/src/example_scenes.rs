@@ -841,11 +841,12 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(1.0)
+                scene
+                    .live()
+                    .wait_segment(1.0)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -867,13 +868,17 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                 circle_options
                     .set_stroke_opacity(0.9)
                     .map_err(|error| error.to_string())?;
-                let circle = live
-                    .create_manim_geometry(circle_options)
+                let circle = scene
+                    .geometry(circle_options)
                     .map_err(|error| error.to_string())?;
-                if live.contains(&circle).map_err(|error| error.to_string())? {
+                if scene
+                    .live()
+                    .contains(&circle)
+                    .map_err(|error| error.to_string())?
+                {
                     return Err("new live Circle must be detached before admission".into());
                 }
-                live.add(&circle).map_err(|error| error.to_string())?;
+                scene.add(&circle).map_err(|error| error.to_string())?;
 
                 let mut square_options =
                     crate::ManimGeometryOptions::square(0.5).map_err(|error| error.to_string())?;
@@ -892,13 +897,17 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                 square_options
                     .set_object_opacity(0.75)
                     .map_err(|error| error.to_string())?;
-                let square = live
-                    .create_manim_geometry(square_options)
+                let square = scene
+                    .geometry(square_options)
                     .map_err(|error| error.to_string())?;
-                if live.contains(&square).map_err(|error| error.to_string())? {
+                if scene
+                    .live()
+                    .contains(&square)
+                    .map_err(|error| error.to_string())?
+                {
                     return Err("new live Square must be detached before admission".into());
                 }
-                live.add(&square).map_err(|error| error.to_string())?;
+                scene.add(&square).map_err(|error| error.to_string())?;
 
                 self.stage = 2;
                 Ok(crate::ContinuationStep::Finished)
@@ -1232,50 +1241,60 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_transform_to(
-                    &self.circle,
-                    &self.target,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.circle,
+                        &self.target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let paint = live
+                let paint = scene
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(paint.fill_opacity(), 0.75);
                 assert_eq!(paint.stroke_opacity(), 1.0);
                 // Captured callback alpha must survive RGB edits; absolute
                 // opacity edits must not multiply its intrinsic alpha again.
-                let copied = live
+                let copied = scene
+                    .live()
                     .target_editor(&self.circle)
                     .map_err(|error| error.to_string())?;
-                live.set_color(&copied, 1.0, 0.0, 0.0, 1.0)
+                scene
+                    .live()
+                    .set_color(&copied, 1.0, 0.0, 0.0, 1.0)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.fill_opacity().map_err(|error| error.to_string())?,
                     0.75
                 );
-                live.set_fill_opacity(&copied, 0.5)
+                scene
+                    .live()
+                    .set_fill_opacity(&copied, 0.5)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.fill_opacity().map_err(|error| error.to_string())?,
                     0.5
                 );
-                live.set_stroke_opacity(&copied, 0.25)
+                scene
+                    .live()
+                    .set_stroke_opacity(&copied, 0.25)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.stroke_opacity().map_err(|error| error.to_string())?,
                     0.25
                 );
-                live.set_opacity(&copied, 0.4)
+                scene
+                    .live()
+                    .set_opacity(&copied, 0.4)
                     .map_err(|error| error.to_string())?;
                 assert_eq!(
                     copied.fill_opacity().map_err(|error| error.to_string())?,
@@ -1293,15 +1312,16 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                         .object_opacity,
                     0.5
                 );
-                let layout = live
+                let layout = scene
+                    .live()
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
                 assert!((layout.center.0 - 2.0).abs() < 1e-6);
                 assert!((layout.center.1 - 1.0).abs() < 1e-6);
                 assert!((layout.width - 0.8).abs() < 1e-6);
                 assert!((layout.height - 0.8).abs() < 1e-6);
-                let probe = live
-                    .create_manim_geometry(
+                let probe = scene
+                    .geometry(
                         crate::ManimGeometryOptions::square(0.2)
                             .map_err(|error| error.to_string())?,
                     )
@@ -1313,21 +1333,24 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     aligned_edge: (0.0, 0.0),
                     mask: (1.0, 1.0),
                 };
-                live.next_layout_to_aligned(
-                    &source,
-                    crate::LiveLayoutTarget::Mobject(&self.circle),
-                    &source,
-                    args,
-                )
-                .map_err(|error| error.to_string())?;
+                scene
+                    .live()
+                    .next_layout_to_aligned(
+                        &source,
+                        crate::LiveLayoutTarget::Mobject(&self.circle),
+                        &source,
+                        args,
+                    )
+                    .map_err(|error| error.to_string())?;
                 let center = probe.center().map_err(|error| error.to_string())?;
                 assert!((center.0 - 2.6).abs() < 1e-6);
                 assert!((center.1 - 1.0).abs() < 1e-6);
-                let before = live
+                let before = scene
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
                 let source = crate::LayoutAnchor::from(&self.circle);
-                let error = live
+                let error = scene
+                    .live()
                     .next_layout_to_aligned(
                         &source,
                         crate::LiveLayoutTarget::Mobject(&probe),
@@ -1342,7 +1365,8 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     ))
                 ));
                 assert_eq!(
-                    live.effective(&self.circle)
+                    scene
+                        .effective(&self.circle)
                         .map_err(|error| error.to_string())?,
                     before
                 );

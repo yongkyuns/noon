@@ -2658,8 +2658,13 @@ impl Context {
     #[pyo3(name = "liveCreateManimGeometry")]
     fn geometry(&mut self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
         self.available()?;
-        self.with_live(|live| live.create_manim_geometry(options.options.clone()))
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .geometry(options.options.clone())
             .map(MobjectHandle::from_semantic_mobject)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
     #[pyo3(name = "liveCreateImage")]
     fn image(

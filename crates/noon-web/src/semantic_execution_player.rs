@@ -6,8 +6,6 @@ mod brace;
 #[cfg(target_arch = "wasm32")]
 mod code;
 #[cfg(any(target_arch = "wasm32", test))]
-mod coordinates;
-#[cfg(any(target_arch = "wasm32", test))]
 mod effects;
 mod export;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1443,66 +1441,6 @@ impl SemanticExecutionPlayer {
             .become_mobject(target, other, options)
             .map(|_| ())
             .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_manim_geometry(
-        &mut self,
-        options: noon::ManimGeometryOptions,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_manim_geometry(options)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_text(
-        &mut self,
-        text: noon::Text,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_text(text)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_typst(
-        &mut self,
-        text: noon::Typst,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_typst(text)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_create_math_typst(
-        &mut self,
-        text: noon::MathTypst,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        self.source
-            .live()
-            .create_math_typst(text)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_latex(
-        &mut self,
-        text: crate::authoring_latex::AuthoredLatex,
-        compiler: &mut crate::WasmLatexCompiler,
-    ) -> Result<noon::LatexParts, AuthoringFailure> {
-        self.with_live_session(|live| match text {
-            crate::authoring_latex::AuthoredLatex::Text(text) => {
-                live.create_tex_parts(text, compiler)
-            }
-            crate::authoring_latex::AuthoredLatex::Math(text) => {
-                live.create_math_tex_parts(text, compiler)
-            }
-        })
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -11,11 +11,8 @@ fn sheen_direction_constructor_metadata_survives_detached_and_live_publication()
     let detached = scene.geometry(options.clone()).unwrap();
     assert_eq!(detached.sheen_direction().unwrap(), expected);
 
-    let mut session = scene.execution_session().unwrap();
-    let live = scene
-        .live(&mut session)
-        .create_manim_geometry(options)
-        .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let live = execution.scene_mut().geometry(options).unwrap();
     assert_eq!(live.sheen_direction().unwrap(), expected);
 }
 

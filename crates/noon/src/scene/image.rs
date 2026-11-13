@@ -5,7 +5,7 @@ impl Scene {
     /// Construct a detached immutable image, including after execution bootstrap.
     /// No execution row is allocated until Add/FadeIn admits the object.
     pub fn image(&mut self, options: ImageMobjectOptions) -> Result<Mobject, AuthoringError> {
-        self.require_image_resource_admission()?;
+        self.require_resource_admission()?;
         let node = self.with_semantic_publication(|store, publish| {
             publish_image_creation(store, options, publish)
         })?;
@@ -21,7 +21,7 @@ impl Scene {
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
         self.require_object(object)?;
         let state = object.state()?;
-        self.require_image_resource_admission()?;
+        self.require_resource_admission()?;
         self.with_semantic_publication(|store, publish| {
             crate::image_authoring::publish_image_fill(
                 store,
@@ -60,13 +60,6 @@ impl Scene {
         let mut transaction = SemanticMutationTransaction::new();
         transaction.replace_content(object.node_id(), content);
         self.apply_semantic_transaction(transaction).map(|_| ())
-    }
-
-    fn require_image_resource_admission(&self) -> Result<(), AuthoringError> {
-        if let Some(execution) = self.running_execution() {
-            execution.require_resource_creation_at_root(&self.store.borrow(), self.root)?;
-        }
-        Ok(())
     }
 
     pub fn image_rgba8(
