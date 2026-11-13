@@ -592,20 +592,17 @@ fn scene_path_alignment_rejects_foreign_before_resource_or_frame_publication() {
 }
 
 #[test]
-fn scene_subcurve_requires_running_and_captures_effective_state() {
+fn scene_subcurve_captures_authored_or_effective_state() {
     let mut scene = Scene::new();
     let source = scene.line((0.0, 0.0), (4.0, 0.0)).unwrap();
     let mut target = source.target_editor().unwrap();
     target.shift(0.0, 2.0).unwrap();
     scene.add(&source).unwrap();
 
-    let cold = scene.subcurve(&source, 0.25, 0.75).unwrap_err();
-    assert!(matches!(
-        cold,
-        crate::AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
-        )
-    ));
+    let cold = scene.subcurve(&source, 0.25, 0.75).unwrap();
+    assert_eq!(cold.path_query().unwrap().start().unwrap(), (1.0, 0.0));
+    assert_eq!(cold.path_query().unwrap().end().unwrap(), (3.0, 0.0));
+    assert!(!scene.contains_direct(&cold).unwrap());
 
     let animation = scene
         .declare_transform_to(
@@ -807,7 +804,7 @@ fn scene_family_placement_surface_is_available_before_execution_bootstrap() {
 }
 
 #[test]
-fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
+fn scene_partial_path_edits_work_before_and_after_bootstrap_and_reject_foreign_handles() {
     let mut scene = Scene::new();
     let source = scene.line((0.0, 0.0), (4.0, 0.0)).unwrap();
     let destination = scene.line((10.0, 0.0), (12.0, 0.0)).unwrap();
@@ -815,23 +812,18 @@ fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
     scene.add(&destination).unwrap();
 
     let revision = scene.revision();
-    let cold = scene
+    scene
         .pointwise_become_partial(&destination, &source, 0.25, 0.75)
-        .unwrap_err();
-    assert!(matches!(
-        cold,
-        crate::AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable
-        )
-    ));
-    assert_eq!(scene.revision(), revision);
+        .unwrap();
+    assert!(scene.revision().get() > revision.get());
     assert_eq!(
         destination.path_query().unwrap().start().unwrap(),
-        (10.0, 0.0)
+        (1.0, 0.0)
     );
 
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
+    let revision = scene.revision();
     scene
         .pointwise_become_partial(&destination, &source, 0.25, 0.75)
         .unwrap();
@@ -840,7 +832,7 @@ fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
         (1.0, 0.0)
     );
     assert_eq!(destination.path_query().unwrap().end().unwrap(), (3.0, 0.0));
-    assert!(scene.revision().get() > revision.get());
+    assert_eq!(scene.revision(), revision);
 
     let foreign = Scene::new().line((0.0, 0.0), (1.0, 0.0)).unwrap();
     let revision = scene.revision();
@@ -854,7 +846,7 @@ fn scene_running_path_edits_reject_cold_and_foreign_without_mutation() {
 }
 
 #[test]
-fn scene_path_edit_surface_rejects_cold_invalid_and_foreign_before_publication() {
+fn scene_path_edits_reject_invalid_and_foreign_inputs_before_publication() {
     let mut scene = Scene::new();
     let object = scene.square(2.0).unwrap();
     let family = scene.family(&[MobjectTarget::Object(&object)]).unwrap();
@@ -867,9 +859,8 @@ fn scene_path_edit_surface_rejects_cold_invalid_and_foreign_before_publication()
         .geometry_resources()
         .len();
 
-    let straight = [noon_core::Vec2::ZERO, noon_core::Vec2::new(1.0, 0.0)];
-    assert!(scene.set_points_smoothly(&object, &straight).is_err());
-    assert!(scene.make_family_jagged(&family).is_err());
+    let invalid = [noon_core::Vec2::ZERO, noon_core::Vec2::new(f32::NAN, 0.0)];
+    assert!(scene.set_points_smoothly(&object, &invalid).is_err());
     assert_eq!(scene.revision(), revision);
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(
@@ -883,7 +874,6 @@ fn scene_path_edit_surface_rejects_cold_invalid_and_foreign_before_publication()
 
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
-    let invalid = [noon_core::Vec2::ZERO, noon_core::Vec2::new(f32::NAN, 0.0)];
     let revision = scene.revision();
     assert!(scene.set_points_smoothly(&object, &invalid).is_err());
     assert_eq!(scene.revision(), revision);

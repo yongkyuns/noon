@@ -812,21 +812,21 @@ impl Scene {
         )
     }
 
-    /// Create one detached subcurve from the current coherent effective source state.
-    ///
-    /// Running execution is required because authored-only subcurve creation remains
-    /// available directly on Mobject::subcurve. Resource admission, effective
-    /// capture, immutable geometry installation, and semantic node publication stay
-    /// behind the Scene-owned running publication boundary.
+    /// Create a detached subcurve from authored state during setup or effective
+    /// state during execution. Geometry and object identity publish atomically.
     pub fn subcurve(
         &mut self,
         source: &Mobject,
         a: f64,
         b: f64,
     ) -> Result<Mobject, AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            crate::path_editing::publish_running_subcurve(store, root, execution, source, a, b)
-        })
+        self.require_object(source)?;
+        self.require_resource_admission()?;
+        let state = self.capture_mobject_state(source)?;
+        let node = self.with_semantic_publication(|store, publish| {
+            crate::path_editing::publish_subcurve(store, state, a, b, publish)
+        })?;
+        Mobject::from_node(Rc::clone(&self.store), node)
     }
 
     /// Observe one family's effective Runtime layout without creating a borrowed
