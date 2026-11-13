@@ -11,8 +11,6 @@ pub use markup::MarkupText;
 pub(crate) use semantic::prepare_native_text;
 #[cfg(all(feature = "native-text", feature = "latex"))]
 pub(crate) use semantic::PreparedDecimalLabels;
-#[cfg(feature = "typst")]
-pub(crate) use semantic::{prepare_math_typst, prepare_typst, TypstAdmission};
 
 use std::sync::Arc;
 

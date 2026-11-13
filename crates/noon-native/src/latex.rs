@@ -369,10 +369,10 @@ mod tests {
         assert!((parts.current_font_size().unwrap() - 72.0).abs() < 1e-5);
 
         let scene = noon::Scene::new();
-        let mut execution = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut execution);
-        let live_parts = live
-            .create_math_tex_parts(
+        let mut execution = scene.into_execution().unwrap();
+        let live_parts = execution
+            .scene_mut()
+            .math_tex_parts(
                 noon::MathTex::new(r"x^2+\frac{1}{2}")
                     .unwrap()
                     .with_isolated_substrings(["x", r"\frac{1}{2}"])
@@ -382,7 +382,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(live_parts.current_members().unwrap().len(), 3);
-        live.add_many(&[live_parts.family().into()]).unwrap();
+        execution
+            .scene_mut()
+            .add_many(&[live_parts.family().into()])
+            .unwrap();
+        let mut live = execution.live();
         assert!((live.latex_font_size(&live_parts).unwrap() - 36.0).abs() < 1e-6);
 
         let target = live.copy_family(live_parts.family()).unwrap();

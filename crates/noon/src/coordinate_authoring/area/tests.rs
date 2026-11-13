@@ -407,7 +407,7 @@ fn effective_plan_values_use_one_existing_live_publication_transaction() {
     let paths = plan
         .paths(Some(&[0.5625, 0.0625, 0.0625, 0.5625]), None)
         .unwrap();
-    let family = crate::scene::publish_path_family(&mut scene, paths).unwrap();
+    let family = scene.path_family(paths).unwrap();
     assert_eq!(scene.revision().get(), revision.get() + 1);
     assert_eq!(
         family_top_points(&scene, &family),

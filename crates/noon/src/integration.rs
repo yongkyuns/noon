@@ -331,6 +331,18 @@ pub fn publish_family_align_to(
 mod vector_path;
 pub use crate::binding_error::AuthoringFailure;
 
+/// Preserve typed live resource and compiler diagnostics at the language boundary.
+#[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
+pub fn live_text_failure(error: crate::TextAuthoringError) -> AuthoringFailure {
+    match error {
+        crate::TextAuthoringError::Semantic(crate::AuthoringError::ExecutionPublication(error)) => {
+            crate::LiveSessionError::Publication(error)
+        }
+        other => crate::LiveSessionError::Text(other),
+    }
+    .into()
+}
+
 /// Preserve the language host's live numeric errors when Scene owns publication.
 #[cfg(feature = "latex")]
 pub fn live_numeric_failure(error: crate::NumericAuthoringError) -> AuthoringFailure {

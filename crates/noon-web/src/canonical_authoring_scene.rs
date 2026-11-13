@@ -3563,7 +3563,9 @@ impl CanonicalAuthoringScene {
         match &mut self.player_ownership {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
                 .active_live_player()?
-                .live_create_manim_geometry(options),
+                .scene_mut()
+                .geometry(options)
+                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
             PlayerOwnership::Unstarted => {
                 Err("live primitive construction requires an active canonical session".into())
             }
@@ -3616,9 +3618,11 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_text(text)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .text(text)
+                .map_err(noon::integration::live_text_failure),
             PlayerOwnership::Unstarted => {
                 Err("live Text construction requires an active canonical session".into())
             }
@@ -3631,9 +3635,11 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_typst(text)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .typst(text)
+                .map_err(noon::integration::live_text_failure),
             PlayerOwnership::Unstarted => {
                 Err("live Typst construction requires an active canonical session".into())
             }
@@ -3649,9 +3655,11 @@ impl CanonicalAuthoringScene {
         text: noon::MathTypst,
     ) -> Result<noon::Mobject, AuthoringFailure> {
         match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_create_math_typst(text)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .math_typst(text)
+                .map_err(noon::integration::live_text_failure),
             PlayerOwnership::Unstarted => {
                 Err("live MathTypst construction requires an active canonical session".into())
             }
@@ -10209,11 +10217,22 @@ mod wasm {
             options: crate::WasmLatexOptions,
             compiler: &mut crate::WasmLatexCompiler,
         ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
-            self.inner
+            let scene = self
+                .inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_create_latex(options.text, compiler)
+                .scene_mut();
+            let parts = match options.text {
+                crate::authoring_latex::AuthoredLatex::Text(text) => {
+                    scene.tex_parts(text, compiler)
+                }
+                crate::authoring_latex::AuthoredLatex::Math(text) => {
+                    scene.math_tex_parts(text, compiler)
+                }
+            };
+            parts
                 .map(crate::WasmLatexPartsHandle::new)
+                .map_err(noon::integration::live_text_failure)
                 .map_err(typed_js_error)
         }
 

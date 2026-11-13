@@ -183,13 +183,18 @@ pub(crate) fn live(
     let text = prepare(source, family, size, spacing, colors, face, markup)?;
     let opacity = noon::integration::text_color_channel(opacity).map_err(engine_error)?;
     let text = text.color(color(r, g, b, a)?).set_opacity(opacity);
-    if context.has_execution() {
-        context.with_live(|live| live.create_text(text))
-    } else {
-        noon::Mobject::from_text(Rc::clone(context.scene.integration_store()), text)
-            .map_err(engine_error)
-    }
-    .map(MobjectHandle::from_semantic_mobject)
+    let running = context.has_execution();
+    context
+        .scene
+        .text(text)
+        .map(MobjectHandle::from_semantic_mobject)
+        .map_err(|error| {
+            if running {
+                engine_error(noon::integration::live_text_failure(error))
+            } else {
+                engine_error(error)
+            }
+        })
 }
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<FontFace>()?;

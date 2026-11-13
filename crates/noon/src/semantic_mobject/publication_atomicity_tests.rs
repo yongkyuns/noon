@@ -1,6 +1,6 @@
 //! Fail after resource import, not merely at constructor argument preflight.
 use super::*;
-use crate::{ExecutionSession, ExecutionSessionPublicationError, LiveSessionError, Scene};
+use crate::{ExecutionSession, ExecutionSessionPublicationError, Scene};
 use noon_core::{FrameEpoch, GeometryResourceHandle, SemanticObjectProperty};
 
 fn path_options() -> ManimGeometryOptions {
@@ -104,10 +104,8 @@ fn geometry_publication_scope_rolls_back_a_real_late_lowering_failure() {
     // Retry through the public constructor. A released generation must not
     // revive, and admission must reuse the successful import rather than create
     // another copy or replace the runtime's unrelated object identity.
-    let curve = scene
-        .live(&mut session)
-        .create_manim_geometry(path_options())
-        .unwrap();
+    let mut execution = scene.into_execution_with_session(session).unwrap();
+    let curve = execution.scene_mut().geometry(path_options()).unwrap();
     let retry_resource = resource(&curve);
     assert_ne!(retry_resource, rejected);
     assert!(store_rc
@@ -115,16 +113,22 @@ fn geometry_publication_scope_rolls_back_a_real_late_lowering_failure() {
         .geometry_resources()
         .get(rejected)
         .is_none());
-    assert_eq!(session.execution_object_id(curve.node_id()), None);
-    assert_eq!(session.frame().objects, before_frame.objects);
-    assert!(session.take_frame_changes().is_empty());
-    scene.live(&mut session).add(&curve).unwrap();
+    assert_eq!(
+        execution.session().execution_object_id(curve.node_id()),
+        None
+    );
+    assert_eq!(execution.session().frame().objects, before_frame.objects);
+    assert!(execution.session_mut().take_frame_changes().is_empty());
+    execution.scene_mut().add(&curve).unwrap();
     assert_eq!(resource(&curve), retry_resource);
     assert_eq!(
         store_rc.borrow().geometry_resources().len(),
         before_stats.live_resources + 1
     );
-    assert_eq!(session.execution_object_id(sentinel.node_id()), before_id);
+    assert_eq!(
+        execution.session().execution_object_id(sentinel.node_id()),
+        before_id
+    );
     assert_eq!(curve.path_query().unwrap().start().unwrap(), (-1.0, 0.0));
     assert_eq!(curve.path_query().unwrap().end().unwrap(), (1.0, 1.0));
 }
@@ -182,25 +186,24 @@ fn geometry_publication_scope_preserves_injected_runtime_errors_and_existing_pat
 
 #[test]
 fn live_geometry_preflight_still_rejects_stale_owners_without_import() {
-    let (scene, retained, sentinel, mut session) = fixture();
-    let store_rc = Rc::clone(scene.integration_store());
+    let (scene, retained, sentinel, session) = fixture();
+    let mut execution = scene.into_execution_with_session(session).unwrap();
+    let store_rc = Rc::clone(execution.scene().integration_store());
     let before_stats = store_rc.borrow().geometry_resources().stats();
     // An explicit out-of-band edit must not be repaired by the constructor.
     let mut transaction = SemanticMutationTransaction::new();
     transaction.set_property(sentinel.node_id(), SemanticObjectProperty::RotationZ, 0.5);
     transaction.apply(&mut store_rc.borrow_mut()).unwrap();
-    let before_revision = scene.revision();
-    let before_context = session.publication_context();
+    let before_revision = execution.scene().revision();
+    let before_context = execution.session().publication_context();
     assert!(matches!(
-        scene
-            .live(&mut session)
-            .create_manim_geometry(path_options()),
-        Err(LiveSessionError::Publication(
+        execution.scene_mut().geometry(path_options()),
+        Err(AuthoringError::ExecutionPublication(
             ExecutionSessionPublicationError::StaleSceneRevision { .. }
         ))
     ));
     assert_eq!(store_rc.borrow().geometry_resources().stats(), before_stats);
-    assert_eq!(scene.revision(), before_revision);
-    assert_eq!(session.publication_context(), before_context);
+    assert_eq!(execution.scene().revision(), before_revision);
+    assert_eq!(execution.session().publication_context(), before_context);
     retained.validate().unwrap();
 }
