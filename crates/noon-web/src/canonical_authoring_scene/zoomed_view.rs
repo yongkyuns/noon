@@ -35,7 +35,7 @@ impl CanonicalAuthoringScene {
         Ok(view)
     }
 
-    /// Query the current inset ratio through the existing cold/live scene authority.
+    /// Query the current inset ratio through the owning Scene.
     pub fn zoom_factor(&mut self, view: &noon::ZoomedView) -> Result<f64, AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(
             view.display().integration_store(),
@@ -44,40 +44,31 @@ impl CanonicalAuthoringScene {
             return Err(noon::AuthoringError::ForeignStore.into());
         }
         #[cfg(any(target_arch = "wasm32", test))]
-        if !matches!(self.player_ownership, PlayerOwnership::Unstarted) {
-            return self.active_live_player()?.live_zoom_factor(view);
+        if !self.player_ownership.is_unstarted() {
+            return self
+                .active_live_player()?
+                .scene()
+                .zoom_factor(view)
+                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true));
         }
-        view.zoom_factor().map_err(Into::into)
+        self.scene.zoom_factor(view).map_err(Into::into)
     }
 
-    /// Activate an existing inset through the current cold/live transaction authority.
+    /// Activate an inset and its foreground membership in one Scene publication.
     pub fn activate_zooming(&mut self, view: &noon::ZoomedView) -> Result<(), AuthoringFailure> {
-        let transaction = self
-            .scene
-            .prepare_zooming_activation(view)
-            .map_err(AuthoringFailure::from)?;
-        #[cfg(not(any(target_arch = "wasm32", test)))]
-        {
-            transaction
-                .apply(&mut self.scene.integration_store().borrow_mut())
-                .map(|_| ())
-                .map_err(AuthoringFailure::from)
-        }
         #[cfg(any(target_arch = "wasm32", test))]
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted if self.scene.time() == 0.0 => transaction
-                .apply(&mut self.scene.integration_store().borrow_mut())
-                .map(|_| ())
-                .map_err(AuthoringFailure::from),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_apply_semantic_transaction(transaction),
-            PlayerOwnership::Unstarted => {
-                Err("zoom activation cannot follow pre-execution canonical timing".into())
+        {
+            if !self.player_ownership.is_unstarted() {
+                return self
+                    .active_live_player()?
+                    .scene_mut()
+                    .activate_zooming(view)
+                    .map_err(|error| AuthoringFailure::from_scene_mutation(error, true));
             }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
+            if self.scene.time() != 0.0 {
+                return Err("zoom activation cannot follow pre-execution canonical timing".into());
             }
         }
+        self.scene.activate_zooming(view).map_err(Into::into)
     }
 }

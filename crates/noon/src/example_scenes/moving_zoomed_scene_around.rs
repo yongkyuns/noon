@@ -81,10 +81,7 @@ impl LiveContinuation for MovingZoomedSceneAround {
                 // frame, then runs Restore back to that saved state. Capture
                 // from the exact effective publication before stretching.
                 if self.stage == 1 {
-                    scene
-                        .live()
-                        .activate_zooming(&self.zoomed_view)
-                        .map_err(message)?;
+                    scene.activate_zooming(&self.zoomed_view).map_err(message)?;
                 }
                 let saved_display = scene.target_editor(&self.display).map_err(message)?;
                 scene

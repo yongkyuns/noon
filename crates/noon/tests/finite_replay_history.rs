@@ -300,7 +300,7 @@ fn inset_relations_replay_activation_retirement_retarget_and_clear_with_the_fram
     };
     record(session.session_mut());
     session.session_mut().advance_to(1.0).unwrap();
-    session.live().activate_zooming(&view).unwrap();
+    session.scene_mut().activate_zooming(&view).unwrap();
     record(session.session_mut());
     let segment = session
         .live()
