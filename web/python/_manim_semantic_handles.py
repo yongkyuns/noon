@@ -864,10 +864,14 @@ def _content_critical_point_3d(value: _base.Mobject, direction):
 def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
     """Read Rust content extents without asking for vector boundary anchors."""
     if _is_shared_family(self):
+        context = _group_live_layout_context(self) or _object_authoring_context(self)
         anchor = _layout_anchor(self)
         if anchor is None:
             raise RuntimeError("family layout requires a current shared Rust semantic handle")
-        return float(_dimension_fit_extent(anchor, _group_live_layout_context(self), dimension))
+        try:
+            return float(_dimension_fit_extent(anchor, context, dimension))
+        finally:
+            anchor.free()
     observed = _bound_layout_observation(self, "queryMobjectDimension", dimension)
     if observed is not None:
         return float(observed)
@@ -954,41 +958,44 @@ def _move_to(
 def _dimension_fit_source(self, dim, *, planar_depth=False):
     if dim not in ((0, 1, 2) if planar_depth else (0, 1)):
         raise NotImplementedError("dimension fitting requires X, Y or Z")
+    context = _group_live_layout_context(self) if _is_shared_family(self) else None
     anchor = _layout_anchor(self)
     if anchor is None:
         raise RuntimeError("dimension fitting requires a shared Rust layout handle")
-    context = (_group_live_layout_context(self) if _is_shared_family(self)
-               else _live_mutation_context(self))
+    context = context or _path_authoring_context(self)
     return anchor, context
 
 
 def _stretch(self, factor, dim, *, about_point=None, about_edge=None):
     anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
-    arguments = (float(factor), dim, *_pivot_arguments_3d(about_point, about_edge))
-    if context is None:
-        engine_call(anchor.stretch, *arguments)
-    else:
-        engine_call(context.liveStretchLayout, anchor, *arguments)
+    try:
+        arguments = (float(factor), dim, *_pivot_arguments_3d(about_point, about_edge))
+        if context is None:
+            engine_call(anchor.stretch, *arguments)
+        else:
+            engine_call(context.liveStretchLayout, anchor, *arguments)
+    finally:
+        anchor.free()
     return self
 
 
 def _rescale_to_fit(self, length, dim, stretch=False, *, about_point=None, about_edge=None):
     dim = _fitting_dimension_index(dim)
     anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
-    # Manim ignores length/pivot arguments when the shared source extent is
-    # zero. Avoid coercing them, but still let Rust validate the anchor and own
-    # the no-op decision from its coherent fitting snapshot.
-    zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
-    pivot = ((0., 0., 0., False) if zero_extent
-             else _pivot_arguments_3d(about_point, about_edge))
-    length = 0.0 if zero_extent else float(length)
     try:
+        # Manim ignores length and pivot arguments when the source extent is zero.
+        zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
+        pivot = ((0., 0., 0., False) if zero_extent
+                 else _pivot_arguments_3d(about_point, about_edge))
+        length = 0.0 if zero_extent else float(length)
         if context is None:
             engine_call(anchor.rescaleToFit, length, dim, bool(stretch), *pivot)
         else:
             engine_call(context.liveRescaleToFit, anchor, length, dim, bool(stretch), *pivot)
     except Exception as error:
         _raise_boundary_error(error)
+    finally:
+        anchor.free()
     return self
 
 
@@ -997,19 +1004,24 @@ def _match_dim_size(self, mobject, dim, stretch=False, *, about_point=None, abou
         raise TypeError("dimension match target must be a Mobject")
     dim = _fitting_dimension_index(dim)
     anchor, context = _dimension_fit_source(self, dim, planar_depth=True)
-    zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
-    pivot = ((0., 0., 0., False) if zero_extent
-             else _pivot_arguments_3d(about_point, about_edge))
-    target = _layout_anchor(mobject)
-    if target is None:
-        raise RuntimeError("dimension matching requires a shared Rust target")
+    target = None
     try:
+        zero_extent = _dimension_fit_extent(anchor, context, dim) == 0
+        pivot = ((0., 0., 0., False) if zero_extent
+                 else _pivot_arguments_3d(about_point, about_edge))
+        target = _layout_anchor(mobject)
+        if target is None:
+            raise RuntimeError("dimension matching requires a shared Rust target")
         if context is None:
             engine_call(anchor.matchDimSize, target, dim, bool(stretch), *pivot)
         else:
             engine_call(context.liveMatchDimSize, anchor, target, dim, bool(stretch), *pivot)
     except Exception as error:
         _raise_boundary_error(error)
+    finally:
+        if target is not None:
+            target.free()
+        anchor.free()
     return self
 
 
@@ -1312,10 +1324,9 @@ def _replacement_anchors(self, mobject, dimension):
     if target is None:
         raise RuntimeError("replacement requires a shared Rust target layout")
     if context is None:
-        context = (_group_live_layout_context(mobject) if _is_shared_family(mobject)
-                   else _live_mutation_context(mobject))
-    if context is None:
-        context = _live_constructor_context("replace")
+        if _is_shared_family(mobject):
+            context = _group_live_layout_context(mobject)
+        context = context or _object_authoring_context(mobject)
     return source, target, context
 
 

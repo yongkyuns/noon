@@ -438,13 +438,14 @@ impl Context {
         operation: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<()> {
         self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        operation(&mut self.scene)
-            .map(|_| ())
-            .map_err(noon::LiveSessionError::from)
-            .map_err(engine_error)
+        let running = self.has_execution();
+        operation(&mut self.scene).map(|_| ()).map_err(|error| {
+            if running {
+                engine_error(noon::LiveSessionError::from(error))
+            } else {
+                engine_error(error)
+            }
+        })
     }
 
     fn require_execution(&self) -> PyResult<()> {
@@ -2112,22 +2113,17 @@ impl Context {
     fn layout_dimension_length(&mut self, source: &LayoutAnchor, dimension: u32) -> PyResult<f64> {
         self.require_active()?;
         let dimension = dimension.try_into().map_err(engine_error)?;
-        if self.has_execution() {
-            self.scene
-                .effective_dimension_length(&source.anchor, dimension)
-                .map_err(|error| {
-                    if dimension == noon::LayoutDimension::Depth {
-                        engine_error(AuthoringFailure::from_scene_mutation(error, true))
-                    } else {
-                        engine_error(noon::LiveSessionError::from(error))
-                    }
-                })
-        } else {
-            source
-                .anchor
-                .dimension_length(dimension)
-                .map_err(engine_error)
-        }
+        self.scene
+            .layout_dimension_length(&source.anchor, dimension)
+            .map_err(|error| {
+                if !self.has_execution() {
+                    engine_error(error)
+                } else if dimension == noon::LayoutDimension::Depth {
+                    engine_error(AuthoringFailure::from_scene_mutation(error, true))
+                } else {
+                    engine_error(noon::LiveSessionError::from(error))
+                }
+            })
     }
     #[pyo3(name = "queryMobjectDimension")]
     fn mobject_dimension(&mut self, target: &MobjectHandle, dimension: u32) -> PyResult<f64> {

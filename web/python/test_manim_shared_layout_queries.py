@@ -341,7 +341,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
     def test_family_dimensions_use_the_shared_dimension_only_query(self):
         value = object.__new__(_manim_compat.VGroup)
         value._semantic_family_handle = object()
-        anchor = SimpleNamespace(dimensionLength=Mock(side_effect=lambda dim: (3.0, 7.0)[dim]))
+        anchor = SimpleNamespace(dimensionLength=Mock(side_effect=lambda dim: (3.0, 7.0)[dim]), free=Mock())
         context = SimpleNamespace(queryLayoutDimensionLength=Mock(side_effect=lambda handle, dim: (6.0, 14.0)[dim]))
         with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
             shared, "_group_live_layout_context", return_value=None
@@ -351,6 +351,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
             shared, "_group_live_layout_context", return_value=context
         ):
             self.assertEqual((shared._width(value), shared._height(value)), (6.0, 14.0))
+        self.assertEqual(anchor.free.call_count, 4)
 
     def test_missing_shared_layout_never_falls_back_to_snapshot_math(self):
         for handle in (None, SimpleNamespace(snapshotJson=lambda: self.fail("raw fallback"))):

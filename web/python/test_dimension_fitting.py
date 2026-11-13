@@ -21,6 +21,7 @@ class DimensionFittingTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self.anchor = types.SimpleNamespace(
+            free=lambda: None,
             dimensionLength=lambda dim: 0.0 if dim == 2 else 1.0,
             stretch=lambda *args: self.calls.append(("stretch", args)),
             rescaleToFit=lambda *args: self.calls.append(("fit", args)),
@@ -41,16 +42,16 @@ class DimensionFittingTests(unittest.TestCase):
         self.assertEqual(self.calls, [("stretch", (-2., 0, -1., 0., 0., False)),
                                      ("stretch", (3., 1, 2., 4., 0., True))])
 
-    def test_live_dispatch_passes_both_opaque_anchors(self):
+    def test_scene_dispatch_passes_both_opaque_anchors_without_a_phase_probe(self):
         source, target = self.wrapper(), self.wrapper()
         context = types.SimpleNamespace(
             queryLayoutDimensionLength=lambda *args: 1.0,
             liveRescaleToFit=lambda *args: self.calls.append(("live fit", args)),
             liveMatchDimSize=lambda *args: self.calls.append(("live match", args)),
         )
-        with patch.object(semantic, "_live_mutation_context", return_value=context):
-            source.stretch_to_fit_height(3)
-            source.match_width(target)
+        source._scene = types.SimpleNamespace(_canonical_authoring_context=context)
+        source.stretch_to_fit_height(3)
+        source.match_width(target)
         self.assertEqual(self.calls, [("live fit", (self.anchor, 3.0, 1, True, 0., 0., 0., False)),
                                      ("live match", (self.anchor, self.anchor, 0, False, 0., 0., 0., False))])
 
@@ -68,7 +69,7 @@ class DimensionFittingTests(unittest.TestCase):
         context = types.SimpleNamespace(
             liveStretchLayout=lambda *args: self.calls.append(("live stretch", args)),
         )
-        with patch.object(semantic, "_live_mutation_context", return_value=context):
+        with patch.object(semantic, "_path_authoring_context", return_value=context):
             self.assertIs(source.stretch(2, 2), source)
         self.assertEqual(self.calls, [
             ("stretch", (-2., 2, 1., 2., 3.125, True)),

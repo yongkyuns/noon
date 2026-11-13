@@ -10,6 +10,7 @@ class ManimMobjectDepthTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self.anchor = types.SimpleNamespace(
+            free=lambda: None,
             dimensionLength=lambda dim: 0.0,
             rescaleToFit=lambda *args: self.calls.append(("fit", args)),
             matchDimSize=lambda *args: self.calls.append(("match", args)),
