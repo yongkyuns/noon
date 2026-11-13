@@ -2,10 +2,16 @@
 
 use crate::{
     family_authoring::FamilyTranslation,
-    semantic_mobject::{edit_color, edit_fill, edit_fill_opacity, edit_stroke_width},
+    semantic_mobject::{
+        edit_color, edit_fill, edit_fill_opacity, edit_stroke_width, prepare_fill_paint_value,
+    },
     AuthoringError, Mobject, Scene,
 };
-use noon_core::{Color, SemanticMutationTransaction, SemanticStyle, SemanticVec3, Vec2};
+use noon_core::{
+    Color, HatchPaint, LinearGradient, NoisePaint, RadialGradient, SemanticMutationTransaction,
+    SemanticPaint, SemanticStyle, SemanticVec3, Vec2,
+};
+use std::sync::Arc;
 
 impl Scene {
     /// Recolor the object's enabled fill and stroke while retaining layer opacity.
@@ -59,6 +65,65 @@ impl Scene {
     /// Set persistent stroke width through the shared paint and publication rules.
     pub fn set_stroke_width(&mut self, object: &Mobject, width: f64) -> Result<(), AuthoringError> {
         self.edit_object_style(object, |style| edit_stroke_width(style, width))
+    }
+
+    /// Set an immutable linear fill and optional fill opacity.
+    pub fn set_fill_gradient(
+        &mut self,
+        object: &Mobject,
+        paint: impl Into<Arc<LinearGradient>>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.set_fill_paint(object, SemanticPaint::LinearGradient(paint.into()), opacity)
+    }
+
+    /// Set an elliptical radial fill in object-local coordinates.
+    pub fn set_fill_radial_gradient(
+        &mut self,
+        object: &Mobject,
+        paint: impl Into<Arc<RadialGradient>>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.set_fill_paint(object, SemanticPaint::RadialGradient(paint.into()), opacity)
+    }
+
+    /// Set stripes or crosshatching in object-local coordinates.
+    pub fn set_fill_hatch(
+        &mut self,
+        object: &Mobject,
+        paint: impl Into<Arc<HatchPaint>>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.set_fill_paint(object, SemanticPaint::Hatch(paint.into()), opacity)
+    }
+
+    /// Set a seeded noise fill in object-local coordinates.
+    pub fn set_fill_noise(
+        &mut self,
+        object: &Mobject,
+        paint: impl Into<Arc<NoisePaint>>,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.set_fill_paint(object, SemanticPaint::Noise(paint.into()), opacity)
+    }
+
+    fn set_fill_paint(
+        &mut self,
+        object: &Mobject,
+        paint: SemanticPaint,
+        opacity: Option<f64>,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        let state = prepare_fill_paint_value(
+            &self.integration_store().borrow(),
+            object.node_id(),
+            object.state()?,
+            paint,
+            opacity,
+        )?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.replace_style(object.node_id(), state.style);
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
     /// Translate an object's own content and unique descendants in one publication.

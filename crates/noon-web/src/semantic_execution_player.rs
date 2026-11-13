@@ -1236,50 +1236,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_hatch(
-        &mut self,
-        mobject: &noon::Mobject,
-        paint: std::sync::Arc<noon::HatchPaint>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_hatch(mobject, paint, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_noise(
-        &mut self,
-        mobject: &noon::Mobject,
-        gradient: std::sync::Arc<noon::NoisePaint>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_noise(mobject, gradient, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_radial_gradient(
-        &mut self,
-        mobject: &noon::Mobject,
-        gradient: std::sync::Arc<noon::RadialGradient>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_radial_gradient(mobject, gradient, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_set_fill_gradient(
-        &mut self,
-        mobject: &noon::Mobject,
-        gradient: std::sync::Arc<noon::LinearGradient>,
-        opacity: Option<f64>,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_fill_gradient(mobject, gradient, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_fill(
         &mut self,
         mobject: &noon::Mobject,

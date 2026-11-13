@@ -38,26 +38,29 @@ impl LiveContinuation for NoiseSurface {
     const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 => live.wait_segment(0.5),
+            0 => scene.live().wait_segment(0.5),
             1 | 3 | 5 => {
-                let target = live.target_editor(&self.panel).map_err(message)?;
+                let target = scene.live().target_editor(&self.panel).map_err(message)?;
                 match self.stage {
                     1 => {
-                        live.set_fill_noise(&target, paint(true)?, Some(0.5))
+                        scene
+                            .set_fill_noise(&target, paint(true)?, Some(0.5))
                             .map_err(message)?;
                     }
                     3 => {
-                        live.set_fill(&target, 1.0, 0.0, 0.0, 1.0)
+                        scene
+                            .live()
+                            .set_fill(&target, 1.0, 0.0, 0.0, 1.0)
                             .map_err(message)?;
                     }
                     _ => {
-                        live.set_fill_noise(&target, paint(false)?, None)
+                        scene
+                            .set_fill_noise(&target, paint(false)?, None)
                             .map_err(message)?;
                     }
                 }
-                live.declare_and_activate_transform_to(
+                scene.live().declare_and_activate_transform_to(
                     &self.panel,
                     &target,
                     AnimationOptions::new()
@@ -65,7 +68,7 @@ impl LiveContinuation for NoiseSurface {
                         .rate_func(RateFunction::Linear),
                 )
             }
-            2 | 4 | 6 => live.wait_segment(0.25),
+            2 | 4 | 6 => scene.live().wait_segment(0.25),
             7 => return Ok(ContinuationStep::Finished),
             _ => return Err("painted surface resumed after completion".into()),
         }

@@ -630,7 +630,7 @@ pub(crate) fn parse_stroke_cap(cap: &str) -> Result<StrokeCap, AuthoringError> {
     }
 }
 
-pub(crate) fn prepare_fill_gradient(
+fn prepare_fill_gradient(
     object: &Mobject,
     gradient: std::sync::Arc<noon_core::LinearGradient>,
     opacity: Option<f64>,

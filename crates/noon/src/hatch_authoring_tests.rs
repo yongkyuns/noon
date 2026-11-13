@@ -89,18 +89,18 @@ fn animated_cross_topology_rejects_atomically_but_immediate_edit_is_valid() {
     let animation = scene
         .declare_transform_to(&source, &target, AnimationOptions::new())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    assert!(scene.live(&mut session).play_animation(&animation).is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    scene
-        .live(&mut session)
+    let mut running = scene.into_execution().unwrap();
+    let before = running.session().frame().clone();
+    let context = running.session().publication_context();
+    assert!(running.live().play_animation(&animation).is_err());
+    assert_eq!(running.session().frame(), &before);
+    assert_eq!(running.session().publication_context(), context);
+    running
+        .scene_mut()
         .set_fill_hatch(&source, paint(0.25, [0.0; 2], true), None)
         .unwrap();
-    assert!(scene
-        .live(&mut session)
+    assert!(running
+        .live()
         .authored(&source)
         .unwrap()
         .style
@@ -119,33 +119,25 @@ fn invalid_local_hatch_profile_preserves_authored_and_effective_publications() {
         .set_fill_hatch(paint(0.5, [0.0; 2], false), Some(0.25))
         .unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.frame().clone();
-    let publication = session.publication_context();
-    let authored = scene.live(&mut session).authored(&source).unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let before = running.session().frame().clone();
+    let publication = running.session().publication_context();
+    let authored = running.live().authored(&source).unwrap();
     for spacing in [1e-60, 1e60, 1e-10] {
-        assert!(scene
-            .live(&mut session)
+        assert!(running
+            .scene_mut()
             .set_fill_hatch(&source, paint(spacing, [0.0; 2], false), Some(0.75))
             .is_err());
-        assert_eq!(session.frame(), &before);
-        assert_eq!(session.publication_context(), publication);
-        assert_eq!(
-            scene.live(&mut session).authored(&source).unwrap(),
-            authored
-        );
+        assert_eq!(running.session().frame(), &before);
+        assert_eq!(running.session().publication_context(), publication);
+        assert_eq!(running.live().authored(&source).unwrap(), authored);
     }
-    scene
-        .live(&mut session)
+    running
+        .scene_mut()
         .set_fill_hatch(&source, paint(0.75, [4.25, -8.5], true), None)
         .unwrap();
     assert_eq!(
-        scene
-            .live(&mut session)
-            .authored(&source)
-            .unwrap()
-            .style
-            .fill_opacity,
+        running.live().authored(&source).unwrap().style.fill_opacity,
         0.25
     );
 }
