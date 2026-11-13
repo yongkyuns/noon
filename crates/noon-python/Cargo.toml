@@ -19,6 +19,7 @@ wgsl-effects = ["noon/wgsl-effects"]
 bundled-fonts = ["native-text", "noon/bundled-fonts"]
 image-decode = ["noon/image-decode"]
 window = ["dep:noon-native"]
+audio = ["window", "noon-native/audio"]
 capture = ["dep:noon-export", "dep:png"]
 
 [lib]
