@@ -2515,7 +2515,7 @@ impl Context {
             .map_err(crate::arrow::scale_error)
     }
 
-    #[pyo3(name = "liveBindClickIndicate")]
+    #[pyo3(name = "bindClickIndicate")]
     #[allow(clippy::too_many_arguments)]
     fn bind_click_indicate(
         &mut self,
@@ -2552,7 +2552,7 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 
-    #[pyo3(name = "liveBindClickGlowPulse")]
+    #[pyo3(name = "bindClickGlowPulse")]
     fn bind_click_glow_pulse(
         &mut self,
         target: &MobjectHandle,
@@ -2574,7 +2574,7 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 
-    #[pyo3(name = "liveClearClickAction")]
+    #[pyo3(name = "clearClickAction")]
     fn clear_click_action(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
         let running = self.has_execution();
