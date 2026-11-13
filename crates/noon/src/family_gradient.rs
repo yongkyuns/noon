@@ -457,7 +457,10 @@ mod tests {
             scene.add(member).unwrap();
         }
         let mut session = scene.into_execution().unwrap();
-        session.live().shift(&center, 1.0, 0.0).unwrap();
+        session
+            .scene_mut()
+            .shift_3d(&center, crate::SemanticVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
         session
             .scene_mut()
             .set_family_color_by_radial_gradient(

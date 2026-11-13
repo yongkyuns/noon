@@ -473,12 +473,15 @@ impl Scene {
     /// this Scene's owned execution component.
     pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, AuthoringError> {
         if let Some(execution) = self.execution.as_mut() {
-            return crate::integration::publish_value_tracker_creation(
-                &self.store,
+            let node = execution.create_scoped_value_tracker(
+                &mut self.store.borrow_mut(),
                 self.root,
-                execution,
                 initial,
-            );
+            )?;
+            return Ok(ValueTracker::from_semantic_node(
+                Rc::clone(&self.store),
+                node,
+            ));
         }
         let creation = SemanticNodeCreation::input_signal(initial).map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
@@ -504,12 +507,12 @@ impl Scene {
     ) -> Result<(), AuthoringError> {
         tracker.require_store(&self.store)?;
         if let Some(execution) = self.execution.as_mut() {
-            return crate::integration::publish_value_tracker_association(
-                &self.store,
+            execution.associate_value_tracker(
+                &mut self.store.borrow_mut(),
                 self.root,
-                execution,
-                tracker,
-            );
+                tracker.node_id(),
+            )?;
+            return Ok(());
         }
         let mut transaction = SemanticMutationTransaction::new();
         transaction.scope_signal(self.root, tracker.node_id());

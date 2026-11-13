@@ -53,7 +53,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = scene.into_execution()?;
     let (composition, path_glow, formula_glow) = {
         let target = session.scene_mut().target_editor(&dot)?;
-        session.live().shift(&target, 2.0, 0.0)?;
+        session
+            .scene_mut()
+            .shift_3d(&target, noon::SemanticVec3::new(2.0, 0.0, 0.0))?;
         session.scene_mut().set_glow(
             &target,
             EffectUpdate::default()

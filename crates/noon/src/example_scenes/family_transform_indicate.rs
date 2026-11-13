@@ -82,8 +82,7 @@ impl LiveContinuation for FamilyTransformIndicate {
                     .mobject(&self.left)
                     .map_err(|error| error.to_string())?;
                 scene
-                    .live()
-                    .shift(&left_target, 1.0, 0.0)
+                    .shift_3d(&left_target, crate::SemanticVec3::new(1.0, 0.0, 0.0))
                     .map_err(|e| e.to_string())?;
                 scene
                     .become_mobject(

@@ -98,7 +98,10 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
 
     // New source revisions belong to the future. Receiving them must not replace
     // the current display, cancel its effect, or reuse the producer's new values.
-    source.live().shift(&target, 2.0, 0.0).unwrap();
+    source
+        .scene_mut()
+        .shift_3d(&target, noon::SemanticVec3::new(2.0, 0.0, 0.0))
+        .unwrap();
     source
         .scene_mut()
         .set_fill_rgb(&target, 0.9, 0.1, 0.2, 1.0)
@@ -303,7 +306,10 @@ fn prefix_indicate_pixels_change_and_restore_after_appends_source_drop_and_seek(
 
         // Publish a changed future, then a removal, while the historical effect
         // remains active. Neither append may alter the currently presented pixels.
-        source.live().shift(&target, 2.0, 0.0).unwrap();
+        source
+            .scene_mut()
+            .shift_3d(&target, noon::SemanticVec3::new(2.0, 0.0, 0.0))
+            .unwrap();
         source
             .scene_mut()
             .set_fill_rgb(&target, 0.9, 0.1, 0.2, 1.0)

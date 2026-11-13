@@ -29,21 +29,38 @@ impl LiveContinuation for Segments {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let stage = self.stage;
         self.stage += 1;
         self.resumes.borrow_mut().push(stage);
         match stage {
-            0 => Ok(ContinuationStep::Await(live.wait_segment(FIRST_END)?)),
+            0 => Ok(ContinuationStep::Await(
+                scene.live().wait_segment(FIRST_END)?,
+            )),
             1 => {
-                let y = f64::from(live.effective(&self.marker)?.transform.translation.y);
-                live.set_translation(&self.marker, 2.0, y)?;
-                Ok(ContinuationStep::Await(live.wait_segment(SECOND_DURATION)?))
+                let y = f64::from(
+                    scene
+                        .live()
+                        .effective(&self.marker)?
+                        .transform
+                        .translation
+                        .y,
+                );
+                scene.set_translation(&self.marker, 2.0, y)?;
+                Ok(ContinuationStep::Await(
+                    scene.live().wait_segment(SECOND_DURATION)?,
+                ))
             }
-            2 => Ok(ContinuationStep::Await(live.wait_segment(0.0)?)),
+            2 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.0)?)),
             3 => {
-                let y = f64::from(live.effective(&self.marker)?.transform.translation.y);
-                live.set_translation(&self.marker, 9.0, y)?;
+                let y = f64::from(
+                    scene
+                        .live()
+                        .effective(&self.marker)?
+                        .transform
+                        .translation
+                        .y,
+                );
+                scene.set_translation(&self.marker, 9.0, y)?;
                 Ok(ContinuationStep::Finished)
             }
             _ => panic!("a completed source must never resume again"),

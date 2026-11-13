@@ -368,31 +368,49 @@ fn offscreen_shader_residency_and_rejected_source_keep_the_published_scene() {
         .add_effect(&object, ShaderEffect::new(program.clone()), "material")
         .unwrap();
     scene.add(&object).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut surface = Surface::new(&device, &queue);
-    let hidden = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let hidden = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     assert!(hidden.iter().all(|&v| v == 0));
     assert_eq!(surface.program_stats.pipeline_compiles, 1);
-    scene.live(&mut session).shift(&object, -20.0, 0.0).unwrap();
-    let valid = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    session
+        .scene_mut()
+        .shift_3d(&object, noon::SemanticVec3::new(-20.0, 0.0, 0.0))
+        .unwrap();
+    let valid = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     assert_eq!(surface.program_stats.pipeline_compiles, 0);
     assert!(valid.iter().any(|&v| v > 0));
-    let before = session.publication_context();
-    let changes = session.resource_publication().changes().clone();
+    let before = session.session().publication_context();
+    let changes = session.session().resource_publication().changes().clone();
     assert!(WgslEffectProgram::prepare(
         program.schema().clone(),
         format!("{SOURCE}\nfn fs_sample() {{}}")
     )
     .is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(session.resource_publication().changes(), &changes);
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(session.session().resource_publication().changes(), &changes);
     assert_eq!(
         readback(&device, &queue, &surface.target),
         valid,
         "failed preparation must keep the actual last image"
     );
     assert_eq!(
-        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+        surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT
+        ),
         valid
     );
 }

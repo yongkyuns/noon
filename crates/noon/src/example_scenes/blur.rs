@@ -22,7 +22,9 @@ impl LiveContinuation for ImageBlur {
             0 | 2 | 4 => scene.live().wait_segment(0.75),
             1 => {
                 let target = scene.target_editor(&self.image).map_err(message)?;
-                scene.live().shift(&target, 0.0, 0.6).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, 0.6, 0.0))
+                    .map_err(message)?;
                 scene
                     .live()
                     .rotate(&target, std::f64::consts::PI / 12.0)
@@ -41,7 +43,9 @@ impl LiveContinuation for ImageBlur {
             3 => {
                 // Return to the original pose while making the effect neutral.
                 let target = scene.target_editor(&self.image).map_err(message)?;
-                scene.live().shift(&target, 0.0, -0.6).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, -0.6, 0.0))
+                    .map_err(message)?;
                 scene
                     .live()
                     .rotate(&target, -std::f64::consts::PI / 12.0)

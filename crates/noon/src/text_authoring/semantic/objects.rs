@@ -407,7 +407,10 @@ mod tests {
             .runs
             .iter()
             .all(|run| run.fill.is_none()));
-        session.live().set_translation(&label, 3.0, -1.0).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&label, 3.0, -1.0)
+            .unwrap();
         assert_eq!(
             session
                 .live()
@@ -1015,7 +1018,10 @@ mod tests {
             .is_none());
 
         {
-            session.live().set_translation(&target, 3.0, -2.0).unwrap();
+            session
+                .scene_mut()
+                .set_translation(&target, 3.0, -2.0)
+                .unwrap();
             session
                 .scene_mut()
                 .replace_content(&target, &replacement_text)

@@ -97,16 +97,34 @@ fn depth_xyz_affines_match_all_ce_pivots_in_authored_owned_and_borrowed_hosts() 
                 } else {
                     borrowed = Some(scene.execution_session().unwrap());
                 }
+                if let Some(family) = &family {
+                    if let Some(execution) = borrowed.as_mut() {
+                        scene
+                            .live(execution)
+                            .shift_family_3d(family, delta)
+                            .unwrap();
+                    } else {
+                        scene.shift_family_3d(family, delta).unwrap();
+                    }
+                } else {
+                    if let Some(execution) = borrowed.as_mut() {
+                        crate::family_layout::publish_shift_root(
+                            scene.integration_store(),
+                            scene.root(),
+                            execution,
+                            leaves[0].node_id(),
+                            delta,
+                        )
+                        .unwrap();
+                    } else {
+                        scene.shift_3d(&leaves[0], delta).unwrap();
+                    }
+                }
                 let mut live = if let Some(execution) = borrowed.as_mut() {
                     scene.live(execution)
                 } else {
                     scene.owned_live()
                 };
-                if let Some(family) = &family {
-                    live.shift_family_3d(family, delta).unwrap();
-                } else {
-                    live.shift_3d(&leaves[0], delta).unwrap();
-                }
                 live.stretch(&anchor, factor, LayoutDimension::Depth, pivot)
                     .unwrap();
             }

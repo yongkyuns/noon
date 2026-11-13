@@ -242,13 +242,13 @@ fn terminal_hold_rejects_resumed_source_time_or_changed_publication() {
     let mut scene = Scene::new();
     let marker = scene.square(0.5).unwrap();
     scene.add(&marker).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let initial = session.publication_context();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let initial = session.session().publication_context();
+    session
+        .scene_mut()
         .set_translation(&marker, 1.0, 0.0)
         .unwrap();
-    let changed = session.publication_context();
+    let changed = session.session().publication_context();
     assert_ne!(initial, changed);
     for (published, context, finished) in [
         (1.0 / 30.0, initial, true),

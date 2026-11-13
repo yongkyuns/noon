@@ -65,7 +65,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     let baseline = preparer.incremental_stats();
     for tick in 1..=128 {
         execution
-            .live()
+            .scene_mut()
             .set_translation(&a, tick as f64 * 0.01, 0.0)
             .unwrap();
         let changed = upload(
@@ -288,36 +288,30 @@ fn skipped_image_generation_reconciles_without_reuploading_pixels() {
     let a = scene.image(options()).unwrap();
     let b = scene.image(options()).unwrap();
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     upload(
-        &mut session,
+        session.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
         &queue,
         &mut text,
     );
-    scene
-        .live(&mut session)
-        .set_translation(&a, 0.2, 0.0)
-        .unwrap();
+    session.scene_mut().set_translation(&a, 0.2, 0.0).unwrap();
     preparer
         .prepare_publication(
             &device,
-            &session.take_renderer_publication(),
+            &session.session_mut().take_renderer_publication(),
             TextDeviceMetrics::uniform(32.0).unwrap(),
         )
         .unwrap();
-    scene
-        .live(&mut session)
-        .set_translation(&b, 0.5, 0.0)
-        .unwrap();
+    session.scene_mut().set_translation(&b, 0.5, 0.0).unwrap();
     let caught_up = upload(
-        &mut session,
+        session.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,

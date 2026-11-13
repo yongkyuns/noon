@@ -62,9 +62,7 @@ impl LiveContinuation for ObjectMembershipQueries {
             if self.stage == 1 {
                 scene
                     .replace_members((&self.root).into(), &[(&self.a).into(), (&self.b).into()])?;
-                scene
-                    .live()
-                    .shift_3d(&self.root, noon_core::SemanticVec3::new(0., 0., 0.5))?;
+                scene.shift_3d(&self.root, noon_core::SemanticVec3::new(0., 0., 0.5))?;
                 assert_depth(scene, &self.root, 1.625, -3., 2.75)?;
                 assert_depth(scene, &self.c, 4.75, 4.75, 4.75)?;
                 // The Python metadata alias points to the same copied child.
@@ -81,7 +79,7 @@ impl LiveContinuation for ObjectMembershipQueries {
                     copied_root.member_at(0)?.unwrap().as_target().node_id(),
                     self.a.node_id()
                 );
-                scene.live().shift(copied_root, 0.0, -1.0)?;
+                scene.shift_3d(copied_root, crate::SemanticVec3::new(0.0, -1.0, 0.0))?;
                 assert_eq!(
                     split_ids(&self.root)?,
                     [self.root.node_id(), self.a.node_id(), self.b.node_id()]

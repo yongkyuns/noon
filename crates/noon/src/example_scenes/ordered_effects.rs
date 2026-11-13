@@ -28,8 +28,12 @@ impl LiveContinuation for OrderedEffects {
                 let first = scene.target_editor(&self.source).map_err(message)?;
                 let finish = scene.target_editor(&self.source).map_err(message)?;
                 let reference = scene.target_editor(&self.reference).map_err(message)?;
-                scene.live().shift(&first, 0.0, 0.4).map_err(message)?;
-                scene.live().shift(&reference, 0.0, 0.4).map_err(message)?;
+                scene
+                    .shift_3d(&first, crate::SemanticVec3::new(0.0, 0.4, 0.0))
+                    .map_err(message)?;
+                scene
+                    .shift_3d(&reference, crate::SemanticVec3::new(0.0, 0.4, 0.0))
+                    .map_err(message)?;
                 scene
                     .set_effect(
                         &first,
@@ -65,8 +69,12 @@ impl LiveContinuation for OrderedEffects {
             3 => {
                 let target = scene.target_editor(&self.source).map_err(message)?;
                 let reference = scene.target_editor(&self.reference).map_err(message)?;
-                scene.live().shift(&target, 0.0, -0.4).map_err(message)?;
-                scene.live().shift(&reference, 0.0, -0.4).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, -0.4, 0.0))
+                    .map_err(message)?;
+                scene
+                    .shift_3d(&reference, crate::SemanticVec3::new(0.0, -0.4, 0.0))
+                    .map_err(message)?;
                 for name in ["soften", "finish"] {
                     scene
                         .set_effect(&target, name, EffectUpdate::default().radius(Pixels(0.0)))

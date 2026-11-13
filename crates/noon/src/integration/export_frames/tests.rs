@@ -19,16 +19,22 @@ impl LiveContinuation for Source {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let stage = self.stage;
         self.stage += 1;
         if stage < self.durations.len() {
             Ok(ContinuationStep::Await(
-                live.wait_segment(self.durations[stage])?,
+                scene.live().wait_segment(self.durations[stage])?,
             ))
         } else {
-            let y = f64::from(live.effective(&self.object)?.transform.translation.y);
-            live.set_translation(&self.object, 7.0, y)?;
+            let y = f64::from(
+                scene
+                    .live()
+                    .effective(&self.object)?
+                    .transform
+                    .translation
+                    .y,
+            );
+            scene.set_translation(&self.object, 7.0, y)?;
             Ok(ContinuationStep::Finished)
         }
     }

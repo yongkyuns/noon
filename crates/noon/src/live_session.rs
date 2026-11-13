@@ -17,19 +17,18 @@ pub use family_layout::LiveLayoutTarget;
 use crate::effective_capture::target_style_from_effective;
 use crate::execution_session::NativePointerInputToken;
 use crate::{
-    semantic_mobject::authoring_render_f64, DeclaredAnimation, ExecutionSegment,
-    ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError, ExecutionSegmentError,
-    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionPublicationError, Mobject, MobjectFamily, MobjectTarget,
-    SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
+    DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
+    ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
+    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
+    MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError,
+    TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
     SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectProperty, SemanticObjectState,
-    SemanticSignalValue, SemanticStore, SemanticSubsetDisplayMode, SemanticVec3, Style,
-    Transform2D,
+    SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectState, SemanticStore,
+    SemanticSubsetDisplayMode, SemanticVec3, Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -602,23 +601,6 @@ impl<'a> LiveSession<'a> {
 
     pub(crate) fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         self.store
-    }
-
-    /// Associate an existing detached tracker while a continuation holds the
-    /// only borrowed execution capability.
-    ///
-    /// Ordinary authoring uses [`crate::Scene::associate_value_tracker`].
-    pub(crate) fn associate_value_tracker(
-        &mut self,
-        tracker: &ValueTracker,
-    ) -> Result<(), LiveSessionError> {
-        tracker
-            .require_store(self.store)
-            .map_err(LiveSessionError::from)?;
-        let mut store = self.store.borrow_mut();
-        self.session
-            .associate_value_tracker(&mut store, self.root, tracker.node_id())
-            .map_err(Into::into)
     }
 
     /// Bind a facade to the supplied store and existing execution session.
@@ -1200,23 +1182,6 @@ impl<'a> LiveSession<'a> {
                 .rate_func(rate_func),
         };
         self.declare_and_activate_composition(&request, AnimationOptions::new())
-    }
-
-    /// Persist one tracker value at the current live authored time after its
-    /// active segment has completed and released timeline ownership.
-    pub fn set_value(
-        &mut self,
-        tracker: &ValueTracker,
-        value: f64,
-    ) -> Result<(), LiveSessionError> {
-        tracker
-            .require_store(self.store)
-            .map_err(LiveSessionError::from)?;
-        let mut store = self.store.borrow_mut();
-        self.session
-            .set_scalar_signal_value(&mut store, tracker.node_id(), value)
-            .map(|_| ())
-            .map_err(Into::into)
     }
 
     /// Atomically author and activate one canonical single-leaf FadeIn or FadeOut.
@@ -1995,84 +1960,6 @@ impl<'a> LiveSession<'a> {
             .map_err(Into::into)
     }
 
-    /// Set any already-supported semantic property through one atomic publish.
-    pub fn set_property(
-        &mut self,
-        mobject: &Mobject,
-        property: SemanticObjectProperty,
-        value: impl Into<SemanticSignalValue>,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_property(mobject.node_id(), property, value);
-        self.apply(transaction)
-    }
-
-    /// Set the nominal Manim Angle value through the active publication boundary.
-    pub fn set_angle_value(
-        &mut self,
-        mobject: &Mobject,
-        radians: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_angle_value(mobject.node_id(), radians);
-        self.apply(transaction)
-    }
-
-    pub fn set_translation(
-        &mut self,
-        mobject: &Mobject,
-        x: f64,
-        y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let mut translation = self.authored(mobject)?.transform.translation;
-        translation.x = x;
-        translation.y = y;
-        self.set_property(mobject, SemanticObjectProperty::Translation, translation)
-    }
-
-    pub fn shift(
-        &mut self,
-        mobject: &Mobject,
-        x: f64,
-        y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.shift_3d(mobject, SemanticVec3::new(x, y, 0.0))
-    }
-
-    pub fn shift_3d(
-        &mut self,
-        mobject: &Mobject,
-        delta: SemanticVec3,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        if !delta.is_finite() {
-            // Invalid live property values use the canonical publication validator
-            // and its structured diagnostic, before any root/descendant edit.
-            let mut translation = self.authored(mobject)?.transform.translation;
-            translation.x += delta.x;
-            translation.y += delta.y;
-            translation.z += delta.z;
-            return self.set_property(mobject, SemanticObjectProperty::Translation, translation);
-        }
-        crate::family_layout::publish_shift_root(
-            self.store,
-            self.root,
-            self.session,
-            mobject.node_id(),
-            delta,
-        )
-        .map_err(|error| match error {
-            // The shared authoring helper retains the publication cause; the
-            // live facade must retain its existing public error category too.
-            crate::AuthoringError::ExecutionPublication(error) => {
-                LiveSessionError::Publication(error)
-            }
-            other => LiveSessionError::from(other),
-        })
-    }
-
     /// Shift every ordinary leaf of one semantic family in a single publication.
     ///
     /// Family traversal and alias handling stay in the shared semantic store. This
@@ -2143,24 +2030,6 @@ impl<'a> LiveSession<'a> {
             .map_err(LiveSessionError::from)
     }
 
-    /// Multiply an object's authored affine scale through the shared live
-    /// transaction. The current scale is read from the semantic store, never a
-    /// wrapper projection, so detached session targets follow the same path.
-    pub fn scale(
-        &mut self,
-        mobject: &Mobject,
-        x: f64,
-        y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let x = authoring_render_f64("scale.x", x).map_err(LiveSessionError::from)?;
-        let y = authoring_render_f64("scale.y", y).map_err(LiveSessionError::from)?;
-        let mut scale = self.authored(mobject)?.transform.scale;
-        scale.x *= x;
-        scale.y *= y;
-        scale.lower_xy_f32().map_err(crate::AuthoringError::from)?;
-        self.set_property(mobject, SemanticObjectProperty::Scale, scale)
-    }
-
     /// Rotate about the coherent effective geometry center through the shared
     /// affine transaction. Active affine drivers must complete before this edit.
     pub fn rotate(
@@ -2173,26 +2042,6 @@ impl<'a> LiveSession<'a> {
             angle,
             crate::ManimRotationPivot::Center,
         )
-    }
-
-    pub fn set_scale(
-        &mut self,
-        mobject: &Mobject,
-        x: f64,
-        y: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let mut scale = self.authored(mobject)?.transform.scale;
-        scale.x = x;
-        scale.y = y;
-        self.set_property(mobject, SemanticObjectProperty::Scale, scale)
-    }
-
-    pub fn set_rotation(
-        &mut self,
-        mobject: &Mobject,
-        angle: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.set_property(mobject, SemanticObjectProperty::RotationZ, angle)
     }
 
     #[cfg(feature = "latex")]
@@ -2333,15 +2182,17 @@ mod tests {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
 
         let observed = {
-            let mut live = scene.live(&mut session);
-            live.set_translation(&circle, 2.0, -1.0).unwrap();
-            live.set_scale(&circle, 1.5, 0.5).unwrap();
-            live.set_rotation(&circle, 0.25).unwrap();
-            let authored = live.authored(&circle).unwrap();
-            let effective = live.effective(&circle).unwrap();
+            session
+                .scene_mut()
+                .set_translation(&circle, 2.0, -1.0)
+                .unwrap();
+            session.scene_mut().set_scale(&circle, 1.5, 0.5).unwrap();
+            session.scene_mut().set_rotation(&circle, 0.25).unwrap();
+            let authored = session.live().authored(&circle).unwrap();
+            let effective = session.live().effective(&circle).unwrap();
             assert_eq!(
                 authored.transform.translation,
                 SemanticVec3::new(2.0, -1.0, 0.0)
@@ -2353,7 +2204,7 @@ mod tests {
             effective
         };
         assert_eq!(observed.transform.translation.x, 2.0);
-        assert_eq!(session.frame().objects.len(), 1);
+        assert_eq!(session.session().frame().objects.len(), 1);
     }
 
     #[test]
@@ -2370,50 +2221,69 @@ mod tests {
             )
             .unwrap();
         scene.add(&angle).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let frame_before = session.frame().clone();
-        let publication_before = session.publication_context();
+        let mut session = scene.into_execution().unwrap();
+        let frame_before = session.session().frame().clone();
+        let publication_before = session.session().publication_context();
 
         {
-            let mut live = scene.live(&mut session);
-            live.set_angle_value(&angle, -0.75).unwrap();
+            session.scene_mut().set_angle_value(&angle, -0.75).unwrap();
             assert_eq!(
-                live.authored(&angle).unwrap().role(),
+                session.live().authored(&angle).unwrap().role(),
                 SemanticObjectRole::Angle(noon_core::SemanticAngleRole::new(Some(-0.75)),)
             );
             assert_eq!(angle.angle_value(false).unwrap(), -0.75);
-            assert_ne!(live.session.publication_context(), publication_before);
-            let publication_after = live.session.publication_context();
-            assert!(live.set_angle_value(&angle, f64::NAN).is_err());
-            assert_eq!(live.session.publication_context(), publication_after);
+            assert_ne!(
+                session.live().session.publication_context(),
+                publication_before
+            );
+            let publication_after = session.live().session.publication_context();
+            assert!(session
+                .scene_mut()
+                .set_angle_value(&angle, f64::NAN)
+                .is_err());
+            assert_eq!(
+                session.live().session.publication_context(),
+                publication_after
+            );
         }
 
-        assert_eq!(session.frame(), &frame_before);
+        assert_eq!(session.session().frame(), &frame_before);
 
         let mut callbacks = SemanticMutationTransaction::new();
         callbacks.add_updater(angle.node_id(), HostCallbackId::new(9), 0.0, None);
         callbacks
-            .apply(&mut scene.integration_store().borrow_mut())
+            .apply(&mut session.scene().integration_store().borrow_mut())
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let overlay = match live.session.advance_to_callback_barrier(0.0).unwrap() {
+        let scene = crate::Scene::with_integration_root(
+            session.scene().integration_store().clone(),
+            session.scene().root(),
+        )
+        .unwrap();
+        let mut session = scene.into_execution().unwrap();
+        let overlay = match session
+            .live()
+            .session
+            .advance_to_callback_barrier(0.0)
+            .unwrap()
+        {
             CallbackAdvance::HostRequired { overlay, .. } => overlay,
             CallbackAdvance::Ready(_) => panic!("time-zero callback phase must be required"),
         };
-        let publication = live.session.publication_context();
+        let publication = session.live().session.publication_context();
         assert!(matches!(
-            live.set_angle_value(&angle, 0.5),
-            Err(LiveSessionError::Publication(
+            session.scene_mut().set_angle_value(&angle, 0.5),
+            Err(crate::AuthoringError::ExecutionPublication(
                 ExecutionSessionPublicationError::RequiredCallbackPending
             ))
         ));
-        assert_eq!(live.session.publication_context(), publication);
+        assert_eq!(session.live().session.publication_context(), publication);
         assert_eq!(angle.angle_value(false).unwrap(), -0.75);
-        live.session
+        session
+            .live()
+            .session
             .commit_required_callback_phase(overlay.finish())
             .unwrap();
-        live.set_angle_value(&angle, 0.5).unwrap();
+        session.scene_mut().set_angle_value(&angle, 0.5).unwrap();
         assert_eq!(angle.angle_value(false).unwrap(), 0.5);
     }
 
@@ -2608,7 +2478,7 @@ mod tests {
         scene.add(&circle).unwrap();
         let mut session = scene.into_execution().unwrap();
 
-        session.live().scale(&circle, 2.0, 0.5).unwrap();
+        session.scene_mut().scale(&circle, 2.0, 0.5).unwrap();
         session.live().rotate(&circle, 0.25).unwrap();
         let effective = session.live().effective(&circle).unwrap();
         assert_eq!(effective.transform.scale, noon_core::Vec2::new(2.0, 0.5));
@@ -2616,7 +2486,7 @@ mod tests {
 
         session.live().session.take_frame_changes();
         let target = session.scene_mut().target_editor(&circle).unwrap();
-        session.live().scale(&target, 0.5, 4.0).unwrap();
+        session.scene_mut().scale(&target, 0.5, 4.0).unwrap();
         session.live().rotate(&target, 0.75).unwrap();
         let authored = session.live().authored(&target).unwrap();
         assert_eq!(authored.transform.scale, SemanticVec3::new(1.0, 2.0, 1.0));
@@ -2692,31 +2562,52 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
 
-        let mut live = scene.live(&mut session);
-        let segment = live.play_animation(&animation).unwrap();
-        live.advance_segment_to(segment, 1.0).unwrap();
+        let segment = session.live().play_animation(&animation).unwrap();
+        session.live().advance_segment_to(segment, 1.0).unwrap();
         assert!(matches!(
-            live.set_translation(&circle, 100.0, 0.0),
-            Err(LiveSessionError::Publication(
+            session.scene_mut().set_translation(&circle, 100.0, 0.0),
+            Err(crate::AuthoringError::ExecutionPublication(
                 ExecutionSessionPublicationError::SegmentCompletionPending
             ))
         ));
         assert_eq!(
-            live.authored(&circle).unwrap().transform.translation,
+            session
+                .live()
+                .authored(&circle)
+                .unwrap()
+                .transform
+                .translation,
             SemanticVec3::new(0.0, 0.0, 0.0)
         );
         assert_eq!(
-            live.effective(&circle).unwrap().transform.translation.x,
+            session
+                .live()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
             2.0
         );
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
-        live.set_translation(&circle, 100.0, 0.0).unwrap();
+        session.live().complete_segment(segment).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&circle, 100.0, 0.0)
+            .unwrap();
         assert_eq!(
-            live.effective(&circle).unwrap().transform.translation.x,
+            session
+                .live()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
             100.0
         );
     }
@@ -3035,49 +2926,66 @@ mod tests {
                         .unwrap(),
                 )
             };
-            let mut session = scene.execution_session().unwrap();
-            let mut live = scene.live(&mut session);
+            let mut session = scene.into_execution().unwrap();
             let segment = if let Some(animation) = animation {
-                live.play_animation(&animation).unwrap()
+                session.live().play_animation(&animation).unwrap()
             } else if mode == "mapped" {
-                live.declare_and_activate_transform_composition(
-                    SemanticAnimationCompositionKind::Parallel,
-                    &[TransformToRequest::new(
-                        &source,
-                        &target,
-                        AnimationOptions::new()
-                            .run_time(1.0)
-                            .rate_func(RateFunction::Linear),
-                    )],
-                    options,
-                    AnimationOptions::new(),
-                )
-                .unwrap()
+                session
+                    .live()
+                    .declare_and_activate_transform_composition(
+                        SemanticAnimationCompositionKind::Parallel,
+                        &[TransformToRequest::new(
+                            &source,
+                            &target,
+                            AnimationOptions::new()
+                                .run_time(1.0)
+                                .rate_func(RateFunction::Linear),
+                        )],
+                        options,
+                        AnimationOptions::new(),
+                    )
+                    .unwrap()
             } else {
-                live.declare_and_activate_transform_to(&source, &target, options)
+                session
+                    .live()
+                    .declare_and_activate_transform_to(&source, &target, options)
                     .unwrap()
             };
-            live.advance_segment_to(segment, 0.5).unwrap();
+            session.live().advance_segment_to(segment, 0.5).unwrap();
             assert_eq!(
-                live.effective(&source).unwrap().transform.translation,
+                session
+                    .live()
+                    .effective(&source)
+                    .unwrap()
+                    .transform
+                    .translation,
                 noon_core::Vec2::new(3.25, 1.25)
             );
-            live.advance_segment_to(segment, 1.0).unwrap();
-            let before_completion = live.effective(&source).unwrap();
-            live.complete_segment(segment).unwrap();
+            session.live().advance_segment_to(segment, 1.0).unwrap();
+            let before_completion = session.live().effective(&source).unwrap();
+            session.live().complete_segment(segment).unwrap();
             let mut expected = original;
             if mode == "mapped" {
                 let target_state = target.state().unwrap();
                 expected.transform = target_state.transform;
                 expected.style = target_state.style;
             }
-            assert_eq!(live.authored(&source).unwrap(), expected);
-            let after_completion = live.effective(&source).unwrap();
+            assert_eq!(session.live().authored(&source).unwrap(), expected);
+            let after_completion = session.live().effective(&source).unwrap();
             assert_eq!(after_completion.transform, before_completion.transform);
             assert_eq!(after_completion.style, before_completion.style);
-            live.set_translation(&source, -2.0, 0.0).unwrap();
+            session
+                .scene_mut()
+                .set_translation(&source, -2.0, 0.0)
+                .unwrap();
             assert_eq!(
-                live.effective(&source).unwrap().transform.translation.x,
+                session
+                    .live()
+                    .effective(&source)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
                 -2.0
             );
         }
@@ -3093,9 +3001,9 @@ mod tests {
         let mut target = source.target_editor().unwrap();
         target.set_translation(3.25, 1.25).unwrap();
 
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let mut session = scene.into_execution().unwrap();
+        let segment = session
+            .live()
             .declare_and_activate_transform_to(
                 &source,
                 &target,
@@ -3106,13 +3014,18 @@ mod tests {
             )
             .unwrap();
 
-        live.advance_segment_to(segment, 0.0).unwrap();
+        session.live().advance_segment_to(segment, 0.0).unwrap();
         assert_eq!(
-            live.effective(&source).unwrap().transform.translation,
+            session
+                .live()
+                .effective(&source)
+                .unwrap()
+                .transform
+                .translation,
             noon_core::Vec2::new(3.25, 1.25)
         );
-        live.advance_segment_to(segment, 1.0).unwrap();
-        let at_finish = live.effective(&source).unwrap();
+        session.live().advance_segment_to(segment, 1.0).unwrap();
+        let at_finish = session.live().effective(&source).unwrap();
         assert_eq!(
             at_finish.transform.translation,
             noon_core::Vec2::new(
@@ -3120,15 +3033,29 @@ mod tests {
                 original.transform.translation.y as f32,
             )
         );
-        live.complete_segment(segment).unwrap();
-        assert_eq!(live.authored(&source).unwrap(), original);
+        session.live().complete_segment(segment).unwrap();
+        assert_eq!(session.live().authored(&source).unwrap(), original);
         assert_eq!(
-            live.effective(&source).unwrap().transform.translation,
+            session
+                .live()
+                .effective(&source)
+                .unwrap()
+                .transform
+                .translation,
             at_finish.transform.translation
         );
-        live.set_translation(&source, -2.0, 0.0).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&source, -2.0, 0.0)
+            .unwrap();
         assert_eq!(
-            live.effective(&source).unwrap().transform.translation.x,
+            session
+                .live()
+                .effective(&source)
+                .unwrap()
+                .transform
+                .translation
+                .x,
             -2.0
         );
     }
@@ -3219,31 +3146,55 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution().unwrap();
 
-        let first_segment = live.play_animation(&first).unwrap();
-        live.advance_segment_to(first_segment, first_segment.end_time())
+        let first_segment = session.live().play_animation(&first).unwrap();
+        session
+            .live()
+            .advance_segment_to(first_segment, first_segment.end_time())
             .unwrap();
-        assert!(!live.segment_state(first_segment).is_complete());
-        live.complete_segment(first_segment).unwrap();
-        assert!(live.segment_state(first_segment).is_complete());
+        assert!(!session.live().segment_state(first_segment).is_complete());
+        session.live().complete_segment(first_segment).unwrap();
+        assert!(session.live().segment_state(first_segment).is_complete());
         assert_eq!(
-            live.effective(&circle).unwrap().transform.translation.x,
+            session
+                .live()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
             2.0
         );
 
-        live.set_translation(&circle, 3.0, -2.0).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&circle, 3.0, -2.0)
+            .unwrap();
         assert_eq!(
-            live.effective(&circle).unwrap().transform.translation.x,
+            session
+                .live()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
             3.0
         );
-        let second_segment = live.play_animation(&second).unwrap();
-        live.advance_segment_to(second_segment, second_segment.end_time())
+        let second_segment = session.live().play_animation(&second).unwrap();
+        session
+            .live()
+            .advance_segment_to(second_segment, second_segment.end_time())
             .unwrap();
-        live.complete_segment(second_segment).unwrap();
+        session.live().complete_segment(second_segment).unwrap();
         assert_eq!(
-            live.effective(&circle).unwrap().transform.translation.x,
+            session
+                .live()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation
+                .x,
             5.0
         );
     }
@@ -4209,7 +4160,10 @@ mod tests {
             .unwrap();
         assert_eq!(session.live().session.frame().time, 3.0);
         let target = session.scene_mut().target_editor(&circle).unwrap();
-        session.live().set_translation(&target, 6.0, 1.0).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&target, 6.0, 1.0)
+            .unwrap();
         assert!(session.live().session.take_frame_changes().is_empty());
         let segment = session
             .live()
@@ -4256,7 +4210,10 @@ mod tests {
             .advance_segment_to(wait, wait.end_time())
             .unwrap();
         let target = session.scene_mut().target_editor(&square).unwrap();
-        session.live().set_translation(&target, 3.0, -1.0).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&target, 3.0, -1.0)
+            .unwrap();
         let request = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
             &square,
             &target,
@@ -4313,7 +4270,7 @@ mod tests {
                 1
             );
             session
-                .live()
+                .scene_mut()
                 .set_translation(&detached, 4.0, -2.0)
                 .unwrap();
             assert_eq!(
@@ -5134,9 +5091,9 @@ mod recursive_composition_tests {
             )
             .unwrap();
         scene.bind_position(&circle, &position).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let before = session.publication_context();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let before = session.session().publication_context();
         let request = AnimationCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Sequence,
             options: AnimationOptions::new().rate_func(RateFunction::Linear),
@@ -5160,19 +5117,24 @@ mod recursive_composition_tests {
                 },
             ],
         };
-        let mut live = scene.live(&mut session);
-        let segment = live
+        let segment = session
+            .live()
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
 
         assert_eq!(segment.duration(), 2.5);
         assert!(segment.token().is_some());
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             before.scene_revision().checked_next().unwrap()
         );
         assert_eq!(
-            scene
+            session
+                .scene()
                 .integration_store()
                 .borrow()
                 .semantic_signal_state(tracker.node_id())
@@ -5182,35 +5144,55 @@ mod recursive_composition_tests {
             1
         );
 
-        live.advance_segment_to(segment, 0.25).unwrap();
+        session.live().advance_segment_to(segment, 0.25).unwrap();
         assert_eq!(
-            live.session.effective_signal_value(tracker.node_id()),
+            session
+                .live()
+                .session
+                .effective_signal_value(tracker.node_id()),
             Some(&noon_core::ReactiveValue::Scalar(0.0))
         );
-        live.advance_segment_to(segment, 1.5).unwrap();
-        let forward_objects = live.session.frame().objects.clone();
+        session.live().advance_segment_to(segment, 1.5).unwrap();
+        let forward_objects = session.live().session.frame().objects.clone();
         assert_eq!(
-            live.session.effective_signal_value(tracker.node_id()),
+            session
+                .live()
+                .session
+                .effective_signal_value(tracker.node_id()),
             Some(&noon_core::ReactiveValue::Scalar(2.0))
         );
-        live.session.seek(0.25).unwrap();
-        live.session.seek(1.5).unwrap();
-        assert_eq!(live.session.frame().objects, forward_objects);
+        session.live().session.seek(0.25).unwrap();
+        session.live().session.seek(1.5).unwrap();
+        assert_eq!(session.live().session.frame().objects, forward_objects);
         assert_eq!(
-            live.session.effective_signal_value(tracker.node_id()),
+            session
+                .live()
+                .session
+                .effective_signal_value(tracker.node_id()),
             Some(&noon_core::ReactiveValue::Scalar(2.0))
         );
 
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        let before_completion = live.session.publication_context().scene_revision();
-        live.complete_segment(segment).unwrap();
+        let before_completion = session
+            .live()
+            .session
+            .publication_context()
+            .scene_revision();
+        session.live().complete_segment(segment).unwrap();
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             before_completion.checked_next().unwrap()
         );
         assert_eq!(
-            scene
+            session
+                .scene()
                 .integration_store()
                 .borrow()
                 .semantic_signal_state(tracker.node_id())
@@ -5220,7 +5202,8 @@ mod recursive_composition_tests {
             2
         );
         assert_eq!(
-            scene
+            session
+                .scene()
                 .integration_store()
                 .borrow()
                 .semantic_input_scalar_value_at(tracker.node_id(), segment.end_time()),
@@ -5238,9 +5221,12 @@ mod recursive_composition_tests {
                 < 1e-12
         );
 
-        live.set_value(&tracker, 3.0).unwrap();
+        session.scene_mut().set_value(&tracker, 3.0).unwrap();
         assert_eq!(
-            live.session.effective_signal_value(tracker.node_id()),
+            session
+                .live()
+                .session
+                .effective_signal_value(tracker.node_id()),
             Some(&noon_core::ReactiveValue::Scalar(3.0))
         );
     }
@@ -5788,9 +5774,9 @@ mod recursive_composition_tests {
         let mut scene = Scene::new();
         let square = scene.square(1.0).unwrap();
         scene.add(&square).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.scale(&square, 1.5, 0.75).unwrap();
+        let mut session = scene.into_execution().unwrap();
+        session.scene_mut().scale(&square, 1.5, 0.75).unwrap();
+        let mut live = session.live();
         let source = live.effective(&square).unwrap();
         let segment = live
             .declare_and_activate_indicate(

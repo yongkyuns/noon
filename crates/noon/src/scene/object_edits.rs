@@ -3,15 +3,16 @@
 use crate::{
     family_authoring::FamilyTranslation,
     semantic_mobject::{
-        edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fill, edit_fill_color,
-        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-        edit_stroke_opacity, edit_stroke_width, prepare_fill_paint_value,
+        authoring_render_f64, edit_color, edit_disable_fill, edit_disable_stroke, edit_fade,
+        edit_fill, edit_fill_color, edit_fill_opacity, edit_manim_opacity, edit_object_opacity,
+        edit_stroke, edit_stroke_color, edit_stroke_opacity, edit_stroke_width,
+        prepare_fill_paint_value,
     },
     AuthoringError, EffectiveMobjectState, Mobject, Scene,
 };
 use noon_core::{
     Color, HatchPaint, LinearGradient, NoisePaint, RadialGradient, SemanticMutationTransaction,
-    SemanticPaint, SemanticStyle, SemanticVec3, Vec2,
+    SemanticObjectProperty, SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticVec3, Vec2,
 };
 use std::sync::Arc;
 
@@ -327,6 +328,86 @@ impl Scene {
         self.publish_object_style(object, state.style)
     }
 
+    /// Set the planar authored translation while preserving depth.
+    pub fn set_translation(
+        &mut self,
+        object: &Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_translation(x, y);
+        }
+        let z = object.state()?.transform.translation.z;
+        self.set_object_property(
+            object,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(x, y, z),
+        )
+    }
+
+    /// Set the planar authored scale while preserving depth scale.
+    pub fn set_scale(&mut self, object: &Mobject, x: f64, y: f64) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_scale(x, y);
+        }
+        let z = object.state()?.transform.scale.z;
+        self.set_object_property(
+            object,
+            SemanticObjectProperty::Scale,
+            SemanticVec3::new(x, y, z),
+        )
+    }
+
+    /// Multiply the object's authored scale in the plane.
+    pub fn scale(&mut self, object: &Mobject, x: f64, y: f64) -> Result<(), AuthoringError> {
+        let x = authoring_render_f64("scale.x", x)?;
+        let y = authoring_render_f64("scale.y", y)?;
+        self.require_object(object)?;
+        let mut scale = object.state()?.transform.scale;
+        scale.x *= x;
+        scale.y *= y;
+        scale.lower_xy_f32()?;
+        self.set_object_property(object, SemanticObjectProperty::Scale, scale)
+    }
+
+    /// Set the object's authored planar rotation.
+    pub fn set_rotation(&mut self, object: &Mobject, angle: f64) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_rotation(angle);
+        }
+        self.set_object_property(object, SemanticObjectProperty::RotationZ, angle)
+    }
+
+    /// Set the nominal value of an Angle, leaving its drawn geometry intact.
+    pub fn set_angle_value(
+        &mut self,
+        object: &Mobject,
+        radians: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_angle_value(radians);
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_angle_value(object.node_id(), radians);
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
+    fn set_object_property(
+        &mut self,
+        object: &Mobject,
+        property: SemanticObjectProperty,
+        value: impl Into<SemanticSignalValue>,
+    ) -> Result<(), AuthoringError> {
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_property(object.node_id(), property, value);
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     /// Translate an object's own content and unique descendants in one publication.
     ///
     /// The delta is applied to authored positions. Runtime publication barriers
@@ -352,13 +433,11 @@ impl Scene {
                 translation.x += delta.x;
                 translation.y += delta.y;
                 translation.z += delta.z;
-                let mut transaction = SemanticMutationTransaction::new();
-                transaction.set_property(
-                    object.node_id(),
-                    noon_core::SemanticObjectProperty::Translation,
+                return self.set_object_property(
+                    object,
+                    SemanticObjectProperty::Translation,
                     translation,
                 );
-                return self.apply_semantic_transaction(transaction).map(|_| ());
             }
             return self.with_running_execution(|store, root, execution| {
                 crate::family_layout::publish_shift_root(

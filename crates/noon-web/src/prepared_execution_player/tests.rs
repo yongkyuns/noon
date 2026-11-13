@@ -51,7 +51,10 @@ impl Fixture {
     }
 
     fn next(&mut self, terminal: bool) -> PrefixBatch {
-        self.source.live().shift(&self.target, 1.0, 0.0).unwrap();
+        self.source
+            .scene_mut()
+            .shift_3d(&self.target, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
         let segment = self.source.session_mut().wait_segment(1.0).unwrap();
         self.source
             .session_mut()
@@ -1092,7 +1095,10 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
     let mut f = Fixture::new(87);
     let segment = {
         let target = f.source.scene_mut().target_editor(&f.target).unwrap();
-        f.source.live().set_translation(&target, 2.0, 0.0).unwrap();
+        f.source
+            .scene_mut()
+            .set_translation(&target, 2.0, 0.0)
+            .unwrap();
         let segment = f
             .source
             .live()

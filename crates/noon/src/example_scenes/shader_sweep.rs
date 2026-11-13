@@ -135,7 +135,6 @@ impl LiveContinuation for ShaderSweep {
                 let targets = [left?, right?];
                 for (i, target) in targets.iter().enumerate() {
                     scene
-                        .live()
                         .set_rotation(target, if outward { 0.35 } else { 0.0 })
                         .map_err(message)?;
                     scene

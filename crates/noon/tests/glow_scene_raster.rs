@@ -3139,10 +3139,12 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                             .set_fill_image_mapping(&source, mapping, Some(0.7))
                             .unwrap();
                         if pose == 3 {
-                            let mut live = execution.live();
-                            live.set_scale(&source, -0.9, 1.2).unwrap();
-                            live.set_rotation(&source, 0.413).unwrap();
-                            live.shift(&source, 0.17, -0.23).unwrap();
+                            let scene = execution.scene_mut();
+                            scene.set_scale(&source, -0.9, 1.2).unwrap();
+                            scene.set_rotation(&source, 0.413).unwrap();
+                            scene
+                                .shift_3d(&source, noon::SemanticVec3::new(0.17, -0.23, 0.0))
+                                .unwrap();
                         }
                         let pixels = surface.render_on(
                             &device,

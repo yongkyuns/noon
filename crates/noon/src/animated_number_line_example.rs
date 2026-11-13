@@ -75,7 +75,7 @@ impl NumberLinePlayback {
                 let frame = scene.effective_number_line_frame(&self.line)?;
                 let [x, y] = frame.number_to_point(value)?;
                 let target = scene.target_editor(&self.marker)?;
-                scene.live().set_translation(&target, x, y)?;
+                scene.set_translation(&target, x, y)?;
                 scene
                     .live()
                     .declare_and_activate_transform_to(&self.marker, &target, options)?
@@ -84,7 +84,7 @@ impl NumberLinePlayback {
                 let line_target = scene.copy_family(self.line.family())?;
                 scene.shift_family(line_target.root(), 0.0, 0.6)?;
                 let marker_target = scene.target_editor(&self.marker)?;
-                scene.live().shift(&marker_target, 0.0, 0.6)?;
+                scene.shift_3d(&marker_target, crate::SemanticVec3::new(0.0, 0.6, 0.0))?;
                 scene.live().declare_and_activate_composition(
                     &Request::Composition {
                         kind: Kind::Parallel,

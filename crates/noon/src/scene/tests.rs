@@ -514,10 +514,9 @@ fn scene_path_alignment_publishes_effective_operands_coherently() {
     scene.add(&right).unwrap();
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
-    {
-        let mut live = scene.owned_live();
-        live.shift(&left, 1.0, 2.0).unwrap();
-    }
+    scene
+        .shift_3d(&left, crate::SemanticVec3::new(1.0, 2.0, 0.0))
+        .unwrap();
 
     scene.align_points(&left, &right).unwrap();
 
