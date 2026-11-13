@@ -97,17 +97,16 @@ def _detached_handle_for(value: object):
     return None if _is_bound(value) else _handle_for(value)
 
 
-def _live_mutation_context(value: object):
-    """Return the retained-session context for a bound object or its target.
-
-    The context reference is wrapper identity only. The handle and its current
-    state remain in Rust; it lets a target cloned after bootstrap publish its
-    detached creation and affine edits through the same live session.
-    """
+def _object_authoring_context(value: object):
     context = getattr(value, "_canonical_live_target_context", None)
-    if context is None:
-        scene = getattr(value, "_scene", None)
-        context = getattr(scene, "_canonical_authoring_context", None)
+    if context is not None:
+        return context
+    return getattr(getattr(value, "_scene", None), "_canonical_authoring_context", None)
+
+
+def _live_mutation_context(value: object):
+    """Find the context that owns an existing or transferred player."""
+    context = _object_authoring_context(value)
     if context is None:
         return None
     # Returning the player keeps its runtime alive for the next source operation.
@@ -332,6 +331,20 @@ def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
     if color is not None:
         parsed = _constructor_color("color", color)
         engine_call(handle.setColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
+
+
+def _path_authoring_context(*operands):
+    """Resolve the owning Scene for an ordinary edit in either execution phase."""
+    for operand in operands:
+        context = _object_authoring_context(operand)
+        if context is not None:
+            return context
+    reactive = sys.modules.get("_manim_reactive")
+    scene = None if reactive is None else reactive._current_authoring_scene()
+    if scene is None:
+        return None
+    from _manim_scene import _context
+    return _context(scene)
 
 
 def _live_constructor_context(kind: str = "primitive", *, allow_unstarted: bool = False):
@@ -629,20 +642,23 @@ def _clone_mobject(
                 "canonical callback copies are unsupported while a callback phase is active"
             )
         raise RuntimeError("Mobject copy requires a current shared Rust semantic handle")
-    context = _live_mutation_context(self)
+    context = (_path_authoring_context(self) if subcurve is not None
+               else _live_mutation_context(self))
     if context is None:
         context = context_override
     clone = object.__new__(type(self))
     clone._raw = None
     clone._scene = None
     clone._object = None
-    clone._semantic_handle = (
-        (engine_call(context.liveSubcurve, handle, *subcurve) if context is not None
-         else engine_call(handle.subcurve, *subcurve)) if subcurve is not None else
-        engine_call(context.liveTargetEditor, handle)
-        if context is not None
-        else engine_call(handle.targetEditor) if target_state else engine_call(handle.cloneHandle)
-    )
+    if subcurve is not None:
+        clone._semantic_handle = (
+            engine_call(context.liveSubcurve, handle, *subcurve)
+            if context is not None else engine_call(handle.subcurve, *subcurve)
+        )
+    elif context is not None:
+        clone._semantic_handle = engine_call(context.liveTargetEditor, handle)
+    else:
+        clone._semantic_handle = engine_call(handle.targetEditor if target_state else handle.cloneHandle)
     clone._semantic_handle_fresh = True
     if context is not None:
         clone._canonical_live_target_context = context

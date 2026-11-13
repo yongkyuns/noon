@@ -789,16 +789,18 @@ impl Scene {
         source: &Mobject,
         target: &Mobject,
     ) -> Result<(), AuthoringError> {
-        let root = self.root;
-        let store = &self.store;
-        if let Some(execution) = self.execution.as_mut() {
-            return crate::point_matching::publish_match_points(
-                store, root, execution, source, target,
-            );
+        if !Rc::ptr_eq(&self.store, source.integration_store())
+            || !Rc::ptr_eq(&self.store, target.integration_store())
+        {
+            return Err(AuthoringError::ForeignStore);
         }
-        self.require_object(source)?;
-        self.require_object(target)?;
-        let transaction = crate::point_matching::prepare_match_points(source, target.state()?)?;
+        source.validate()?;
+        target.validate()?;
+        if self.running_execution().is_some() {
+            self.capture_mobject_state(source)?;
+        }
+        let target_state = self.capture_mobject_state(target)?;
+        let transaction = crate::point_matching::prepare_match_points(source, target_state)?;
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 

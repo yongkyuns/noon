@@ -14,6 +14,16 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class PathEditingTests(unittest.TestCase):
+    def test_scene_bound_edits_use_scene_in_setup_and_playback(self):
+        value = identity_only_wrapper(compat.VMobject)
+        handle = Mock()
+        context = types.SimpleNamespace(liveClearPoints=Mock())
+        value._scene = types.SimpleNamespace(_canonical_authoring_context=context)
+        with patch.object(editing, "_handle_for", return_value=handle):
+            self.assertIs(value.clear_points(), value)
+        context.liveClearPoints.assert_called_once_with(handle)
+        handle.clearPoints.assert_not_called()
+
     def test_family_raw_points_and_reset_dispatch_only_the_root_handle(self):
         ffi = types.ModuleType("pyodide.ffi")
         ffi.to_js = lambda values: values
@@ -26,8 +36,7 @@ class PathEditingTests(unittest.TestCase):
                     context = Mock() if live else None
                     with patch.dict(sys.modules, {"pyodide.ffi": ffi}), \
                          patch.object(editing, "_handle_for") as leaf, \
-                         patch.object(editing, "_live_mutation_context", return_value=context), \
-                         patch.object(editing, "_live_constructor_context", return_value=None), \
+                         patch.object(editing, "_path_authoring_context", return_value=context), \
                          patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
                         if cls is compat.Group:
                             with self.assertWarns(DeprecationWarning):
@@ -64,8 +73,7 @@ class PathEditingTests(unittest.TestCase):
             live_context.liveRepeatFamilyPoints.assert_called_once_with(family_handle, 3)
 
         with patch.object(editing, "_handle_for", return_value=value_handle), \
-             patch.object(editing, "_live_mutation_context", return_value=None), \
-             patch.object(editing, "_live_constructor_context", return_value=None), \
+             patch.object(editing, "_path_authoring_context", return_value=None), \
              patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
             self.assertIs(editing.repeat_points(value, 2), value)
             value_handle.repeatPoints.assert_called_once_with(2)
@@ -104,8 +112,7 @@ class PathEditingTests(unittest.TestCase):
             live_context.liveReverseFamilyPoints.assert_called_once_with(family_handle)
 
         with patch.object(editing, "_handle_for", return_value=value_handle), \
-             patch.object(editing, "_live_mutation_context", return_value=None), \
-             patch.object(editing, "_live_constructor_context", return_value=None), \
+             patch.object(editing, "_path_authoring_context", return_value=None), \
              patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
             self.assertIs(editing.reverse_points(value), value)
             value_handle.reversePoints.assert_called_once_with()
@@ -119,8 +126,7 @@ class PathEditingTests(unittest.TestCase):
         value = identity_only_wrapper(compat.Mobject)
         handle = Mock()
         with patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.reset_points(), value)
         handle.clearPoints.assert_called_once_with()
 
@@ -132,8 +138,7 @@ class PathEditingTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
                  patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(value.set_points_as_corners([(1, 2, 0), (3, 4, 0)]), value)
                 self.assertIs(value.clear_points(), value)
                 if context is None:
@@ -170,8 +175,7 @@ class PathEditingTests(unittest.TestCase):
         ffi.to_js = lambda values: values
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.set_points_as_corners([(0, 0), (2, 0)]), value)
         handle.setPointsAsCornersWithSamples.assert_called_once_with(
             [0.0, 0.0, 0.0, 2.0, 0.0, 0.0], [0.0, 0.25, 0.75, 1.0]
@@ -180,8 +184,7 @@ class PathEditingTests(unittest.TestCase):
         context = Mock()
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=context), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=context):
             self.assertIs(value.set_points_as_corners([(0, 0), (2, 0)]), value)
         context.liveSetPointsAsCornersWithSamples.assert_called_once_with(
             handle, [0.0, 0.0, 0.0, 2.0, 0.0, 0.0], [0.0, 0.25, 0.75, 1.0]
@@ -228,8 +231,7 @@ class PathEditingTests(unittest.TestCase):
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}):
             for context in (None, Mock()):
                 with patch.object(editing, '_handle_for', return_value=handle), \
-                     patch.object(editing, '_live_mutation_context', return_value=context), \
-                     patch.object(editing, '_live_constructor_context', return_value=None):
+                     patch.object(editing, '_path_authoring_context', return_value=context):
                     self.assertIs(value.set_points([(0, 1), (2, 3, .625)]), value)
                     self.assertIs(value.append_points([(4, 5, -.375)]), value)
                 if context is None:
@@ -249,8 +251,7 @@ class PathEditingTests(unittest.TestCase):
         ffi.to_js = lambda values: values
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.set_points([(0, 1), (2, 3), (4, 5)]), value)
             self.assertIs(value.append_points([(6, 7, 0)]), value)
         handle.setPoints3D.assert_called_once_with([0.0, 1.0, 0.0, 2.0, 3.0, 0.0, 4.0, 5.0, 0.0])
@@ -265,8 +266,7 @@ class PathEditingTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
                  patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(value.start_new_path((1, 2, 0)), value)
             if context is None:
                 handle.startNewPathWithStride.assert_called_once_with(1., 2., 0.0, 5)
@@ -324,8 +324,7 @@ class PathEditingTests(unittest.TestCase):
                 for context in (None, Mock()):
                     with self.subTest(method=authored_method, live=context is not None), \
                          patch.object(editing, '_handle_for', return_value=handle), \
-                         patch.object(editing, '_live_mutation_context', return_value=context), \
-                         patch.object(editing, '_live_constructor_context', return_value=None):
+                         patch.object(editing, '_path_authoring_context', return_value=context):
                         self.assertIs(call(*points), value)
                     if context is None:
                         getattr(handle, authored_method).assert_called_once_with(*expected)
@@ -342,8 +341,7 @@ class PathEditingTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
                  patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(value.add_line_to((9, -1, 0)), value)
             if context is None:
                 handle.addLineToWithSamples.assert_called_once_with(
@@ -382,8 +380,7 @@ class PathEditingTests(unittest.TestCase):
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}):
             for context in (None, Mock()):
                 with patch.object(editing, '_handle_for', return_value=handle), \
-                     patch.object(editing, '_live_mutation_context', return_value=context), \
-                     patch.object(editing, '_live_constructor_context', return_value=None):
+                     patch.object(editing, '_path_authoring_context', return_value=context):
                     self.assertIs(value.add_points_as_corners(corners), value)
                 if context is None:
                     handle.addPointsAsCornersWithStride.assert_called_once_with(
@@ -427,8 +424,7 @@ class PathEditingTests(unittest.TestCase):
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch('_manim_path_queries._query', return_value=query), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.resize_points(3), value)
         handle.setPoints3D.assert_called_once_with([1.0, 2.0, .25, 3.0, 4.0, .75, 1.0, 2.0, .25])
         query.free.assert_called_once_with()
@@ -455,8 +451,7 @@ class PathEditingTests(unittest.TestCase):
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch('_manim_path_queries._query', return_value=query), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.resize_points(1, resize_func=resize_call), value)
         points, length = resize_call.call_args.args
         self.assertIsInstance(points, numpy.ndarray)
@@ -470,8 +465,7 @@ class PathEditingTests(unittest.TestCase):
         handle = Mock()
         for context in (None, Mock()):
             with patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(
                     value.add_cubic_bezier_curve((0, 1), (2, 3), (4, 5), (6, 7)),
                     value,
@@ -498,8 +492,7 @@ class PathEditingTests(unittest.TestCase):
             for context in (None, Mock()):
                 with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
                      patch.object(editing, '_handle_for', return_value=handle), \
-                     patch.object(editing, '_live_mutation_context', return_value=context), \
-                     patch.object(editing, '_live_constructor_context', return_value=None):
+                     patch.object(editing, '_path_authoring_context', return_value=context):
                     self.assertIs(value.add_smooth_curve_to(*points), value)
                 if context is None:
                     self.assertEqual(handle.addSmoothCurveTo.call_args.args, (expected,))
@@ -524,8 +517,7 @@ class PathEditingTests(unittest.TestCase):
         handle = Mock()
         for context in (None, Mock()):
             with patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(value.scale_handle_to_anchor_distances(0.5), value)
             if context is None:
                 handle.scaleHandleToAnchorDistances.assert_called_once_with(0.5)
@@ -589,8 +581,7 @@ class PathEditingTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
                  patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(value.add_points_as_corners(points), value)
             if context is None:
                 handle.addPointsAsCorners.assert_called_once_with([1.0, 0.0, 0.0, 2.0, 1.0, 0.0])
@@ -611,8 +602,7 @@ class PathEditingTests(unittest.TestCase):
         ]
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.add_subpath(points), value)
             handle.appendPoints3D.assert_called_once_with(
                 [0., 0., 0., 1., 0., 0., 1., 1., 0., 2., 1., 0., 2., 1., 0., 3., 1., 0., 3., 2., 0., 4., 2., 0.]
@@ -638,8 +628,7 @@ class PathEditingTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
                  patch.object(editing, '_handle_for', return_value=handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(value.set_anchors_and_handles(*arrays), value)
             if context is None:
                 handle.setCubicBezierCurves.assert_called_once_with(expected)
@@ -666,15 +655,13 @@ class PathEditingTests(unittest.TestCase):
         source = identity_only_wrapper(compat.VMobject)
         handle, source_handle = Mock(), Mock()
         with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.append_vectorized_mobject(source), value)
         handle.appendVectorizedMobject.assert_called_once_with(source_handle)
 
         context = Mock()
         with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
-             patch.object(editing, '_live_mutation_context', side_effect=lambda obj: context if obj is source else None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', side_effect=lambda *args: context if source in args else None):
             self.assertIs(value.append_vectorized_mobject(source), value)
         context.liveAppendVectorizedMobject.assert_called_once_with(handle, source_handle)
 
@@ -684,15 +671,13 @@ class PathEditingTests(unittest.TestCase):
         source = identity_only_wrapper(compat.VMobject)
         handle, source_handle = Mock(), Mock()
         with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.append_vectorized_mobject(source), value)
         handle.appendVectorizedMobjectWithStride.assert_called_once_with(source_handle, 5)
 
         context = Mock()
         with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
-             patch.object(editing, '_live_mutation_context', side_effect=lambda obj: context if obj is source else None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', side_effect=lambda *args: context if source in args else None):
             self.assertIs(value.append_vectorized_mobject(source), value)
         context.liveAppendVectorizedMobjectWithStride.assert_called_once_with(
             handle, source_handle, 5
@@ -718,8 +703,7 @@ class PathEditingTests(unittest.TestCase):
         ffi.to_js = lambda values: values
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None), \
+             patch.object(editing, '_path_authoring_context', return_value=None), \
              patch('_manim_path_queries.is_closed', return_value=False):
             self.assertIs(value.close_path(), value)
         authored_args = handle.closePathWithStride.call_args.args
@@ -729,8 +713,7 @@ class PathEditingTests(unittest.TestCase):
         context = Mock()
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=context), \
-             patch.object(editing, '_live_constructor_context', return_value=None), \
+             patch.object(editing, '_path_authoring_context', return_value=context), \
              patch('_manim_path_queries.is_closed', return_value=False):
             self.assertIs(value.close_path(), value)
         live_args = context.liveClosePathWithStride.call_args.args
@@ -803,8 +786,7 @@ class PathEditingTests(unittest.TestCase):
         ffi.to_js = lambda values: values
         with patch.dict(sys.modules, {'pyodide.ffi': ffi}), \
              patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None), \
+             patch.object(editing, '_path_authoring_context', return_value=None), \
              patch('_manim_path_queries.is_closed', return_value=False):
             self.assertIs(value.start_new_path((1, 2, 0)), value)
             value.add_line_to((3, 4))
@@ -827,8 +809,7 @@ class PathEditingTests(unittest.TestCase):
         handle, source_handle = Mock(), Mock()
         for context in (None, Mock()):
             with patch.object(editing, '_handle_for', side_effect=lambda obj: handle if obj is value else source_handle), \
-                 patch.object(editing, '_live_mutation_context', return_value=context), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', return_value=context):
                 self.assertIs(value.pointwise_become_partial(source, 0.2, 0.8), value)
                 self.assertIs(value.reverse_direction(), value)
                 if context is None:
@@ -849,8 +830,7 @@ class PathEditingTests(unittest.TestCase):
         value = identity_only_wrapper(compat.VMobject)
         handle = Mock()
         with patch.object(editing, '_handle_for', return_value=handle), \
-             patch.object(editing, '_live_mutation_context', return_value=None), \
-             patch.object(editing, '_live_constructor_context', return_value=None):
+             patch.object(editing, '_path_authoring_context', return_value=None):
             self.assertIs(value.insert_n_curves(3), value)
             handle.insertNCurves.assert_called_once_with(3)
             for count in [-1, 2**32]:
@@ -866,8 +846,7 @@ class SmoothingDispatchTests(unittest.TestCase):
             if family: value._semantic_family_handle = handle
             for context in (None, Mock()):
                 with patch.object(editing, '_handle_for', return_value=handle), \
-                     patch.object(editing, '_live_mutation_context', return_value=context), \
-                     patch.object(editing, '_live_constructor_context', return_value=None), \
+                     patch.object(editing, '_path_authoring_context', return_value=context), \
                      patch.object(handles, '_group_target_context', return_value=context):
                     self.assertIs(value.make_smooth(), value)
                     self.assertIs(value.make_jagged(), value)
@@ -903,8 +882,7 @@ class AlignmentDispatchTests(unittest.TestCase):
                     a.align_rgbas = Mock(return_value=a)
                     context = Mock() if live else None
                     with patch.object(editing, '_handle_for', side_effect=lambda value: left if value is a else right), \
-                         patch.object(editing, '_live_mutation_context', return_value=context), \
-                         patch.object(editing, '_live_constructor_context', return_value=None), \
+                         patch.object(editing, '_path_authoring_context', return_value=context), \
                          patch.object(compat, '_leaf_mobjects', side_effect=AssertionError('root-only operation')):
                         self.assertIs(a.align_points(b), a)
                     a.align_rgbas.assert_called_once_with(b)
@@ -954,8 +932,7 @@ class AlignmentDispatchTests(unittest.TestCase):
         left, right = Mock(), Mock()
         for context in (None, Mock()):
             with patch.object(editing, '_handle_for', side_effect=lambda v: left if v is a else right), \
-                 patch.object(editing, '_live_mutation_context', side_effect=lambda v: context if v is b else None), \
-                 patch.object(editing, '_live_constructor_context', return_value=None):
+                 patch.object(editing, '_path_authoring_context', side_effect=lambda *args: context if b in args else None):
                 self.assertIs(a.align_points(b), a)
                 a.align_rgbas.assert_called_with(b)
                 if context is None:

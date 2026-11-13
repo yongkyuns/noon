@@ -343,7 +343,6 @@ class VMobject(Mobject):
         return edit_points(
             self,
             "addCubicBezierCurve",
-            "liveAddCubicBezierCurve",
             (anchor1, handle1, handle2, anchor2),
         )
 
@@ -477,7 +476,7 @@ class VMobject(Mobject):
 
     def reverse_direction(self):
         from _manim_path_editing import edit_points
-        return edit_points(self, "reverseDirection", "liveReverseDirection", ())
+        return edit_points(self, "reverseDirection", ())
 
     def align_points(self, vmobject):
         from _manim_path_editing import align_points

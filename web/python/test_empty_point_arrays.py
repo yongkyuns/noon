@@ -24,8 +24,7 @@ class EmptyPointArrayTests(unittest.TestCase):
                         value._semantic_family_handle = handle
                     with patch.dict(sys.modules, {"pyodide.ffi": ffi}), \
                          patch.object(editing, "_handle_for", return_value=handle), \
-                         patch.object(editing, "_live_mutation_context", return_value=context), \
-                         patch.object(editing, "_live_constructor_context", return_value=None):
+                         patch.object(editing, "_path_authoring_context", return_value=context):
                         self.assertIs(editing.set_points(value, points), value)
                     if live:
                         name = "liveSetFamilyEmptyPointArray" if family else "liveSetEmptyPointArray"

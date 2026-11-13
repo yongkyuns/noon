@@ -2240,7 +2240,7 @@ class SubpathQueryTests(unittest.TestCase):
         value.label = {'kind': ['source']}
         source = Mock()
         for context in (None, Mock()):
-            with patch.object(handles, '_handle_for', return_value=source), patch.object(handles, '_live_mutation_context', return_value=context):
+            with patch.object(handles, '_handle_for', return_value=source), patch.object(handles, '_path_authoring_context', return_value=context):
                 result = value.get_subcurve(0.8, 0.2)
             expected = source.subcurve.return_value if context is None else context.liveSubcurve.return_value
             self.assertIs(result._semantic_handle, expected)
