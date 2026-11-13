@@ -155,15 +155,20 @@ fn historical_effect_survives_append_and_forward_playback_without_editing_source
 
 #[test]
 fn historical_target_remains_interactive_after_source_removal_and_destruction() {
-    let (scene, target, mut source, object, mut publisher, mut reader) = fixture();
+    let (scene, target, source, object, mut publisher, mut reader) = fixture();
+    let mut source = scene.into_execution_with_session(source).unwrap();
     let baseline = reader.frame().clone();
-    scene.live(&mut source).remove(&target).unwrap();
-    assert!(!scene.live(&mut source).contains(&target).unwrap());
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
+    source.scene_mut().remove(&target).unwrap();
+    assert!(!source.scene().contains_direct(&target).unwrap());
+    let boundary = source.live().wait_segment(1.0).unwrap();
+    source
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
     reader
         .append(
             source
+                .session()
                 .publish_prepared_prefix(boundary, &mut publisher)
                 .unwrap(),
         )
@@ -176,7 +181,6 @@ fn historical_target_remains_interactive_after_source_removal_and_destruction() 
     assert_ne!(reader.frame(), &baseline);
     drop(target);
     drop(source);
-    drop(scene);
     drop(publisher);
     reader.advance_interactions(31.0).unwrap();
     assert!(!reader.interactions_active());
@@ -306,7 +310,7 @@ fn prefix_indicate_pixels_change_and_restore_after_appends_source_drop_and_seek(
             .unwrap();
         for removed in [false, true] {
             if removed {
-                source.live().remove(&target).unwrap();
+                source.scene_mut().remove(&target).unwrap();
             }
             let boundary = source.session().wait_segment(1.0).unwrap();
             source

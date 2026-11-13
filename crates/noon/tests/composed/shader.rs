@@ -738,8 +738,8 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(readback(&device, &queue, &surface.target), input);
     session.live().publish_staged_effects(pending).unwrap();
-    assert!(!session.live().contains(&object).unwrap());
-    assert!(session.live().contains(&incoming).unwrap());
+    assert!(!session.scene_mut().contains_direct(&object).unwrap());
+    assert!(session.scene_mut().contains_direct(&incoming).unwrap());
     let actual = surface.render_on(
         &device,
         &queue,

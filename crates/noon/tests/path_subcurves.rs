@@ -14,8 +14,8 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         let mut running = scene.into_execution().unwrap();
         let selected = if live_mode {
             let copy = running.scene_mut().subcurve(&source, 0.25, 0.75).unwrap();
-            assert!(!running.live().contains(&copy).unwrap());
-            running.live().add(&copy).unwrap();
+            assert!(!running.scene_mut().contains_direct(&copy).unwrap());
+            running.scene_mut().add(&copy).unwrap();
             assert_eq!(
                 running
                     .scene()

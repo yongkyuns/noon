@@ -829,7 +829,7 @@ fn digraph_live_copy_preserves_arrow_style_and_remaps_endpoint_dependencies() {
     );
     drop(declaration);
     session
-        .live()
+        .scene_mut()
         .add_many(&[crate::MobjectTarget::Family(copied.family())])
         .unwrap();
     let source_path = session

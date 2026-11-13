@@ -178,25 +178,20 @@ fn live_membership_retains_semantic_cause_and_recovers_without_partial_work() ->
     let anchor = scene.circle(1.0)?;
     let next = scene.square(1.0)?;
     scene.add(&anchor)?;
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let before = authored_snapshot(&scene);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let anchor_execution = session.execution_object_id(anchor.node_id());
-    let error = scene
-        .live(&mut session)
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let before = authored_snapshot(session.scene());
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
+    let anchor_execution = session.session().execution_object_id(anchor.node_id());
+    let error = session
+        .scene_mut()
         .add_many(&[MobjectTarget::Object(&next), MobjectTarget::Object(&next)])
         .unwrap_err();
-    assert!(
-        matches!(&error, LiveSessionError::Authoring(AuthoringError::Semantic(
-        SemanticSceneOperationError::DuplicateMembershipTarget(id))) if *id == next.node_id())
-    );
-    assert!(error.source().unwrap().is::<AuthoringError>());
+    assert!(matches!(&error, AuthoringError::Semantic(
+            SemanticSceneOperationError::DuplicateMembershipTarget(id)) if *id == next.node_id()));
     assert_eq!(
         error
-            .source()
-            .unwrap()
             .source()
             .unwrap()
             .downcast_ref::<SemanticSceneOperationError>(),
@@ -204,13 +199,16 @@ fn live_membership_retains_semantic_cause_and_recovers_without_partial_work() ->
             next.node_id()
         ))
     );
-    assert_live_unchanged(&scene, &mut session, before, frame, publication);
-    scene.live(&mut session).add(&next)?;
+    assert_eq!(authored_snapshot(session.scene()), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
+    session.scene_mut().add(&next)?;
     assert_eq!(
-        session.execution_object_id(anchor.node_id()),
+        session.session().execution_object_id(anchor.node_id()),
         anchor_execution
     );
-    assert_eq!(session.frame().objects.len(), 2);
+    assert_eq!(session.session().frame().objects.len(), 2);
     Ok(())
 }
 
@@ -222,29 +220,42 @@ fn live_foreign_handle_and_foreign_runtime_are_distinct_and_atomic() -> TestResu
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.circle(1.0)?;
     foreign_scene.add(&foreign)?;
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let before = authored_snapshot(&scene);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let before = authored_snapshot(session.scene());
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
     assert!(matches!(
-        scene.live(&mut session).add(&foreign),
-        Err(LiveSessionError::ForeignMobjectStore)
+        session.scene_mut().add(&foreign),
+        Err(AuthoringError::ForeignStore)
     ));
-    assert_live_unchanged(&scene, &mut session, before, frame, publication);
+    assert_eq!(authored_snapshot(session.scene()), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
 
     let mut wrong_session = foreign_scene.execution_session()?;
     wrong_session.take_frame_changes();
-    let before = authored_snapshot(&scene);
+    let before = authored_snapshot(session.scene());
     let frame = wrong_session.frame().clone();
     let publication = wrong_session.publication_context();
+    let root = session.scene().root();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.remove_member(root, local.node_id());
     assert!(matches!(
-        scene.live(&mut wrong_session).remove(&local),
-        Err(LiveSessionError::Publication(
-            ExecutionSessionPublicationError::ForeignSemanticStore
-        ))
+        wrong_session.apply_semantic_transaction(
+            &mut session.scene().integration_store().borrow_mut(),
+            transaction,
+        ),
+        Err(ExecutionSessionPublicationError::ForeignSemanticStore)
     ));
-    assert_live_unchanged(&scene, &mut wrong_session, before, frame, publication);
+    assert_live_unchanged(
+        session.scene(),
+        &mut wrong_session,
+        before,
+        frame,
+        publication,
+    );
     Ok(())
 }
 
@@ -259,28 +270,27 @@ fn live_stale_handle_is_not_reduced_to_a_mobject_string() -> TestResult {
     let valid = scene.square(1.0)?;
     scene.add(&valid)?;
     // Lower the valid revision so this is a handle failure, not a stale-publication failure.
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let before = authored_snapshot(&scene);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let before = authored_snapshot(session.scene());
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
     for error in [
-        scene.live(&mut session).add(&stale).unwrap_err(),
-        scene.live(&mut session).effective(&stale).unwrap_err(),
+        LiveSessionError::from(session.scene_mut().add(&stale).unwrap_err()),
+        session.live().effective(&stale).unwrap_err(),
     ] {
         assert!(
             matches!(error, LiveSessionError::Authoring(AuthoringError::Semantic(
             SemanticSceneOperationError::UnknownNode(id))) if id == stale.node_id())
         );
     }
-    assert_live_unchanged(&scene, &mut session, before, frame, publication);
-    scene.live(&mut session).set_translation(&valid, 2.0, 0.0)?;
+    assert_eq!(authored_snapshot(session.scene()), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
+    session.live().set_translation(&valid, 2.0, 0.0)?;
     assert_eq!(
-        scene
-            .live(&mut session)
-            .effective(&valid)?
-            .transform
-            .translation,
+        session.live().effective(&valid)?.transform.translation,
         Vec2::new(2.0, 0.0)
     );
     Ok(())
@@ -292,15 +302,23 @@ fn external_authored_edit_keeps_the_stale_publication_category() -> TestResult {
     let mut local = scene.circle(1.0)?;
     let detached = scene.square(1.0)?;
     scene.add(&local)?;
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let expected = scene.integration_store().borrow().scene_revision();
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
+    let expected = session
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
     local.set_translation(3.0, 0.0)?;
-    let actual = scene.integration_store().borrow().scene_revision();
-    let before = authored_snapshot(&scene);
-    let error = scene.live(&mut session).add(&detached).unwrap_err();
+    let actual = session
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
+    let before = authored_snapshot(session.scene());
+    let error = session.scene_mut().add(&detached).unwrap_err();
     assert_eq!(
         error
             .source()
@@ -308,19 +326,17 @@ fn external_authored_edit_keeps_the_stale_publication_category() -> TestResult {
             .downcast_ref::<ExecutionSessionPublicationError>(),
         Some(&ExecutionSessionPublicationError::StaleSceneRevision { expected, actual })
     );
-    assert_live_unchanged(&scene, &mut session, before, frame, publication);
-    // Explicitly lower the new authored revision; do not bypass the stale check.
-    let mut replacement_session = scene.execution_session()?;
-    scene.live(&mut replacement_session).add(&detached)?;
-    assert_eq!(
-        scene
-            .live(&mut replacement_session)
-            .effective(&local)?
-            .transform
-            .translation
-            .x,
-        3.0
-    );
+    assert_eq!(authored_snapshot(session.scene()), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
+    // Retire the invalidated runtime and lower the new authored revision.
+    let scene = session.scene_mut();
+    noon::integration::scene_execution::retire(scene)?;
+    let replacement = scene.execution_session()?;
+    noon::integration::scene_execution::attach(scene, replacement)?;
+    scene.add(&detached)?;
+    assert_eq!(scene.effective(&local)?.transform.translation.x, 3.0);
     Ok(())
 }
 
@@ -339,44 +355,44 @@ fn pending_segment_rejects_membership_then_accepts_it_after_logical_completion()
             .run_time(2.0)
             .rate_func(RateFunction::Linear),
     )?;
-    let mut session = scene.execution_session()?;
-    let segment = scene.live(&mut session).play_animation(&animation)?;
-    scene.live(&mut session).advance_segment_to(segment, 1.0)?;
-    session.take_frame_changes();
-    let before = authored_snapshot(&scene);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    let mut session = scene.into_execution()?;
+    let segment = session.live().play_animation(&animation)?;
+    session.live().advance_segment_to(segment, 1.0)?;
+    session.session_mut().take_frame_changes();
+    let before = authored_snapshot(session.scene());
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
     assert!(matches!(
-        scene.live(&mut session).add(&detached),
-        Err(LiveSessionError::Publication(
+        session.scene_mut().add(&detached),
+        Err(AuthoringError::ExecutionPublication(
             ExecutionSessionPublicationError::SegmentCompletionPending
         ))
     ));
-    assert_live_unchanged(&scene, &mut session, before, frame, publication);
+    assert_eq!(authored_snapshot(session.scene()), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
     assert_eq!(
-        scene
-            .live(&mut session)
-            .authored(&local)?
-            .transform
-            .translation
-            .x,
+        session.live().authored(&local)?.transform.translation.x,
         0.0
     );
     assert_eq!(
-        scene
-            .live(&mut session)
-            .effective(&local)?
-            .transform
-            .translation
-            .x,
+        session.live().effective(&local)?.transform.translation.x,
         2.0
     );
-    let mut live = scene.live(&mut session);
-    live.advance_segment_to(segment, segment.end_time())?;
-    live.complete_segment(segment)?;
-    live.add(&detached)?;
-    assert_eq!(live.authored(&local)?.transform.translation.x, 4.0);
-    assert_eq!(live.effective(&local)?.transform.translation.x, 4.0);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())?;
+    session.live().complete_segment(segment)?;
+    session.scene_mut().add(&detached)?;
+    assert_eq!(
+        session.live().authored(&local)?.transform.translation.x,
+        4.0
+    );
+    assert_eq!(
+        session.live().effective(&local)?.transform.translation.x,
+        4.0
+    );
     Ok(())
 }
 
@@ -389,25 +405,30 @@ fn pending_callback_preserves_publication_and_can_resume_after_rejection() -> Te
     let mut callbacks = SemanticMutationTransaction::new();
     callbacks.add_updater(local.node_id(), HostCallbackId::new(9), 0.0, None);
     callbacks.apply(&mut scene.integration_store().borrow_mut())?;
-    let mut session = scene.execution_session()?;
-    let overlay = match session.advance_to_callback_barrier(0.0)? {
+    let mut session = scene.into_execution()?;
+    let overlay = match session.session_mut().advance_to_callback_barrier(0.0)? {
         CallbackAdvance::HostRequired { overlay, .. } => overlay,
         CallbackAdvance::Ready(_) => panic!("expected ordered callback barrier"),
     };
-    session.take_frame_changes();
-    let before = authored_snapshot(&scene);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    session.session_mut().take_frame_changes();
+    let before = authored_snapshot(session.scene());
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
     assert!(matches!(
-        scene.live(&mut session).add(&detached),
-        Err(LiveSessionError::Publication(
+        session.scene_mut().add(&detached),
+        Err(AuthoringError::ExecutionPublication(
             ExecutionSessionPublicationError::RequiredCallbackPending
         ))
     ));
-    assert_live_unchanged(&scene, &mut session, before, frame, publication);
-    session.commit_required_callback_phase(overlay.finish())?;
-    scene.live(&mut session).add(&detached)?;
-    assert_eq!(session.frame().objects.len(), 2);
+    assert_eq!(authored_snapshot(session.scene()), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
+    session
+        .session_mut()
+        .commit_required_callback_phase(overlay.finish())?;
+    session.scene_mut().add(&detached)?;
+    assert_eq!(session.session().frame().objects.len(), 2);
     Ok(())
 }
 

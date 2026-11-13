@@ -229,7 +229,7 @@ fn inactive_family_aliases_do_not_prevent_removed_leaf_create() {
         .declare_and_activate_create(&circle, AnimationOptions::new())
         .is_err());
     assert_eq!(running.session().publication_context(), before);
-    running.live().remove(&circle).unwrap();
+    running.scene_mut().remove(&circle).unwrap();
     assert!(running.session().painter_order().is_empty());
     let reveal = running
         .live()

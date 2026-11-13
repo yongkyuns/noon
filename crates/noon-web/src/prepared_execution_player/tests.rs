@@ -790,7 +790,7 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
         .scene_mut()
         .image(noon::ImageMobjectOptions::rgba8(2, 2, [230, 40, 10, 255].repeat(4)).unwrap())
         .unwrap();
-    f.source.live().add(&image).unwrap();
+    f.source.scene_mut().add(&image).unwrap();
     let segment = f.source.session_mut().wait_segment(1.0).unwrap();
     f.source.session_mut().advance_to(2.0).unwrap();
     let batch = f
@@ -818,7 +818,7 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
         .scene_mut()
         .image(noon::ImageMobjectOptions::rgba8(2, 2, [10, 230, 40, 255].repeat(4)).unwrap())
         .unwrap();
-    f.source.live().add(&future).unwrap();
+    f.source.scene_mut().add(&future).unwrap();
     let segment = f.source.session_mut().wait_segment(1.0).unwrap();
     f.source.session_mut().advance_to(3.0).unwrap();
     let batch = f

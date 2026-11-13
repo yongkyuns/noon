@@ -1422,7 +1422,10 @@ impl SemanticExecutionPlayer {
         root: noon::MobjectTarget<'_>,
         members: &[noon::MobjectTarget<'_>],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.replace_members(root, members))
+        self.source
+            .scene_mut()
+            .replace_members(root, members)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1921,12 +1924,16 @@ impl SemanticExecutionPlayer {
         prepare: bool,
     ) -> Result<Option<noon::StagedEffectPublication>, AuthoringFailure> {
         self.require_completed_live_segment()?;
-        self.with_live_session(|live| match live.edit_membership(request) {
-            Err(noon::LiveSessionError::Publication(
+        match self.source.scene_mut().edit_membership(request) {
+            Err(noon::AuthoringError::ExecutionPublication(
                 noon::ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
-            )) if prepare => live.prepare_membership(request).map(Some),
-            result => result.map(|_| None),
-        })
+            )) if prepare => self
+                .with_live_session(|live| live.prepare_membership(request))
+                .map(Some),
+            result => result
+                .map(|_| None)
+                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
+        }
     }
 
     /// Stage one existing-handle root-membership operation beside an exact
@@ -2346,9 +2353,9 @@ impl SemanticExecutionPlayer {
         target: &noon::Mobject,
     ) -> Result<bool, AuthoringFailure> {
         self.source
-            .live()
-            .contains(target)
-            .map_err(AuthoringFailure::from)
+            .scene()
+            .contains_direct(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     /// Atomically admit and activate one recursive composition request through the shared
@@ -2426,13 +2433,13 @@ impl SemanticExecutionPlayer {
         members: &[noon::MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, AuthoringFailure> {
-        let mut live = self.source.live();
+        let scene = self.source.scene_mut();
         if adding {
-            live.add_family_members(family, members)
+            scene.add_family_members(family, members)
         } else {
-            live.remove_family_members(family, members)
+            scene.remove_family_members(family, members)
         }
-        .map_err(AuthoringFailure::from)
+        .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2442,9 +2449,9 @@ impl SemanticExecutionPlayer {
         members: &[noon::MobjectTarget<'_>],
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .prepend_family_members(family, members)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2455,9 +2462,9 @@ impl SemanticExecutionPlayer {
         member: noon::MobjectTarget<'_>,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .insert_family_member(family, index, member)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2467,9 +2474,9 @@ impl SemanticExecutionPlayer {
         recursive: bool,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .invert_family_members(family, recursive)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     /// Create one detached family through the retained session so its node and

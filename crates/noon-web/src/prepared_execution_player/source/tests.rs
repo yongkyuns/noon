@@ -324,7 +324,7 @@ fn staged_player_with_snapshot(
         .scene_mut()
         .image(ImageMobjectOptions::rgba8(2, 2, [230, 40, 10, 255].repeat(4)).unwrap())
         .unwrap();
-    execution.live().add(&image).unwrap();
+    execution.scene_mut().add(&image).unwrap();
     let segment = execution.session_mut().wait_segment(1.0).unwrap();
     execution.session_mut().advance_to(2.0).unwrap();
     let batch = if terminal {

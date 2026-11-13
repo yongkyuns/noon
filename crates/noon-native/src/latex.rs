@@ -435,7 +435,7 @@ mod tests {
 
         let removed = live_parts.current_members().unwrap().remove(0);
         execution
-            .live()
+            .scene_mut()
             .remove_family_members(live_parts.family(), &[(&removed).into()])
             .unwrap();
         assert!(execution

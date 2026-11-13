@@ -899,14 +899,20 @@ fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
     scene
         .add_many(&[(&source).into(), (&panel).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let source_id = session.execution_object_id(source.node_id()).unwrap();
-    let anchor = session.execution_object_id(panel.node_id()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let source_id = session
+        .session()
+        .execution_object_id(source.node_id())
+        .unwrap();
+    let anchor = session
+        .session()
+        .execution_object_id(panel.node_id())
+        .unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(124);
     let mut mirror =
         InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
             .unwrap();
-    let mut snapshot = encode(&mut encoder, &mut session, true);
+    let mut snapshot = encode(&mut encoder, session.session_mut(), true);
     // The ordinary authoring path inlines this small path. Exercise the same
     // supported geometry as a versioned worker resource, which requires the
     // installed lookup rather than the inline-geometry shortcut.
@@ -958,9 +964,12 @@ fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
         )
         .unwrap();
     assert_eq!(query.objects, [source_id]);
-    scene.live(&mut session).add(&second).unwrap();
-    let second_id = session.execution_object_id(second.node_id()).unwrap();
-    let mut next = encode(&mut encoder, &mut session, false);
+    session.scene_mut().add(&second).unwrap();
+    let second_id = session
+        .session()
+        .execution_object_id(second.node_id())
+        .unwrap();
+    let mut next = encode(&mut encoder, session.session_mut(), false);
     let mut second_geometries = noon_core::GeometryResourceArena::new();
     let second_handle = second_geometries.insert_path(second_path);
     assert_eq!(
@@ -1027,8 +1036,8 @@ fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
             .objects,
         [second_id]
     );
-    scene.live(&mut session).remove(&second).unwrap();
-    let mut removed = encode(&mut encoder, &mut session, false);
+    session.scene_mut().remove(&second).unwrap();
+    let mut removed = encode(&mut encoder, session.session_mut(), false);
     removed
         .resource_retirements
         .geometries

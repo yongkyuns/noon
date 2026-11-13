@@ -429,14 +429,14 @@ mod tests {
         scene.activate_zooming(&view).unwrap();
         let mut display = view.display().clone();
         display.scale(2.0, 2.0).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let captured = session.inset_2d_views().unwrap();
+        let mut session = scene.into_execution().unwrap();
+        let captured = session.session().inset_2d_views().unwrap();
         assert_eq!(captured.len(), 1);
         assert!((captured[0].display_stroke_width - 0.03).abs() < 1e-6);
-        scene.live(&mut session).remove(view.display()).unwrap();
-        assert!(session.inset_2d_views().unwrap().is_empty());
-        scene.live(&mut session).add(view.display()).unwrap();
-        assert_eq!(session.inset_2d_views().unwrap().len(), 1);
+        session.scene_mut().remove(view.display()).unwrap();
+        assert!(session.session().inset_2d_views().unwrap().is_empty());
+        session.scene_mut().add(view.display()).unwrap();
+        assert_eq!(session.session().inset_2d_views().unwrap().len(), 1);
     }
     #[test]
     fn copied_inset_pair_uses_copied_camera_and_survives_original_retirement() {

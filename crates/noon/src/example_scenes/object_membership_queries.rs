@@ -61,7 +61,6 @@ impl LiveContinuation for ObjectMembershipQueries {
             }
             if self.stage == 1 {
                 scene
-                    .live()
                     .replace_members((&self.root).into(), &[(&self.a).into(), (&self.b).into()])?;
                 scene
                     .live()
@@ -87,7 +86,7 @@ impl LiveContinuation for ObjectMembershipQueries {
                     split_ids(&self.root)?,
                     [self.root.node_id(), self.a.node_id(), self.b.node_id()]
                 );
-                scene.live().add(copied_root)?;
+                scene.add(copied_root)?;
                 assert_depth(&scene.live(), copied_root, 1.625, -3., 2.75)?;
             }
             self.stage += 1;

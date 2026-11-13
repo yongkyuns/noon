@@ -217,7 +217,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             running.scene().effective_path_query(&rectangle)?.start()?,
             before
         );
-        running.live().remove(&ellipse)?;
+        running.scene_mut().remove(&ellipse)?;
         let reveal = running.live().declare_and_activate_create(
             &ellipse,
             crate::AnimationOptions::new()

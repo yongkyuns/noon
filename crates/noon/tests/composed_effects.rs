@@ -169,7 +169,7 @@ fn live_membership_relowers_only_affected_scope_plans_and_rejects_aliases_atomic
     attach(session.scene_mut(), &outer);
     attach(session.scene_mut(), &inner);
     session
-        .live()
+        .scene_mut()
         .add_family_members(&inner, &[(&added).into()])
         .unwrap();
     let ids = |nodes: &[SemanticNodeId]| {
@@ -196,7 +196,7 @@ fn live_membership_relowers_only_affected_scope_plans_and_rejects_aliases_atomic
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.session().frame(), &frame);
     session
-        .live()
+        .scene_mut()
         .remove_family_members(&inner, &[(&a).into()])
         .unwrap();
     assert!(row(session.session(), a.node_id()).is_none());

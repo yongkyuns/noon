@@ -554,7 +554,7 @@ fn glow_pulse_persistent_edit_respects_ordinary_parameter_ownership() {
 #[test]
 fn glow_pulse_fade_out_retires_source_and_temporary_output_together() {
     let (scene, object) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let request = Request::Composition {
         kind: Kind::Parallel,
         children: vec![
@@ -568,36 +568,47 @@ fn glow_pulse_fade_out_retires_source_and_temporary_output_together() {
         ],
         options: AnimationOptions::new(),
     };
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .unwrap();
     let temporary = object.get_effect("glow").unwrap();
-    let execution_object = session.execution_object_id(object.node_id()).unwrap();
+    let execution_object = session
+        .session()
+        .execution_object_id(object.node_id())
+        .unwrap();
     let source_frame_index = session
+        .session()
         .frame()
         .objects
         .iter()
         .position(|row| row.id == execution_object)
         .unwrap();
-    advance(&scene, &mut session, segment, 0.5);
-    assert!(effect(&session, &object).intensity() > 0.0);
-    finish(&scene, &mut session, segment);
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    assert!(effect(session.session(), &object).intensity() > 0.0);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert!(object.get_effect("glow").is_err());
     assert!(temporary.authored_definition().is_err());
     assert!(
-        !scene.live(&mut session).contains(&object).unwrap(),
+        !session.scene_mut().contains_direct(&object).unwrap(),
         "FadeOut must remove source membership at completion"
     );
     // Stable identity and slots survive detachment for replay and re-entry;
     // reachability, presence and painter membership retire in one publication.
     assert_eq!(
-        session.execution_object_id(object.node_id()),
+        session.session().execution_object_id(object.node_id()),
         Some(execution_object)
     );
-    assert!(!session.semantic_object_is_reachable(object.node_id()));
-    assert!(!session.frame().is_present(source_frame_index));
     assert!(!session
+        .session()
+        .semantic_object_is_reachable(object.node_id()));
+    assert!(!session.session().frame().is_present(source_frame_index));
+    assert!(!session
+        .session()
         .painter_order()
         .contains(&(source_frame_index as u32)));
 }

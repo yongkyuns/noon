@@ -92,7 +92,7 @@ fn image_seek_matches_forward_for_fades_and_affine_transform() -> TestResult {
         let mut live = running.live();
         live.advance_segment_to(segment, segment.end_time())?;
         live.complete_segment(segment)?;
-        assert_eq!(live.contains(&image)?, kind != "fade-out");
+        assert_eq!(running.scene().contains_direct(&image)?, kind != "fade-out");
         if kind == "transform" {
             assert_eq!(image.center()?, (3.0, -1.0));
             assert_eq!(image.fill_opacity()?, 0.4);

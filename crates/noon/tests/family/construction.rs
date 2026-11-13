@@ -99,13 +99,13 @@ fn scene_owned_creation_admits_empty_and_nested_families_after_lowering() {
     let empty = scene.family(&[]).unwrap();
     let nested = scene.family(&[(&first).into(), (&second).into()]).unwrap();
     let root = scene.family(&[(&empty).into(), (&nested).into()]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     {
-        let mut live = scene.live(&mut execution);
-        live.add_many(&[(&root).into()]).unwrap();
+        execution.scene_mut().add_many(&[(&root).into()]).unwrap();
     }
-    assert_eq!(execution.frame().objects.len(), 2);
+    assert_eq!(execution.session().frame().objects.len(), 2);
     assert!(execution
+        .session()
         .frame()
         .objects
         .iter()
@@ -120,22 +120,24 @@ fn live_member_batch_rejects_a_late_cycle_without_partial_publication() {
     let nested = scene.family(&[(&first).into()]).unwrap();
     let root = scene.family(&[(&nested).into()]).unwrap();
     scene.add_many(&[(&root).into()]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let store = std::rc::Rc::clone(scene.integration_store());
+    let mut execution = scene.into_execution().unwrap();
+    let store = std::rc::Rc::clone(execution.scene().integration_store());
     {
-        let mut live = scene.live(&mut execution);
-        let wait = live.wait_segment(0.5).unwrap();
-        live.advance_segment_to(wait, 0.5).unwrap();
-        live.complete_segment(wait).unwrap();
-        let before = live.effective(&first).unwrap();
+        let wait = execution.live().wait_segment(0.5).unwrap();
+        execution.live().advance_segment_to(wait, 0.5).unwrap();
+        execution.live().complete_segment(wait).unwrap();
+        let before = execution.live().effective(&first).unwrap();
         let revision = store.borrow().scene_revision();
-        assert!(live
+        assert!(execution
+            .scene_mut()
             .add_family_members(&nested, &[(&second).into(), (&root).into()])
             .is_err());
         assert_eq!(store.borrow().scene_revision(), revision);
-        assert_eq!(live.effective(&first).unwrap(), before);
+        assert_eq!(execution.live().effective(&first).unwrap(), before);
         assert_eq!(
-            live.add_family_members(&nested, &[(&second).into(), (&second).into()])
+            execution
+                .scene_mut()
+                .add_family_members(&nested, &[(&second).into(), (&second).into()])
                 .unwrap(),
             vec![false, true]
         );
@@ -144,17 +146,21 @@ fn live_member_batch_rejects_a_late_cycle_without_partial_publication() {
             revision.checked_next().unwrap()
         );
         assert_eq!(
-            live.remove_family_members(&nested, &[(&second).into(), (&second).into()])
+            execution
+                .scene_mut()
+                .remove_family_members(&nested, &[(&second).into(), (&second).into()])
                 .unwrap(),
             vec![false, true]
         );
         assert_eq!(
-            live.add_family_members(&nested, &[(&second).into()])
+            execution
+                .scene_mut()
+                .add_family_members(&nested, &[(&second).into()])
                 .unwrap(),
             vec![true]
         );
     }
-    assert_eq!(execution.frame().objects.len(), 2);
+    assert_eq!(execution.session().frame().objects.len(), 2);
 }
 
 #[test]

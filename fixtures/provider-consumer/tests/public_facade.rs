@@ -51,7 +51,7 @@ fn public_authoring_live_queries_and_completion() -> Result<(), Box<dyn std::err
         .scene_mut()
         .geometry(ManimGeometryOptions::square(0.5)?)?;
     running.scene_mut().add(&added)?;
-    assert!(running.live().contains(&added)?);
+    assert!(running.scene_mut().contains_direct(&added)?);
     let wait = running.live().wait_segment(0.25)?;
     running.live().advance_segment_to(wait, wait.end_time())?;
     running.live().complete_segment(wait)?;
