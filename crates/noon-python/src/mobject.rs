@@ -53,6 +53,13 @@ pub struct MobjectHandle {
     pub(crate) handle: noon::Mobject,
 }
 impl MobjectHandle {
+    pub(crate) fn from_semantic_mobject(handle: noon::Mobject) -> Self {
+        Self { handle }
+    }
+}
+#[pymethods]
+#[allow(clippy::too_many_arguments)]
+impl MobjectHandle {
     #[pyo3(name = "updatingSuspended")]
     fn updating_suspended(&self) -> PyResult<bool> {
         self.handle.updating_suspended().map_err(engine_error)
@@ -65,13 +72,6 @@ impl MobjectHandle {
             .map_err(engine_error)
     }
 
-    pub(crate) fn from_semantic_mobject(handle: noon::Mobject) -> Self {
-        Self { handle }
-    }
-}
-#[pymethods]
-#[allow(clippy::too_many_arguments)]
-impl MobjectHandle {
     #[cfg(any(feature = "native-text", feature = "typst"))]
     #[pyo3(name = "textSource")]
     fn text_source(&self) -> PyResult<String> {
