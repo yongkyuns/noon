@@ -37,10 +37,9 @@ pub enum FamilyLayoutTarget<'a> {
     Anchor(&'a LayoutAnchor),
 }
 
-/// A placement destination observed from one coherent execution publication.
+/// A placement destination resolved by the owning [`crate::Scene`].
 ///
-/// The value owns no Runtime state. Running placement helpers resolve it against
-/// the caller-supplied [`ExecutionSession`] immediately before one publication.
+/// During playback, the Scene observes the current publication before applying placement.
 #[derive(Clone, Copy)]
 pub enum LiveLayoutTarget<'a> {
     Point(f64, f64),
