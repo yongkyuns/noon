@@ -99,13 +99,6 @@ impl ManimPolarPlane {
     pub fn authored_polar_frame(&self) -> Result<PolarFrame, CoordinateAuthoringError> {
         Ok(PolarFrame::new(self.authored_frame()?))
     }
-
-    pub fn effective_polar_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<PolarFrame, CoordinateAuthoringError> {
-        Ok(PolarFrame::new(self.effective_frame(execution)?))
-    }
 }
 
 impl Scene {

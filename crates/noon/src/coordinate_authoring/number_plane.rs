@@ -194,16 +194,6 @@ impl ManimNumberPlane {
         ))
     }
 
-    pub fn effective_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        Ok(AxesFrame::new(
-            self.x_axis()?.effective_frame(execution)?,
-            self.y_axis()?.effective_frame(execution)?,
-        ))
-    }
-
     fn grid_family(&self, index: usize) -> Result<MobjectFamily, CoordinateAuthoringError> {
         let id = plane_members(&self.family)?[index];
         MobjectFamily::from_node(Rc::clone(self.family.integration_store()), id).map_err(Into::into)

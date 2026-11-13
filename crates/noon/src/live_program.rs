@@ -306,9 +306,14 @@ impl Scene {
 }
 
 impl<C: LiveContinuation> LiveProgram<C> {
-    /// Borrow the authoritative runtime for frame, wake, camera, and query observations.
+    /// Borrow the owning Scene for authoring observations during execution.
+    pub const fn scene(&self) -> &Scene {
+        self.scene.get()
+    }
+
+    /// Borrow the runtime for host frame delivery and diagnostics.
     pub const fn session(&self) -> &ExecutionSession {
-        self.scene.get().owned_execution()
+        self.scene().owned_execution()
     }
 
     /// Derive host cadence from the runtime and this program's one continuation barrier.
