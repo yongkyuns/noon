@@ -12,38 +12,50 @@ fn public_authoring_live_queries_and_completion() -> Result<(), Box<dyn std::err
     let circle = scene.geometry(ManimGeometryOptions::circle(1.0)?)?;
     assert!(scene.revision().get() > before.get());
     scene.add(&circle)?;
-    let mut session = scene.execution_session()?;
-    let mut live = scene.live(&mut session);
-    let target = live.target_editor(&circle)?;
-    live.shift(&target, 4.0, -2.0)?;
-    let segment = live.declare_and_activate_transform_to(
+    let mut running = scene.into_execution()?;
+    let target = running.live().target_editor(&circle)?;
+    running.live().shift(&target, 4.0, -2.0)?;
+    let segment = running.live().declare_and_activate_transform_to(
         &circle,
         &target,
         AnimationOptions::new()
             .run_time(2.0)
             .rate_func(RateFunction::Linear),
     )?;
-    live.advance_segment_to(segment, 1.0)?;
-    let halfway = live.effective(&circle)?;
+    running.live().advance_segment_to(segment, 1.0)?;
+    let halfway = running.scene().effective(&circle)?;
     assert_eq!(halfway.transform.translation, Vec2::new(2.0, -1.0));
-    assert_eq!(live.authored(&circle)?.transform.translation.x, 0.0);
-    live.advance_segment_to(segment, segment.end_time())?;
-    assert!(!live.segment_state(segment).is_complete());
-    live.complete_segment(segment)?;
-    assert!(live.segment_state(segment).is_complete());
-    assert_eq!(live.authored(&circle)?.transform.translation.x, 4.0);
-    live.shift(&circle, 1.0, 0.0)?;
-    let after = live.effective(&circle)?;
+    assert_eq!(
+        running.scene().authored(&circle)?.transform.translation.x,
+        0.0
+    );
+    running
+        .live()
+        .advance_segment_to(segment, segment.end_time())?;
+    assert!(!running.live().segment_state(segment).is_complete());
+    running.live().complete_segment(segment)?;
+    assert!(running.live().segment_state(segment).is_complete());
+    assert_eq!(
+        running.scene().authored(&circle)?.transform.translation.x,
+        4.0
+    );
+    running.live().shift(&circle, 1.0, 0.0)?;
+    let after = running.scene().effective(&circle)?;
     assert_eq!(after.transform.translation, Vec2::new(5.0, -2.0));
-    assert_eq!(after.publication.scene_revision(), scene.revision());
+    assert_eq!(
+        after.publication.scene_revision(),
+        running.scene().revision()
+    );
     assert_eq!(halfway.transform.translation, Vec2::new(2.0, -1.0));
-    let added = live.create_manim_geometry(ManimGeometryOptions::square(0.5)?)?;
-    live.add(&added)?;
-    assert!(live.contains(&added)?);
-    let wait = live.wait_segment(0.25)?;
-    live.advance_segment_to(wait, wait.end_time())?;
-    live.complete_segment(wait)?;
-    assert!(live.segment_state(wait).is_complete());
+    let added = running
+        .scene_mut()
+        .geometry(ManimGeometryOptions::square(0.5)?)?;
+    running.scene_mut().add(&added)?;
+    assert!(running.live().contains(&added)?);
+    let wait = running.live().wait_segment(0.25)?;
+    running.live().advance_segment_to(wait, wait.end_time())?;
+    running.live().complete_segment(wait)?;
+    assert!(running.live().segment_state(wait).is_complete());
     Ok(())
 }
 
