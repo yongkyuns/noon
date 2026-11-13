@@ -316,6 +316,13 @@ impl GeometryOptions {
             stroke_width,
         )
     }
+    #[pyo3(name = "setSheenDirection")]
+    fn set_sheen_direction(&mut self, x: f64, y: f64, z: f64, dimensions: u8) -> PyResult<()> {
+        self.options
+            .set_sheen_direction(x, y, z, dimensions)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "setZIndex")]
     pub fn set_z_index(&mut self, value: f64) -> Result<(), PyErr> {
         self.options.set_z_index(value).map_err(engine_error)

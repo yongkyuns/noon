@@ -1904,6 +1904,68 @@ impl Context {
         self.edit_scene(|scene| scene.fade_family_own(&source.family, darkness))
     }
 
+    #[pyo3(name = "setMobjectSheenDirection")]
+    fn set_mobject_sheen_direction(
+        &mut self,
+        source: &MobjectHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        let target = MobjectTarget::from(&source.handle);
+        self.edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
+    }
+
+    #[pyo3(name = "rotateMobjectSheenDirection")]
+    fn rotate_mobject_sheen_direction(
+        &mut self,
+        source: &MobjectHandle,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        let axis = noon::SemanticVec3::new(axis_x, axis_y, axis_z);
+        let target = MobjectTarget::from(&source.handle);
+        self.edit_scene(|scene| scene.rotate_sheen_direction(&target, angle, axis, family))
+    }
+
+    #[pyo3(name = "setFamilySheenDirection")]
+    fn set_family_sheen_direction(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        let target = MobjectTarget::from(&source.family);
+        self.edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
+    }
+
+    #[pyo3(name = "rotateFamilySheenDirection")]
+    fn rotate_family_sheen_direction(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        let axis = noon::SemanticVec3::new(axis_x, axis_y, axis_z);
+        let target = MobjectTarget::from(&source.family);
+        self.edit_scene(|scene| scene.rotate_sheen_direction(&target, angle, axis, family))
+    }
+
     #[pyo3(name = "setFamilyOwnStrokeCap")]
     fn set_family_own_stroke_cap(
         &mut self,

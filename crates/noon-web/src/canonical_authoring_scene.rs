@@ -11194,8 +11194,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetMobjectSheenDirection)]
-        pub fn live_set_mobject_sheen_direction(
+        #[wasm_bindgen(js_name = setMobjectSheenDirection)]
+        pub fn set_mobject_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             x: f64,
@@ -11210,16 +11210,12 @@ mod wasm {
             );
             let target = noon::MobjectTarget::from(source.semantic_mobject());
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_sheen_direction(&target, direction, family)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotateMobjectSheenDirection)]
-        pub fn live_rotate_mobject_sheen_direction(
+        #[wasm_bindgen(js_name = rotateMobjectSheenDirection)]
+        pub fn rotate_mobject_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             angle: f64,
@@ -11230,17 +11226,15 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let target = noon::MobjectTarget::from(source.semantic_mobject());
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .rotate_sheen_direction(
-                    &target,
-                    angle,
-                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
-                    family,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.rotate_sheen_direction(
+                        &target,
+                        angle,
+                        noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                        family,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = matchStyle)]
@@ -11318,8 +11312,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilySheenDirection)]
-        pub fn live_set_family_sheen_direction(
+        #[wasm_bindgen(js_name = setFamilySheenDirection)]
+        pub fn set_family_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -11335,16 +11329,12 @@ mod wasm {
             let family_target = source.semantic_family()?;
             let target = noon::MobjectTarget::from(&family_target);
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_sheen_direction(&target, direction, family)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotateFamilySheenDirection)]
-        pub fn live_rotate_family_sheen_direction(
+        #[wasm_bindgen(js_name = rotateFamilySheenDirection)]
+        pub fn rotate_family_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             angle: f64,
@@ -11356,17 +11346,15 @@ mod wasm {
             let family_target = source.semantic_family()?;
             let target = noon::MobjectTarget::from(&family_target);
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .rotate_sheen_direction(
-                    &target,
-                    angle,
-                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
-                    family,
-                )
-                .map(|_| ())
-                .map_err(|error| typed_js_error(running_scene_error(error)))
+                .edit_scene(|scene| {
+                    scene.rotate_sheen_direction(
+                        &target,
+                        angle,
+                        noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                        family,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = setFamilyOwnStyle)]
