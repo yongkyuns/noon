@@ -40,7 +40,8 @@ impl PreparedCanvasFixture {
                 AnimationOptions::new().run_time(0.5),
             )
             .map_err(js_error)?;
-        let mut session = scene.execution_session().map_err(js_error)?;
+        let mut execution = scene.into_execution().map_err(js_error)?;
+        let session = execution.session_mut();
         session
             .begin_replay_retention(ReplayLimits {
                 revisions: 128,
@@ -53,9 +54,7 @@ impl PreparedCanvasFixture {
         reader.seek(0.5).map_err(js_error)?;
         Ok(Self {
             source: Some(Producer {
-                execution: scene
-                    .into_execution_with_session(session)
-                    .map_err(js_error)?,
+                execution,
                 target,
                 publisher,
             }),

@@ -396,7 +396,7 @@ fn stale_live_creation_rolls_back_resources_then_valid_creation_stays_detached()
     let mut session = scene.into_execution().unwrap();
     let store = session.scene().integration_store().clone();
     let root = session.scene().root();
-    let mut scene = Scene::with_integration_root(store, root).unwrap();
+    let mut scene = crate::integration::scene_execution::adopt_root(store, root).unwrap();
     scene.circle(0.1).unwrap();
     let revision = scene.revision();
     let before = counts(&scene);

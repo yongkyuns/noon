@@ -180,11 +180,13 @@ fn invalid_publication_context_rejects_before_resource_import() -> TestResult {
     let other = scene.family(&[(&object).into()])?;
     let store = scene.integration_store().clone();
     for invalid_root in [object.node_id(), SemanticNodeId::new(u32::MAX, 1)] {
-        assert!(Scene::with_integration_root(store.clone(), invalid_root).is_err());
+        assert!(
+            noon::integration::scene_execution::adopt_root(store.clone(), invalid_root).is_err()
+        );
     }
     for mut wrong in [
         Scene::new(),
-        Scene::with_integration_root(store.clone(), other.node_id())?,
+        noon::integration::scene_execution::adopt_root(store.clone(), other.node_id())?,
     ] {
         let before = (resources(&wrong), wrong.revision());
         assert!(matches!(

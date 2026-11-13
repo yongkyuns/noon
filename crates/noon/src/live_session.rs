@@ -2001,7 +2001,7 @@ mod tests {
         callbacks
             .apply(&mut session.scene().integration_store().borrow_mut())
             .unwrap();
-        let scene = crate::Scene::with_integration_root(
+        let scene = crate::integration::scene_execution::adopt_root(
             session.scene().integration_store().clone(),
             session.scene().root(),
         )

@@ -447,7 +447,8 @@ fn required_callback_barrier_is_not_bypassed_even_by_unit_zoom() {
 #[test]
 fn navigation_during_real_indicate_preserves_midpoint_completion_and_authored_guard() {
     let (scene, circle, session) = fixture();
-    let mut running = scene.into_execution_with_session(session).unwrap();
+    let mut running =
+        crate::integration::scene_execution::consume_with_session(scene, session).unwrap();
     let original = running.scene().effective(&circle).unwrap();
     let segment = running
         .live()

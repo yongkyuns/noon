@@ -65,7 +65,7 @@ pub async fn create_direct_pointer_input_trace_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let fixture = noon::example_scenes::pointer_input_trace::Fixture::new();
-    let scene = noon::Scene::with_integration_root(
+    let scene = noon::integration::scene_execution::adopt_root(
         std::rc::Rc::new(std::cell::RefCell::new(fixture.store)),
         fixture.root,
     )

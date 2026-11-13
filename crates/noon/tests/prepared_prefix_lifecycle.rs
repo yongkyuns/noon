@@ -181,7 +181,8 @@ fn image_paint_resource_budget_failure_keeps_suffix_cursor_and_reader_unchanged(
 #[test]
 fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
     let (scene, _, source, mut publisher, mut reader) = fixture();
-    let mut execution = scene.into_execution_with_session(source).unwrap();
+    let mut execution =
+        noon::integration::scene_execution::consume_with_session(scene, source).unwrap();
     let a = execution
         .scene_mut()
         .image(image([240, 20, 10, 255]))

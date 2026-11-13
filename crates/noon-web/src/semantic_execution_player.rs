@@ -529,10 +529,9 @@ impl SemanticExecutionPlayer {
         duration: f64,
         transport_session: u32,
     ) -> Result<Self, String> {
-        let scene = noon::Scene::with_integration_root(semantics, semantic_root)
+        let scene = noon::integration::scene_execution::adopt_root(semantics, semantic_root)
             .map_err(|error| error.to_string())?;
-        let source = scene
-            .into_execution_with_session(session)
+        let source = noon::integration::scene_execution::consume_with_session(scene, session)
             .map_err(|error| error.to_string())?;
         Self::from_scene_execution(source, duration, transport_session)
     }

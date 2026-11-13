@@ -94,7 +94,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         .expect("created composition");
     let store = std::rc::Rc::new(std::cell::RefCell::new(store));
     let animation = crate::DeclaredAnimation::new(std::rc::Rc::clone(&store), animation_root);
-    crate::Scene::with_integration_root(store, scene_root)
+    crate::integration::scene_execution::adopt_root(store, scene_root)
         .map_err(|error| error.to_string())?
         .into_execution_with_animation_root(&animation)
 }

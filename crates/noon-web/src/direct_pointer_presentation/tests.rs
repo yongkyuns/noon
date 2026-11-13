@@ -423,9 +423,11 @@ fn binding_reset_is_revalidated_before_positional_admission() {
         NativeStateSource::PointerPosition,
         SemanticSignalValue::Vec3(SemanticVec3::ZERO),
     );
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut execution = scene.into_execution().unwrap();
     execution
         .session_mut()
@@ -610,9 +612,11 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
         source.clone(),
         SemanticSignalValue::Scalar(0.0),
     );
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut execution = scene.into_execution().unwrap();
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
@@ -661,9 +665,11 @@ fn signal_only_publication_requests_refresh_with_pointer_subscribers() {
         source.clone(),
         SemanticSignalValue::Scalar(0.0),
     );
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut execution = scene.into_execution().unwrap();
     execution
         .session_mut()

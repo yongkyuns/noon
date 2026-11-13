@@ -55,7 +55,7 @@ fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
     let frame = session.frame().clone();
     let publication = session.publication_context();
     let mut player = SemanticExecutionPlayer::from_scene_execution(
-        scene.into_execution_with_session(session).unwrap(),
+        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
         1.0,
         105,
     )
@@ -323,7 +323,7 @@ fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport
     assert!(error.contains("scene playback controls"));
     assert_eq!(scene.revision(), revision);
     let error = SemanticExecutionPlayer::from_scene_execution(
-        scene.into_execution_with_session(session).unwrap(),
+        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
         f64::NAN,
         101,
     )
@@ -357,7 +357,7 @@ fn worker_profile_gate_preserves_existing_click_indicate_admission() {
     .unwrap();
     assert!(!live_player.resource_bundle_bytes().is_empty());
     let player = SemanticExecutionPlayer::from_scene_execution(
-        scene.into_execution_with_session(session).unwrap(),
+        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
         1.0,
         103,
     )
@@ -2102,7 +2102,7 @@ fn animated_player() -> SemanticExecutionPlayer {
         )
         .unwrap();
     SemanticExecutionPlayer::from_scene_execution(
-        scene.into_execution_with_session(session).unwrap(),
+        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
         2.0,
         42,
     )
@@ -2136,9 +2136,11 @@ fn native_input_codec_reaches_one_session_and_keeps_event_occurrences_ordered() 
     store
         .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
         .unwrap();
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut player =
         SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 61)
             .unwrap();
@@ -2183,9 +2185,11 @@ fn rejected_native_input_keeps_frame_and_player_event_sequence_unchanged() {
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_updater(object, HostCallbackId::new(9), 0.0, None);
     transaction.apply(&mut store).unwrap();
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut player =
         SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 62)
             .unwrap();

@@ -83,8 +83,11 @@ fn test_scene_from_store(mut store: noon_core::SemanticStore) -> noon::Scene {
     for member in members {
         store.add_semantic_family_member(root, member).unwrap();
     }
-    noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-        .unwrap()
+    noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap()
 }
 
 #[cfg(test)]
@@ -92,8 +95,11 @@ fn test_scene_from_root(
     store: noon_core::SemanticStore,
     root: noon_core::SemanticNodeId,
 ) -> noon::Scene {
-    noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-        .unwrap()
+    noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap()
 }
 use winit::window::{Window, WindowId};
 
@@ -2098,7 +2104,8 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let session = scene.into_execution_with_session(session).unwrap();
+        let session =
+            noon::integration::scene_execution::consume_with_session(scene, session).unwrap();
         let mut app =
             NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
 
