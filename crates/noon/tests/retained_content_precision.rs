@@ -125,14 +125,16 @@ fn retained_content_precision_matches_all_pinned_coordinates_without_query_publi
                 execution = Some(scene.take().unwrap().into_execution().unwrap());
             }
             if phase_index == 3 {
-                let mut live = execution.as_mut().unwrap().live();
+                let scene = execution.as_mut().unwrap().scene_mut();
                 match &root {
                     CompositeEntryHandle::Mobject(value) => {
-                        live.shift_3d(value, SemanticVec3::new(0.5, 0.25, 1.125))
+                        scene
+                            .shift_3d(value, SemanticVec3::new(0.5, 0.25, 1.125))
                             .unwrap();
                     }
                     CompositeEntryHandle::Family(value) => {
-                        live.shift_family_3d(value, SemanticVec3::new(0.5, 0.25, 1.125))
+                        scene
+                            .shift_family_3d(value, SemanticVec3::new(0.5, 0.25, 1.125))
                             .unwrap();
                     }
                 }

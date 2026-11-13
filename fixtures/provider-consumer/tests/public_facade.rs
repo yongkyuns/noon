@@ -14,7 +14,9 @@ fn public_authoring_live_queries_and_completion() -> Result<(), Box<dyn std::err
     scene.add(&circle)?;
     let mut running = scene.into_execution()?;
     let target = running.scene_mut().target_editor(&circle)?;
-    running.live().shift(&target, 4.0, -2.0)?;
+    running
+        .scene_mut()
+        .shift_3d(&target, noon::SemanticVec3::new(4.0, -2.0, 0.0))?;
     let segment = running.live().declare_and_activate_transform_to(
         &circle,
         &target,
@@ -39,7 +41,9 @@ fn public_authoring_live_queries_and_completion() -> Result<(), Box<dyn std::err
         running.scene().authored(&circle)?.transform.translation.x,
         4.0
     );
-    running.live().shift(&circle, 1.0, 0.0)?;
+    running
+        .scene_mut()
+        .shift_3d(&circle, noon::SemanticVec3::new(1.0, 0.0, 0.0))?;
     let after = running.scene().effective(&circle)?;
     assert_eq!(after.transform.translation, Vec2::new(5.0, -2.0));
     assert_eq!(
@@ -75,36 +79,41 @@ fn integration_access_keeps_one_arena_and_stale_publication_protection(
     assert!(Rc::ptr_eq(family.integration_store(), &arena));
     scene.add(&circle)?;
     assert!(arena.borrow().text_resources().is_empty());
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let published = session.publication_context();
-    let original_transform = session.frame().objects[0].transform;
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let published = session.session().publication_context();
+    let original_transform = session.session().frame().objects[0].transform;
     let mut transaction = SemanticMutationTransaction::new();
     transaction.set_property(
         circle.node_id(),
         noon::SemanticObjectProperty::Translation,
         noon::SemanticVec3::new(9.0, 0.0, 0.0),
     );
-    transaction.apply(&mut scene.integration_store().borrow_mut())?;
-    let raw_revision = scene.revision();
+    transaction.apply(&mut session.scene().integration_store().borrow_mut())?;
+    let raw_revision = session.scene().revision();
     assert_ne!(raw_revision, published.scene_revision());
     {
-        let mut live = scene.live(&mut session);
-        let error = live.shift(&circle, 1.0, 0.0).unwrap_err();
-        assert!(matches!(error, LiveSessionError::Publication(
+        let error = session
+            .scene_mut()
+            .shift_3d(&circle, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+            .unwrap_err();
+        assert!(matches!(error, noon::AuthoringError::ExecutionPublication(
             ExecutionSessionPublicationError::StaleSceneRevision { expected, actual }
         ) if expected == published.scene_revision() && actual == raw_revision));
         assert!(matches!(
-            live.effective(&circle),
+            session.live().effective(&circle),
             Err(LiveSessionError::Publication(
                 ExecutionSessionPublicationError::StaleSceneRevision { .. }
             ))
         ));
     }
     assert_eq!(circle.state()?.transform.translation.x, 9.0);
-    assert_eq!(scene.revision(), raw_revision);
-    assert_eq!(session.publication_context(), published);
-    assert_eq!(session.frame().objects[0].transform, original_transform);
-    assert!(session.take_frame_changes().is_empty());
+    assert_eq!(session.scene().revision(), raw_revision);
+    assert_eq!(session.session().publication_context(), published);
+    assert_eq!(
+        session.session().frame().objects[0].transform,
+        original_transform
+    );
+    assert!(session.session_mut().take_frame_changes().is_empty());
     Ok(())
 }

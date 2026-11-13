@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = scene.into_execution()?;
     let unaffected_slot = session.session().execution_slot_for_frame_index(1).unwrap();
     {
-        session.live().set_translation(&target, 2.0, -1.0)?;
+        session.scene_mut().set_translation(&target, 2.0, -1.0)?;
         session
             .scene_mut()
             .replace_content(&target, &replacement_text)?;
@@ -44,8 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session
             .scene_mut()
             .replace_content(&target, &replacement_text)?;
-        session.live().set_translation(&target, -2.0, 1.0)?;
-        session.live().set_scale(&target, 1.0 / 96.0, 1.0 / 96.0)?;
+        session.scene_mut().set_translation(&target, -2.0, 1.0)?;
+        session
+            .scene_mut()
+            .set_scale(&target, 1.0 / 96.0, 1.0 / 96.0)?;
     }
     noon_native::run(session)?;
     Ok(())

@@ -175,6 +175,7 @@ impl AuthoringFailure {
         }
         match error {
             AuthoringError::ExecutionPublication(error) => LiveSessionError::Publication(error),
+            AuthoringError::ExecutionAnimation(error) => LiveSessionError::Activation(error),
             other => other.into(),
         }
         .into()

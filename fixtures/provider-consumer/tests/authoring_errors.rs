@@ -288,7 +288,7 @@ fn live_stale_handle_is_not_reduced_to_a_mobject_string() -> TestResult {
     assert_eq!(session.session().frame(), &frame);
     assert_eq!(session.session().publication_context(), publication);
     assert!(session.session_mut().take_frame_changes().is_empty());
-    session.live().set_translation(&valid, 2.0, 0.0)?;
+    session.scene_mut().set_translation(&valid, 2.0, 0.0)?;
     assert_eq!(
         session.live().effective(&valid)?.transform.translation,
         Vec2::new(2.0, 0.0)
@@ -455,12 +455,12 @@ fn invalid_live_batch_preserves_transaction_cause_and_rolls_back_prior_writes() 
     let mut scene = Scene::new();
     let local = scene.circle(1.0)?;
     scene.add(&local)?;
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let before = authored_snapshot(&scene);
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let before = authored_snapshot(session.scene());
     let state = local.state()?;
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
     let mut transaction = SemanticMutationTransaction::new();
     transaction.set_property(
         local.node_id(),
@@ -472,7 +472,7 @@ fn invalid_live_batch_preserves_transaction_cause_and_rolls_back_prior_writes() 
         SemanticObjectProperty::StrokeWidth,
         f64::NAN,
     );
-    let error = scene.live(&mut session).apply(transaction).unwrap_err();
+    let error = session.live().apply(transaction).unwrap_err();
     let cause = SemanticMutationTransactionError::NonFinitePropertyValue {
         index: 1,
         object: local.node_id(),
@@ -492,7 +492,10 @@ fn invalid_live_batch_preserves_transaction_cause_and_rolls_back_prior_writes() 
         LiveSessionError::Publication(ExecutionSessionPublicationError::Semantic(_))
     ));
     assert_eq!(local.state()?, state);
-    assert_live_unchanged(&scene, &mut session, before, frame, publication);
-    scene.live(&mut session).set_translation(&local, 1.0, 0.0)?;
+    assert_eq!(authored_snapshot(session.scene()), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
+    session.scene_mut().set_translation(&local, 1.0, 0.0)?;
     Ok(())
 }

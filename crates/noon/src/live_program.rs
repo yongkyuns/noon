@@ -802,7 +802,7 @@ mod tests {
             if self.1 {
                 // Ordinary controls and detached animation targets must still work.
                 let target = scene.target_editor(&self.0[0])?;
-                scene.live().set_translation(&target, 1.0, 0.0)?;
+                scene.set_translation(&target, 1.0, 0.0)?;
                 let definition = target.get_effect("stripes")?.authored_definition()?;
                 let detached = scene
                     .live()
@@ -944,12 +944,11 @@ mod tests {
             &mut self,
             scene: &mut ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
-            let live = &mut scene.live();
             *self.resumes.borrow_mut() += 1;
             match self.stage {
                 0 => {
                     self.stage = 1;
-                    let segment = live.declare_and_activate_transform_to(
+                    let segment = scene.live().declare_and_activate_transform_to(
                         &self.source,
                         &self.target,
                         AnimationOptions::new()
@@ -960,9 +959,9 @@ mod tests {
                 }
                 1 => {
                     self.stage = 2;
-                    live.set_translation(&self.source, 3.0, -1.0)?;
+                    scene.set_translation(&self.source, 3.0, -1.0)?;
                     assert_eq!(
-                        live.effective(&self.source)?.transform.translation,
+                        scene.live().effective(&self.source)?.transform.translation,
                         Vec2::new(3.0, -1.0)
                     );
                     Ok(ContinuationStep::Finished)

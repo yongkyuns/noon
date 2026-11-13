@@ -232,7 +232,9 @@ impl LiveContinuation for MovingZoomedSceneAround {
             }
             7 => {
                 let target = scene.target_editor(&self.frame).map_err(message)?;
-                scene.live().shift(&target, 0.0, -2.5).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, -2.5, 0.0))
+                    .map_err(message)?;
                 self.stage = 8;
                 scene
                     .live()

@@ -139,7 +139,10 @@ fn live_target_preserves_an_independent_attachment_then_activates() {
         .scene_mut()
         .set_glow(&target, EffectUpdate::default().intensity(1.5))
         .unwrap();
-    session.live().shift(&target, 2.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&target, crate::SemanticVec3::new(2.0, 0.0, 0.0))
+        .unwrap();
     assert!(session
         .session_mut()
         .take_renderer_publication()
@@ -215,7 +218,7 @@ fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
     }
     let before = session.session().publication_context();
     let original = row(session.session(), &source).clone();
-    assert!(session.live().set_scale(&source, 0.0, 1.0).is_err());
+    assert!(session.scene_mut().set_scale(&source, 0.0, 1.0).is_err());
     assert!(session
         .scene_mut()
         .add_effect(&source, noon_core::Glow::default(), "other")

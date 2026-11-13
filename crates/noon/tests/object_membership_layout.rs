@@ -204,7 +204,10 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
         child.state().unwrap(),
         grandchild.state().unwrap(),
     ];
-    assert!(execution.live().shift(&root, f64::NAN, 0.0).is_err());
+    assert!(execution
+        .scene_mut()
+        .shift_3d(&root, noon::SemanticVec3::new(f64::NAN, 0.0, 0.0))
+        .is_err());
     assert_eq!(
         [
             root.state().unwrap(),
@@ -220,8 +223,10 @@ fn live_root_shift_and_move_publish_once_for_unique_descendants_and_use_whole_ro
         .take_frame_changes()
         .object_indices()
         .is_empty());
-    let result = execution.live().shift(&root, 2.0, -1.0).unwrap();
-    assert_eq!(result.impacts().len(), 3);
+    execution
+        .scene_mut()
+        .shift_3d(&root, noon::SemanticVec3::new(2.0, -1.0, 0.0))
+        .unwrap();
     assert_eq!(execution.scene().revision(), before.checked_next().unwrap());
     assert_eq!(
         [
@@ -342,10 +347,11 @@ fn stale_scene_shift_keeps_publication_error_and_root_scope_atomicity() {
     let mut scene = Scene::new();
     let (root, child, grandchild, _) = root_tree(&mut scene);
     scene.add(&root).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    execution.take_frame_changes();
-    let published = execution.publication_context();
+    let mut execution = scene.into_execution().unwrap();
+    execution.session_mut().take_frame_changes();
+    let published = execution.session().publication_context();
     let frame_transforms: Vec<_> = execution
+        .session()
         .frame()
         .objects
         .iter()
@@ -359,16 +365,19 @@ fn stale_scene_shift_keeps_publication_error_and_root_scope_atomicity() {
         noon::SemanticObjectProperty::Translation,
         noon::SemanticVec3::new(9.0, 0.0, 0.0),
     );
-    raw.apply(&mut scene.integration_store().borrow_mut())
+    raw.apply(&mut execution.scene().integration_store().borrow_mut())
         .unwrap();
-    let raw_revision = scene.revision();
+    let raw_revision = execution.scene().revision();
     assert_ne!(raw_revision, published.scene_revision());
     for x in [1.0, f64::NAN] {
-        let error = scene.live(&mut execution).shift(&root, x, 0.0).unwrap_err();
+        let error = execution
+            .scene_mut()
+            .shift_3d(&root, noon::SemanticVec3::new(x, 0.0, 0.0))
+            .unwrap_err();
         assert!(
             matches!(
                 &error,
-                noon::LiveSessionError::Publication(
+                noon::AuthoringError::ExecutionPublication(
                     noon::ExecutionSessionPublicationError::StaleSceneRevision { expected, actual }
                 ) if *expected == published.scene_revision() && *actual == raw_revision
             ),
@@ -378,10 +387,11 @@ fn stale_scene_shift_keeps_publication_error_and_root_scope_atomicity() {
     assert_eq!(translation(&root), (9.0, 0.0));
     assert_eq!(translation(&child), child_translation);
     assert_eq!(translation(&grandchild), grandchild_translation);
-    assert_eq!(scene.revision(), raw_revision);
-    assert_eq!(execution.publication_context(), published);
+    assert_eq!(execution.scene().revision(), raw_revision);
+    assert_eq!(execution.session().publication_context(), published);
     assert_eq!(
         execution
+            .session()
             .frame()
             .objects
             .iter()
@@ -389,7 +399,7 @@ fn stale_scene_shift_keeps_publication_error_and_root_scope_atomicity() {
             .collect::<Vec<_>>(),
         frame_transforms
     );
-    assert!(execution.take_frame_changes().is_empty());
+    assert!(execution.session_mut().take_frame_changes().is_empty());
 }
 
 #[test]
@@ -405,22 +415,19 @@ fn pending_live_shift_keeps_publication_error_then_recovers_after_completion() {
     let animation = scene
         .declare_transform_to(&unrelated, &target, AnimationOptions::new().run_time(0.1))
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut execution)
-        .play_animation(&animation)
-        .unwrap();
-    execution.take_frame_changes();
-    let revision = scene.revision();
-    let published = execution.publication_context();
-    let error = scene
-        .live(&mut execution)
-        .shift(&root, 1.0, 0.0)
+    let mut execution = scene.into_execution().unwrap();
+    let segment = execution.live().play_animation(&animation).unwrap();
+    execution.session_mut().take_frame_changes();
+    let revision = execution.scene().revision();
+    let published = execution.session().publication_context();
+    let error = execution
+        .scene_mut()
+        .shift_3d(&root, noon::SemanticVec3::new(1.0, 0.0, 0.0))
         .unwrap_err();
     assert!(
         matches!(
             &error,
-            noon::LiveSessionError::Publication(
+            noon::AuthoringError::ExecutionPublication(
                 noon::ExecutionSessionPublicationError::SegmentCompletionPending
             )
         ),
@@ -434,15 +441,19 @@ fn pending_live_shift_keeps_publication_error_then_recovers_after_completion() {
         ],
         [(0.0, 0.0), (4.0, 0.0), (8.0, 0.0)]
     );
-    assert_eq!(scene.revision(), revision);
-    assert_eq!(execution.publication_context(), published);
-    assert!(execution.take_frame_changes().is_empty());
-    let mut live = scene.live(&mut execution);
-    live.advance_segment_to(segment, segment.end_time())
+    assert_eq!(execution.scene().revision(), revision);
+    assert_eq!(execution.session().publication_context(), published);
+    assert!(execution.session_mut().take_frame_changes().is_empty());
+    execution
+        .live()
+        .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    live.complete_segment(segment).unwrap();
+    execution.live().complete_segment(segment).unwrap();
     let unrelated_translation = translation(&unrelated);
-    live.shift(&root, 1.0, 0.0).unwrap();
+    execution
+        .scene_mut()
+        .shift_3d(&root, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+        .unwrap();
     assert_eq!(
         [
             translation(&root),

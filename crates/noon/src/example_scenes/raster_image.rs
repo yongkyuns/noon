@@ -43,21 +43,15 @@ impl LiveContinuation for RasterImage {
                 if scene.contains_direct(&second).map_err(message)? {
                     return Err("new image was admitted before add".into());
                 }
-                scene
-                    .live()
-                    .set_translation(&second, 2.0, 0.0)
-                    .map_err(message)?;
+                scene.set_translation(&second, 2.0, 0.0).map_err(message)?;
                 scene.add(&second).map_err(message)?;
                 let target = scene.target_editor(&self.image).map_err(message)?;
-                scene
-                    .live()
-                    .set_translation(&target, 0.0, 0.0)
-                    .map_err(message)?;
+                scene.set_translation(&target, 0.0, 0.0).map_err(message)?;
                 scene
                     .live()
                     .rotate(&target, std::f64::consts::FRAC_PI_4)
                     .map_err(message)?;
-                scene.live().scale(&target, 0.75, 0.75).map_err(message)?;
+                scene.scale(&target, 0.75, 0.75).map_err(message)?;
                 scene.set_opacity(&target, 0.6).map_err(message)?;
                 scene
                     .live()

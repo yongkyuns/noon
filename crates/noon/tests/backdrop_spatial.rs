@@ -86,7 +86,10 @@ fn backdrop_queries_borrow_the_synchronized_session_index_and_follow_local_edits
             .objects,
         [later_id, earlier_id]
     );
-    session.live().shift(&earlier, 20.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&earlier, noon::SemanticVec3::new(20.0, 0.0, 0.0))
+        .unwrap();
     assert_eq!(
         session
             .session_mut()

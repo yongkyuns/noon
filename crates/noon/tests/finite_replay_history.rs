@@ -161,7 +161,10 @@ fn morph_affine_morph_replay_selects_time_qualified_content_and_render_frame() {
     session.session_mut().advance_to(1.5).unwrap();
     let target = session.scene_mut().target_editor(&shape).unwrap();
     {
-        session.live().shift(&target, 3.0, 1.0).unwrap();
+        session
+            .scene_mut()
+            .shift_3d(&target, noon::SemanticVec3::new(3.0, 1.0, 0.0))
+            .unwrap();
         session.live().rotate(&target, 0.4).unwrap();
     }
     let segment = session
@@ -195,26 +198,44 @@ fn sealed_mutation_rejects_before_semantic_commit_and_discard_restores_frontier(
     let mut scene = Scene::new();
     let shape = scene.square(1.0).unwrap();
     scene.add(&shape).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
-    session.advance_to(1.0).unwrap();
-    scene.live(&mut session).shift(&shape, 4.0, 0.0).unwrap();
-    session.advance_to(2.0).unwrap();
-    let frontier = snapshot(&session);
-    session.seal_replay().unwrap();
+    session.session_mut().advance_to(1.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&shape, noon::SemanticVec3::new(4.0, 0.0, 0.0))
+        .unwrap();
+    session.session_mut().advance_to(2.0).unwrap();
+    let frontier = snapshot(session.session());
+    session.session_mut().seal_replay().unwrap();
     session.seek(0.5).unwrap();
-    let revision = scene.integration_store().borrow().scene_revision();
-    assert!(scene.live(&mut session).shift(&shape, 1.0, 0.0).is_err());
+    let revision = session
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
+    assert!(session
+        .scene_mut()
+        .shift_3d(&shape, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+        .is_err());
     assert_eq!(
-        scene.integration_store().borrow().scene_revision(),
+        session
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
         revision
     );
-    session.discard_replay_retention();
-    assert_eq!(snapshot(&session), frontier);
-    assert_eq!(session.replay_stats().revisions_retained, 0);
-    scene.live(&mut session).shift(&shape, 1.0, 0.0).unwrap();
+    session.session_mut().discard_replay_retention();
+    assert_eq!(snapshot(session.session()), frontier);
+    assert_eq!(session.session().replay_stats().revisions_retained, 0);
+    session
+        .scene_mut()
+        .shift_3d(&shape, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+        .unwrap();
 }
 
 #[test]
@@ -222,21 +243,40 @@ fn retention_exhaustion_preserves_live_execution_and_rejects_replay() {
     let mut scene = Scene::new();
     let shape = scene.square(1.0).unwrap();
     scene.add(&shape).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(ReplayLimits {
             revisions: 1,
             payloads: 1,
         })
         .unwrap();
-    scene.live(&mut session).shift(&shape, 1.0, 0.0).unwrap();
-    session.advance_to(1.0).unwrap();
-    scene.live(&mut session).shift(&shape, 1.0, 0.0).unwrap();
-    assert_eq!(session.frame().objects[0].transform.translation.x, 2.0);
-    assert_eq!(session.seal_replay(), Err(ReplayError::RetentionLimit));
-    session.discard_replay_retention();
-    scene.live(&mut session).shift(&shape, 1.0, 0.0).unwrap();
-    assert_eq!(session.frame().objects[0].transform.translation.x, 3.0);
+    session
+        .scene_mut()
+        .shift_3d(&shape, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+        .unwrap();
+    session.session_mut().advance_to(1.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&shape, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+        .unwrap();
+    assert_eq!(
+        session.session().frame().objects[0].transform.translation.x,
+        2.0
+    );
+    assert_eq!(
+        session.session_mut().seal_replay(),
+        Err(ReplayError::RetentionLimit)
+    );
+    session.session_mut().discard_replay_retention();
+    session
+        .scene_mut()
+        .shift_3d(&shape, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+        .unwrap();
+    assert_eq!(
+        session.session().frame().objects[0].transform.translation.x,
+        3.0
+    );
 }
 
 #[test]

@@ -438,7 +438,9 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
     scene.add(&second)?;
     let mut running = scene.into_execution()?;
     running.session_mut().take_frame_changes();
-    running.live().shift(&first, 1.0, 0.0)?;
+    running
+        .scene_mut()
+        .shift_3d(&first, noon::SemanticVec3::new(1.0, 0.0, 0.0))?;
     let before = snapshot(running.scene(), &[&first, &second]);
     let frame = running.session().frame().clone();
     let publication = running.session().publication_context();

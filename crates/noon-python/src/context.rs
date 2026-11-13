@@ -1039,30 +1039,17 @@ impl Context {
     #[pyo3(name = "createValueTracker")]
     fn create_tracker(&mut self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
         self.available()?;
-        let value =
-            if let Some((store, root, execution)) = scene_execution::parts_mut(&mut self.scene) {
-                noon::integration::publish_value_tracker_creation(store, root, execution, initial)
-            } else {
-                self.scene.value_tracker(initial)
-            };
-        value
+        self.scene
+            .value_tracker(initial)
             .map(|value| crate::signals::ValueTrackerHandle { value })
             .map_err(engine_error)
     }
     #[pyo3(name = "associateValueTracker")]
     fn associate_tracker(&mut self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<()> {
         self.available()?;
-        if let Some((store, root, execution)) = scene_execution::parts_mut(&mut self.scene) {
-            noon::integration::publish_value_tracker_association(
-                store,
-                root,
-                execution,
-                &tracker.value,
-            )
-        } else {
-            self.scene.associate_value_tracker(&tracker.value)
-        }
-        .map_err(engine_error)
+        self.scene
+            .associate_value_tracker(&tracker.value)
+            .map_err(engine_error)
     }
     #[pyo3(name = "valueTrackerValue")]
     fn tracker_value(&self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<f64> {
@@ -1098,13 +1085,10 @@ impl Context {
         value: f64,
     ) -> PyResult<()> {
         self.available()?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_value(&tracker.value, value))
-        } else {
-            self.scene
-                .set_value(&tracker.value, value)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_value(&tracker.value, value)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "trackerPosition")]
     fn tracker_position(
@@ -2266,16 +2250,10 @@ impl Context {
     fn set_angle_value(&mut self, target: &MobjectHandle, radians: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_angle_value(&target.handle, radians))
-                .map(|_| ())
-        } else {
-            target
-                .handle
-                .clone()
-                .set_angle_value(radians)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_angle_value(&target.handle, radians)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[cfg(feature = "typst")]
     #[pyo3(name = "liveCreateManimTypst")]
@@ -3711,17 +3689,17 @@ impl Context {
     #[pyo3(name = "liveSetTranslation")]
     fn set_translation(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.with_live(|live| live.set_translation(&target.handle, x, y).map(|_| ()))
+        self.edit_running_scene(|scene| scene.set_translation(&target.handle, x, y))
     }
     #[pyo3(name = "liveSetScale")]
     fn set_scale(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.with_live(|live| live.set_scale(&target.handle, x, y).map(|_| ()))
+        self.edit_running_scene(|scene| scene.set_scale(&target.handle, x, y))
     }
     #[pyo3(name = "liveSetRotation")]
     fn set_rotation(&mut self, target: &MobjectHandle, angle: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.with_live(|live| live.set_rotation(&target.handle, angle).map(|_| ()))
+        self.edit_running_scene(|scene| scene.set_rotation(&target.handle, angle))
     }
     #[pyo3(name = "liveReplaceContent")]
     fn replace_content(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {

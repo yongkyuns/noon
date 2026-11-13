@@ -773,10 +773,9 @@ impl SemanticExecutionPlayer {
         y: f64,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .set_translation(mobject, x, y)
-            .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -785,8 +784,10 @@ impl SemanticExecutionPlayer {
         mobject: &noon::Mobject,
         radians: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_angle_value(mobject, radians))
-            .map(|_| ())
+        self.source
+            .scene_mut()
+            .set_angle_value(mobject, radians)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1534,10 +1535,9 @@ impl SemanticExecutionPlayer {
         y: f64,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .set_scale(mobject, x, y)
-            .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1561,10 +1561,9 @@ impl SemanticExecutionPlayer {
         angle: f64,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .set_rotation(mobject, angle)
-            .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -2328,14 +2327,10 @@ impl SemanticExecutionPlayer {
         initial: f64,
     ) -> Result<noon::ValueTracker, AuthoringFailure> {
         self.require_completed_live_segment()?;
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_value_tracker_creation(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            initial,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene_mut()
+            .value_tracker(initial)
+            .map_err(AuthoringFailure::from)
     }
 
     /// Associate and sparsely enroll one pre-existing tracker in this live root.
@@ -2345,14 +2340,10 @@ impl SemanticExecutionPlayer {
         tracker: &noon::ValueTracker,
     ) -> Result<(), AuthoringFailure> {
         self.require_completed_live_segment()?;
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::publish_value_tracker_association(
-            &semantics,
-            self.source.scene().root(),
-            self.source.session_mut(),
-            tracker,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene_mut()
+            .associate_value_tracker(tracker)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2851,9 +2842,9 @@ impl SemanticExecutionPlayer {
             return Err("ValueTracker value must be finite".into());
         }
         self.source
-            .live()
+            .scene_mut()
             .set_value(tracker, value)
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

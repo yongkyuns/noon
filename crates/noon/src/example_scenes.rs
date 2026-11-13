@@ -624,56 +624,63 @@ pub fn live_affine_completion() -> Result<crate::SceneExecution, Box<dyn Error>>
             .rate_func(RateFunction::Linear),
     )?;
 
-    let mut session = scene.execution_session()?;
+    let mut session = scene.into_execution()?;
     {
-        let mut live = scene.live(&mut session);
-        let first_segment = live.play_animation(&first)?;
-        live.advance_segment_to(first_segment, first_segment.end_time())?;
-        assert!(!live.segment_state(first_segment).is_complete());
-        live.complete_segment(first_segment)?;
-        assert!(live.segment_state(first_segment).is_complete());
+        let first_segment = session.live().play_animation(&first)?;
+        session
+            .live()
+            .advance_segment_to(first_segment, first_segment.end_time())?;
+        assert!(!session.live().segment_state(first_segment).is_complete());
+        session.live().complete_segment(first_segment)?;
+        assert!(session.live().segment_state(first_segment).is_complete());
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.live().effective(&circle)?.transform.translation,
             Vec2::new(2.0, -2.0)
         );
-        let first_authored = live.authored(&circle)?.transform.translation;
+        let first_authored = session.live().authored(&circle)?.transform.translation;
         assert_eq!((first_authored.x, first_authored.y), (2.0, -2.0));
 
-        live.set_translation(&circle, 3.0, -2.0)?;
+        session.scene_mut().set_translation(&circle, 3.0, -2.0)?;
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.live().effective(&circle)?.transform.translation,
             Vec2::new(3.0, -2.0)
         );
 
-        let next_frame = live.wait_segment(0.25)?;
-        live.advance_segment_to(next_frame, next_frame.end_time())?;
-        live.complete_segment(next_frame)?;
+        let next_frame = session.live().wait_segment(0.25)?;
+        session
+            .live()
+            .advance_segment_to(next_frame, next_frame.end_time())?;
+        session.live().complete_segment(next_frame)?;
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.live().effective(&circle)?.transform.translation,
             Vec2::new(3.0, -2.0),
             "released timeline state must not overwrite the later authored setter",
         );
-        let edited_authored = live.authored(&circle)?.transform.translation;
+        let edited_authored = session.live().authored(&circle)?.transform.translation;
         assert_eq!((edited_authored.x, edited_authored.y), (3.0, -2.0));
 
-        let second_segment = live.play_animation(&second)?;
-        live.advance_segment_to(second_segment, second_segment.start_time() + 1.0)?;
+        let second_segment = session.live().play_animation(&second)?;
+        session
+            .live()
+            .advance_segment_to(second_segment, second_segment.start_time() + 1.0)?;
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.live().effective(&circle)?.transform.translation,
             Vec2::new(4.0, -2.0),
             "the second declaration must capture the current effective source",
         );
-        live.advance_segment_to(second_segment, second_segment.end_time())?;
-        live.complete_segment(second_segment)?;
-        assert!(live.segment_state(second_segment).is_complete());
+        session
+            .live()
+            .advance_segment_to(second_segment, second_segment.end_time())?;
+        session.live().complete_segment(second_segment)?;
+        assert!(session.live().segment_state(second_segment).is_complete());
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.live().effective(&circle)?.transform.translation,
             Vec2::new(5.0, -2.0)
         );
-        let final_authored = live.authored(&circle)?.transform.translation;
+        let final_authored = session.live().authored(&circle)?.transform.translation;
         assert_eq!((final_authored.x, final_authored.y), (5.0, -2.0));
     }
-    Ok(scene.into_execution_with_session(session)?)
+    Ok(session)
 }
 
 /// Execute the paired ordinary affine-play example on one live runtime.
@@ -721,7 +728,9 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
             session.live().effective_layout(&circle)?.center,
             (2.0, -1.0)
         );
-        session.live().shift(&circle, 1.0, 0.0)?;
+        session
+            .scene_mut()
+            .shift_3d(&circle, crate::SemanticVec3::new(1.0, 0.0, 0.0))?;
         assert_eq!(
             session.live().effective_layout(&circle)?.center,
             (3.0, -1.0)
@@ -731,7 +740,9 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
 
     {
         let second_target = session.scene_mut().target_editor(&circle)?;
-        session.live().set_translation(&second_target, 5.0, -1.0)?;
+        session
+            .scene_mut()
+            .set_translation(&second_target, 5.0, -1.0)?;
         let second = session.live().declare_and_activate_transform_to(
             &circle,
             &second_target,
@@ -802,14 +813,12 @@ impl LiveContinuation for OrdinaryAffineContinuation {
                 // This resumes after the wait's no-op endpoint. It proves that
                 // authored edits and late targets keep using the one live session.
                 scene
-                    .live()
-                    .shift(&self.circle, 1.0, 0.0)
+                    .shift_3d(&self.circle, crate::SemanticVec3::new(1.0, 0.0, 0.0))
                     .map_err(|error| error.to_string())?;
                 let late_target = scene
                     .target_editor(&self.circle)
                     .map_err(|error| error.to_string())?;
                 scene
-                    .live()
                     .set_translation(&late_target, 5.0, -1.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 3;
@@ -971,41 +980,48 @@ impl LiveContinuation for OrdinaryValueTrackerContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.associate_value_tracker(&self.tracker)
+                scene
+                    .associate_value_tracker(&self.tracker)
                     .map_err(|error| error.to_string())?;
-                live.declare_and_activate_value_tracker(
-                    &self.tracker,
-                    2.0,
-                    2.0,
-                    RateFunction::Linear,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_value_tracker(
+                        &self.tracker,
+                        2.0,
+                        2.0,
+                        RateFunction::Linear,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
                 // Completion releases the first track. This setter is one
                 // authored hold at t=2, not a host-side scalar cache.
-                live.set_value(&self.tracker, 3.0)
+                scene
+                    .set_value(&self.tracker, 3.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 2;
-                live.wait_segment(1.0)
+                scene
+                    .live()
+                    .wait_segment(1.0)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             2 => {
                 self.stage = 3;
-                live.declare_and_activate_value_tracker(
-                    &self.tracker,
-                    5.0,
-                    1.0,
-                    RateFunction::Linear,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_value_tracker(
+                        &self.tracker,
+                        5.0,
+                        1.0,
+                        RateFunction::Linear,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             3 => {
                 self.stage = 4;
@@ -1469,30 +1485,36 @@ impl LiveContinuation for OrdinaryCallbackSparseReadsContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
                 self.stage = 2;
-                live.declare_and_activate_value_tracker(
-                    &self.tracker,
-                    2.0,
-                    1.0,
-                    RateFunction::Linear,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_value_tracker(
+                        &self.tracker,
+                        2.0,
+                        1.0,
+                        RateFunction::Linear,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
-                live.set_value(&self.tracker, 3.0)
+                scene
+                    .set_value(&self.tracker, 3.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }

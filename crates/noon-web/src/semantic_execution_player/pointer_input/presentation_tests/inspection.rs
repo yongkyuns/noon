@@ -242,11 +242,11 @@ fn worker_inspection_during_real_indicate_preserves_restoration_and_authored_gua
     assert!(acknowledge(&mut p, r));
     assert_eq!(scroll(&mut p, Some(r), zoom_in()), Ok(Some(true)));
     assert_eq!(p.source.session().frame().time, 0.5);
-    assert!(
-        noon::LiveSession::new(&semantics, root, p.source.session_mut())
-            .set_translation(&circle, 9.0, 0.0)
-            .is_err()
-    );
+    assert!(p
+        .source
+        .scene_mut()
+        .set_translation(&circle, 9.0, 0.0)
+        .is_err());
     let inspection = p.source.session().inspection_camera().unwrap();
     noon::LiveSession::new(&semantics, root, p.source.session_mut())
         .advance_segment_to(segment, 1.0)

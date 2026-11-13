@@ -821,7 +821,10 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
         .unwrap();
     assert_eq!(query.objects, [earlier_id]);
     assert_eq!(query.stats.full_scan_fallbacks, 0);
-    session.live().shift(&earlier, 20.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&earlier, noon::SemanticVec3::new(20.0, 0.0, 0.0))
+        .unwrap();
     let moved = encode(&mut encoder, session.session_mut(), false);
     let (_, changes) = apply(&mut mirror, &moved).unwrap();
     let stats = mirror.last_spatial_query_update_stats();
@@ -836,7 +839,10 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
         .is_empty());
     // A bad suffix must preserve the previously committed query, not just the
     // frame and protocol sequence. Retry the exact same sequence afterward.
-    session.live().shift(&earlier, -20.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&earlier, noon::SemanticVec3::new(-20.0, 0.0, 0.0))
+        .unwrap();
     let good = encode(&mut encoder, session.session_mut(), false);
     let mut bad = good.clone();
     let mut suffix = added.retained.objects[0].clone();

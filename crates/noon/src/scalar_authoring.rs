@@ -245,15 +245,20 @@ impl Scene {
             .map_err(AuthoringError::from)
     }
 
-    /// Set a non-timeline-owned tracker through the shared mutation transaction.
-    pub fn set_value(&self, tracker: &ValueTracker, value: f64) -> Result<(), AuthoringError> {
+    /// Set a non-timeline-owned tracker at the current authored or running time.
+    pub fn set_value(&mut self, tracker: &ValueTracker, value: f64) -> Result<(), AuthoringError> {
         tracker.require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            return self.with_running_execution(|store, _, execution| {
+                execution
+                    .set_scalar_signal_value(&mut store.borrow_mut(), tracker.node_id(), value)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            });
+        }
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_signal(tracker.node, value);
-        transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        transaction.set_signal(tracker.node_id(), value);
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
     /// Read the scalar track value at this Scene's shared authored cursor.

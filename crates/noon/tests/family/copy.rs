@@ -196,7 +196,10 @@ fn live_copy_obeys_completion_and_captures_completed_state_without_changing_sour
             .scene_revision(),
         before.publication.scene_revision().checked_next().unwrap()
     );
-    execution.live().shift(&copy_leaf, 1.0, 0.0).unwrap();
+    execution
+        .scene_mut()
+        .shift_3d(&copy_leaf, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+        .unwrap();
     assert_eq!(copy_leaf.center().unwrap(), (5.0, 0.0));
     assert_eq!(leaf.center().unwrap(), (4.0, 0.0));
 }

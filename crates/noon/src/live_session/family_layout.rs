@@ -274,7 +274,7 @@ impl LiveSession<'_> {
 
     /// Apply Manim's default center-pivot scale through one coherent live publication.
     ///
-    /// Native [`LiveSession::scale`] remains the origin-space affine primitive. This
+    /// Native [`crate::Scene::scale`] remains the origin-space affine primitive. This
     /// compatibility operation reuses the same atomic affine transaction used for
     /// families so Python never reconstructs a pivot or publishes a follow-up move.
     pub fn manim_scale(
