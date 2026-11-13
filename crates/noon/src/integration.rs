@@ -197,17 +197,18 @@ pub fn family_color(
 
 /// Decode RGBA components for per-member gradient authoring.
 pub fn gradient_colors(values: &[f64]) -> Result<Vec<crate::Color>, AuthoringFailure> {
-    if !values.len().is_multiple_of(4) {
+    let (colors, remainder) = values.as_chunks::<4>();
+    if !remainder.is_empty() {
         return Err(AuthoringFailure::new(
             "invalid_input",
             "gradient.invalid_components",
             "gradient colors require RGBA components",
         ));
     }
-    values
-        .chunks_exact(4)
-        .map(|c| {
-            family_color(true, c[0], c[1], c[2], c[3])
+    colors
+        .iter()
+        .map(|&[red, green, blue, alpha]| {
+            family_color(true, red, green, blue, alpha)
                 .map(|color| color.expect("enabled color"))
                 .map_err(|error| {
                     AuthoringFailure::new("invalid_input", "gradient.invalid_color", error)
