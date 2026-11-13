@@ -3,24 +3,6 @@
 use crate::authoring_error::AuthoringFailure;
 
 impl super::SemanticExecutionPlayer {
-    pub(crate) fn live_set_surface_checkerboard(
-        &mut self,
-        surface: &noon::SurfaceFamily,
-        colors: [noon::Color; 2],
-        opacity: f64,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_surface_checkerboard(surface, colors, opacity))
-            .map(|_| ())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_manim_arrow(
-        &mut self,
-        options: noon::ManimArrowOptions,
-    ) -> Result<noon::ManimArrow, AuthoringFailure> {
-        self.with_live_session(|live| live.create_manim_arrow(options))
-    }
-
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn world_affine(
         &mut self,

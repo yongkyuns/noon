@@ -6,13 +6,11 @@
 //! Existing affine declarations use session-local segments, whose endpoint
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
-mod arrow;
 mod brace;
 mod camera_motion;
 mod family_layout;
 mod path_editing;
 mod point_promotion;
-mod spatial;
 pub use family_layout::LiveLayoutTarget;
 
 #[cfg(test)]
