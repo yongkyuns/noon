@@ -2,14 +2,16 @@
 // original assertion/captures and run the same real test in a fresh browser.
 import { chromium } from 'playwright';
 import { appendFileSync, existsSync } from 'node:fs';
-import { cp, mkdir, rm, rename } from 'node:fs/promises';
+import { mkdir, rename } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { observeRendererCalls } from './project-site-native-observation.mjs';
 
 const output = fileURLToPath(new URL('../browser-smoke-artifacts/project-site/', import.meta.url));
 const original = `${output}/embedded`, backup = `${output}/original-runtime-failure`;
 await mkdir(output, {recursive:true});
-if (existsSync(original)) await cp(original, backup, {recursive:true});
+// Atomically preserve the failed run before replay writes new captures. Never
+// rename, remove or copy evidence during artifact upload, even if replay times out.
+if (existsSync(original)) await rename(original, backup);
 const journal = `${output}/native-replay.ndjson`;
 const prefix = 'NOON_NATIVE_CALL ';
 let nextWorker = 0;
@@ -56,9 +58,4 @@ try {
   await import('./project-site-embed-smoke.mjs');
 } finally {
   chromium.launch = launch;
-  if (existsSync(original)) await rename(original, `${output}/native-replay-captures`);
-  if (existsSync(backup)) {
-    await cp(backup, original, {recursive:true});
-    await rm(backup, {recursive:true});
-  }
 }
