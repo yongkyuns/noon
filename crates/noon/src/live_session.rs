@@ -9,7 +9,6 @@
 mod arrow;
 mod brace;
 mod camera_motion;
-mod coordinates;
 mod family_layout;
 mod path_editing;
 mod point_promotion;

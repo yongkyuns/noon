@@ -81,6 +81,8 @@ pub use bar_chart::{ManimBarChart, ManimBarChartOptions};
 pub use polar_plane::{ManimPolarPlane, ManimPolarPlaneOptions, PolarAzimuthDirection};
 
 #[cfg(test)]
+mod running_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Debug)]
@@ -977,7 +979,7 @@ pub(crate) fn resolve_family(
     Ok(MobjectFamily::from_node(store, id)?)
 }
 
-pub(crate) fn prepare_number_line(
+fn prepare_number_line(
     options: &ManimNumberLineOptions,
 ) -> Result<PreparedNumberLine, CoordinateAuthoringError> {
     prepare_number_line_in_frame(options.frame()?, options)
@@ -1035,13 +1037,13 @@ fn prepare_number_line_in_frame(
     })
 }
 
-pub(crate) struct PreparedNumberLine {
+struct PreparedNumberLine {
     states: Vec<SemanticObjectState>,
     tip_path: Option<VectorPath>,
     tip_style: Option<SemanticStyle>,
 }
 
-pub(crate) fn publish_prepared_number_line(
+fn publish_prepared_number_line(
     prepared: PreparedNumberLine,
     store: &mut SemanticStore,
     mut publish: impl FnMut(
@@ -1074,9 +1076,7 @@ pub(crate) fn publish_prepared_number_line(
     })
 }
 
-pub(crate) fn prepare_axes(
-    options: &ManimAxesOptions,
-) -> Result<PreparedAxes, CoordinateAuthoringError> {
+fn prepare_axes(options: &ManimAxesOptions) -> Result<PreparedAxes, CoordinateAuthoringError> {
     let frame = AxesFrame::centered_with_scales(
         options.x_range,
         options.y_range,
@@ -1134,12 +1134,12 @@ pub(crate) fn prepare_axes(
     Ok(PreparedAxes { axes, tip_paths })
 }
 
-pub(crate) struct PreparedAxes {
-    pub(crate) axes: [Vec<SemanticObjectState>; 2],
-    pub(crate) tip_paths: Vec<VectorPath>,
+struct PreparedAxes {
+    axes: [Vec<SemanticObjectState>; 2],
+    tip_paths: Vec<VectorPath>,
 }
 
-pub(crate) fn publish_prepared_axes(
+fn publish_prepared_axes(
     options: &ManimAxesOptions,
     axes: [Vec<SemanticObjectState>; 2],
     tip_paths: Vec<VectorPath>,

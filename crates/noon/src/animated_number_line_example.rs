@@ -2,9 +2,9 @@
 use crate::plot_presentation::NumberLabelOptions;
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, FadeEndpoint,
-    LiveContinuation, LiveProgram, LiveSession, ManimGeometryOptions, ManimNumberLine,
-    ManimNumberLineOptions, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind as Kind,
-    SemanticFadeDirection, Text, TransformToRequest, YELLOW,
+    LiveContinuation, LiveProgram, ManimGeometryOptions, ManimNumberLine, ManimNumberLineOptions,
+    Mobject, RateFunction, Scene, SemanticAnimationCompositionKind as Kind, SemanticFadeDirection,
+    Text, TransformToRequest, YELLOW,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -24,13 +24,12 @@ impl LiveContinuation for NumberLinePlayback {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> std::result::Result<ContinuationStep, String> {
-        let live = &mut scene.live();
-        self.step(live).map_err(|error| error.to_string())
+        self.step(scene).map_err(|error| error.to_string())
     }
 }
 
 impl NumberLinePlayback {
-    fn step(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep> {
+    fn step(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep> {
         let durations = [0.5, 1.0, 0.5, 1.5, 0.5, 1.2, 0.5, 0.8, 1.5, 0.8];
         let Some(&duration) = durations.get(self.phase) else {
             return Ok(ContinuationStep::Finished);
@@ -39,9 +38,15 @@ impl NumberLinePlayback {
             .run_time(duration)
             .rate_func(RateFunction::Linear);
         let segment = match self.phase {
-            0 => live.declare_and_activate_text_write(&self.title, false, options)?,
-            1 => live.declare_and_activate_family_reveal(self.line.family(), false, options)?,
-            2 => live.declare_and_activate_composition(
+            0 => scene
+                .live()
+                .declare_and_activate_text_write(&self.title, false, options)?,
+            1 => scene.live().declare_and_activate_family_reveal(
+                self.line.family(),
+                false,
+                options,
+            )?,
+            2 => scene.live().declare_and_activate_composition(
                 &Request::Composition {
                     kind: Kind::Parallel,
                     children: vec![
@@ -67,18 +72,20 @@ impl NumberLinePlayback {
                     5 => 3.0,
                     _ => -2.0,
                 };
-                let frame = live.effective_number_line_frame(&self.line)?;
+                let frame = scene.effective_number_line_frame(&self.line)?;
                 let [x, y] = frame.number_to_point(value)?;
-                let target = live.target_editor(&self.marker)?;
-                live.set_translation(&target, x, y)?;
-                live.declare_and_activate_transform_to(&self.marker, &target, options)?
+                let target = scene.live().target_editor(&self.marker)?;
+                scene.live().set_translation(&target, x, y)?;
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.marker, &target, options)?
             }
             7 => {
-                let line_target = live.copy_family(self.line.family())?;
-                live.shift_family(line_target.root(), 0.0, 0.6)?;
-                let marker_target = live.target_editor(&self.marker)?;
-                live.shift(&marker_target, 0.0, 0.6)?;
-                live.declare_and_activate_composition(
+                let line_target = scene.live().copy_family(self.line.family())?;
+                scene.shift_family(line_target.root(), 0.0, 0.6)?;
+                let marker_target = scene.live().target_editor(&self.marker)?;
+                scene.live().shift(&marker_target, 0.0, 0.6)?;
+                scene.live().declare_and_activate_composition(
                     &Request::Composition {
                         kind: Kind::Parallel,
                         children: vec![
@@ -98,7 +105,7 @@ impl NumberLinePlayback {
                     options,
                 )?
             }
-            _ => live.wait_segment(duration)?,
+            _ => scene.live().wait_segment(duration)?,
         };
         self.phase += 1;
         Ok(ContinuationStep::Await(segment))
