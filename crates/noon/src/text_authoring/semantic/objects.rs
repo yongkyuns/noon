@@ -628,9 +628,9 @@ mod tests {
         );
 
         let fade = {
-            let mut live = execution.live();
             assert!(!execution.scene().contains_direct(&label).unwrap());
-            let fade = live
+            let fade = execution
+                .live()
                 .declare_and_activate_fade(
                     &label,
                     SemanticFadeDirection::In,
@@ -641,7 +641,7 @@ mod tests {
                 .unwrap();
             assert_eq!(fade.start_time(), 1.0);
             assert!(execution.scene().contains_direct(&label).unwrap());
-            assert_eq!(live.effective(&label).unwrap().appearance, 0.0);
+            assert_eq!(execution.scene().effective(&label).unwrap().appearance, 0.0);
             fade
         };
         assert_eq!(execution.session().frame().objects.len(), 1);
@@ -655,7 +655,7 @@ mod tests {
         live.advance_segment_to(fade, fade.end_time()).unwrap();
         live.complete_segment(fade).unwrap();
         assert!(execution.scene().contains_direct(&label).unwrap());
-        assert_eq!(live.effective(&label).unwrap().appearance, 1.0);
+        assert_eq!(execution.scene().effective(&label).unwrap().appearance, 1.0);
     }
 
     #[test]

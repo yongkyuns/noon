@@ -392,21 +392,19 @@ fn ordinary_family_transforms_reuse_text_and_leave_unrelated_state_unchanged() {
 
 #[test]
 fn stale_live_creation_rolls_back_resources_then_valid_creation_stays_detached() {
-    let mut scene = Scene::new();
+    let scene = Scene::new();
     let mut session = scene.into_execution().unwrap();
+    let store = session.scene().integration_store().clone();
+    let root = session.scene().root();
+    let mut scene = Scene::with_integration_root(store, root).unwrap();
     scene.circle(0.1).unwrap();
-    let revision = session.scene().revision();
+    let revision = scene.revision();
     let before = counts(&scene);
-    let mut live = crate::LiveSession::new(
-        session.scene().integration_store(),
-        session.scene().root(),
-        session.session_mut(),
-    );
-    assert!(Code::in_live_session(&mut live, "one\n    two", plain()).is_err());
-    assert_eq!(session.scene().revision(), revision);
+    assert!(Code::in_live_session(&mut session.live(), "one\n    two", plain()).is_err());
+    assert_eq!(scene.revision(), revision);
     assert_eq!(counts(&scene), before);
 
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let code = Code::in_live_session(&mut session.live(), "one\n    two", plain()).unwrap();
     let line = code.line(0).unwrap();
     assert!(session
