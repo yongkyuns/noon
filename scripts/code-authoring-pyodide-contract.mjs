@@ -55,7 +55,7 @@ try {
     noonCodeLanguagesList: () => wasm.noonCodeLanguagesList(),
     noonCodeFromFamily: family => family.asCode(),
     noonCreateAuthoringCodeHandle: (source, options, context) => context == null
-      ? authoringStore.createCode(source, options) : context.liveCreateCode(source, options),
+      ? authoringStore.createCode(source, options) : context.createCode(source, options),
   });
   for (const descriptor of PYTHON_COMPAT_MODULES) {
     pyodide.FS.writeFile(descriptor.runtimePath,
