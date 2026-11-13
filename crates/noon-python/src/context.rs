@@ -3489,24 +3489,19 @@ impl Context {
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
-    #[pyo3(name = "liveCreateImage")]
+    #[pyo3(name = "createImage")]
     fn image(
         &mut self,
         mut options: PyRefMut<'_, crate::image::ImageOptions>,
     ) -> PyResult<MobjectHandle> {
-        crate::image::live(self, &mut options)
+        crate::image::create_in_scene(self, &mut options)
     }
-    #[pyo3(name = "liveSetImageSampling")]
+    #[pyo3(name = "setImageSampling")]
     fn set_image_sampling(&mut self, target: &MobjectHandle, value: &str) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
         let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .set_image_sampling(&target.handle, sampling)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        self.edit_scene(|scene| scene.set_image_sampling(&target.handle, sampling))
     }
     #[pyo3(name = "liveChangeAnchorMode")]
     fn change_anchor_mode(&mut self, target: &MobjectHandle, smooth: bool) -> PyResult<()> {

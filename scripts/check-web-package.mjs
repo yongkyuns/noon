@@ -353,6 +353,8 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "createImage(candidate: WasmImageMobjectOptions): WasmAuthoringMobjectHandle;",
+  "setImageSampling(handle: WasmAuthoringMobjectHandle, value: string): void;",
   "createManimGeometry(candidate: WasmManimGeometryOptions): WasmAuthoringMobjectHandle;",
   "bindMobject(object_id: string, handle: WasmAuthoringMobjectHandle): void;",
   "setFillHatch(handle: WasmAuthoringMobjectHandle, paint: WasmHatchPaint, opacity?: number | null): void;",
@@ -1038,7 +1040,7 @@ for (const retired of [
   "liveFadeTo(",
   "liveSetFamilyFade(",
   "liveSetFamilyFadeTo(",
-  "liveCreateManimGeometry(",
+  "liveCreateManimGeometry(", "liveCreateImage(", "liveSetImageSampling(",
   "liveMatchStyle(",
   "liveInterpolateMobjectStyle(",
   "liveInterpolateMobject(",

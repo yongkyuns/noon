@@ -85,7 +85,7 @@ class ImageFacadeTests(unittest.TestCase):
             self.assertIn(("height", 3.0), options.calls)
             return handle
         with patch.object(images, "_image_options", Factory), patch.object(images, "_js_bytes", bytes), \
-             patch.object(images, "_create_image", publish), patch.object(images, "_live_constructor_context", return_value=None):
+             patch.object(images, "_create_image", publish), patch.object(images, "_path_authoring_context", return_value=None):
             value = images.ImageMobject([[[1,2,3], [4,5,6]]], height=3, opacity=.5)
         self.assertIs(value._semantic_handle, handle)
         self.assertEqual((value.pixel_width, value.pixel_height), (2,1))
