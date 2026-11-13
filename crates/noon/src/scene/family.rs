@@ -112,6 +112,22 @@ impl Scene {
         .map_err(AuthoringError::from)
     }
 
+    /// Hide direct members atomically before a subset display animation.
+    pub fn prepare_family_subset_display(
+        &mut self,
+        family: &MobjectFamily,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, String> {
+        MobjectTarget::from(family)
+            .require_store(self.integration_store())
+            .map_err(|error| error.to_string())?;
+        let transaction = crate::family_authoring::prepare_subset_display_transaction(
+            &self.integration_store().borrow(),
+            family.node_id(),
+        )?;
+        self.apply_semantic_transaction(transaction)
+            .map_err(|error| error.to_string())
+    }
+
     /// Read own content and unique descendants from one coherent effective publication.
     ///
     /// Bounds use the shared layout rules without stroke expansion. Cold Scenes

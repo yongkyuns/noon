@@ -14,9 +14,8 @@
 //!
 //! Mutating the arena (including through an authored handle) after lowering does
 //! **not** publish that change into a live session. Existing revision and identity
-//! checks reject the resulting stale or foreign context. They are never disabled
-//! by using this module. Prefer `scene.live(&mut session)` for live mutation; raw
-//! callers must use the session's coherent semantic-transaction publication API.
+//! checks reject the resulting stale or foreign context. Use the owning `Scene`
+//! for authoring, and `scene_execution` for host execution controls and publication.
 //! If raw edits have already invalidated a session, explicitly discard/rebuild it
 //! rather than overwriting its publication revision or treating old frames as new.
 //!

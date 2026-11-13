@@ -24,7 +24,7 @@ class NativePythonTests(unittest.TestCase):
                      "ordinary_path_refinement", "ordinary_path_selection", "ordinary_path_alignment",
                      "showcase_bezier_paths", "manim_parity_family_slices",
                      "manim_parity_object_members", "manim_parity_family_member_queries",
-                     "manim_parity_point_promotion",
+                     "manim_parity_point_promotion", "ordinary_subset_display",
                      "coordinate_plotting", "animated_number_line", "live_coordinate_plotting",
                      "number_plane", "polar_plane", "manim_example_moving_camera_center",
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
@@ -322,12 +322,22 @@ class Demo(Scene):
         path = VMobject().start_new_path((precise, 0, 0.25))
         path.add_line_to((2, 1, 0.5))
         assert tuple(path.get_all_points()[0]) == (precise, 0, 0.25)
-        self.add(path)
+        assert path.reduce_across_dimension(min, 0) == precise
+        group = Group(path, Line((-3, 0, 0), (-2, 0, 0)))
+        assert group.reduce_across_dimension(min, 0) == -3
+        self.add(group)
         self.wait(0.1)
         path.add_line_to((3, 0, 0.75))
         before = [tuple(point) for point in path.get_all_points()]
         assert before[0] == (precise, 0, 0.25)
         assert before[-1] == (3, 0, 0.75)
+        assert path.reduce_across_dimension(max, 2) == 0.75
+        calls = []
+        def reducer(values):
+            calls.append(len(values))
+            return max(values)
+        assert group.reduce_across_dimension(reducer, 2) == 0.75
+        assert calls == [len(before), 4, 2]
         try:
             path.set_points([(float("nan"), 0, 0)] * 4)
         except ValueError:

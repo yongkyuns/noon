@@ -128,6 +128,11 @@ pub(crate) enum Child {
         outline: noon::DrawBorderThenFillOptions,
         options: AnimationOptions,
     },
+    FamilySubsetDisplay {
+        target: noon::MobjectFamily,
+        mode: noon::SubsetDisplayMode,
+        options: AnimationOptions,
+    },
     FamilyTextWrite {
         target: noon::MobjectFamily,
         reverse_member_order: bool,
@@ -285,6 +290,15 @@ impl Child {
             } => Request::FamilyDrawBorderThenFill {
                 target,
                 outline: *outline,
+                options: *options,
+            },
+            Self::FamilySubsetDisplay {
+                target,
+                mode,
+                options,
+            } => Request::FamilySubsetDisplay {
+                target,
+                mode: *mode,
                 options: *options,
             },
             Self::FamilyTextWrite {
@@ -962,6 +976,46 @@ impl Composition {
         }
         Ok(())
     }
+    #[pyo3(name = "appendFamilySubsetDisplay")]
+    #[pyo3(signature=(target,mode,child_run_time,rate_function))]
+    fn append_family_subset_display(
+        &mut self,
+        target: &FamilyHandle,
+        mode: &str,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+    ) -> PyResult<()> {
+        let mode = match mode {
+            "increasing-floor" => noon::SubsetDisplayMode::IncreasingFloor,
+            "one-by-one-ceil" => noon::SubsetDisplayMode::OneByOneCeil,
+            _ => return Err(engine_error("unknown subset-display mode")),
+        };
+        self.children.push(Child::FamilySubsetDisplay {
+            target: target.family.clone(),
+            mode,
+            options: Self::optional_options(child_run_time, rate_function)?,
+        });
+        Ok(())
+    }
+
+    #[pyo3(name = "appendFamilySubsetDisplayEntering")]
+    fn append_family_subset_display_entering(
+        &mut self,
+        _id: &str,
+        member: &MobjectHandle,
+    ) -> PyResult<()> {
+        let Some(Child::FamilySubsetDisplay { target, .. }) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilySubsetDisplay",
+            ));
+        };
+        noon::MobjectTarget::from(&member.handle)
+            .require_store(target.integration_store())
+            .map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
+
     #[pyo3(name = "appendFamilyFade")]
     #[pyo3(signature=(target,direction,child_run_time,rate_function,lag_ratio))]
     pub fn append_family_fade(

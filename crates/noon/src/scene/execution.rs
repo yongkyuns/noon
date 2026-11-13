@@ -122,6 +122,20 @@ pub mod host_execution {
         scene.running_execution()
     }
 
+    /// Borrow execution controls from the Scene's installed runtime.
+    pub fn live(scene: &mut Scene) -> Option<LiveSession<'_>> {
+        scene.running_execution()?;
+        Some(scene.owned_live())
+    }
+
+    /// Publish a typed host semantic transaction through its owning Scene.
+    pub fn publish(
+        scene: &mut Scene,
+        transaction: noon_core::SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, crate::AuthoringError> {
+        scene.apply_semantic_transaction(transaction)
+    }
+
     /// Borrow the original store and root alongside the installed execution.
     pub fn parts_mut(
         scene: &mut Scene,

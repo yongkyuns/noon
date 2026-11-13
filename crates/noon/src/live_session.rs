@@ -1059,20 +1059,6 @@ impl<'a> LiveSession<'a> {
         )
     }
 
-    /// Atomically hide every direct member before activating a subset display.
-    pub fn prepare_family_subset_display(
-        &mut self,
-        target: &MobjectFamily,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.require_family(target)?;
-        let transaction = {
-            let store = self.store.borrow();
-            crate::family_authoring::prepare_subset_display_transaction(&store, target.node_id())
-                .map_err(LiveSessionError::Mobject)?
-        };
-        self.apply(transaction)
-    }
-
     /// Atomically append and activate one scalar tracker interval at the current
     /// session time. The returned segment uses the same completion barrier as
     /// object-property animation tracks.
@@ -6019,12 +6005,11 @@ mod recursive_composition_tests {
         scene.add(&first).unwrap();
         scene.add(&second).unwrap();
         let family = scene.family(&[(&first).into(), (&second).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let before = session.publication_context();
-        let result = scene
-            .live(&mut session)
-            .prepare_family_subset_display(&family)
-            .unwrap();
+        let session = scene.execution_session().unwrap();
+        scene.install_execution(session);
+        let before = scene.owned_execution().publication_context();
+        let result = scene.prepare_family_subset_display(&family).unwrap();
+        let session = scene.owned_execution();
         assert_eq!(result.impacts().len(), 2);
         assert_eq!(
             session.publication_context().scene_revision().get(),
@@ -6057,8 +6042,8 @@ mod recursive_composition_tests {
             ])
             .unwrap();
 
+        scene.prepare_family_subset_display(&family).unwrap();
         let mut live = scene.owned_live();
-        live.prepare_family_subset_display(&family).unwrap();
         assert_eq!(first.state().unwrap().style.fill_opacity, 0.0);
         assert_eq!(second.state().unwrap().style.fill_opacity, 0.0);
         let segment = live
