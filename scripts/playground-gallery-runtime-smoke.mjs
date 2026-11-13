@@ -14,6 +14,7 @@ import { serveRepository } from './browser-test-server.mjs';
 import { seekPausedGallery, waitForPublishedGalleryFrame } from './showcase-playback.mjs';
 import { AUTHORING_CHANNEL, AUTHORING_PROTOCOL_VERSION, parseAuthoringResult } from '../web/authoring-client.js';
 import { galleryCaseQueue, galleryEntriesFromManifests, galleryManifestPaths, galleryPoolForProfileGate, galleryShardFromEnvironment, shardGalleryEntries } from './gallery-shards.mjs';
+import { repeatedProbeQueue, installWasmAllocationObserver } from './webkit-wasm-allocation-probe.mjs';
 import { assertGalleryRuntimeBuildIdentityUnchanged, evaluateShowcaseDiagnostics, galleryCaseLifecycleReady, showcaseAudioGestureReady, SHOWCASE_PROFILE_EXPECTATIONS, validateGalleryRuntimeBuildIdentity, validateShowcaseInventory, validateShowcaseDiagnostics } from './playground-profile-expectations.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -21,6 +22,8 @@ const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? 'webkit';
 const profile = process.env.NOON_PLAYGROUND_PROFILE ?? 'mobile-dpr2';
 const profileGateMode = process.env.NOON_SHOWCASE_PROFILE_GATE ?? 'disabled';
 const profilePreparation = process.env.NOON_GALLERY_PREPARATION_TIMING === '1';
+// An opt-in, isolated allocator experiment. Ordinary full-gallery CI is unchanged.
+const memoryDiagnostic = process.env.NOON_WEBKIT_ALLOC_REPEATS !== undefined;
 assert.ok(['disabled', 'baseline', 'strict'].includes(profileGateMode), 'NOON_SHOWCASE_PROFILE_GATE must be disabled, baseline, or strict');
 const port = Number(process.env.NOON_GALLERY_PORT ?? 4197);
 const external = process.env.NOON_GALLERY_BASE;
@@ -184,7 +187,14 @@ try {
   const shard = galleryShardFromEnvironment(process.env);
   const selectedEntries = shard ? shardGalleryEntries(selectedPool, shard.index, shard.count) : selectedPool;
   assert.ok(selectedEntries.length > 0, "gallery selection is empty");
-  const queue = galleryCaseQueue(selectedEntries, browserName);
+  if (memoryDiagnostic) {
+    assert.equal(browserName, 'webkit', 'allocator probe must run in WebKit');
+    assert.deepEqual(selectedIds, ['showcase-text-math'], 'only the identical text/math scene may be compared');
+    assert.equal(shard, null, 'do not shard the diagnostic pair');
+  }
+  const canonicalQueue = galleryCaseQueue(selectedEntries, browserName);
+  const queue = memoryDiagnostic ? repeatedProbeQueue(canonicalQueue,
+    Number(process.env.NOON_WEBKIT_ALLOC_REPEATS)) : canonicalQueue;
   await writeFile(path.join(artifacts, 'shard-inventory.json'), stringify({
     schemaVersion: 1,
     browser: browserName,
@@ -202,7 +212,7 @@ try {
     profileGateShowcaseCaseIds: profileGateMode !== 'disabled'
       ? selectedEntries.filter(entry => SHOWCASE_PROFILE_EXPECTATIONS.some(row => row.id === entry.id)).map(entry => entry.id)
       : [],
-    expectedCases: queue.map(({ entry, noJspi }) => ({ id: entry.id, noJspi })),
+    expectedCases: queue.map(({ entry, noJspi, probeTrial }) => ({ id: entry.id, noJspi, ...(probeTrial ? { probeTrial } : {}) })),
   }));
   console.log("Gallery case inventory:", selectedEntries.length, "cases", queue.length, "executions");
   const engine = playwright[browserName];
@@ -211,12 +221,16 @@ try {
   const options = profile === 'android' ? playwright.devices['Pixel 7'] : profile.startsWith('mobile') ?
     playwright.devices['iPhone 13'] : { viewport: { width: 1280, height: 900 }, deviceScaleFactor: profile.endsWith('dpr2') ? 2 : 1 };
   let next = 0;
-  async function runCase(caseBrowser, { entry, noJspi }) {
+  async function runCase(caseBrowser, { entry, noJspi, probeTrial = null }) {
     const caseStartedAt = performance.now();
     const caseStartedWallMs = Date.now();
     const context = await caseBrowser.newContext({ ...options });
     await runtimeCache.install(context);
-    if (noJspi) await disableAuthoringJspi(context);
+    if (memoryDiagnostic) {
+      await installWasmAllocationObserver(context, { noJspi });
+    } else if (noJspi) {
+      await disableAuthoringJspi(context);
+    }
     // Observe the existing result envelope without guessing its payload shape.
     // The production parser below validates the semantic descriptor and duration;
     // semantic_execution is an object, not the boolean true.
@@ -277,14 +291,14 @@ try {
     const detachTrace = trace.attach(caseBrowser, context, page);
     const expectedProfile = profileGateMode === 'disabled' ? null
       : SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === entry.id) ?? null;
-    const result = { id: entry.id, noJspi, browserName, profile, revision, browserVersion: caseBrowser.version(),
+    const result = { id: entry.id, noJspi, ...(probeTrial ? { probeTrial } : {}), browserName, profile, revision, browserVersion: caseBrowser.version(),
       runtimeBuildIdentity: { beforeBuildId: runtimeBuildIdentity.buildId, afterBuildId: null, unchanged: false },
       ...(expectedProfile ? { source: { path: expectedProfile.path, sha256: expectedProfile.sha256 } } : {}),
       errors: [], failedRequests: [], samples: [], presentations: [] };
     let audioGestureIssued = false;
     let audioAttachmentObserved = false;
     const observedPublications = new Set();
-    const name = `${entry.id}${noJspi ? '-no-jspi' : ''}`;
+    const name = `${entry.id}${noJspi ? '-no-jspi' : ''}${probeTrial ? '-trial-' + String(probeTrial).padStart(2,'0') : ''}`;
     const native = createNativeWebKitEvidence({
       enabled: nativeFailureDiagnostics,
       executablePath: playwright.webkit.executablePath(),
@@ -637,6 +651,30 @@ try {
       result.failureDiagnostics.attemptedPage = await captureAttemptedPage(page);
     } finally {
       clearTimeout(caseTimer);
+      if (memoryDiagnostic) {
+        result.wasmAllocationProbe = await Promise.race([
+          page.evaluate(() => window.__noonWasmMemorySamples ?? null),
+          new Promise(resolve => setTimeout(() => resolve(null), 1000)),
+        ]).catch(() => null);
+        const probes = Array.isArray(result.wasmAllocationProbe) ? result.wasmAllocationProbe : [];
+        const observedModes = [...new Set(probes.map(sample => sample.activeJspi))];
+        const modeIsCorrect = observedModes.length === 1 &&
+          observedModes[0] === !noJspi &&
+          probes.every(sample => sample.jspiInitiallyAvailable === true);
+        const hasRustSnapshot = probes.some(sample =>
+          sample.allocator && Number.isSafeInteger(sample.allocator.reallocs));
+        const hasMemory = probes.some(sample => sample.memories?.some(memory =>
+          Number.isSafeInteger(memory.pages) && memory.pages > 0));
+        result.wasmAllocationProbeChecks = {
+          hasRustSnapshot, hasMemory, modeIsCorrect, observedModes,
+          initialAvailability: [...new Set(probes.map(sample => sample.jspiInitiallyAvailable))],
+        };
+        if (!hasRustSnapshot || !hasMemory || !modeIsCorrect) {
+          result.outcome = 'fail';
+          result.failure = [result.failure, 'opt-in WASM allocator diagnostic violated a precondition: ' +
+            JSON.stringify(result.wasmAllocationProbeChecks)].filter(Boolean).join('; ');
+        }
+      }
       if (profilePreparation) {
         result.preparationTimingDiagnostics = await Promise.race([
           page.evaluate(() => window.__noonExampleGallery?.executionPreparationTimingDiagnostics ?? null),
