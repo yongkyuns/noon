@@ -81,7 +81,7 @@ impl ImageOptions {
     }
 }
 
-pub(crate) fn live(
+pub(crate) fn create_in_scene(
     context: &mut crate::context::Context,
     input: &mut ImageOptions,
 ) -> PyResult<MobjectHandle> {
