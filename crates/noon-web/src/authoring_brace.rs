@@ -4,10 +4,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::js_error;
-use crate::{
-    CanonicalAuthoringSceneContext, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
-    WasmLayoutAnchor, WasmManimGeometryOptions,
-};
+use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
 
 #[wasm_bindgen]
 pub struct WasmBraceLabelHandle {
