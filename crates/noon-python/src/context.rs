@@ -1755,10 +1755,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_gradient(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.set_fill_gradient(&target.handle, paint.value.clone(), opacity))
     }
 
     #[pyo3(name="liveSetFillRadialGradient", signature=(target,paint,opacity))]
@@ -1770,9 +1767,8 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_radial_gradient(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
+        self.place(|scene| {
+            scene.set_fill_radial_gradient(&target.handle, paint.value.clone(), opacity)
         })
     }
 
@@ -1785,10 +1781,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_noise(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.set_fill_noise(&target.handle, paint.value.clone(), opacity))
     }
 
     #[pyo3(name="liveSetFillHatch", signature=(target,paint,opacity))]
@@ -1800,10 +1793,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| {
-            live.set_fill_hatch(&target.handle, paint.value.clone(), opacity)
-                .map(|_| ())
-        })
+        self.place(|scene| scene.set_fill_hatch(&target.handle, paint.value.clone(), opacity))
     }
 
     #[pyo3(name = "liveSetGlow")]

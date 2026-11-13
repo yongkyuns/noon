@@ -10701,7 +10701,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
+                .scene_mut()
+                .set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -10719,7 +10721,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .scene_mut()
+                .set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -10737,11 +10741,13 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_radial_gradient(
+                .scene_mut()
+                .set_fill_radial_gradient(
                     handle.semantic_mobject(),
                     gradient.value.clone(),
                     opacity,
                 )
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
@@ -10759,7 +10765,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_gradient(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .scene_mut()
+                .set_fill_gradient(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 

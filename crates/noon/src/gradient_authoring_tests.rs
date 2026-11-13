@@ -264,13 +264,10 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
         let animation = scene
             .declare_transform_to(&source, &target, options())
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 0.5)
-            .unwrap();
-        let state = row(&session, &source);
+        let mut running = scene.into_execution().unwrap();
+        let segment = running.live().play_animation(&animation).unwrap();
+        running.live().advance_segment_to(segment, 0.5).unwrap();
+        let state = row(running.session(), &source);
         assert!(
             (crate::effect_authoring::only_effect(state.effects.as_ref().unwrap())
                 .definition
@@ -292,22 +289,24 @@ fn gradient_glow_shared_authoring_accepts_both_orders_and_samples_both_channels(
                 .start(),
             [0.25, 0.25]
         );
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 1.0)
-            .unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
-        scene
-            .live(&mut session)
+        running.live().advance_segment_to(segment, 1.0).unwrap();
+        running.live().complete_segment(segment).unwrap();
+        running
+            .scene_mut()
             .set_fill_gradient(&source, gradient(false), None)
             .unwrap();
-        assert_eq!(row(&session, &source).style.fill.unwrap().alpha, 0.75);
         assert_eq!(
-            crate::effect_authoring::only_effect(row(&session, &source).effects.as_ref().unwrap())
-                .definition
-                .as_glow()
-                .unwrap()
-                .intensity(),
+            row(running.session(), &source).style.fill.unwrap().alpha,
+            0.75
+        );
+        assert_eq!(
+            crate::effect_authoring::only_effect(
+                row(running.session(), &source).effects.as_ref().unwrap()
+            )
+            .definition
+            .as_glow()
+            .unwrap()
+            .intensity(),
             1.4
         );
     }

@@ -1412,40 +1412,36 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
             let (plain_scene, plain_source, plain_animation) =
                 gradient_glow_scene(kind, None, 1.0, false);
             let (mask_scene, _, mask_animation) = gradient_glow_scene(kind, None, 1.0, true);
-            let mut session = scene.execution_session().unwrap();
-            let mut plain = plain_scene.execution_session().unwrap();
-            let mut mask = mask_scene.execution_session().unwrap();
-            let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-            let plain_segment = plain_scene
-                .live(&mut plain)
-                .play_animation(&plain_animation)
-                .unwrap();
-            let mask_segment = mask_scene
-                .live(&mut mask)
-                .play_animation(&mask_animation)
-                .unwrap();
+            let mut session = scene.into_execution().unwrap();
+            let mut plain = plain_scene.into_execution().unwrap();
+            let mut mask = mask_scene.into_execution().unwrap();
+            let segment = session.live().play_animation(&animation).unwrap();
+            let plain_segment = plain.live().play_animation(&plain_animation).unwrap();
+            let mask_segment = mask.live().play_animation(&mask_animation).unwrap();
             let mut surface = Surface::new(&device, &queue);
             let mut reference = Surface::new(&device, &queue);
             let mut mask_surface = Surface::new(&device, &queue);
             let times = [0.0, 0.25, 0.5, 0.75, 1.0];
             let mut frames = Vec::new();
             for time in times {
-                scene
-                    .live(&mut session)
-                    .advance_segment_to(segment, time)
-                    .unwrap();
-                plain_scene
-                    .live(&mut plain)
+                session.live().advance_segment_to(segment, time).unwrap();
+                plain
+                    .live()
                     .advance_segment_to(plain_segment, time)
                     .unwrap();
-                mask_scene
-                    .live(&mut mask)
-                    .advance_segment_to(mask_segment, time)
-                    .unwrap();
-                let ordinary =
-                    reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
-                let silhouette =
-                    mask_surface.render_on(&device, &queue, &mut mask, wgpu::Color::TRANSPARENT);
+                mask.live().advance_segment_to(mask_segment, time).unwrap();
+                let ordinary = reference.render_on(
+                    &device,
+                    &queue,
+                    plain.session_mut(),
+                    wgpu::Color::TRANSPARENT,
+                );
+                let silhouette = mask_surface.render_on(
+                    &device,
+                    &queue,
+                    mask.session_mut(),
+                    wgpu::Color::TRANSPARENT,
+                );
                 let alpha = if mode == GlowSource::Painted {
                     &ordinary
                 } else {
@@ -1453,8 +1449,12 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
                 };
                 let expected =
                     expected_image_glow(&ordinary, alpha, time, 0.45, wgpu::Color::TRANSPARENT);
-                let actual =
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+                let actual = surface.render_on(
+                    &device,
+                    &queue,
+                    session.session_mut(),
+                    wgpu::Color::TRANSPARENT,
+                );
                 let difference = error(&actual, &expected);
                 max_error = max_error.max(difference);
                 let worst = actual
@@ -1474,7 +1474,12 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
                 );
                 assert!(error(&expected, &missing) > 2, "missing halo control");
                 assert_eq!(
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    surface.render_on(
+                        &device,
+                        &queue,
+                        session.session_mut(),
+                        wgpu::Color::TRANSPARENT
+                    ),
                     actual
                 );
                 assert_eq!(surface.effect_stats.source_passes, 0);
@@ -1487,15 +1492,17 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
             for index in [4, 1, 3, 0, 2, 4] {
                 session.seek(times[index]).unwrap();
                 assert_eq!(
-                    surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+                    surface.render_on(
+                        &device,
+                        &queue,
+                        session.session_mut(),
+                        wgpu::Color::TRANSPARENT
+                    ),
                     frames[index]
                 );
             }
-            scene.live(&mut session).complete_segment(segment).unwrap();
-            plain_scene
-                .live(&mut plain)
-                .complete_segment(plain_segment)
-                .unwrap();
+            session.live().complete_segment(segment).unwrap();
+            plain.live().complete_segment(plain_segment).unwrap();
             let changed = noon::LinearGradient::new(
                 [0.5, 0.0],
                 [0.5, 1.0],
@@ -1505,18 +1512,26 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
                 ],
             )
             .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .set_fill_gradient(&source, changed.clone(), None)
                 .unwrap();
-            plain_scene
-                .live(&mut plain)
+            plain
+                .scene_mut()
                 .set_fill_gradient(&plain_source, changed, None)
                 .unwrap();
-            let ordinary =
-                reference.render_on(&device, &queue, &mut plain, wgpu::Color::TRANSPARENT);
-            let silhouette =
-                mask_surface.render_on(&device, &queue, &mut mask, wgpu::Color::TRANSPARENT);
+            let ordinary = reference.render_on(
+                &device,
+                &queue,
+                plain.session_mut(),
+                wgpu::Color::TRANSPARENT,
+            );
+            let silhouette = mask_surface.render_on(
+                &device,
+                &queue,
+                mask.session_mut(),
+                wgpu::Color::TRANSPARENT,
+            );
             let alpha = if mode == GlowSource::Painted {
                 &ordinary
             } else {
@@ -1529,7 +1544,7 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
                 a: 1.0,
             };
             let expected = expected_image_glow(&ordinary, alpha, 1.0, 0.45, background);
-            let actual = surface.render_on(&device, &queue, &mut session, background);
+            let actual = surface.render_on(&device, &queue, session.session_mut(), background);
             assert!(
                 error(&actual, &expected) <= 2,
                 "paint-only edit must recapture current stops"
@@ -1537,31 +1552,31 @@ fn gradient_glow_preserves_paint_alpha_seek_and_local_capture() {
             assert!(surface.effect_stats.source_passes > 0);
             assert_eq!(surface.effect_stats.texture_allocations, 0);
             // A warmed intensity edit uses the captured paint and blur again.
-            scene
-                .live(&mut session)
+            session
+                .live()
                 .set_glow(&source, EffectUpdate::default().intensity(1.2))
                 .unwrap();
-            surface.render_on(&device, &queue, &mut session, background);
+            surface.render_on(&device, &queue, session.session_mut(), background);
             assert_eq!(surface.effect_stats.source_passes, 0);
             assert_eq!(surface.effect_stats.blur_passes, 0);
             assert_eq!(surface.effect_stats.texture_allocations, 0);
-            plain_scene
-                .live(&mut plain)
+            plain
+                .live()
                 .set_object_opacity(&plain_source, 0.45)
                 .unwrap();
-            let ordinary = reference.render(&device, &queue, &mut plain);
-            scene
-                .live(&mut session)
+            let ordinary = reference.render(&device, &queue, plain.session_mut());
+            session
+                .live()
                 .set_glow(&source, EffectUpdate::default().intensity(0.0))
                 .unwrap();
             assert_eq!(
-                surface.render(&device, &queue, &mut session),
+                surface.render(&device, &queue, session.session_mut()),
                 ordinary,
                 "neutral paint must be exact"
             );
-            scene.live(&mut session).remove_glow(&source).unwrap();
+            session.live().remove_glow(&source).unwrap();
             assert_eq!(
-                surface.render(&device, &queue, &mut session),
+                surface.render(&device, &queue, session.session_mut()),
                 ordinary,
                 "removed paint must be exact"
             );
@@ -3326,11 +3341,11 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
                 )
                 .unwrap();
                 execution
-                    .live()
+                    .scene_mut()
                     .set_fill_noise(&source, paint.clone(), None)
                     .unwrap();
                 plain_execution
-                    .live()
+                    .scene_mut()
                     .set_fill_noise(&plain_source, paint, None)
                     .unwrap();
             } else if let (1, ContinuousFillFixture::Hatch { cross }) = (stage, fixture) {
@@ -3347,11 +3362,11 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
                 )
                 .unwrap();
                 execution
-                    .live()
+                    .scene_mut()
                     .set_fill_hatch(&source, paint.clone(), None)
                     .unwrap();
                 plain_execution
-                    .live()
+                    .scene_mut()
                     .set_fill_hatch(&plain_source, paint, None)
                     .unwrap();
             } else if stage == 1 {
