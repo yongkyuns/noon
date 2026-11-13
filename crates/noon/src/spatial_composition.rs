@@ -1,8 +1,6 @@
 //! Camera-composition domains authored through the canonical semantic transaction.
 
-use crate::{
-    AuthoringError, LiveSession, LiveSessionError, MobjectTarget, Scene, SceneMembershipRequest,
-};
+use crate::{AuthoringError, MobjectTarget, Scene, SceneMembershipRequest};
 use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticObjectRole,
     SemanticSpatialCompositionDomain, SemanticStore,
@@ -13,7 +11,6 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc};
 #[derive(Debug)]
 pub enum SpatialCompositionError {
     Authoring(AuthoringError),
-    Live(LiveSessionError),
     FixedFrameRequiresPlanarOrientation,
     CameraOrLightMustRemainWorld,
     MeshMustRemainWorld,
@@ -23,7 +20,6 @@ impl std::fmt::Display for SpatialCompositionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(error) => error.fmt(formatter),
-            Self::Live(error) => error.fmt(formatter),
             Self::FixedFrameRequiresPlanarOrientation => formatter.write_str(
                 "FixedFrame requires a planar scalar orientation and cannot flatten a 3D quaternion",
             ),
@@ -39,7 +35,6 @@ impl std::error::Error for SpatialCompositionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Authoring(error) => Some(error),
-            Self::Live(error) => Some(error),
             Self::FixedFrameRequiresPlanarOrientation
             | Self::CameraOrLightMustRemainWorld
             | Self::MeshMustRemainWorld => None,
@@ -50,12 +45,6 @@ impl std::error::Error for SpatialCompositionError {
 impl From<AuthoringError> for SpatialCompositionError {
     fn from(error: AuthoringError) -> Self {
         Self::Authoring(error)
-    }
-}
-
-impl From<LiveSessionError> for SpatialCompositionError {
-    fn from(error: LiveSessionError) -> Self {
-        Self::Live(error)
     }
 }
 
@@ -215,19 +204,6 @@ impl Scene {
     }
 }
 
-impl LiveSession<'_> {
-    /// Set the camera-composition domain through this session's root publication.
-    pub fn set_spatial_composition_domain(
-        &mut self,
-        target: MobjectTarget<'_>,
-        domain: SemanticSpatialCompositionDomain,
-    ) -> Result<SemanticMutationTransactionResult, SpatialCompositionError> {
-        target.require_store(self.integration_store())?;
-        let transaction = composition_transaction(self.integration_store(), target, domain)?;
-        self.apply(transaction).map_err(Into::into)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,20 +346,19 @@ mod tests {
     }
 
     #[test]
-    fn live_session_uses_the_same_transactional_domain_operation() {
+    fn running_scene_publishes_the_domain_with_the_current_frame() {
         let mut scene = Scene::new();
         let object = scene.square(1.0).unwrap();
         scene.add(&object).unwrap();
-        let mut execution = scene.execution_session().unwrap();
-        {
-            let mut live = scene.live(&mut execution);
-            live.set_spatial_composition_domain(MobjectTarget::Object(&object), Domain::FixedFrame)
-                .unwrap();
-        }
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        scene
+            .set_spatial_composition_domain(MobjectTarget::Object(&object), Domain::FixedFrame)
+            .unwrap();
         assert_eq!(
             object.state().unwrap().spatial_composition_domain(),
             Domain::FixedFrame
         );
-        assert_eq!(execution.frame().objects.len(), 1);
+        assert_eq!(scene.owned_execution().frame().objects.len(), 1);
     }
 }

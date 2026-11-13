@@ -75,21 +75,11 @@ fn bind(
     target: &Mobject,
     binding: Option<SemanticClickIndicate>,
 ) {
-    if let Some(binding) = binding {
-        let (indication, animation) = options(binding);
-        scene
-            .live(source)
-            .on_click_indicate(target, indication, animation)
-            .unwrap();
-    } else {
-        // The facade has no clear convenience method. Use the public semantic
-        // transaction boundary, never mutate the store behind its live session.
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_click_indicate(target.node_id(), None);
-        source
-            .apply_semantic_transaction(&mut scene.integration_store().borrow_mut(), transaction)
-            .unwrap();
-    }
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_click_indicate(target.node_id(), binding);
+    source
+        .apply_semantic_transaction(&mut scene.integration_store().borrow_mut(), transaction)
+        .unwrap();
 }
 
 fn append_interval(
