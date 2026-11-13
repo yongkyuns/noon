@@ -1,8 +1,8 @@
 //! Scene-owned Brace geometry and label publication.
 use super::wasm::CanonicalAuthoringSceneContext;
 use crate::{
-    authoring_error::js_error, authoring_mobject::WasmLayoutAnchor, WasmBraceLabelHandle,
-    WasmManimGeometryOptions,
+    authoring_brace::WasmBraceLabelHandle, authoring_error::js_error,
+    authoring_mobject::WasmLayoutAnchor, WasmManimGeometryOptions,
 };
 use wasm_bindgen::prelude::*;
 
