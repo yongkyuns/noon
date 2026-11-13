@@ -3306,17 +3306,16 @@ def _group_init(self: _compat.Group, *mobjects: object, z_index: float = 0, colo
         raise RuntimeError("Group construction requires the shared Rust authoring host")
     z_index = _ir._finite_number("z_index", z_index)
     parsed = _base.BLACK if color is None else _compat._as_color("color", color)
-    arguments = () if parsed == _base.WHITE else (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+    rgba = parsed.red, parsed.green, parsed.blue, parsed.alpha
     draw_enabled = isinstance(self, _compat.VMobject)
     _validate_group_members(self, mobjects)
-    context = _live_constructor_context("family")
+    context = _path_authoring_context()
     batch = _family_membership_batch(context, "add", mobjects)
-    family = (
-        engine_call(context.liveCreateFamilyWithColor if arguments else context.liveCreateFamily,
-                    batch, z_index, *arguments, draw_enabled)
-        if context is not None
-        else engine_call(_create_family_handle, batch, z_index, draw_enabled, *arguments)
-    )
+    if context is None:
+        color_args = () if parsed == _base.WHITE else rgba
+        family = engine_call(_create_family_handle, batch, z_index, draw_enabled, *color_args)
+    else:
+        family = engine_call(context.createFamily, batch, z_index, draw_enabled, *rgba)
     self._semantic_family_handle = family
     self._semantic_member_wrappers = {_family_wrapper_key(value): value for value in mobjects}
     if context is not None:
@@ -3337,20 +3336,23 @@ def _replace_submobjects(root, members):
     keys = [_family_wrapper_key(member) for member in members]
     if len(set(keys)) != len(keys):
         raise NotImplementedError("repeated direct child identities require a shared occurrence model")
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(root)
     batch = _family_membership_batch(context, "add", members)
-    _membership_call(root, context, "liveReplaceFamilyMembers", "liveReplaceObjectMembers", "replaceMembers", batch)
+    _membership_call(root, context, "replaceFamilyMembers", "replaceObjectMembers", "replaceMembers", batch)
     _fork_group_wrapper_references(root)
     root._semantic_member_wrappers = dict(zip(keys, members))
 
 
 def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
-    context = _live_constructor_context("family")
-    scene = None
-    if context is not None:
+    context = _path_authoring_context(self)
+    scene = getattr(self, "_scene", None)
+    if context is not None and scene is None:
         from _manim_reactive import _current_authoring_scene
-        scene = _current_authoring_scene()
+        active_scene = _current_authoring_scene()
+        if getattr(active_scene, "_canonical_authoring_context", None) is context:
+            scene = active_scene
+    if scene is not None:
         for member in mobjects:
             for leaf in _compat._leaf_mobjects(member):
                 if leaf._scene is not None and leaf._scene is not scene:
@@ -3366,7 +3368,7 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
             _reconcile_completed_family_bindings(scene, mobjects)
 
     try:
-        _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
+        _membership_call(self, context, "editFamilyMembership", "editObjectMembership", "editMembership", batch)
     except Exception as error:
         if not is_effect_preparation_required(error):
             raise
@@ -3399,9 +3401,9 @@ def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.G
             "semantic families store each child identity once"
         )
 
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(self)
     batch = _family_membership_batch(context, "add", (mobject,))
-    _membership_call(self, context, "liveInsertFamilyMember", "liveInsertObjectMember", "insertMember", position, batch, operation="Mobject.insert")
+    _membership_call(self, context, "insertFamilyMember", "insertObjectMember", "insertMember", position, batch, operation="Mobject.insert")
     if getattr(self, "_semantic_member_wrappers", None) is None:
         self._semantic_member_wrappers = {}
     self._semantic_member_wrappers[key] = mobject
@@ -3410,9 +3412,9 @@ def _group_insert(self: _compat.Group, index: int, mobject: object) -> _compat.G
 
 def _group_add_to_back(self: _compat.Group, *mobjects: object) -> _compat.Group:
     _validate_group_members(self, mobjects)
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(self)
     batch = _family_membership_batch(context, "add", mobjects)
-    _membership_call(self, context, "livePrependFamilyMembers", "livePrependObjectMembers", "prependMembers", batch, operation="Mobject.add_to_back")
+    _membership_call(self, context, "prependFamilyMembers", "prependObjectMembers", "prependMembers", batch, operation="Mobject.add_to_back")
     _fork_group_wrapper_references(self)
     for value in mobjects:
         self._semantic_member_wrappers[_family_wrapper_key(value)] = value
@@ -3457,22 +3459,10 @@ def _group_add_n_more_submobjects(
         ):
             return self
 
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(self)
     batch = _family_membership_batch(context, "add", ordered)
-    family_handle = self._semantic_family_handle
-    if context is not None:
-        engine_call(
-            context.livePrependFamilyMembers,
-            family_handle,
-            batch,
-            operation="Mobject.add_n_more_submobjects",
-        )
-    else:
-        engine_call(
-            family_handle.prependMembers,
-            batch,
-            operation="Mobject.add_n_more_submobjects",
-        )
+    _membership_call(self, context, "prependFamilyMembers", "prependObjectMembers",
+                     "prependMembers", batch, operation="Mobject.add_n_more_submobjects")
     _fork_group_wrapper_references(self)
     for member in ordered:
         self._semantic_member_wrappers[_family_wrapper_key(member)] = member
@@ -3481,11 +3471,11 @@ def _group_add_n_more_submobjects(
 
 def _group_invert(self: _compat.Group, recursive: bool = False) -> _compat.Group:
     family_handle = self._semantic_family_handle
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(self)
     recursive = bool(recursive)
     if context is not None:
         engine_call(
-            context.liveInvertFamilyMembers,
+            context.invertFamilyMembers,
             family_handle,
             recursive,
             operation="Mobject.invert",
@@ -3504,7 +3494,7 @@ def _group_sort(
     point_to_num_func: Callable[[Any], float] = lambda point: point[0],
     submob_func: Callable[[_compat.Mobject], Any] | None = None,
 ) -> _compat.Group:
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(self)
     members = tuple(self.submobjects)
     key = submob_func
     if key is None:
@@ -3513,11 +3503,8 @@ def _group_sort(
     if all(before is after for before, after in zip(members, ordered)):
         return self
     batch = _family_membership_batch(context, "add", ordered)
-    family_handle = self._semantic_family_handle
-    if context is not None:
-        engine_call(context.livePrependFamilyMembers, family_handle, batch)
-    else:
-        engine_call(family_handle.prependMembers, batch)
+    _membership_call(self, context, "prependFamilyMembers", "prependObjectMembers",
+                     "prependMembers", batch)
     return self
 
 
@@ -3528,26 +3515,23 @@ def _group_shuffle(self: _compat.Group, recursive: bool = False) -> _compat.Grou
         raise NotImplementedError(
             "recursive family shuffle is not supported until Rust owns its family traversal"
         )
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(self)
     members = list(self.submobjects)
     random.shuffle(members)
     if all(before is after for before, after in zip(self.submobjects, members)):
         return self
     batch = _family_membership_batch(context, "add", tuple(members))
-    family_handle = self._semantic_family_handle
-    if context is not None:
-        engine_call(context.livePrependFamilyMembers, family_handle, batch)
-    else:
-        engine_call(family_handle.prependMembers, batch)
+    _membership_call(self, context, "prependFamilyMembers", "prependObjectMembers",
+                     "prependMembers", batch)
     return self
 
 
 def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     if not mobjects:
         return self
-    context = _live_constructor_context("family")
+    context = _path_authoring_context(self)
     batch = _family_membership_batch(context, "remove", mobjects)
-    changed = _membership_call(self, context, "liveEditFamilyMembership", "liveEditObjectMembership", "editMembership", batch)
+    changed = _membership_call(self, context, "editFamilyMembership", "editObjectMembership", "editMembership", batch)
     for value, removed in zip(mobjects, changed):
         if removed:
             self._semantic_member_wrappers.pop(_family_wrapper_key(value), None)

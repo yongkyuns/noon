@@ -22,7 +22,7 @@ class FamilyReplacementTests(unittest.TestCase):
         with patch.object(semantic, "_dimension_fit_source", return_value=(self.source_anchor, None)), \
              patch.object(semantic, "_layout_anchor", return_value=self.target_anchor), \
              patch.object(semantic, "_group_live_layout_context", return_value=None), \
-             patch.object(semantic, "_live_constructor_context", return_value=None):
+             patch.object(semantic, "_path_authoring_context", return_value=None):
             self.assertIs(self.source.replace(self.target, dim_to_match=1, stretch=True), self.source)
         self.assertEqual(self.calls, [(self.target_anchor, 1, True)])
 

@@ -509,15 +509,15 @@ impl Context {
         batch: &MembershipBatch,
     ) -> PyResult<Vec<bool>> {
         self.available()?;
+        let running = self.has_execution();
         let adding = batch.is_add()?;
         let members = batch.targets();
-        self.edit_running_scene(|scene| {
-            if adding {
-                scene.add_family_members(owner, &members)
-            } else {
-                scene.remove_family_members(owner, &members)
-            }
-        })
+        if adding {
+            self.scene.add_family_members(owner, &members)
+        } else {
+            self.scene.remove_family_members(owner, &members)
+        }
+        .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 
     fn prepare_children(
@@ -599,6 +599,7 @@ impl Context {
         &mut self,
         edit: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<()> {
+        self.available()?;
         let running = self.has_execution();
         edit(&mut self.scene)
             .map(|_| ())
@@ -2166,33 +2167,25 @@ impl Context {
             )
         })
     }
-    #[pyo3(name = "livePrependFamilyMembers")]
+    #[pyo3(name = "prependFamilyMembers")]
     fn prepend_family_members(
         &mut self,
         target: &crate::family::FamilyHandle,
         batch: &MembershipBatch,
     ) -> PyResult<()> {
         self.same_family_store(target)?;
-        if batch.kind != "add" {
-            return Err(engine_error("member prepend requires an add batch"));
-        }
-        self.edit_running_scene(|scene| {
-            scene.prepend_family_members(&target.family, &batch.targets())
-        })
+        let members = batch.add_targets()?;
+        self.edit_scene(|scene| scene.prepend_family_members(&target.family, &members))
     }
-    #[pyo3(name = "livePrependObjectMembers")]
+    #[pyo3(name = "prependObjectMembers")]
     fn prepend_handle_members(
         &mut self,
         target: &MobjectHandle,
         batch: &MembershipBatch,
     ) -> PyResult<()> {
         self.same_store(target)?;
-        if batch.kind != "add" {
-            return Err(engine_error("member prepend requires an add batch"));
-        }
-        self.edit_running_scene(|scene| {
-            scene.prepend_family_members(&target.handle, &batch.targets())
-        })
+        let members = batch.add_targets()?;
+        self.edit_scene(|scene| scene.prepend_family_members(&target.handle, &members))
     }
 
     #[pyo3(name = "queryMobjectPathBoundaryPoints3D")]
@@ -3155,39 +3148,23 @@ impl Context {
         };
         Ok(color.into())
     }
-    #[pyo3(name = "liveCreateFamily")]
+    #[pyo3(name = "createFamily")]
     fn create_family(
         &mut self,
         batch: &MembershipBatch,
         z_index: f64,
         draw_enabled: bool,
-    ) -> PyResult<crate::family::FamilyHandle> {
-        self.create_family_with_color(batch, z_index, 1.0, 1.0, 1.0, 1.0, draw_enabled)
-    }
-    #[pyo3(name = "liveCreateFamilyWithColor")]
-    #[allow(clippy::too_many_arguments)]
-    fn create_family_with_color(
-        &mut self,
-        batch: &MembershipBatch,
-        z_index: f64,
-        r: f64,
-        g: f64,
-        b: f64,
-        a: f64,
-        draw_enabled: bool,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
     ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
-        if batch.kind != "add" {
-            return Err(engine_error("family creation requires an add batch"));
-        }
-        self.require_execution()?;
+        let color = noon::integration::family_color(true, red, green, blue, alpha)
+            .map_err(engine_error)?
+            .expect("required family color");
         self.scene
-            .family_with_presentation(
-                &batch.targets(),
-                z_index,
-                noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
-                draw_enabled,
-            )
+            .family_with_presentation(&batch.add_targets()?, z_index, color, draw_enabled)
             .map(|family| crate::family::FamilyHandle { family })
             .map_err(engine_error)
     }
@@ -3241,7 +3218,7 @@ impl Context {
             })
             .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
-    #[pyo3(name = "liveEditFamilyMembership")]
+    #[pyo3(name = "editFamilyMembership")]
     fn edit_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3251,7 +3228,7 @@ impl Context {
         self.edit_children((&target.family).into(), batch)
     }
 
-    #[pyo3(name = "liveEditObjectMembership")]
+    #[pyo3(name = "editObjectMembership")]
     fn edit_object_membership(
         &mut self,
         target: &MobjectHandle,
@@ -3261,7 +3238,7 @@ impl Context {
         self.edit_children((&target.handle).into(), batch)
     }
 
-    #[pyo3(name = "liveInsertFamilyMember")]
+    #[pyo3(name = "insertFamilyMember")]
     fn insert_family_member(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3270,10 +3247,10 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let member = batch.single_member()?;
-        self.edit_running_scene(|scene| scene.insert_family_member(&target.family, index, member))
+        self.edit_scene(|scene| scene.insert_family_member(&target.family, index, member))
     }
 
-    #[pyo3(name = "liveInsertObjectMember")]
+    #[pyo3(name = "insertObjectMember")]
     fn insert_object_member(
         &mut self,
         target: &MobjectHandle,
@@ -3282,10 +3259,10 @@ impl Context {
     ) -> PyResult<()> {
         self.same_store(target)?;
         let member = batch.single_member()?;
-        self.edit_running_scene(|scene| scene.insert_family_member(&target.handle, index, member))
+        self.edit_scene(|scene| scene.insert_family_member(&target.handle, index, member))
     }
 
-    #[pyo3(name = "liveReplaceFamilyMembers")]
+    #[pyo3(name = "replaceFamilyMembers")]
     fn replace_family_members(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3293,10 +3270,10 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let members = batch.add_targets()?;
-        self.edit_running_scene(|scene| scene.replace_members((&target.family).into(), &members))
+        self.edit_scene(|scene| scene.replace_members((&target.family).into(), &members))
     }
 
-    #[pyo3(name = "liveReplaceObjectMembers")]
+    #[pyo3(name = "replaceObjectMembers")]
     fn replace_object_members(
         &mut self,
         target: &MobjectHandle,
@@ -3304,17 +3281,17 @@ impl Context {
     ) -> PyResult<()> {
         self.same_store(target)?;
         let members = batch.add_targets()?;
-        self.edit_running_scene(|scene| scene.replace_members((&target.handle).into(), &members))
+        self.edit_scene(|scene| scene.replace_members((&target.handle).into(), &members))
     }
 
-    #[pyo3(name = "liveInvertFamilyMembers")]
+    #[pyo3(name = "invertFamilyMembers")]
     fn invert_family_members(
         &mut self,
         target: &crate::family::FamilyHandle,
         recursive: bool,
     ) -> PyResult<()> {
         self.same_family_store(target)?;
-        self.edit_running_scene(|scene| scene.invert_family_members(&target.family, recursive))
+        self.edit_scene(|scene| scene.invert_family_members(&target.family, recursive))
     }
 
     #[pyo3(name = "copyMobjectFamily")]

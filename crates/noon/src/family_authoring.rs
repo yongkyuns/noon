@@ -473,21 +473,7 @@ fn last_occurrences(members: &[MobjectTarget<'_>]) -> Vec<usize> {
     indices
 }
 
-/// Construct the same pending semantic family for authored and live publication.
-pub(crate) fn family_creation_transaction(
-    store: &Rc<RefCell<SemanticStore>>,
-    members: &[MobjectTarget<'_>],
-    z_index: f64,
-) -> Result<
-    (
-        SemanticMutationTransaction,
-        noon_core::SemanticLocalNodeToken,
-    ),
-    AuthoringError,
-> {
-    family_creation_presentation_transaction(store, members, z_index, crate::Color::WHITE, true)
-}
-
+/// Prepare detached family creation and root presentation in one transaction.
 pub(crate) fn family_creation_presentation_transaction(
     store: &Rc<RefCell<SemanticStore>>,
     members: &[MobjectTarget<'_>],

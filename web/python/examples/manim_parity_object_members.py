@@ -30,6 +30,22 @@ def assert_mixed_content_bounds():
         assert float(family.get_nadir()[2]) == -3.5
 
 
+def assert_nested_membership():
+    first, second, third = Square(.2), Circle(.2), Square(.3)
+    nested = VGroup(first)
+    family = VGroup(nested, second)
+    assert nested.add(third) is nested
+    assert nested.submobjects == [first, third]
+    family.add_to_back(second)
+    assert family.submobjects == [second, nested]
+    nested.remove(first)
+    nested.insert(0, first)
+    nested.invert()
+    assert nested.submobjects == [third, first]
+    nested.submobjects = [second, first]
+    assert nested[0] is second and nested[1] is first
+
+
 class ObjectMembers(Scene):
     async def construct(self):
         root = Circle(.4)
@@ -50,8 +66,10 @@ class ObjectMembers(Scene):
         assert root.submobjects == [c, b]
         root.metadata_alias = b
         assert_mixed_content_bounds()
+        assert_nested_membership()
         self.add(root)
         await self.wait(.25)
+        assert_nested_membership()
         assert_depth(root, 1.125, -3.5, 4.75)
         root.submobjects = [a, b]
         root.shift((0., 0., .5))
