@@ -1233,6 +1233,11 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn scene(&self) -> &noon::Scene {
+        self.source.scene()
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn scene_mut(&mut self) -> &mut noon::Scene {
         self.source.scene_mut()
     }
@@ -1732,80 +1737,6 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_requires_content_boundary(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<bool, AuthoringFailure> {
-        self.with_live_session(|live| live.requires_content_boundary(target))
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_all_points_3d(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_all_points_3d(&semantics, self.source.session(), target)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_critical_point_3d(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-        direction: noon_core::SemanticVec3,
-        vector_boundary: bool,
-    ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_critical_point_3d(
-            &semantics,
-            self.source.session(),
-            target,
-            direction,
-            vector_boundary,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_vector_boundary_points_3d(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_vector_boundary_points_3d(
-            &semantics,
-            self.source.session(),
-            target,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_vector_boundary_points(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_vector_boundary_points(
-            &semantics,
-            self.source.session(),
-            target,
-        )
-        .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_effective_point_reduction_tree(
-        &mut self,
-        target: noon::MobjectTarget<'_>,
-    ) -> Result<noon::PointReductionTree, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_point_reduction_tree(&semantics, self.source.session(), target)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_effective_path_boundary_points_3d(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -1862,17 +1793,6 @@ impl SemanticExecutionPlayer {
         self.source
             .scene()
             .effective_length_over_dim(target, dim)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn live_effective_line_endpoints(
-        &mut self,
-        mobject: &noon::Mobject,
-    ) -> Result<noon::ManimLineEndpoints, AuthoringFailure> {
-        self.source
-            .live()
-            .effective_line_endpoints(mobject)
             .map_err(AuthoringFailure::from)
     }
 

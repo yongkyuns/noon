@@ -71,11 +71,6 @@ pub use crate::host_callbacks::{
     effective_style_with_paint_opacity, effective_style_with_stroke_color,
     rotate_effective_transform_about_point,
 };
-pub use crate::path_queries::{
-    effective_all_points_3d, effective_critical_point_3d, effective_point_reduction_tree,
-    effective_requires_content_boundary, effective_vector_boundary_points,
-    effective_vector_boundary_points_3d,
-};
 pub use crate::scene::host_execution as scene_execution;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
 #[cfg(feature = "native-text")]

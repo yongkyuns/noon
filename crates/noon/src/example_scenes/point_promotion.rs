@@ -17,7 +17,6 @@ impl LiveContinuation for PointPromotion {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         if self.stage == 3 {
             return Ok(ContinuationStep::Finished);
         }
@@ -25,10 +24,14 @@ impl LiveContinuation for PointPromotion {
             match self.stage {
                 0 => {}
                 1 => {
-                    let before = live.point_reduction_tree((&self.left).into())?.points;
+                    let before = scene
+                        .effective_point_reduction_tree((&self.left).into())?
+                        .points;
                     let captured = self.left.split_iter()?;
                     let references = [(&self.left_child).into()];
-                    let copied = live.promote_own_points((&self.left).into(), &references)?;
+                    let copied = scene
+                        .live()
+                        .promote_own_points((&self.left).into(), &references)?;
                     let root = copied.mobject(&self.left)?;
                     let alias = copied.mobject(&self.left_child)?;
                     assert_eq!(self.left.get_num_points()?, 0);
@@ -42,7 +45,10 @@ impl LiveContinuation for PointPromotion {
                         root.node_id()
                     );
                     assert_eq!(root.get_num_points()?, 32);
-                    assert_eq!(live.point_reduction_tree((&root).into())?.points, before);
+                    assert_eq!(
+                        scene.effective_point_reduction_tree((&root).into())?.points,
+                        before
+                    );
                     assert_eq!(root.member_count()?, 0);
                     assert_ne!(root.node_id(), self.left.node_id());
                     assert_ne!(alias.node_id(), self.left_child.node_id());
@@ -56,7 +62,8 @@ impl LiveContinuation for PointPromotion {
                     self.left_metadata = Some((root, alias));
                 }
                 2 => {
-                    let aligned = live
+                    let aligned = scene
+                        .live()
                         .align_own_points((&self.left).into(), (&self.right).into(), &[], &[])?
                         .expect("only the right operand still has own points");
                     assert_eq!(aligned.side, PointAlignmentSide::Right);
@@ -70,7 +77,8 @@ impl LiveContinuation for PointPromotion {
                         self.right.member_at(1)?.unwrap().as_target().node_id(),
                         root.node_id()
                     );
-                    assert!(live
+                    assert!(scene
+                        .live()
                         .align_own_points((&self.left).into(), (&self.right).into(), &[], &[])?
                         .is_none());
                     let (left_copy, left_alias) = self
@@ -84,7 +92,7 @@ impl LiveContinuation for PointPromotion {
                 _ => unreachable!("three held membership phases"),
             }
             self.stage += 1;
-            live.wait_segment(0.25).map(ContinuationStep::Await)
+            scene.live().wait_segment(0.25).map(ContinuationStep::Await)
         })();
         step.map_err(|error| error.to_string())
     }

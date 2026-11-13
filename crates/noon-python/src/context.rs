@@ -1708,12 +1708,8 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_vector_boundary_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
+        let value = if self.has_execution() {
+            self.scene.effective_vector_boundary_points_3d(target)
         } else {
             target.vector_boundary_points_3d()
         };
@@ -1726,12 +1722,8 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_all_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
+        let value = if self.has_execution() {
+            self.scene.effective_all_points_3d(target)
         } else {
             target.all_points_3d()
         };
@@ -1747,12 +1739,8 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_vector_boundary_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
+        let value = if self.has_execution() {
+            self.scene.effective_vector_boundary_points_3d(target)
         } else {
             target.vector_boundary_points_3d()
         };
@@ -1765,12 +1753,8 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_all_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
+        let value = if self.has_execution() {
+            self.scene.effective_all_points_3d(target)
         } else {
             target.all_points_3d()
         };
@@ -2120,12 +2104,9 @@ impl Context {
     fn mobject_requires_content_boundary(&self, target: &MobjectHandle) -> PyResult<bool> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_requires_content_boundary(
-                self.scene.integration_store(),
-                execution,
-                noon::MobjectTarget::from(&target.handle),
-            )
+        let value = if self.has_execution() {
+            self.scene
+                .effective_requires_content_boundary(noon::MobjectTarget::from(&target.handle))
         } else {
             noon::MobjectTarget::from(&target.handle).requires_content_boundary()
         };
@@ -2143,10 +2124,8 @@ impl Context {
     ) -> PyResult<(f64, f64, f64)> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_critical_point_3d(
-                self.scene.integration_store(),
-                execution,
+        let value = if self.has_execution() {
+            self.scene.effective_critical_point_3d(
                 noon::MobjectTarget::from(&target.handle),
                 noon::SemanticVec3::new(x, y, z),
                 vector_boundary,
@@ -2172,12 +2151,9 @@ impl Context {
     ) -> PyResult<bool> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_requires_content_boundary(
-                self.scene.integration_store(),
-                execution,
-                noon::MobjectTarget::from(&target.family),
-            )
+        let value = if self.has_execution() {
+            self.scene
+                .effective_requires_content_boundary(noon::MobjectTarget::from(&target.family))
         } else {
             noon::MobjectTarget::from(&target.family).requires_content_boundary()
         };
@@ -2195,10 +2171,8 @@ impl Context {
     ) -> PyResult<(f64, f64, f64)> {
         self.require_active()?;
         self.same_family_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_critical_point_3d(
-                self.scene.integration_store(),
-                execution,
+        let value = if self.has_execution() {
+            self.scene.effective_critical_point_3d(
                 noon::MobjectTarget::from(&target.family),
                 noon::SemanticVec3::new(x, y, z),
                 vector_boundary,
@@ -4104,7 +4078,9 @@ impl Context {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
         let value = if self.has_execution() {
-            self.with_live(|live| live.effective_line_endpoints(&target.handle))?
+            self.scene
+                .effective_line_endpoints(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
         } else {
             target.handle.manim_line_endpoints().map_err(engine_error)?
         };

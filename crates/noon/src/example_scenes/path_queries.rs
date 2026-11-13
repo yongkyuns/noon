@@ -194,11 +194,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .chain(captured.anchors()?)
             .collect::<Vec<_>>();
         assert_eq!(
-            crate::integration::effective_vector_boundary_points(
-                running.scene().integration_store(),
-                running.session(),
-                (&vector_family).into(),
-            )?,
+            running
+                .scene()
+                .effective_vector_boundary_points((&vector_family).into())?,
             expected_boundary
         );
         let midpoint = captured.start()?;

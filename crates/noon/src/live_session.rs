@@ -20,7 +20,7 @@ use crate::{
     semantic_mobject::authoring_render_f64, DeclaredAnimation, ExecutionSegment,
     ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError, ExecutionSegmentError,
     ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionPublicationError, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
+    ExecutionSessionPublicationError, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
@@ -781,19 +781,7 @@ impl<'a> LiveSession<'a> {
         crate::Scene::observe_effective(self.store, self.session, mobject).map_err(Into::into)
     }
 
-    /// Capture full-coordinate owned points and ordered child occurrences from
-    /// this session's coherent publication, retaining recursive alias order.
-    pub fn point_reduction_tree(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<crate::PointReductionTree, LiveSessionError> {
-        crate::path_queries::effective_point_reduction_tree(self.store, self.session, target)
-            .map_err(Into::into)
-    }
-
-    /// Choose existing point versus retained-content boundary semantics from
-    /// this publication, without consulting host wrapper types.
-    pub fn requires_content_boundary(
+    pub(crate) fn requires_content_boundary(
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<bool, LiveSessionError> {
@@ -849,28 +837,6 @@ impl<'a> LiveSession<'a> {
         pivot
             .validate(bounds.map_err(LiveSessionError::from)?, origin)
             .map_err(LiveSessionError::Mobject)
-    }
-
-    /// Read one analytic Line's world endpoints at the current publication.
-    pub fn effective_line_endpoints(
-        &self,
-        mobject: &Mobject,
-    ) -> Result<ManimLineEndpoints, LiveSessionError> {
-        self.require_mobject(mobject)?;
-        let store = self.store.borrow();
-        let observed = self
-            .session
-            .effective_semantic_object(&store, mobject.node_id())?;
-        if !observed.authored_content_layout_applicable() {
-            return Err(LiveSessionError::from(crate::AuthoringError::Unsupported(
-                crate::UnsupportedAuthoringOperation::EffectiveLineRenderOverride,
-            )));
-        }
-        let transform = observed.object.transform;
-        drop(store);
-        mobject
-            .manim_line_endpoints_at(transform)
-            .map_err(LiveSessionError::from)
     }
 
     /// Activate one predeclared animation in this session.
@@ -2263,7 +2229,7 @@ impl<'a> LiveSession<'a> {
 mod tests {
     use super::*;
     use crate::execution_session::CallbackAdvance;
-    use crate::{ExecutionSessionCreateError, Scene};
+    use crate::{ExecutionSessionCreateError, ManimLineEndpoints, Scene};
     use noon_core::{
         AnimationOptions, Color, HostCallbackId, RateFunction, SemanticObjectRole, SemanticPaint,
         SemanticSheenDirection, SemanticStyle, SemanticVec3,
@@ -2787,7 +2753,7 @@ mod tests {
             }
         );
         assert_eq!(
-            running.live().effective_line_endpoints(&line).unwrap(),
+            running.scene().effective_line_endpoints(&line).unwrap(),
             ManimLineEndpoints {
                 start: (-1.0, 1.0),
                 end: (1.0, 1.0),
@@ -2819,7 +2785,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(running.live().effective_line_endpoints(&line).is_err());
+        assert!(running.scene().effective_line_endpoints(&line).is_err());
         assert_eq!(
             running.scene().effective_manim_color(&line).unwrap(),
             Color::WHITE

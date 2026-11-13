@@ -137,7 +137,6 @@ impl LiveContinuation for LiveGeometryConstruction {
                 let line = self.line.as_ref().ok_or("missing live line")?;
                 assert_endpoints(
                     scene
-                        .live()
                         .effective_line_endpoints(line)
                         .map_err(|error| error.to_string())?,
                     (LINE_START.0, LINE_START.1 + 1.0),
