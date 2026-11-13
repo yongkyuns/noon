@@ -984,10 +984,17 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_count(&self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
         self.mobject_observation(handle, noon::Mobject::get_num_points, |scene, handle| {
-            scene
-                .effective_mobject_point_count(handle)
-                .map_err(Into::into)
+            scene.own_point_count(handle.into()).map_err(Into::into)
         })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_point_count(&self, family: &noon::MobjectFamily) -> Result<usize, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.get_num_points(),
+            |scene, target| scene.own_point_count(target).map_err(Into::into),
+        )
     }
 
     /// Observe one family's own root through the current execution owner.
@@ -996,22 +1003,15 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), family.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        family.validate().map_err(AuthoringFailure::from)?;
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local() {
-                return player
-                    .scene()
+        self.family_observation(
+            family,
+            |_| family.own_path_query(),
+            |scene, _| {
+                scene
                     .effective_family_own_path_query(family)
-                    .map_err(Into::into);
-            }
-        }
-        family.own_path_query().map_err(AuthoringFailure::from)
+                    .map_err(Into::into)
+            },
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -8235,6 +8235,16 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = queryFamilyPointCount)]
+        pub fn query_family_point_count(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<usize, JsValue> {
+            self.inner
+                .family_point_count(&handle.semantic_family()?)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = queryFamilyRequiresContentBoundary)]
         pub fn query_family_requires_content_boundary(
             &mut self,
@@ -14004,7 +14014,12 @@ mod tests {
         let mut foreign_scene = noon::Scene::new();
         let foreign = foreign_scene.family(&[]).unwrap();
         assert!(context.family_own_path_query(&foreign).is_err());
+        assert!(context.family_point_count(&foreign).is_err());
+        assert_eq!(context.family_point_count(&empty).unwrap(), 0);
+        assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         context.live_player(1.0).unwrap();
+        assert_eq!(context.family_point_count(&empty).unwrap(), 0);
+        assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert!(context
             .family_own_path_query(&empty)
             .unwrap()
@@ -14020,9 +14035,12 @@ mod tests {
             points
         );
         let transferred = context.take_execution_player(1.0, 41).unwrap();
+        assert!(context.family_point_count(&empty).is_err());
+        assert!(context.family_point_count(&owned).is_err());
         assert!(context.family_own_path_query(&empty).is_err());
         assert!(context.family_own_path_query(&owned).is_err());
         context.return_execution_player(transferred).unwrap();
+        assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert_eq!(
             context
                 .family_own_path_query(&owned)

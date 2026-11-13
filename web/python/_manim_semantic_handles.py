@@ -2858,8 +2858,15 @@ def _point_reduction_tree_observation(value: _base.Mobject):
 def _family_point_count_observation(value: _base.Mobject) -> int | None:
     if not _is_shared_family(value):
         return None
-    # Only root-owned points contribute; direct-child membership stays separate.
-    return int(engine_call(value._semantic_family_handle.pointCount))
+    from _manim_updaters import canonical_callback_phase_active
+
+    family = value._semantic_family_handle
+    # Callbacks do not stage root point edits on shared families.
+    if not canonical_callback_phase_active():
+        context = _path_authoring_context(value)
+        if context is not None:
+            return int(engine_call(context.queryFamilyPointCount, family))
+    return int(engine_call(family.pointCount))
 
 
 def _extremum_along_dim_observation(value: _base.Mobject, dim: int, key: float):

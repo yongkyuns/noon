@@ -44,13 +44,7 @@ fn text_root_owns_no_points_on_authored_and_live_paths() {
     scene.add(&text).unwrap();
     let running = scene.into_execution().unwrap();
     let publication = running.session().publication_context();
-    assert_eq!(
-        running
-            .scene()
-            .effective_mobject_point_count(&text)
-            .unwrap(),
-        0
-    );
+    assert_eq!(running.scene().own_point_count((&text).into()).unwrap(), 0);
     assert_eq!(running.session().publication_context(), publication);
 }
 
@@ -87,10 +81,7 @@ fn live_point_counts_preserve_partial_paths_and_publication_guards() {
         running.live().advance_segment_to(reveal, alpha).unwrap();
         let publication = running.session().publication_context();
         assert_eq!(
-            running
-                .scene()
-                .effective_mobject_point_count(&circle)
-                .unwrap(),
+            running.scene().own_point_count((&circle).into()).unwrap(),
             expected
         );
         assert_eq!(
@@ -101,34 +92,16 @@ fn live_point_counts_preserve_partial_paths_and_publication_guards() {
                 .point_count(),
             expected
         );
-        assert_eq!(
-            running
-                .scene()
-                .effective_mobject_point_count(&image)
-                .unwrap(),
-            4
-        );
-        assert_eq!(
-            running
-                .scene()
-                .effective_mobject_point_count(&empty)
-                .unwrap(),
-            0
-        );
+        assert_eq!(running.scene().own_point_count((&image).into()).unwrap(), 4);
+        assert_eq!(running.scene().own_point_count((&empty).into()).unwrap(), 0);
         assert_eq!(running.session().publication_context(), publication);
     }
     let publication = running.session().publication_context();
     let mut other_scene = Scene::new();
     let foreign = other_scene.circle(1.0).unwrap();
-    assert!(running
-        .scene()
-        .effective_mobject_point_count(&foreign)
-        .is_err());
+    assert!(running.scene().own_point_count((&foreign).into()).is_err());
     image.set_object_opacity(0.5).unwrap();
-    assert!(running
-        .scene()
-        .effective_mobject_point_count(&image)
-        .is_err());
+    assert!(running.scene().own_point_count((&image).into()).is_err());
     assert_eq!(running.session().publication_context(), publication);
 }
 
