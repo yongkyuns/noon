@@ -1218,10 +1218,10 @@ class PlottingAdapterTests(unittest.TestCase):
         batch = Mock()
         with patch.object(plotting._shared, "_group_target_context", return_value=context), \
              patch.object(plotting._shared, "_family_membership_batch", return_value=batch):
-            context.liveCopyFamily.return_value = copied_root
+            context.copyFamily.return_value = copied_root
             copied = source.copy()
 
-        context.liveCopyFamily.assert_called_once_with(source._semantic_family_handle, batch)
+        context.copyFamily.assert_called_once_with(source._semantic_family_handle, batch)
         self.assertIsNot(copied._semantic_family_handle, source._semantic_family_handle)
         self.assertIs(copied.axes._semantic_family_handle, copied_axes)
         self.assertIs(copied.bars._semantic_family_handle, copied_bars)

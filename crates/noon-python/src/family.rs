@@ -1000,6 +1000,16 @@ impl FamilyHandle {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "cyclicReplaceTarget")]
+    fn cyclic_replace_target(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
+        self.family
+            .cyclic_replace_target_with_references(&references.add_targets()?)
+            .map(|copied| FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "copyFamily")]
     fn copy_family(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
         if references.kind != "add" {

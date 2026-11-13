@@ -121,11 +121,11 @@ class MovingCameraWrapperTests(unittest.TestCase):
                 def liveExecutionOwnership(self):
                     return self.ownership
 
-                def liveTargetEditor(self, handle):
+                def targetEditor(self, handle):
                     self._require_coherent()
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveTargetEditor")
+                    self.calls.append("targetEditor")
                     return handle.targetEditor()
 
                 def liveScaleLayout3d(self, anchor, x, y, z, px, py, pz, about_point):
@@ -147,12 +147,12 @@ class MovingCameraWrapperTests(unittest.TestCase):
                     self.execution_revision = self.semantic_revision
                     self.calls.append("liveMoveToPoint")
 
-                def liveBecomeMobject(self, handle, target, *flags):
+                def becomeMobject(self, handle, target, *flags):
                     self._require_coherent()
                     handle.state = copy.deepcopy(target.state)
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveBecomeMobject")
+                    self.calls.append("becomeMobject")
 
                 def _require_coherent(self):
                     if self.semantic_revision != self.execution_revision:
@@ -204,17 +204,17 @@ class MovingCameraWrapperTests(unittest.TestCase):
             assert target.camera.frame is not frame
             assert target.camera.frame._canonical_live_target_context is context
             assert context.semantic_revision == context.execution_revision
-            assert context.calls.count("liveTargetEditor") >= 5, context.calls
+            assert context.calls.count("targetEditor") >= 5, context.calls
             assert context.calls[-2:] == ["liveScale", "liveMoveToPoint"], context.calls
 
             context.liveScale(frame._semantic_handle, 2.0, 2.0)
             frame.restore()
             assert frame._semantic_handle.state["scale"] == [1.0, 1.0]
-            assert context.calls[-1] == "liveBecomeMobject"
+            assert context.calls[-1] == "becomeMobject"
             context.liveScale(display._semantic_handle, 2.0, 2.0)
             display.restore()
             assert display._semantic_handle.state["scale"] == [1.0, 1.0]
-            assert context.calls[-1] == "liveBecomeMobject"
+            assert context.calls[-1] == "becomeMobject"
             assert context.semantic_revision == context.execution_revision
             """
         )

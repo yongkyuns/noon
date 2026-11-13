@@ -167,7 +167,7 @@ else: raise AssertionError("compiler error was swallowed")
                 def liveCreateManimTypst(self, *args):
                     self.calls.append(("typst", args))
                     return object()
-                def liveTargetEditor(self, handle):
+                def targetEditor(self, handle):
                     self.calls.append(("copy", handle))
                     return object()
 
