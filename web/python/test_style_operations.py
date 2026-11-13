@@ -610,7 +610,7 @@ class StyleOperationsTests(unittest.TestCase):
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
                 operation()
         bridge = SimpleNamespace(setStyle=Mock())
-        with patch.object(handles, "_style_target", return_value=(bridge, None, "")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(bridge, None, "")):
             self.assertIs(
                 obj.set_stroke(color=compat._base.RED, width=2, background=True), obj
             )
@@ -651,7 +651,7 @@ class StyleOperationsTests(unittest.TestCase):
     def test_combined_style_is_one_typed_request_and_validates_before_dispatch(self):
         obj = identity_only_wrapper(compat.Circle)
         bridge = SimpleNamespace(setStyle=Mock())
-        with patch.object(handles, '_style_target', return_value=(bridge, None, '')):
+        with patch.object(handles, '_paint_authoring_target', return_value=(bridge, None, '')):
             self.assertIs(obj.set_style(fill_color='#FF0000', fill_opacity=0.4,
                                         stroke_color='#0000FF', stroke_width=6), obj)
             bridge.setStyle.assert_called_once_with(True, 1, 0, 0, 1, 0.4,

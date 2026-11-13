@@ -281,9 +281,9 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             handle, 0.0, 0.0, 1.0, 0.5, (1.0, 2.0, 3.0),
         )
         context.scaleFamilyWorld.assert_called_once_with(handle, 2.0, (1.0, 2.0, 3.0))
-        context.liveSetFamilyStyle.assert_called_once()
-        context.liveSetFamilyColor.assert_called_once()
-        context.liveSetFamilyOpacity.assert_called_once()
+        context.setFamilyStyle.assert_called_once()
+        context.setFamilyColor.assert_called_once()
+        context.setFamilyOpacity.assert_called_once()
         context.setSurfaceCheckerboard.assert_called_once_with(
             handle,
             (noon.RED.red, noon.RED.green, noon.RED.blue, noon.RED.alpha),
@@ -347,8 +347,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         surface._scene = SimpleNamespace(_canonical_authoring_context=context)
         surface._object = SimpleNamespace(id=42)
         surface.set_style(fill_color=noon.RED)
-        context.liveSetStyle.assert_called_once()
-        context.liveSetFamilyStyle.assert_not_called()
+        context.setStyle.assert_called_once()
+        context.setFamilyStyle.assert_not_called()
 
         mesh_handle.width.return_value = 2.5
         mesh_handle.height.return_value = 1.25
@@ -385,8 +385,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         surface.set_color(noon.BLUE)
         surface.set_opacity(0.4)
         surface.match_style(target)
-        context.liveSetColor.assert_called_once()
-        context.liveSetObjectOpacity.assert_called_once_with(mesh_handle, 0.4)
+        context.setColor.assert_called_once()
+        context.setObjectOpacity.assert_called_once_with(mesh_handle, 0.4)
         context.liveMatchStyle.assert_called_once_with(mesh_handle, target_handle)
 
         with patch("_manim_geometry._mobject_get_color", return_value=noon.BLUE) as get_color:
