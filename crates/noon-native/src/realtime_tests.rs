@@ -1,8 +1,6 @@
 //! Actual native host/source timing, not a model of the clock algorithm.
 use super::*;
-use noon::{
-    AnimationOptions, ContinuationStep, LiveSession, LiveSessionError, Mobject, RateFunction,
-};
+use noon::{AnimationOptions, ContinuationStep, LiveSessionError, Mobject, RateFunction};
 #[cfg(target_os = "linux")]
 use std::{cell::Cell, rc::Rc};
 
@@ -16,7 +14,11 @@ struct WaitThenMove {
 impl LiveContinuation for WaitThenMove {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         if self.waits_left != 0 {
             self.waits_left -= 1;
             return live.wait_segment(1.0 / 64.0).map(ContinuationStep::Await);
@@ -172,7 +174,11 @@ struct ShortAnimatedSequence {
 impl LiveContinuation for ShortAnimatedSequence {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         self.resumes.set(self.resumes.get() + 1);
         let Some(target) = self.targets.get(self.next) else {
             return Ok(ContinuationStep::Finished);

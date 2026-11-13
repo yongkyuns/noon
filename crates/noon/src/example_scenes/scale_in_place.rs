@@ -1,7 +1,6 @@
 //! Play-begin target capture for the paired Python ScaleInPlace example.
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
 };
 
 pub struct ScaleInPlace {
@@ -12,7 +11,8 @@ pub struct ScaleInPlace {
 impl LiveContinuation for ScaleInPlace {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.stage == 2 {
             let state = live.effective(&self.square).map_err(|e| e.to_string())?;
             if state.transform.translation != noon_core::Vec2::new(1.0, 0.0)

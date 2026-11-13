@@ -129,7 +129,7 @@ use std::{error::Error, rc::Rc};
 
 use crate::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    AnimationOptions, Color, LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction,
+    AnimationOptions, Color, LiveContinuation, LiveProgram, Mobject, RateFunction,
     RustHostCallbackTable, Scene, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticNodeId, SemanticPaint, SemanticStyle, SemanticVec3, StoredGeometry, StrokeCap,
     StrokeJoin, StrokeWidthMode, TransformToRequest, ValueTracker, Vec2, VectorPath,
@@ -147,7 +147,11 @@ pub struct OrdinaryDifferentRotations {
 impl LiveContinuation for OrdinaryDifferentRotations {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<crate::ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -748,8 +752,9 @@ impl LiveContinuation for OrdinaryAffineContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let linear = |duration| {
             AnimationOptions::new()
                 .run_time(duration)
@@ -834,8 +839,9 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -929,8 +935,9 @@ impl LiveContinuation for OrdinaryValueTrackerContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -1028,8 +1035,9 @@ impl LiveContinuation for OrdinaryCompositionContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let linear = |duration| {
             AnimationOptions::new()
                 .run_time(duration)
@@ -1139,7 +1147,11 @@ pub struct OrdinarySuccession {
 impl LiveContinuation for OrdinarySuccession {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<crate::ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.activated {
             return Ok(crate::ContinuationStep::Finished);
         }
@@ -1218,8 +1230,9 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -1404,8 +1417,9 @@ impl LiveContinuation for OrdinaryCallbackSparseReadsContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -1607,8 +1621,9 @@ impl LiveContinuation for OrdinaryFadeContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let linear = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
@@ -1744,8 +1759,9 @@ impl LiveContinuation for OrdinaryCreateContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 if live
@@ -1818,7 +1834,11 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
     // it performs no host I/O, callback dispatch, or external-time work.
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<crate::ContinuationStep, String> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<crate::ContinuationStep, String> {
+        let live = &mut scene.live();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth);
@@ -1915,8 +1935,9 @@ impl LiveContinuation for OrdinaryUncreateContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 if live
@@ -1985,8 +2006,9 @@ impl LiveContinuation for OrdinarySquareAndCircleCreateContinuation {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 if live
@@ -2084,8 +2106,9 @@ impl LiveContinuation for OrdinaryCreateThenContentMorph {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -2187,8 +2210,9 @@ impl LiveContinuation for OrdinaryMovingCameraCenter {
 
     fn resume(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;

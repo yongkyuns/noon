@@ -2,7 +2,7 @@
 use crate::{
     effects::{Bloom, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
 };
 use noon_core::ViewColorProfile;
 
@@ -13,7 +13,8 @@ pub struct CameraBloom {
 }
 impl LiveContinuation for CameraBloom {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 | 2 => live.wait_segment(0.5).map_err(message)?,
             1 | 3 => {
@@ -92,10 +93,12 @@ pub fn program() -> Result<LiveProgram<CameraBloom>, String> {
 }
 /// Pre-author the same finite steps for normal seek/export playback.
 pub fn execution() -> Result<crate::SceneExecution, String> {
-    let (scene, mut continuation) = setup()?;
-    let mut session = scene.execution_session().map_err(message)?;
+    let (mut scene, mut continuation) = setup()?;
+    let session = scene.execution_session().map_err(message)?;
+    scene.install_execution(session);
+    let mut scene = crate::ContinuationScene::new(scene);
     loop {
-        match continuation.resume(&mut scene.live(&mut session))? {
+        match continuation.resume(&mut scene)? {
             ContinuationStep::Finished => break,
             ContinuationStep::Publish(_) => {
                 return Err(
@@ -103,19 +106,18 @@ pub fn execution() -> Result<crate::SceneExecution, String> {
                 );
             }
             ContinuationStep::Await(segment) => {
-                session
-                    .advance_segment_to(segment, segment.end_time())
+                let mut live = scene.live();
+                live.advance_segment_to(segment, segment.end_time())
                     .map_err(message)?;
-                scene
-                    .live(&mut session)
-                    .complete_segment(segment)
-                    .map_err(message)?;
+                live.complete_segment(segment).map_err(message)?;
             }
         }
     }
-    session.seek(0.0).map_err(message)?;
-    scene.into_execution_with_session(session).map_err(message)
+    let mut execution = scene.take().into_execution().map_err(message)?;
+    execution.seek(0.0).map_err(message)?;
+    Ok(execution)
 }
+
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
@@ -137,26 +139,39 @@ mod prefix_tests {
 
     #[test]
     fn prepared_prefix_adopts_camera_bloom_effect_history() {
-        let (scene, mut continuation) = setup().unwrap();
-        let mut source = scene.execution_session().unwrap();
-        source
+        let (mut scene, mut continuation) = setup().unwrap();
+        let source = scene.execution_session().unwrap();
+        scene.install_execution(source);
+        let mut scene = crate::ContinuationScene::new(scene);
+        scene
+            .owned_execution_mut()
             .begin_replay_retention(ReplayLimits::default())
             .unwrap();
-        let first = match continuation.resume(&mut scene.live(&mut source)).unwrap() {
+        let first = match continuation.resume(&mut scene).unwrap() {
             ContinuationStep::Await(segment) => segment,
             other => panic!("expected initial wait, got {other:?}"),
         };
-        source.advance_to(first.end_time()).unwrap();
-        scene.live(&mut source).complete_segment(first).unwrap();
-        let (mut publisher, mut reader) = source.create_prepared_prefix(first).unwrap();
+        scene
+            .owned_execution_mut()
+            .advance_to(first.end_time())
+            .unwrap();
+        scene.live().complete_segment(first).unwrap();
+        let (mut publisher, mut reader) = scene
+            .owned_execution()
+            .create_prepared_prefix(first)
+            .unwrap();
 
         let mut last = first;
         loop {
-            match continuation.resume(&mut scene.live(&mut source)).unwrap() {
+            match continuation.resume(&mut scene).unwrap() {
                 ContinuationStep::Await(segment) => {
-                    source.advance_to(segment.end_time()).unwrap();
-                    scene.live(&mut source).complete_segment(segment).unwrap();
-                    let suffix = source
+                    scene
+                        .owned_execution_mut()
+                        .advance_to(segment.end_time())
+                        .unwrap();
+                    scene.live().complete_segment(segment).unwrap();
+                    let suffix = scene
+                        .owned_execution()
                         .publish_prepared_prefix(segment, &mut publisher)
                         .expect("authored camera Bloom changes stay in their typed history owner");
                     reader.preflight_append(&suffix).unwrap();
@@ -167,9 +182,14 @@ mod prefix_tests {
                 ContinuationStep::Publish(_) => panic!("built-in effects need no host resources"),
             }
         }
-        source.seal_replay().unwrap();
+        scene.owned_execution_mut().seal_replay().unwrap();
         reader
-            .append(source.finish_prepared_prefix(last, &mut publisher).unwrap())
+            .append(
+                scene
+                    .owned_execution()
+                    .finish_prepared_prefix(last, &mut publisher)
+                    .unwrap(),
+            )
             .unwrap();
         for (time, intensity) in [
             (0.0, 0.0),
@@ -180,9 +200,13 @@ mod prefix_tests {
             (4.5, 0.75),
             (5.0, 0.0),
         ] {
-            source.seek(time).unwrap();
+            scene.owned_execution_mut().seek(time).unwrap();
             reader.seek(time).unwrap();
-            assert_eq!(reader.frame(), source.frame(), "at authored time {time}");
+            assert_eq!(
+                reader.frame(),
+                scene.owned_execution().frame(),
+                "at authored time {time}"
+            );
             assert_eq!(bloom_intensity(reader.frame()), intensity);
         }
     }

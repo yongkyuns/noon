@@ -1,7 +1,7 @@
 //! Paired with web/python/examples/live_masked_placement.py.
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveLayoutTarget, LiveSession, Mobject,
-    RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveLayoutTarget, Mobject, RateFunction,
+    Scene,
 };
 
 struct Placement {
@@ -13,7 +13,8 @@ struct Placement {
 impl LiveContinuation for Placement {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.stage == 0 {
             self.stage = 1;
             return live

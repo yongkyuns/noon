@@ -8,7 +8,7 @@ use crate::{
         ShaderSchema, ShaderUnit, ShaderValue, WgslEffectProgram,
     },
     AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
+    LiveProgram, Mobject, RateFunction, Scene, SemanticAnimationCompositionKind,
     TransformToRequest,
 };
 
@@ -81,7 +81,8 @@ fn material(coordinates: ShaderCoordinates) -> Result<WgslEffectProgram, String>
 impl LiveContinuation for ShaderSweep {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 | 2 | 4 => live.wait_segment(0.5),
             1 | 3 => {

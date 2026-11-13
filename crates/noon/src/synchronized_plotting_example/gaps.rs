@@ -6,7 +6,7 @@ use crate::plot_presentation::{number_labels, TimedPlotSample};
 use crate::synchronized_plot_presentation::GappedTimeSeriesPlan;
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction, Scene,
+    LiveProgram, ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction, Scene,
     SemanticAnimationCompositionKind as Kind, Text, TransformToRequest, BLUE, GREEN, ORANGE, WHITE,
 };
 
@@ -32,7 +32,8 @@ pub struct GappedPlayback {
 impl LiveContinuation for GappedPlayback {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let index = self.next_interval;
         if index == self.durations.len() {
             return Ok(ContinuationStep::Finished);

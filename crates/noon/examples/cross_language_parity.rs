@@ -2,8 +2,8 @@
 //! lowering/runtime; the optional codec observes their actual execution frames.
 use noon::{
     diagnostics::execution_frame_value, example_scenes, AnimationOptions, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveProgramStatus, LiveSession, Mobject, RateFunction,
-    RustHostCallbackTable, Scene,
+    LiveContinuation, LiveProgram, LiveProgramStatus, Mobject, RateFunction, RustHostCallbackTable,
+    Scene,
 };
 use serde_json::json;
 
@@ -78,7 +78,8 @@ struct TransformPathArc {
 impl LiveContinuation for TransformPathArc {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;

@@ -4,8 +4,8 @@ use noon::integration::{
     ExportFrameOptions, ExportFrameSummary, ExportFrames, ExportFramesStatus, ExportStop, FrameRate,
 };
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, Mobject,
-    RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveSessionError, Mobject, RateFunction,
+    RustHostCallbackTable, Scene,
 };
 use std::time::Duration;
 
@@ -30,7 +30,11 @@ struct Source {
 impl LiveContinuation for Source {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         if self.waits_left > 0 {
             self.waits_left -= 1;
             // Exactly representable, but off-grid at every integer FPS below.

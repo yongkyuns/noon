@@ -4,7 +4,7 @@
 use crate::{
     effects::{EffectUpdate, Pixels},
     AnimationOptions, Color, ContinuationStep, ImageMobjectOptions, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RasterImageSampling, RateFunction, Scene,
+    Mobject, RasterImageSampling, RateFunction, Scene,
 };
 
 pub const SIDE: u32 = 9;
@@ -48,7 +48,8 @@ pub struct ImageGlow {
 impl LiveContinuation for ImageGlow {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let motion = AnimationOptions::new()
             .run_time(1.5)
             .rate_func(RateFunction::Smooth);

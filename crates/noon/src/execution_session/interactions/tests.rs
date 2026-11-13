@@ -365,7 +365,10 @@ fn authored_change_while_active_never_restores_captured_style() {
 struct Finish;
 impl LiveContinuation for Finish {
     type Error = std::convert::Infallible;
-    fn resume(&mut self, _: &mut crate::LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Ok(ContinuationStep::Finished)
     }
 }

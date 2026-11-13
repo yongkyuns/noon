@@ -3,9 +3,9 @@
 
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, ContinuationEffects,
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, ManimAxes, ManimAxesOptions,
-    Mobject, RateFunction, Scene, SceneExecution, SemanticAnimationCompositionKind as Kind, Text,
-    BLUE, YELLOW,
+    ContinuationStep, LiveContinuation, LiveProgram, ManimAxes, ManimAxesOptions, Mobject,
+    RateFunction, Scene, SceneExecution, SemanticAnimationCompositionKind as Kind, Text, BLUE,
+    YELLOW,
 };
 
 struct PlotObjects {
@@ -88,7 +88,8 @@ impl LiveContinuation for CoordinatePlayback {
     const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let duration = match self.phase {
             0 => 0.5,
             1 => 0.8,

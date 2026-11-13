@@ -84,17 +84,9 @@ pub trait LiveContinuation {
         true
     }
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error>;
-
-    /// Resume with the owning scene available to compiled async authoring.
-    /// Ordinary continuations continue to implement only [`Self::resume`].
-    #[doc(hidden)]
-    fn resume_scene(
-        &mut self,
-        scene: &mut ContinuationScene,
-    ) -> Result<ContinuationStep, Self::Error> {
-        self.resume(&mut scene.owned_live())
-    }
+    /// Resume with the owning Scene. Borrow [`ContinuationScene::live`] to
+    /// declare or await an execution segment.
+    fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, Self::Error>;
 
     /// An authoring source may own its callable table instead of requiring the host
     /// to assemble it. The execution session still owns callback ordering.
@@ -109,7 +101,6 @@ pub trait LiveContinuation {
 /// Only the crate's async adapter may temporarily move the scene into its scoped
 /// authoring capability. Host-facing borrows are available again before resumption
 /// returns, including when source code unwinds.
-#[doc(hidden)]
 pub struct ContinuationScene {
     scene: Option<Scene>,
 }
@@ -124,6 +115,11 @@ impl ContinuationScene {
             Some(scene) => scene,
             None => panic!("scene is temporarily loaned to its authoring continuation"),
         }
+    }
+
+    /// Borrow execution controls for this continuation's current boundary.
+    pub fn live(&mut self) -> LiveSession<'_> {
+        self.owned_live()
     }
 
     pub(crate) fn take(&mut self) -> Scene {
@@ -279,7 +275,7 @@ impl Scene {
     /// Consume this scene into one paired live program.
     ///
     /// Lowering happens once before the continuation starts. All later semantic
-    /// work is available only through the program's temporary [`LiveSession`].
+    /// work uses the same [`Scene`] at each continuation boundary.
     pub fn into_live_program<C: LiveContinuation>(
         mut self,
         continuation: C,
@@ -628,7 +624,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
         // An unwinding source must not be retried. The async adapter restores the
         // one Scene before unwinding out of this call.
         self.phase = LiveProgramPhase::Terminal;
-        let result = self.continuation.resume_scene(&mut self.scene);
+        let result = self.continuation.resume(&mut self.scene);
         match result {
             Ok(ContinuationStep::Await(segment)) => {
                 match self.session().validate_segment_for_advance(segment) {
@@ -795,7 +791,11 @@ mod tests {
     #[cfg(feature = "wgsl-effects")]
     impl LiveContinuation for AttachShaders {
         type Error = crate::LiveSessionError;
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             use crate::effects::{
                 ShaderCoordinates, ShaderDependencies, ShaderEffect, ShaderProfile, ShaderSchema,
                 WgslEffectProgram,
@@ -939,7 +939,11 @@ mod tests {
     impl LiveContinuation for AnimatedContinuation {
         type Error = crate::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             *self.resumes.borrow_mut() += 1;
             match self.stage {
                 0 => {
@@ -1076,7 +1080,10 @@ mod tests {
     impl LiveContinuation for ReturnSegment {
         type Error = Infallible;
 
-        fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            _scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
             Ok(ContinuationStep::Await(self.0))
         }
     }
@@ -1146,7 +1153,11 @@ mod tests {
     impl LiveContinuation for WaitContinuation {
         type Error = Infallible;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             *self.resumes.borrow_mut() += 1;
             if self.stage == 0 {
                 self.stage = 1;
@@ -1203,8 +1214,9 @@ mod tests {
 
             fn resume(
                 &mut self,
-                live: &mut LiveSession<'_>,
+                scene: &mut ContinuationScene,
             ) -> Result<ContinuationStep, Self::Error> {
+                let live = &mut scene.live();
                 *self.resumes.borrow_mut() += 1;
                 if self.stage == 0 {
                     self.stage = 1;

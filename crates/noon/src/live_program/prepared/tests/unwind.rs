@@ -21,7 +21,11 @@ impl Drop for PanicScript {
 impl LiveContinuation for PanicScript {
     const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let call = self.calls.get();
         self.calls.set(call + 1);
         if self.panic_at == Some(call) {

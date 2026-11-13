@@ -2,7 +2,7 @@
 //! The cases share setup; camera motion stays in the ordinary live timeline.
 use crate::{
     AnimationOptions, CameraRotationAxis, Color, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, ManimThreeDAxesOptions, Mobject, MobjectTarget, RateFunction, Scene,
+    ManimThreeDAxesOptions, Mobject, MobjectTarget, RateFunction, Scene,
     SemanticSpatialCompositionDomain, SemanticVec3, StyleUpdate, SurfaceOptions, SurfaceSample,
     Text, UvSurfacePlan, WorldAffineEdit,
 };
@@ -187,7 +187,8 @@ pub struct CameraContinuation {
 }
 impl LiveContinuation for CameraContinuation {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let step = match (self.case, self.stage) {
             (CameraCase::FixedFrame, 0) => live.wait_segment(1.),
             (CameraCase::Ambient, 0) => {

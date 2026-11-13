@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationOptions, Color, ContinuationStep, DrawBorderThenFillOptions, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, MobjectFamily, RateFunction, Scene,
+    LiveProgram, Mobject, MobjectFamily, RateFunction, Scene,
 };
 
 pub struct DrawBorderThenFill {
@@ -15,7 +15,8 @@ pub struct DrawBorderThenFill {
 impl LiveContinuation for DrawBorderThenFill {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 let segment = live

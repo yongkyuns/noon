@@ -1,8 +1,8 @@
 //! Shared Rust counterpart of ManimCE CyclicReplace over a flat three-member family.
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    MobjectFamily, RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily,
+    RateFunction, Scene,
 };
 
 pub struct CyclicReplace {
@@ -17,7 +17,8 @@ pub struct CyclicReplace {
 impl LiveContinuation for CyclicReplace {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;

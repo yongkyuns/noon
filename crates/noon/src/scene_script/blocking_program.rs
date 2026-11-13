@@ -3,7 +3,7 @@
 use super::{BlockingBoundary, ScriptError};
 use crate::{
     ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
-    LiveSession, RustHostCallbackTable, Scene,
+    RustHostCallbackTable, Scene,
 };
 
 /// The single cold Scene and callable table before a blocking source's first boundary.
@@ -71,7 +71,10 @@ impl LiveContinuation for BlockingContinuation {
         self.pending.is_some()
     }
 
-    fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         self.pending.take().ok_or(ScriptError::Inactive)
     }
 

@@ -617,8 +617,9 @@ impl noon::LiveContinuation for BloomAnimation {
     type Error = String;
     fn resume(
         &mut self,
-        live: &mut noon::LiveSession<'_>,
+        scene: &mut noon::ContinuationScene,
     ) -> Result<noon::ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(noon::ContinuationStep::Finished);
         }

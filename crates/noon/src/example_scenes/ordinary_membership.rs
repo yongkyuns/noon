@@ -1,74 +1,83 @@
 //! Atomic scene membership and family projection through the shared live runtime.
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject, MobjectFamily,
+    ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily,
     MobjectTarget::{Family, Object as Leaf},
-    Scene, SemanticNodeId,
+    Scene,
 };
-use noon_core::SemanticStore;
 
 pub struct OrdinaryMembership {
     red: Mobject,
     blue: Mobject,
     green: Mobject,
     family: MobjectFamily,
-    store: Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
     stage: u8,
 }
 
 impl LiveContinuation for OrdinaryMembership {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let expected = match self.stage {
             0 => {
                 // A bad final argument must not partially admit the valid first one.
                 let foreign = Scene::new()
                     .square(1.0)
                     .map_err(|error| error.to_string())?;
-                if live.add_many(&[Leaf(&self.red), Leaf(&foreign)]).is_ok()
-                    || live.contains(&self.red).map_err(|e| e.to_string())?
+                if scene.add_many(&[Leaf(&self.red), Leaf(&foreign)]).is_ok()
+                    || scene
+                        .integration_store()
+                        .borrow()
+                        .node(scene.root())
+                        .unwrap()
+                        .members()
+                        .contains(&self.red.node_id())
                 {
                     return Err("invalid membership batch partially committed".into());
                 }
-                live.add_many(&[Leaf(&self.red), Leaf(&self.blue)])
+                scene
+                    .add_many(&[Leaf(&self.red), Leaf(&self.blue)])
                     .map_err(|e| e.to_string())?;
                 vec![self.red.node_id(), self.blue.node_id()]
             }
             1 => {
-                live.replace(Leaf(&self.red), Leaf(&self.green))
+                scene
+                    .replace(Leaf(&self.red), Leaf(&self.green))
                     .map_err(|e| e.to_string())?;
                 vec![self.green.node_id(), self.blue.node_id()]
             }
             2 => {
-                live.remove(&self.blue).map_err(|e| e.to_string())?;
+                scene.remove(&self.blue).map_err(|e| e.to_string())?;
                 vec![self.green.node_id()]
             }
             3 => {
-                live.add_many(&[Family(&self.family)])
+                scene
+                    .add_many(&[Family(&self.family)])
                     .map_err(|e| e.to_string())?;
                 vec![self.green.node_id(), self.family.node_id()]
             }
             4 => {
                 // Removing a descendant promotes its surviving sibling at the family slot.
-                live.remove(&self.red).map_err(|e| e.to_string())?;
+                scene.remove(&self.red).map_err(|e| e.to_string())?;
                 vec![self.green.node_id(), self.blue.node_id()]
             }
             5 => {
                 // Re-adding an existing root moves it to the end without changing identity.
-                live.add(&self.green).map_err(|e| e.to_string())?;
+                scene.add(&self.green).map_err(|e| e.to_string())?;
                 vec![self.blue.node_id(), self.green.node_id()]
             }
             6 => {
-                live.clear().map_err(|e| e.to_string())?;
+                scene.clear().map_err(|e| e.to_string())?;
                 vec![]
             }
             7 => return Ok(ContinuationStep::Finished),
             _ => return Err("membership continuation resumed after completion".into()),
         };
-        let actual = self.store.borrow().node(self.root).unwrap().members();
+        let actual = scene
+            .integration_store()
+            .borrow()
+            .node(scene.root())
+            .unwrap()
+            .members();
         if actual != expected {
             return Err(format!(
                 "membership stage {}: {actual:?}, expected {expected:?}",
@@ -76,7 +85,9 @@ impl LiveContinuation for OrdinaryMembership {
             ));
         }
         self.stage += 1;
-        live.wait_segment(0.5)
+        scene
+            .live()
+            .wait_segment(0.5)
             .map(ContinuationStep::Await)
             .map_err(|e| e.to_string())
     }
@@ -106,8 +117,6 @@ pub fn program() -> Result<LiveProgram<OrdinaryMembership>, String> {
         blue,
         green,
         family,
-        store: Rc::clone(scene.integration_store()),
-        root: scene.root(),
         stage: 0,
     };
     scene

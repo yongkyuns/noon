@@ -15,7 +15,7 @@ use std::{
 
 use crate::{
     live_program::ContinuationScene, AuthoringError, ContinuationStep,
-    ExecutionSessionCallbackError, LiveContinuation, LiveProgram, LiveSession, LiveSessionError,
+    ExecutionSessionCallbackError, LiveContinuation, LiveProgram, LiveSessionError,
     RustHostCallbackError, RustHostCallbackTable, Scene,
 };
 
@@ -552,16 +552,7 @@ impl Drop for ScriptLoan<'_> {
 impl LiveContinuation for SceneScript {
     type Error = ScriptError;
 
-    fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
-        // This source needs the complete scoped owner. LiveProgram invokes the
-        // owner hook below; a detached LiveSession cannot supply that capability.
-        Err(ScriptError::Inactive)
-    }
-
-    fn resume_scene(
-        &mut self,
-        scene: &mut ContinuationScene,
-    ) -> Result<ContinuationStep, Self::Error> {
+    fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, Self::Error> {
         let _loan = ScriptLoan::new(scene, &mut self.callbacks, &self.bridge)?;
         let complete_previous = if !self.started {
             self.started = true;

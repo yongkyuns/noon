@@ -7,7 +7,7 @@ use effect_fixture::{ScanBand, ScanBandUpdate};
 use noon::effects::{Bloom, BloomUpdate, EffectOptions, EffectScope, Glow, EffectUpdate, Pixels}; // scope options: M3/M4
 use noon::{
     AnimationOptions, ContinuationStep, DeclaredAnimation, LiveContinuation, LiveProgram,
-    LiveSession, ManimGeometryOptions, Mobject, MobjectFamily, MobjectTarget, RateFunction, Scene,
+    ManimGeometryOptions, Mobject, MobjectFamily, MobjectTarget, RateFunction, Scene,
     SemanticAnimationCompositionKind as Kind, SemanticStyle, Text, Vec2, VectorPath,
 };
 use noon_core::SemanticAnimationIntent as Intent;
@@ -32,7 +32,8 @@ pub struct LuminousExplanation {
 }
 impl LiveContinuation for LuminousExplanation {
     type Error = Error;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Error> {
+    fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, Error> {
+        let live = &mut scene.live();
         let step = self.step;
         self.step += 1;
         let segment = match step {
@@ -88,7 +89,8 @@ pub struct MixedEffectsReview {
 }
 impl LiveContinuation for MixedEffectsReview {
     type Error = Error;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Error> {
+    fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, Error> {
+        let live = &mut scene.live();
         let step = self.step;
         self.step += 1;
         let segment = match step {

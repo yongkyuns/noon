@@ -3,8 +3,7 @@
 use crate::{
     effects::{BackdropBlur, DissolveDirection, DissolveStyle, EffectUpdate, Pixels},
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, ImageMobjectOptions,
-    LiveContinuation, LiveProgram, LiveSession, MobjectFamily, RasterImageSampling, RateFunction,
-    Scene, Text,
+    LiveContinuation, LiveProgram, MobjectFamily, RasterImageSampling, RateFunction, Scene, Text,
 };
 
 pub struct GlassLens {
@@ -19,7 +18,8 @@ fn message(error: impl std::fmt::Display) -> String {
 impl LiveContinuation for GlassLens {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let segment = match self.stage {
             0 | 2 | 4 | 8 | 10 => live.wait_segment(0.5),
             1 | 3 => {
@@ -227,18 +227,27 @@ mod tests {
     fn prepared_prefix_adopts_glass_pixels_backdrop_and_dissolve_history() {
         use noon_runtime::ReplayLimits;
 
-        let (scene, mut continuation) = setup().unwrap();
-        let mut source = scene.execution_session().unwrap();
-        source
+        let (mut scene, mut continuation) = setup().unwrap();
+        let source = scene.execution_session().unwrap();
+        scene.install_execution(source);
+        let mut scene = crate::ContinuationScene::new(scene);
+        scene
+            .owned_execution_mut()
             .begin_replay_retention(ReplayLimits::default())
             .unwrap();
-        let first = match continuation.resume(&mut scene.live(&mut source)).unwrap() {
+        let first = match continuation.resume(&mut scene).unwrap() {
             ContinuationStep::Await(segment) => segment,
             other => panic!("expected initial wait, got {other:?}"),
         };
-        source.advance_to(first.end_time()).unwrap();
-        scene.live(&mut source).complete_segment(first).unwrap();
-        let (mut publisher, mut reader) = source.create_prepared_prefix(first).unwrap();
+        scene
+            .owned_execution_mut()
+            .advance_to(first.end_time())
+            .unwrap();
+        scene.live().complete_segment(first).unwrap();
+        let (mut publisher, mut reader) = scene
+            .owned_execution()
+            .create_prepared_prefix(first)
+            .unwrap();
         let paused = reader.frame().clone();
         let image_handles = reader
             .frame()
@@ -256,11 +265,15 @@ mod tests {
 
         let mut last = first;
         loop {
-            match continuation.resume(&mut scene.live(&mut source)).unwrap() {
+            match continuation.resume(&mut scene).unwrap() {
                 ContinuationStep::Await(segment) => {
-                    source.advance_to(segment.end_time()).unwrap();
-                    scene.live(&mut source).complete_segment(segment).unwrap();
-                    let suffix = source
+                    scene
+                        .owned_execution_mut()
+                        .advance_to(segment.end_time())
+                        .unwrap();
+                    scene.live().complete_segment(segment).unwrap();
+                    let suffix = scene
+                        .owned_execution()
                         .publish_prepared_prefix(segment, &mut publisher)
                         .unwrap_or_else(|error| {
                             panic!("glass suffix at {} failed: {error}", segment.end_time())
@@ -274,17 +287,26 @@ mod tests {
                 ContinuationStep::Publish(_) => panic!("local glass resources need no host work"),
             }
         }
-        source.seal_replay().unwrap();
+        scene.owned_execution_mut().seal_replay().unwrap();
         reader
-            .append(source.finish_prepared_prefix(last, &mut publisher).unwrap())
+            .append(
+                scene
+                    .owned_execution()
+                    .finish_prepared_prefix(last, &mut publisher)
+                    .unwrap(),
+            )
             .unwrap();
         for time in [
             0.0, 0.25, 0.5, 1.25, 2.0, 2.25, 2.5, 3.25, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5,
             8.0, 8.5,
         ] {
-            source.seek(time).unwrap();
+            scene.owned_execution_mut().seek(time).unwrap();
             reader.seek(time).unwrap();
-            assert_eq!(reader.frame(), source.frame(), "at authored time {time}");
+            assert_eq!(
+                reader.frame(),
+                scene.owned_execution().frame(),
+                "at authored time {time}"
+            );
         }
     }
 }

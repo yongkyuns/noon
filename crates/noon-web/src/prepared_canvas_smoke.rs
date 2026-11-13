@@ -181,8 +181,7 @@ impl PreparedCanvasFixture {
 // Cooperative fixture below uses the public shared source driver. Only lifecycle
 // calls cross WASM; the source, histories and batches never leave Rust.
 use noon::{
-    ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, PreparedSource,
-    PreparedSourceStatus,
+    ContinuationStep, LiveContinuation, LiveSessionError, PreparedSource, PreparedSourceStatus,
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -202,7 +201,11 @@ impl Drop for CooperativeScene {
 impl LiveContinuation for CooperativeScene {
     const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
     type Error = LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let stage = self.calls.get();
         self.calls.set(stage + 1);
         if stage == self.fail_at {

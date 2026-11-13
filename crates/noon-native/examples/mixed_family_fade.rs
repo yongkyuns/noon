@@ -1,7 +1,7 @@
 //! Paired with web/python/examples/mixed_family_fade.py.
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, MobjectFamily, RateFunction,
-    Scene, SemanticFadeDirection,
+    AnimationOptions, ContinuationStep, LiveContinuation, MobjectFamily, RateFunction, Scene,
+    SemanticFadeDirection,
 };
 
 struct MixedFade {
@@ -11,7 +11,8 @@ struct MixedFade {
 
 impl LiveContinuation for MixedFade {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let direction = match self.stage {
             0 => SemanticFadeDirection::In,
             1 => SemanticFadeDirection::Out,

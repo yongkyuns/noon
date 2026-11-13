@@ -2,8 +2,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    MobjectFamily,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily,
     MobjectTarget::{Family, Object as Leaf},
     RateFunction, Scene, SemanticNodeId,
 };
@@ -47,7 +46,8 @@ impl ForegroundMembership {
 impl LiveContinuation for ForegroundMembership {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 live.add_foreground_many(&[Family(&self.family)])
