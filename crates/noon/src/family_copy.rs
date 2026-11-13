@@ -1,6 +1,9 @@
 //! Atomic copies of an addressed authoritative semantic membership graph.
 use crate::AuthoringError;
-use crate::{ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget};
+use crate::{
+    ExecutionSession, LiveSessionError, ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily,
+    MobjectTarget, Scene,
+};
 use noon_core::{
     SemanticGraphEdgeDependency, SemanticLocalNodeToken, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
@@ -545,6 +548,63 @@ impl Mobject {
     ) -> Result<MobjectCopy, AuthoringError> {
         authored_copy(self.into(), references, Mobject::from_node)
     }
+}
+
+impl Scene {
+    /// Copy a family and its metadata from the Scene's authored or effective state.
+    pub fn copy_family(&mut self, family: &MobjectFamily) -> Result<FamilyCopy, LiveSessionError> {
+        MobjectTarget::from(family).require_store(self.integration_store())?;
+        if let Some((store, root, execution)) = crate::scene::host_execution::parts_mut(self) {
+            return publish_running_copy(
+                store,
+                root,
+                execution,
+                family.into(),
+                &[],
+                MobjectFamily::from_node,
+            );
+        }
+        family.copy_family().map_err(Into::into)
+    }
+}
+
+pub(crate) fn publish_running_copy<R>(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+) -> Result<SemanticCopy<R>, LiveSessionError> {
+    crate::effective_capture::require_target_capture(execution, &store.borrow())?;
+    let (transaction, pending) = crate::family_copy::prepare_semantic_copy(
+        source,
+        references,
+        |mobject, graph_row| {
+            crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                store, execution, mobject, graph_row,
+            )
+            .map_err(LiveSessionError::from)
+        },
+        |store, source, style| {
+            crate::effective_capture::capture_family_style(store, execution, source, style)
+                .map_err(LiveSessionError::from)
+        },
+        |store, source, target, transaction| {
+            crate::effective_capture::stage_effect_copy(
+                store,
+                execution,
+                source,
+                target,
+                transaction,
+            )
+            .map_err(LiveSessionError::from)
+        },
+    )?;
+    let result = Scene::publish_running_transaction(store, root, execution, transaction)?;
+    pending
+        .resolve(&result, from_node)
+        .map_err(LiveSessionError::from)
 }
 
 fn authored_copy<R>(

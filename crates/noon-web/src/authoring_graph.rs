@@ -26,6 +26,20 @@ pub(crate) enum GraphOperation {
 }
 
 impl NativeGraph {
+    pub(crate) fn new(
+        scene: &mut noon::Scene,
+        directed: bool,
+        vertices: Vec<(u32, (f64, f64))>,
+        edges: Vec<(u32, u32)>,
+        options: noon::GraphOptions,
+    ) -> Result<Self, noon::GraphAuthoringError> {
+        if directed {
+            noon::DiGraph::with_options(scene, vertices, edges, options).map(Self::Directed)
+        } else {
+            noon::Graph::with_options(scene, vertices, edges, options).map(Self::Undirected)
+        }
+    }
+
     pub(crate) fn family(&self) -> &noon::MobjectFamily {
         match self {
             Self::Undirected(graph) => graph.family(),
@@ -33,7 +47,6 @@ impl NativeGraph {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
     pub(crate) fn apply(
         &mut self,
         scene: &mut noon::Scene,
@@ -96,84 +109,14 @@ impl NativeGraph {
         Ok(())
     }
 
-    pub(crate) fn apply_live(
-        &mut self,
-        live: &mut noon::LiveSession<'_>,
-        operation: GraphOperation,
-    ) -> Result<(), noon::GraphAuthoringError> {
-        match (self, operation) {
-            (Self::Undirected(graph), GraphOperation::AddVertices(vertices)) => {
-                graph.add_vertices_live(live, vertices)?;
-            }
-            (Self::Directed(graph), GraphOperation::AddVertices(vertices)) => {
-                graph.add_vertices_live(live, vertices)?;
-            }
-            (Self::Undirected(graph), GraphOperation::AddEdges(edges)) => {
-                graph.add_edges_live(live, edges)?;
-            }
-            (Self::Directed(graph), GraphOperation::AddEdges(edges)) => {
-                graph.add_edges_live(live, edges)?;
-            }
-            (Self::Undirected(graph), GraphOperation::RemoveVertices(vertices)) => {
-                graph.remove_vertices_live(live, vertices)?;
-            }
-            (Self::Directed(graph), GraphOperation::RemoveVertices(vertices)) => {
-                graph.remove_vertices_live(live, vertices)?;
-            }
-            (Self::Undirected(graph), GraphOperation::RemoveEdges(edges)) => {
-                graph.remove_edges_live(live, edges)?;
-            }
-            (Self::Directed(graph), GraphOperation::RemoveEdges(edges)) => {
-                graph.remove_edges_live(live, edges)?;
-            }
-            (Self::Undirected(graph), GraphOperation::Circular { scale, center }) => {
-                graph.change_layout_live(
-                    live,
-                    noon::GraphLayoutOptions {
-                        layout: noon::GraphLayout::Circular,
-                        scale,
-                        center,
-                        ..Default::default()
-                    },
-                )?;
-            }
-            (Self::Directed(graph), GraphOperation::Circular { scale, center }) => {
-                graph.change_layout_live(
-                    live,
-                    noon::GraphLayoutOptions {
-                        layout: noon::GraphLayout::Circular,
-                        scale,
-                        center,
-                        ..Default::default()
-                    },
-                )?;
-            }
-            (Self::Undirected(graph), GraphOperation::Explicit(positions)) => {
-                graph.change_layout_positions_live(live, &positions)?;
-            }
-            (Self::Directed(graph), GraphOperation::Explicit(positions)) => {
-                graph.change_layout_positions_live(live, &positions)?;
-            }
-        }
-        Ok(())
-    }
-
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn copy_cold(&self) -> Result<Self, noon::GraphAuthoringError> {
-        match self {
-            Self::Undirected(graph) => graph.copy().map(Self::Undirected),
-            Self::Directed(graph) => graph.copy().map(Self::Directed),
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn copy_live(
+    pub(crate) fn copy_in_scene(
         &self,
-        live: &mut noon::LiveSession<'_>,
+        scene: &mut noon::Scene,
     ) -> Result<Self, noon::GraphAuthoringError> {
         match self {
-            Self::Undirected(graph) => graph.copy_live(live).map(Self::Undirected),
-            Self::Directed(graph) => graph.copy_live(live).map(Self::Directed),
+            Self::Undirected(graph) => graph.copy_in_scene(scene).map(Self::Undirected),
+            Self::Directed(graph) => graph.copy_in_scene(scene).map(Self::Directed),
         }
     }
 }

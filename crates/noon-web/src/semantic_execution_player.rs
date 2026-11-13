@@ -8,8 +8,6 @@ mod code;
 #[cfg(any(target_arch = "wasm32", test))]
 mod effects;
 mod export;
-#[cfg(any(target_arch = "wasm32", test))]
-mod graph;
 #[cfg(test)]
 mod image_paint_tests;
 #[cfg(target_arch = "wasm32")]

@@ -851,38 +851,14 @@ impl<'a> LiveSession<'a> {
             crate::MobjectTarget::Object(mobject) => self.require_mobject(mobject)?,
             crate::MobjectTarget::Family(family) => self.require_family(family)?,
         }
-        self.require_target_capture()?;
-        let (transaction, pending) = crate::family_copy::prepare_semantic_copy(
+        crate::family_copy::publish_running_copy(
+            self.store,
+            self.root,
+            self.session,
             source,
             references,
-            |mobject, graph_row| {
-                crate::effective_capture::capture_mobject_state_with_graph_dependency(
-                    self.store,
-                    self.session,
-                    mobject,
-                    graph_row,
-                )
-                .map_err(LiveSessionError::from)
-            },
-            |store, source, style| {
-                crate::effective_capture::capture_family_style(store, self.session, source, style)
-                    .map_err(LiveSessionError::from)
-            },
-            |store, source, target, transaction| {
-                crate::effective_capture::stage_effect_copy(
-                    store,
-                    self.session,
-                    source,
-                    target,
-                    transaction,
-                )
-                .map_err(LiveSessionError::from)
-            },
-        )?;
-        let result = self.apply(transaction)?;
-        pending
-            .resolve(&result, from_node)
-            .map_err(LiveSessionError::from)
+            from_node,
+        )
     }
 
     /// Capture one flat family at the current publication and cyclically move
