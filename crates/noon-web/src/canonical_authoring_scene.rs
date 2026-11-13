@@ -3648,23 +3648,14 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_manim_geometry(
+    fn create_manim_geometry(
         &mut self,
         options: noon::ManimGeometryOptions,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .geometry(options)
-                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
-            PlayerOwnership::Unstarted => {
-                Err("live primitive construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .geometry(options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -10212,13 +10203,13 @@ mod wasm {
         }
 
         /// Publish a fully configured geometry through the current live session.
-        #[wasm_bindgen(js_name = liveCreateManimGeometry)]
-        pub fn live_create_manim_geometry(
+        #[wasm_bindgen(js_name = createManimGeometry)]
+        pub fn create_manim_geometry(
             &mut self,
             candidate: crate::WasmManimGeometryOptions,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             self.inner
-                .live_create_manim_geometry(candidate.options)
+                .create_manim_geometry(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
@@ -13843,10 +13834,10 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
 
         let left = context
-            .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.15).unwrap())
+            .create_manim_geometry(noon::ManimGeometryOptions::circle(0.15).unwrap())
             .unwrap();
         let right = context
-            .live_create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
+            .create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
             .unwrap();
         let batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
@@ -16029,7 +16020,7 @@ mod tests {
         let returned = context.take_execution_player(1.0, 73).unwrap();
         context.return_execution_player(returned).unwrap();
         let pulse = context
-            .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.05).unwrap())
+            .create_manim_geometry(noon::ManimGeometryOptions::circle(0.05).unwrap())
             .unwrap();
         context
             .active_live_player()
@@ -16444,15 +16435,15 @@ mod tests {
         player.live_advance_segment_to(2.0).unwrap();
         player.live_complete_segment().unwrap();
         let options = context.begin_underline(&circle, 0.15).unwrap();
-        let underline = context.live_create_manim_geometry(options).unwrap();
+        let underline = context.create_manim_geometry(options).unwrap();
         assert_eq!(underline.center().unwrap(), (4.0, -3.15));
         assert_eq!(underline.width().unwrap(), 2.0);
 
         let mut options = noon::ManimGeometryOptions::circle(0.5).unwrap();
         options.set_translation(8.0, 7.0).unwrap();
-        let detached = context.live_create_manim_geometry(options).unwrap();
+        let detached = context.create_manim_geometry(options).unwrap();
         let options = context.begin_underline(&detached, 0.15).unwrap();
-        let detached_underline = context.live_create_manim_geometry(options).unwrap();
+        let detached_underline = context.create_manim_geometry(options).unwrap();
         assert_eq!(detached_underline.center().unwrap(), (8.0, 6.35));
         let foreign = noon::Scene::new().circle(1.0).unwrap();
         let error = context.begin_underline(&foreign, 0.15).unwrap_err();

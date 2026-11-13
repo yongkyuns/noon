@@ -140,10 +140,14 @@ class ManimBraceFacadeTests(unittest.TestCase):
                     assert anchor is target
                     calls.append(("live_brace", *args))
                     return path_options("live_brace")
-                def liveCreateManimGeometry(self, candidate):
+                def createManimGeometry(self, candidate):
                     return FakeHandle(candidate.snapshot)
             context = Context()
             brace_module._shared._live_constructor_context = lambda *args, **kwargs: context
+            import _manim_reactive
+            _manim_reactive._current_authoring_scene = lambda: type(
+                "Scene", (), {"_canonical_authoring_context": context}
+            )()
             brace_module._shared._layout_anchor = lambda value: value
             live_brace = Brace(target, buff=0.4)
             assert calls[-1] == ("live_brace", 0.0, -1.0, 0.4, 2.0)
@@ -254,6 +258,10 @@ class ManimBraceFacadeTests(unittest.TestCase):
                     publications.append(("replace_both", args))
             context = Context()
             brace_module._shared._live_constructor_context = lambda *args, **kwargs: context
+            import _manim_reactive
+            _manim_reactive._current_authoring_scene = lambda: type(
+                "Scene", (), {"_canonical_authoring_context": context}
+            )()
             brace_module._shared._layout_anchor = lambda value: value
             brace_module._shared._family_wrapper_key = lambda value: str(id(value))
             brace_module.Brace = FakeBrace

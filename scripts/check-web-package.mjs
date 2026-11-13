@@ -283,7 +283,6 @@ const expectedJavascriptSurface = [
   "stretch(",
   "liveArrangeFamily(",
   "liveCreateManimArrow(",
-  "liveCreateManimGeometry(",
   "liveCreateManimText(",
   "liveCreateManimTypst(",
   "liveMoveToPoint(",
@@ -354,6 +353,7 @@ const expectedJavascriptSurface = [
   "export function resolveTransformAnimationOptions(",
 ];
 const expectedTypeSurface = [
+  "createManimGeometry(candidate: WasmManimGeometryOptions): WasmAuthoringMobjectHandle;",
   "bindMobject(object_id: string, handle: WasmAuthoringMobjectHandle): void;",
   "setFillHatch(handle: WasmAuthoringMobjectHandle, paint: WasmHatchPaint, opacity?: number | null): void;",
   "setFillNoise(handle: WasmAuthoringMobjectHandle, gradient: WasmNoisePaint, opacity?: number | null): void;",
@@ -565,7 +565,6 @@ const expectedTypeSurface = [
   "shift(x: number, y: number, z?: number | null): void",
   "liveArrangeFamily(handle: WasmAuthoringFamilyHandle, options: WasmFamilyArrangeOptions): void",
   "liveCreateManimArrow(",
-  "liveCreateManimGeometry(",
   "liveCreateManimText(",
   "liveCreateManimTypst(",
   "liveMoveToPoint(",
@@ -1039,6 +1038,7 @@ for (const retired of [
   "liveFadeTo(",
   "liveSetFamilyFade(",
   "liveSetFamilyFadeTo(",
+  "liveCreateManimGeometry(",
   "liveMatchStyle(",
   "liveInterpolateMobjectStyle(",
   "liveInterpolateMobject(",

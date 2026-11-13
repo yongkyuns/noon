@@ -410,13 +410,6 @@ def _vector_path_options(path: dict[str, Any]):
     return engine_call(_geometry_options.path, candidate)
 
 
-def _consume_geometry_options(options: object, kind: str = "geometry"):
-    context = _live_constructor_context(kind)
-    if context is None:
-        return engine_call(_create_geometry_handle, options), None
-    return engine_call(context.liveCreateManimGeometry, options), context
-
-
 def _attach_geometry_options(
     self: _base.Mobject, options: object, kind: str = "geometry"
 ) -> None:
@@ -434,7 +427,15 @@ def _attach_geometry_options(
             self._callback_provisional_handle = callback.stage_provisional_geometry(options)
             self._callback_provisional_context = callback
             return
-    handle, context = _consume_geometry_options(options, kind)
+    context = getattr(scene, "_canonical_authoring_context", None)
+    if context is None and scene is not None:
+        from _manim_scene import _context
+        context = _context(scene)
+    handle = (
+        engine_call(_create_geometry_handle, options)
+        if context is None
+        else engine_call(context.createManimGeometry, options)
+    )
     _attach_shared_handle(self, handle)
     if context is not None:
         self._canonical_live_target_context = context
