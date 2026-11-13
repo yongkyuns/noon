@@ -17,10 +17,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         family.set_fill(None, Some(0.7))?;
         family.set_stroke(None, Some(0.02), None)?;
         scene.add_many(&[(&family).into()])?;
-        let mut session = scene.execution_session()?;
+        let mut session = scene.into_execution()?;
         {
-            let mut live = scene.live(&mut session);
-            live.set_family_color_by_gradient(
+            session.live().set_family_color_by_gradient(
                 &family,
                 &[
                     Color::rgb(1.0, 0.0, 0.0),
@@ -28,33 +27,35 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                     Color::rgb(0.0, 0.0, 1.0),
                 ],
             )?;
-            let color = live.effective_manim_color(&boxes[0])?;
-            live.set_color(
+            let color = session.live().effective_manim_color(&boxes[0])?;
+            session.scene_mut().set_color_rgba(
                 &boxes[0],
                 color.red.into(),
                 color.green.into(),
                 color.blue.into(),
                 color.alpha.into(),
             )?;
-            live.match_color(&boxes[0], &boxes[4])?;
+            session.live().match_color(&boxes[0], &boxes[4])?;
             assert_eq!(
-                live.effective_manim_color(&boxes[0])?,
-                live.effective_manim_color(&boxes[4])?
+                session.live().effective_manim_color(&boxes[0])?,
+                session.live().effective_manim_color(&boxes[4])?
             );
-            live.set_color(
+            session.scene_mut().set_color_rgba(
                 &boxes[0],
                 color.red.into(),
                 color.green.into(),
                 color.blue.into(),
                 1.0,
             )?;
-            assert!((live.effective(&boxes[0])?.fill_opacity() - 0.7).abs() < 1e-6);
-            assert!((live.effective_stroke_width(&boxes[0])? - 0.02).abs() < 1e-6);
-            let segment = live.wait_segment(0.2)?;
-            live.advance_segment_to(segment, segment.end_time())?;
-            live.complete_segment(segment)?;
+            assert!((session.live().effective(&boxes[0])?.fill_opacity() - 0.7).abs() < 1e-6);
+            assert!((session.live().effective_stroke_width(&boxes[0])? - 0.02).abs() < 1e-6);
+            let segment = session.live().wait_segment(0.2)?;
+            session
+                .live()
+                .advance_segment_to(segment, segment.end_time())?;
+            session.live().complete_segment(segment)?;
         }
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(session)
     };
     build().map_err(|error| error.to_string())
 }

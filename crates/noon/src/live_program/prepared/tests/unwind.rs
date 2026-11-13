@@ -25,19 +25,18 @@ impl LiveContinuation for PanicScript {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let call = self.calls.get();
         self.calls.set(call + 1);
         if self.panic_at == Some(call) {
             // Commit real source-side work before unwinding. The immutable reader
             // must not receive this unpublished suffix, and it cannot be retried.
-            live.set_fill(&self.target, 1.0, 0.0, 0.0, 1.0)?;
+            scene.set_fill_rgb(&self.target, 1.0, 0.0, 0.0, 1.0)?;
             panic!("continuation body panic");
         }
         if self.panic_on_drop && call == 1 {
             return Ok(ContinuationStep::Finished);
         }
-        Ok(ContinuationStep::Await(live.wait_segment(1.0)?))
+        Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?))
     }
 }
 fn panic_fixture(

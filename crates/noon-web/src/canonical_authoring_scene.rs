@@ -10787,8 +10787,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_rgb(handle.semantic_mobject(), red, green, blue, opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetFillColor)]
@@ -10807,8 +10808,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveDisableFill)]
@@ -10823,8 +10825,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_disable_fill(handle.semantic_mobject())
-                .map_err(typed_js_error)
+                .scene_mut()
+                .disable_fill(handle.semantic_mobject())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetFillOpacity)]
@@ -10840,8 +10843,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_fill_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_fill_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetImageSampling)]
@@ -10876,8 +10880,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_color_rgba(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetUpdatingSuspended)]
@@ -10913,8 +10918,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeColor)]
@@ -10933,8 +10939,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveDisableStroke)]
@@ -10949,8 +10956,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_disable_stroke(handle.semantic_mobject())
-                .map_err(typed_js_error)
+                .scene_mut()
+                .disable_stroke(handle.semantic_mobject())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeOpacity)]
@@ -10966,8 +10974,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetStrokeCap)]
@@ -10983,8 +10992,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_stroke_cap(handle.semantic_mobject(), cap)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_stroke_cap(handle.semantic_mobject(), cap)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetOpacity)]
@@ -11000,8 +11010,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveFade)]
@@ -11017,8 +11028,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_fade(handle.semantic_mobject(), darkness)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .fade(handle.semantic_mobject(), darkness)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveFadeTo)]
@@ -11059,8 +11071,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_emission(handle.semantic_mobject(), strength)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_emission(handle.semantic_mobject(), strength)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveSetObjectOpacity)]
@@ -11076,8 +11089,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_object_opacity(handle.semantic_mobject(), opacity)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_object_opacity(handle.semantic_mobject(), opacity)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveAdd)]
@@ -11508,8 +11522,9 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_set_style(&source.semantic_mobject(), update)
-                .map_err(typed_js_error)
+                .scene_mut()
+                .set_style(&source.semantic_mobject(), update)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
         }
 
         #[wasm_bindgen(js_name = liveInterpolateMobjectStyle)]

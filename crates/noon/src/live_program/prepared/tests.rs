@@ -23,25 +23,24 @@ impl LiveContinuation for Script {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         if self.fail_at == Some(step) {
             // Produce a genuine source error, not a prepared-runtime exception.
-            return live.wait_segment(-1.0).map(ContinuationStep::Await);
+            return scene.live().wait_segment(-1.0).map(ContinuationStep::Await);
         }
         if self.zero_first && step == 0 {
-            return Ok(ContinuationStep::Await(live.wait_segment(0.0)?));
+            return Ok(ContinuationStep::Await(scene.live().wait_segment(0.0)?));
         }
         let stage = step - usize::from(self.zero_first);
         match stage {
-            0 => Ok(ContinuationStep::Await(live.wait_segment(1.0)?)),
+            0 => Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?)),
             1 => {
                 if self.animate {
-                    let target = live.target_editor(&self.target)?;
-                    live.set_translation(&target, 2.0, 0.0)?;
+                    let target = scene.live().target_editor(&self.target)?;
+                    scene.live().set_translation(&target, 2.0, 0.0)?;
                     Ok(ContinuationStep::Await(
-                        live.declare_and_activate_transform_to(
+                        scene.live().declare_and_activate_transform_to(
                             &self.target,
                             &target,
                             AnimationOptions::new()
@@ -50,19 +49,19 @@ impl LiveContinuation for Script {
                         )?,
                     ))
                 } else {
-                    live.set_fill(&self.target, 1.0, 0.0, 0.0, 1.0)?;
-                    Ok(ContinuationStep::Await(live.wait_segment(1.0)?))
+                    scene.set_fill_rgb(&self.target, 1.0, 0.0, 0.0, 1.0)?;
+                    Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?))
                 }
             }
             2 => {
                 if self.animate {
                     assert_eq!(
-                        live.effective(&self.target)?.transform.translation,
+                        scene.live().effective(&self.target)?.transform.translation,
                         Vec2::new(2.0, 0.0)
                     );
                 }
                 // Same-timestamp final source write must be part of the final batch.
-                live.set_fill(&self.target, 0.0, 1.0, 0.0, 1.0)?;
+                scene.set_fill_rgb(&self.target, 0.0, 1.0, 0.0, 1.0)?;
                 Ok(ContinuationStep::Finished)
             }
             _ => panic!("finished source was resumed"),
@@ -1080,13 +1079,12 @@ fn zero_only_source_yields_then_retains_final_edits_at_exact_endpoint() {
             &mut self,
             scene: &mut crate::ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
-            let live = &mut scene.live();
             let step = self.calls.get();
             self.calls.set(step + 1);
             if step < 2 {
-                return Ok(ContinuationStep::Await(live.wait_segment(0.0)?));
+                return Ok(ContinuationStep::Await(scene.live().wait_segment(0.0)?));
             }
-            live.set_fill(&self.target, 0.0, 1.0, 0.0, 1.0)?;
+            scene.set_fill_rgb(&self.target, 0.0, 1.0, 0.0, 1.0)?;
             Ok(ContinuationStep::Finished)
         }
     }

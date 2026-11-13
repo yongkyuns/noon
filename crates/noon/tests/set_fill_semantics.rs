@@ -25,20 +25,13 @@ fn authored_and_animated_fill_keep_stroke_and_object_opacity_independent() {
         .set_fill(red.red.into(), red.green.into(), red.blue.into(), 0.25)
         .unwrap();
     scene.add(&circle).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    assert_paint(session.frame().objects[0].style, red, 0.25);
-    let id = session.frame().objects[0].id;
-    let mut live = scene.live(&mut session);
-    let target = live.target_editor(&circle).unwrap();
-    live.set_fill(
-        &target,
-        pink.red.into(),
-        pink.green.into(),
-        pink.blue.into(),
-        0.5,
-    )
-    .unwrap();
-    let segment = live
+    let mut running = scene.into_execution().unwrap();
+    assert_paint(running.session().frame().objects[0].style, red, 0.25);
+    let id = running.session().frame().objects[0].id;
+    let target = running.live().target_editor(&circle).unwrap();
+    running.scene_mut().set_fill(&target, pink, 0.5).unwrap();
+    let segment = running
+        .live()
         .declare_and_activate_transform_to(
             &circle,
             &target,
@@ -47,11 +40,11 @@ fn authored_and_animated_fill_keep_stroke_and_object_opacity_independent() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    live.advance_segment_to(segment, 1.0).unwrap();
-    live.complete_segment(segment).unwrap();
-    assert_paint(live.effective(&circle).unwrap().style, pink, 0.5);
-    assert_eq!(session.frame().objects[0].id, id);
-    assert_paint(session.frame().objects[0].style, pink, 0.5);
+    running.live().advance_segment_to(segment, 1.0).unwrap();
+    running.live().complete_segment(segment).unwrap();
+    assert_paint(running.scene().effective(&circle).unwrap().style, pink, 0.5);
+    assert_eq!(running.session().frame().objects[0].id, id);
+    assert_paint(running.session().frame().objects[0].style, pink, 0.5);
 }
 
 #[test]

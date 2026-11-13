@@ -10,8 +10,8 @@ fn shader_composition_preparation_is_inert_and_captures_fresh_activation_state()
     source
         .add_effect(ShaderEffect::new(program()), "material")
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.require_effect_resource_preparation();
+    let mut session = scene.into_execution().unwrap();
+    session.session_mut().require_effect_resource_preparation();
     let request = crate::AnimationCompositionRequest::Fade {
         target: &source,
         direction: noon_core::SemanticFadeDirection::In,
@@ -20,35 +20,38 @@ fn shader_composition_preparation_is_inert_and_captures_fresh_activation_state()
             .run_time(1.0)
             .rate_func(noon_core::RateFunction::Linear),
     };
-    session.take_frame_changes();
-    let before = session.publication_context();
-    let frame = session.frame().clone();
-    let discarded = scene
-        .live(&mut session)
+    session.session_mut().take_frame_changes();
+    let before = session.session().publication_context();
+    let frame = session.session().frame().clone();
+    let discarded = session
+        .live()
         .prepare_composition(&request, noon_core::AnimationOptions::new())
         .unwrap();
     assert_eq!(discarded.programs(), &[program()]);
     drop(discarded);
-    let pending = scene
-        .live(&mut session)
+    let pending = session
+        .live()
         .prepare_composition(&request, noon_core::AnimationOptions::new())
         .unwrap();
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(session.frame(), &frame);
-    assert!(session.take_frame_changes().is_empty());
-    assert!(!scene.live(&mut session).contains(&source).unwrap());
-    scene
-        .live(&mut session)
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert!(session.session_mut().take_frame_changes().is_empty());
+    assert!(!session.live().contains(&source).unwrap());
+    session
+        .scene_mut()
         .set_object_opacity(&source, 0.6)
         .unwrap();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .publish_staged_effects(pending)
         .unwrap()
         .unwrap();
     assert_eq!(segment.end_time(), 1.0);
-    assert!(scene.live(&mut session).contains(&source).unwrap());
-    let id = session.execution_object_id(source.node_id()).unwrap();
+    assert!(session.live().contains(&source).unwrap());
+    let id = session
+        .session()
+        .execution_object_id(source.node_id())
+        .unwrap();
     let opacity = |session: &ExecutionSession| {
         let row = session
             .frame()
@@ -58,23 +61,14 @@ fn shader_composition_preparation_is_inert_and_captures_fresh_activation_state()
             .unwrap();
         row.style.fill.unwrap().alpha * row.style.opacity * row.appearance
     };
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.0)
-        .unwrap();
-    assert_eq!(opacity(&session), 0.0);
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    assert!((opacity(&session) - 0.3).abs() < 1e-6);
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    assert!((opacity(&session) - 0.6).abs() < 1e-6);
-    assert_eq!(effective(&session, &source).program(), &program());
+    session.live().advance_segment_to(segment, 0.0).unwrap();
+    assert_eq!(opacity(session.session()), 0.0);
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    assert!((opacity(session.session()) - 0.3).abs() < 1e-6);
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
+    assert!((opacity(session.session()) - 0.6).abs() < 1e-6);
+    assert_eq!(effective(session.session(), &source).program(), &program());
 }
 
 #[test]

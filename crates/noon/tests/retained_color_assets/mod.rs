@@ -176,10 +176,10 @@ fn qualify_image_emission(emission: f64) {
                         scene.add(&base).unwrap();
                         scene.add(&image).unwrap();
                     }
-                    let mut session = scene.execution_session().unwrap();
+                    let mut session = scene.into_execution().unwrap();
                     let mut tx = SemanticMutationTransaction::new();
                     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-                    scene.live(&mut session).apply(tx).unwrap();
+                    session.live().apply(tx).unwrap();
                     let mut renderer =
                         GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
                     renderer.set_viewport(&device, &queue, SIZE, SIZE);
@@ -190,7 +190,7 @@ fn qualify_image_emission(emission: f64) {
                     let mut text = renderer.create_retained_text_state(&device, &queue);
                     let mut preparer = RetainedFramePreparer::new();
                     let metrics = TextDeviceMetrics::uniform(2.0).unwrap();
-                    let publication = session.take_renderer_publication();
+                    let publication = session.session_mut().take_renderer_publication();
                     let prepared = preparer
                         .prepare_publication(&device, &publication, metrics)
                         .unwrap();
@@ -286,7 +286,7 @@ fn qualify_image_emission(emission: f64) {
                     max_display_error = max_display_error.max(error);
                     assert!(error <= 2);
                     drop(publication);
-                    let publication = session.take_renderer_publication();
+                    let publication = session.session_mut().take_renderer_publication();
                     let prepared = preparer
                         .prepare_publication(&device, &publication, metrics)
                         .unwrap();
@@ -298,11 +298,11 @@ fn qualify_image_emission(emission: f64) {
                     );
                     drop(publication);
                     for opacity in [0.0, 0.5] {
-                        scene
-                            .live(&mut session)
+                        session
+                            .scene_mut()
                             .set_object_opacity(&image, opacity)
                             .unwrap();
-                        let publication = session.take_renderer_publication();
+                        let publication = session.session_mut().take_renderer_publication();
                         let prepared = preparer
                             .prepare_publication(&device, &publication, metrics)
                             .unwrap();

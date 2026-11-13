@@ -40,11 +40,14 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
     scene
         .add_many(&[(&donor).into(), (&family).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut running = scene.into_execution().unwrap();
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.circle(0.1).unwrap();
-    let mut live = scene.live(&mut session);
-    live.set_color(&donor, 0.0, 0.0, 1.0, 1.0).unwrap();
+    running
+        .scene_mut()
+        .set_color(&donor, Color::rgb(0.0, 0.0, 1.0))
+        .unwrap();
+    let mut live = running.live();
     let revision = family.integration_store().borrow().scene_revision();
     let result = live.match_family_color(&family, &donor).unwrap();
     assert_eq!(result.impacts().len(), 2);

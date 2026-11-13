@@ -40,19 +40,28 @@ impl LiveContinuation for RasterImage {
                 // This constructor runs after bootstrap. The resource deduplicates,
                 // but the new object stays detached until the ordinary add operation.
                 let second = scene.image(image_options(1.0)?).map_err(message)?;
-                let live = &mut scene.live();
-                if live.contains(&second).map_err(message)? {
+                if scene.live().contains(&second).map_err(message)? {
                     return Err("new image was admitted before add".into());
                 }
-                live.set_translation(&second, 2.0, 0.0).map_err(message)?;
-                live.add(&second).map_err(message)?;
-                let target = live.target_editor(&self.image).map_err(message)?;
-                live.set_translation(&target, 0.0, 0.0).map_err(message)?;
-                live.rotate(&target, std::f64::consts::FRAC_PI_4)
+                scene
+                    .live()
+                    .set_translation(&second, 2.0, 0.0)
                     .map_err(message)?;
-                live.scale(&target, 0.75, 0.75).map_err(message)?;
-                live.set_opacity(&target, 0.6).map_err(message)?;
-                live.declare_and_activate_transform_to(&self.image, &target, options)
+                scene.live().add(&second).map_err(message)?;
+                let target = scene.live().target_editor(&self.image).map_err(message)?;
+                scene
+                    .live()
+                    .set_translation(&target, 0.0, 0.0)
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .rotate(&target, std::f64::consts::FRAC_PI_4)
+                    .map_err(message)?;
+                scene.live().scale(&target, 0.75, 0.75).map_err(message)?;
+                scene.set_opacity(&target, 0.6).map_err(message)?;
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.image, &target, options)
             }
             2 => scene.live().declare_and_activate_fade(
                 &self.image,

@@ -17,18 +17,13 @@ pub use family_layout::LiveLayoutTarget;
 use crate::effective_capture::target_style_from_effective;
 use crate::execution_session::{EffectiveSemanticObject, NativePointerInputToken};
 use crate::{
-    semantic_mobject::authoring_render_f64,
-    semantic_mobject::{
-        edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fill, edit_fill_color,
-        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-        edit_stroke_opacity,
-    },
-    state_replacement::prepare_become,
-    DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
-    ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
-    ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError,
-    ManimBecomeOptions, ManimLineEndpoints, Mobject, MobjectFamily, MobjectTarget,
-    SceneMembershipRequest, TranslationDragError, TranslationDragReceipt, ValueTracker,
+    semantic_mobject::authoring_render_f64, semantic_mobject::edit_color,
+    state_replacement::prepare_become, DeclaredAnimation, ExecutionSegment,
+    ExecutionSegmentAdvanceError, ExecutionSegmentCompletionError, ExecutionSegmentError,
+    ExecutionSegmentState, ExecutionSession, ExecutionSessionAnimationError,
+    ExecutionSessionPublicationError, ManimBecomeOptions, ManimLineEndpoints, Mobject,
+    MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError,
+    TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
@@ -2739,51 +2734,8 @@ impl<'a> LiveSession<'a> {
         self.publish_path_edits(prepared)
     }
 
-    /// Set fill color and fill opacity through one authoritative style publication.
-    pub fn set_fill(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_fill(style, red, green, blue, opacity))
-    }
-
-    pub fn set_fill_color(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_fill_color(style, red, green, blue, alpha)
-        })
-    }
-
-    pub fn disable_fill(
-        &mut self,
-        mobject: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_disable_fill(style);
-            Ok(())
-        })
-    }
-
-    pub fn set_fill_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_fill_opacity(style, opacity))
-    }
-
     /// Recolor the currently enabled fill and stroke without changing their opacity.
-    pub fn set_color(
+    fn set_color(
         &mut self,
         mobject: &Mobject,
         red: f64,
@@ -2810,81 +2762,6 @@ impl<'a> LiveSession<'a> {
         )
     }
 
-    /// Set stroke color and opacity through one authoritative style publication.
-    pub fn set_stroke(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_stroke(style, red, green, blue, opacity)
-        })
-    }
-
-    pub fn set_stroke_color(
-        &mut self,
-        mobject: &Mobject,
-        red: f64,
-        green: f64,
-        blue: f64,
-        alpha: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_stroke_color(style, red, green, blue, alpha)
-        })
-    }
-
-    pub fn disable_stroke(
-        &mut self,
-        mobject: &Mobject,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            edit_disable_stroke(style);
-            Ok(())
-        })
-    }
-
-    pub fn set_stroke_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_stroke_opacity(style, opacity))
-    }
-
-    pub fn set_stroke_cap(
-        &mut self,
-        mobject: &Mobject,
-        cap: &str,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        let cap = crate::semantic_mobject::parse_stroke_cap(cap)?;
-        self.edit_style(mobject, |style| {
-            style.stroke_cap = cap;
-            Ok(())
-        })
-    }
-
-    /// Apply Manim's paint-opacity operation to the currently enabled paint channels.
-    pub fn set_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_manim_opacity(style, opacity))
-    }
-
-    /// Publish one validated fade of an object's authored fill/stroke channels.
-    pub fn fade(
-        &mut self,
-        mobject: &Mobject,
-        darkness: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_fade(style, darkness))
-    }
-
     /// Publish one validated color interpolation for an object.
     pub fn fade_to(
         &mut self,
@@ -2900,37 +2777,6 @@ impl<'a> LiveSession<'a> {
         self.edit_style(mobject, |style| {
             crate::semantic_mobject::edit_fade_to(style, target, amount)
         })
-    }
-
-    /// Set checked linear material radiance without changing coverage or opacity.
-    pub fn set_emission(
-        &mut self,
-        mobject: &Mobject,
-        strength: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| {
-            style.emission =
-                noon_core::Emission::new(strength).map_err(crate::AuthoringError::Emission)?;
-            Ok(())
-        })
-    }
-
-    /// Set the independent object-composite opacity domain.
-    pub fn set_object_opacity(
-        &mut self,
-        mobject: &Mobject,
-        opacity: f64,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(mobject, |style| edit_object_opacity(style, opacity))
-    }
-
-    /// Update supplied paint fields through one semantic publication.
-    pub fn set_style(
-        &mut self,
-        object: &Mobject,
-        update: crate::StyleUpdate,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        self.edit_style(object, |style| update.apply(style))
     }
 
     pub fn set_family_style(
@@ -3469,20 +3315,19 @@ mod tests {
         assert_eq!(object.fill_opacity().unwrap(), 0.4);
         assert_eq!(object.stroke_opacity().unwrap(), 0.25);
         scene.add(&object).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.fade(&object, 0.5).unwrap();
-        let observed = live.effective(&object).unwrap();
+        let mut session = scene.into_execution().unwrap();
+        session.scene_mut().fade(&object, 0.5).unwrap();
+        let observed = session.live().effective(&object).unwrap();
         assert_eq!(observed.fill_opacity(), f64::from(0.2_f32));
         assert_eq!(observed.stroke_opacity(), 0.125);
         assert_eq!(observed.style.opacity, 0.3);
-        let authored = live.authored(&object).unwrap();
-        let publication = live.session.publication_context();
+        let authored = session.live().authored(&object).unwrap();
+        let publication = session.live().session.publication_context();
         for darkness in [-1.0, 2.0, f64::NAN, f64::INFINITY] {
-            assert!(live.fade(&object, darkness).is_err());
-            assert_eq!(live.authored(&object).unwrap(), authored);
-            assert_eq!(live.session.publication_context(), publication);
-            assert_eq!(live.effective(&object).unwrap(), observed);
+            assert!(session.scene_mut().fade(&object, darkness).is_err());
+            assert_eq!(session.live().authored(&object).unwrap(), authored);
+            assert_eq!(session.live().session.publication_context(), publication);
+            assert_eq!(session.live().effective(&object).unwrap(), observed);
         }
     }
 
@@ -3603,18 +3448,31 @@ mod tests {
         let mut scene = Scene::new();
         let circle = scene.circle(1.0).unwrap();
         scene.add(&circle).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let target = live.target_editor(&circle).unwrap();
-        let before = live.session.publication_context().scene_revision();
+        let mut session = scene.into_execution().unwrap();
+        let target = session.live().target_editor(&circle).unwrap();
+        let before = session
+            .live()
+            .session
+            .publication_context()
+            .scene_revision();
 
-        live.set_fill(&target, 1.0, 0.0, 0.0, 0.4).unwrap();
+        session
+            .scene_mut()
+            .set_fill_rgb(&target, 1.0, 0.0, 0.0, 0.4)
+            .unwrap();
         assert_eq!(
-            live.session.publication_context().scene_revision(),
+            session
+                .live()
+                .session
+                .publication_context()
+                .scene_revision(),
             before.checked_next().unwrap()
         );
-        live.set_object_opacity(&target, 0.5).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session
+            .scene_mut()
+            .set_object_opacity(&target, 0.5)
+            .unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(
             style.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 0.0, 0.0)))
@@ -3622,15 +3480,21 @@ mod tests {
         assert_eq!(style.fill_opacity, 0.4);
         assert_eq!(style.object_opacity, 0.5);
 
-        live.disable_fill(&target).unwrap();
-        live.set_fill_opacity(&target, 0.25).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session.scene_mut().disable_fill(&target).unwrap();
+        session.scene_mut().set_fill_opacity(&target, 0.25).unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(style.fill, Some(SemanticPaint::Solid(Color::WHITE)));
         assert_eq!(style.fill_opacity, 0.25);
 
-        live.set_stroke(&target, 0.0, 0.0, 1.0, 0.7).unwrap();
-        live.set_color(&target, 0.0, 1.0, 0.0, 1.0).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session
+            .scene_mut()
+            .set_stroke(&target, 0.0, 0.0, 1.0, 0.7)
+            .unwrap();
+        session
+            .scene_mut()
+            .set_color_rgba(&target, 0.0, 1.0, 0.0, 1.0)
+            .unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(
             style.fill,
             Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
@@ -3642,8 +3506,8 @@ mod tests {
         assert_eq!(style.fill_opacity, 0.25);
         assert_eq!(style.stroke_opacity, 0.7);
 
-        live.set_opacity(&target, 0.5).unwrap();
-        let style = live.authored(&target).unwrap().style;
+        session.scene_mut().set_opacity(&target, 0.5).unwrap();
+        let style = session.live().authored(&target).unwrap().style;
         assert_eq!(style.fill_opacity, 0.5);
         assert_eq!(style.stroke_opacity, 0.5);
         assert_eq!(style.object_opacity, 0.5);
