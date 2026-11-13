@@ -1285,6 +1285,22 @@ impl MobjectHandle {
             .rotate_about_point(angle, point_x, point_y)
             .map_err(engine_error)
     }
+    #[pyo3(name = "interpolateManimStyle")]
+    fn interpolate_manim_style(&self, start: &Self, end: &Self, alpha: f64) -> PyResult<()> {
+        self.handle
+            .clone()
+            .interpolate_manim_style(&start.handle, &end.handle, alpha)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "interpolateManim")]
+    fn interpolate_manim(&self, start: &Self, end: &Self, alpha: f64) -> PyResult<()> {
+        self.handle
+            .clone()
+            .interpolate_manim(&start.handle, &end.handle, alpha)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "matchStyle")]
     fn match_style(&self, target: &Self) -> PyResult<()> {
         self.handle

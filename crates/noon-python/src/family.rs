@@ -67,6 +67,13 @@ impl FamilyHandle {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "interpolateManimStyle")]
+    fn interpolate_manim_style(&self, start: &Self, end: &Self, alpha: f64) -> PyResult<()> {
+        self.family
+            .interpolate_manim_style(&start.family, &end.family, alpha)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "matchStyle")]
     fn match_style(&self, target: &Self) -> PyResult<()> {
         self.family

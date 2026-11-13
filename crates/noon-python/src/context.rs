@@ -1936,6 +1936,53 @@ impl Context {
         self.edit_scene(|scene| scene.fade_family(&target.family, darkness))
     }
 
+    #[pyo3(name = "interpolateMobjectStyle")]
+    fn interpolate_manim_style(
+        &mut self,
+        receiver: &MobjectHandle,
+        start: &MobjectHandle,
+        end: &MobjectHandle,
+        alpha: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| {
+            scene.interpolate_manim_style(&receiver.handle, &start.handle, &end.handle, alpha)
+        })
+    }
+
+    #[pyo3(name = "interpolateMobject")]
+    fn interpolate_manim(
+        &mut self,
+        receiver: &MobjectHandle,
+        start: &MobjectHandle,
+        end: &MobjectHandle,
+        alpha: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| {
+            scene.interpolate_manim(&receiver.handle, &start.handle, &end.handle, alpha)
+        })
+    }
+
+    #[pyo3(name = "interpolateFamilyManimStyle")]
+    fn interpolate_family_manim_style(
+        &mut self,
+        receiver: &crate::family::FamilyHandle,
+        start: &crate::family::FamilyHandle,
+        end: &crate::family::FamilyHandle,
+        alpha: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| {
+            scene.interpolate_family_manim_style(
+                &receiver.family,
+                &start.family,
+                &end.family,
+                alpha,
+            )
+        })
+    }
+
     #[pyo3(name = "fadeTo")]
     fn fade_to(
         &mut self,
