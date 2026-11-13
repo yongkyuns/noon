@@ -707,14 +707,9 @@ impl Scene {
         self.require_object(object)?;
         self.require_object(other)?;
         let execution = self.running_execution();
-        if let Some(execution) = execution {
-            crate::effective_capture::require_target_capture(
-                execution,
-                &self.integration_store().borrow(),
-            )?;
-        }
-        let source = self.capture_become_state(object, execution)?;
-        let candidate = self.capture_become_state(other, execution)?;
+        self.require_effective_capture()?;
+        let source = self.capture_mobject_state(object)?;
+        let candidate = self.capture_mobject_state(other)?;
         let prepared = prepare_become(
             &self.integration_store().borrow(),
             object.node_id(),
@@ -724,7 +719,7 @@ impl Scene {
             options,
             execution,
         )?;
-        self.publish_become(prepared)
+        Ok(self.publish_path_edits(prepared)?)
     }
 
     /// Reconcile another family's presentation in one publication, reusing compatible members.
@@ -737,43 +732,21 @@ impl Scene {
         MobjectTarget::from(receiver).require_store(self.integration_store())?;
         MobjectTarget::from(other).require_store(self.integration_store())?;
         let execution = self.running_execution();
-        if let Some(execution) = execution {
-            crate::effective_capture::require_target_capture(
-                execution,
-                &self.integration_store().borrow(),
-            )?;
-        }
+        self.require_effective_capture()?;
         let prepared = prepare_family_become(receiver, other, options, execution, |object| {
-            self.capture_become_state(object, execution)
+            self.capture_mobject_state(object)
         })?;
-        self.publish_become(prepared)
+        Ok(self.publish_path_edits(prepared)?)
     }
 
-    fn capture_become_state(
-        &self,
-        object: &Mobject,
-        execution: Option<&crate::ExecutionSession>,
-    ) -> Result<SemanticObjectState, AuthoringError> {
-        if let Some(execution) = execution {
-            crate::effective_capture::capture_mobject_state(
-                self.integration_store(),
-                execution,
-                object,
-            )
-        } else {
-            object.state()
-        }
-    }
-
-    fn publish_become(
+    pub(crate) fn publish_path_edits(
         &mut self,
         prepared: crate::path_editing::PreparedPathEdits,
-    ) -> Result<noon_core::SemanticMutationTransactionResult, LiveSessionError> {
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError> {
         if prepared.creates_resources() {
             self.require_resource_admission()?;
         }
         self.with_semantic_publication(|store, publish| prepared.publish(store, publish))
-            .map_err(Into::into)
     }
 }
 

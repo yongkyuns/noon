@@ -385,14 +385,20 @@ mod tests {
         label.shift(1.0, 0.0).unwrap();
         scene.add(&circle).unwrap();
         scene.add(&label).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        assert_eq!(session.frame().objects.len(), 2);
-        assert!(session.frame().objects[0].geometry().is_some());
-        assert!(session.frame().objects[1].text().is_some());
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        assert_eq!(session.session().frame().objects.len(), 2);
+        assert!(session.session().frame().objects[0].geometry().is_some());
+        assert!(session.session().frame().objects[1].text().is_some());
         let resource = label.state().unwrap().content.text().unwrap();
-        let before = scene.integration_store().borrow().text_resources().stats();
-        assert!(scene
+        let before = session
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats();
+        assert!(session
+            .scene()
             .integration_store()
             .borrow()
             .text_resources()
@@ -401,25 +407,34 @@ mod tests {
             .runs
             .iter()
             .all(|run| run.fill.is_none()));
-        let mut live = scene.live(&mut session);
-        live.set_translation(&label, 3.0, -1.0).unwrap();
+        session.live().set_translation(&label, 3.0, -1.0).unwrap();
         assert_eq!(
-            live.effective(&label).unwrap().transform.translation,
+            session
+                .live()
+                .effective(&label)
+                .unwrap()
+                .transform
+                .translation,
             noon_core::Vec2::new(3.0, -1.0)
         );
         assert_eq!(
-            live.authored(&label).unwrap().content.text(),
+            session.live().authored(&label).unwrap().content.text(),
             Some(resource)
         );
-        let mut style = live.authored(&label).unwrap().style;
+        let mut style = session.live().authored(&label).unwrap().style;
         style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::RED));
-        live.replace_style(&label, style).unwrap();
+        session.scene_mut().replace_style(&label, style).unwrap();
         assert_eq!(
-            live.effective(&label).unwrap().style.fill,
+            session.live().effective(&label).unwrap().style.fill,
             Some(noon_core::RED)
         );
         assert_eq!(
-            scene.integration_store().borrow().text_resources().stats(),
+            session
+                .scene()
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .stats(),
             before
         );
     }

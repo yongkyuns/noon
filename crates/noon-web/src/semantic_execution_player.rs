@@ -852,7 +852,7 @@ impl SemanticExecutionPlayer {
         target: &noon::Mobject,
         colors: &[noon::Color],
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_color_by_gradient(target, colors))
+        self.edit_scene(|scene| scene.set_color_by_gradient(target, colors))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -873,8 +873,8 @@ impl SemanticExecutionPlayer {
         inner: noon::Color,
         outer: noon::Color,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.set_color_by_radial_gradient(target, center, radius, inner, outer)
+        self.edit_scene(|scene| {
+            scene.set_color_by_radial_gradient(target, center, radius, inner, outer)
         })
         .map(|_| ())
     }
@@ -887,8 +887,8 @@ impl SemanticExecutionPlayer {
         inner: noon::Color,
         outer: noon::Color,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| {
-            live.set_family_color_by_radial_gradient(target, center, radius, inner, outer)
+        self.edit_scene(|scene| {
+            scene.set_family_color_by_radial_gradient(target, center, radius, inner, outer)
         })
         .map(|_| ())
     }
@@ -982,7 +982,7 @@ impl SemanticExecutionPlayer {
         end: &noon::Mobject,
         alpha: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.interpolate_manim_style(receiver, start, end, alpha))
+        self.edit_scene(|scene| scene.interpolate_manim_style(receiver, start, end, alpha))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -993,7 +993,7 @@ impl SemanticExecutionPlayer {
         end: &noon::Mobject,
         alpha: f64,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.interpolate_manim(receiver, start, end, alpha))
+        self.edit_scene(|scene| scene.interpolate_manim(receiver, start, end, alpha))
             .map(|_| ())
     }
     #[cfg(target_arch = "wasm32")]
@@ -1002,8 +1002,11 @@ impl SemanticExecutionPlayer {
         source: &noon::Mobject,
         target: &noon::Mobject,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.match_style(source, target))
+        self.source
+            .scene_mut()
+            .match_style(source, target)
             .map(|_| ())
+            .map_err(AuthoringFailure::from)
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_style(
@@ -1126,8 +1129,11 @@ impl SemanticExecutionPlayer {
         source: &noon::MobjectFamily,
         target: &noon::MobjectFamily,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.match_family_style(source, target))
+        self.source
+            .scene_mut()
+            .match_family_style(source, target)
             .map(|_| ())
+            .map_err(AuthoringFailure::from)
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn live_set_family_own_color(

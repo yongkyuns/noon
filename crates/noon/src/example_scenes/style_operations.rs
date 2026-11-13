@@ -23,7 +23,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         scene.add_many(&[(&family).into(), (&c).into()])?;
         let mut session = scene.into_execution()?;
         {
-            session.live().match_style(&c, &a)?;
+            session.scene_mut().match_style(&c, &a)?;
             session.scene_mut().set_family_style(
                 &family,
                 StyleUpdate {

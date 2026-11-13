@@ -48,7 +48,10 @@ fn live_matching_captures_current_donor_color_and_rejects_foreign_donor_atomical
         .set_color(&donor, Color::rgb(0.0, 0.0, 1.0))
         .unwrap();
     let revision = family.integration_store().borrow().scene_revision();
-    let result = running.live().match_family_color(&family, &donor).unwrap();
+    let result = running
+        .scene_mut()
+        .match_family_color(&family, &donor)
+        .unwrap();
     assert_eq!(result.impacts().len(), 2);
     assert!(result.impacts().iter().any(|impact| matches!(impact,
         noon_core::SemanticMutationImpact::FamilyColor { node } if *node == family.node_id())));
@@ -99,13 +102,13 @@ fn live_manim_interpolate_color_publishes_effective_style_once() {
     let mut end = end;
     end.commit_state(end_state).unwrap();
 
-    let mut session = scene.execution_session().unwrap();
-    let before = scene.revision();
-    let result = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let before = session.scene().revision();
+    let result = session
+        .scene_mut()
         .interpolate_manim_style(&receiver, &start, &end, 0.5)
         .unwrap();
-    assert_eq!(scene.revision(), before.checked_next().unwrap());
+    assert_eq!(session.scene().revision(), before.checked_next().unwrap());
     assert_eq!(result.impacts().len(), 1);
     let state = receiver.state().unwrap();
     let midpoint = Color {
