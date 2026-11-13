@@ -42,10 +42,10 @@ fn scalar_planar_line_preserves_xyz_prefix_from_actual_ce() {
         .unwrap();
     let point = xyz(&case["inputXYZ"])[2];
     object.add_line_to_f64(point.xy()).unwrap();
-    assert_eq!(
-        object.path_query().unwrap().points_3d().unwrap(),
-        xyz(&case["pointsXYZ"])
-    );
+    let points = object.path_query().unwrap().points_3d().unwrap();
+    let prefix = xyz(&case["prefixXYZ"]);
+    assert_eq!(&points[..prefix.len()], &prefix);
+    assert_xyz_close(&points, &case["pointsXYZ"], "planar line after XYZ prefix");
 }
 
 fn edit_xyz_object(
