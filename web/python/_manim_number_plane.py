@@ -190,7 +190,7 @@ class NumberPlane(_plot.Axes):
         except BaseException:
             options.free()
             raise
-        handle = engine_call(context.liveCreateCoordinates if context is not None else _plot._create_coordinates, options)
+        handle = engine_call(context.createCoordinates if context is not None else _plot._create_coordinates, options)
         self._coordinate_decimal_places = tuple(
             config["decimal_places"] if config["decimal_places"] is not None
             else _coordinate_decimal_places(axis_range)

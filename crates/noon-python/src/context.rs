@@ -1720,7 +1720,7 @@ impl Context {
             .map_err(engine_error)
     }
 
-    #[pyo3(name = "liveCreateCoordinates")]
+    #[pyo3(name = "createCoordinates")]
     fn coordinates(
         &mut self,
         options: &crate::coordinates::CoordinateOptions,
