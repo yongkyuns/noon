@@ -48,6 +48,13 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "asSampleSpace")]
+    fn as_sample_space(&self) -> PyResult<crate::sample_space::SampleSpaceHandle> {
+        noon::SampleSpace::from_family(self.family.clone())
+            .map(crate::sample_space::SampleSpaceHandle)
+            .map_err(crate::sample_space::failure)
+    }
+
     #[pyo3(name = "updatingSuspended")]
     fn updating_suspended(&self) -> PyResult<bool> {
         self.family.updating_suspended().map_err(engine_error)
