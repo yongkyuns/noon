@@ -4,7 +4,7 @@ Preparation executes source once; preview and MP4 export replay bounded
 deterministic Rust history. MP4 export uses the native renderer and an installed
 FFmpeg executable. Arbitrary callbacks can be sampled with --headless; realtime
 callback preview/export remain unsupported. Predeclared audio is exported to
-MP4. The default native Python window has no audio device output.
+MP4. Native window audio is available in builds with the audio feature.
 """
 from __future__ import annotations
 

@@ -45,13 +45,17 @@ def main() -> None:
         raise SystemExit("Noon requires CPython 3.11 or newer; run this script with that interpreter")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("dev", "release"), default="release")
-    parser.add_argument("--minimal", action="store_true", help="omit native window, GPU capture and optional resources")
+    profile = parser.add_mutually_exclusive_group()
+    profile.add_argument("--minimal", action="store_true", help="omit native window, GPU capture and optional resources")
+    profile.add_argument("--audio", action="store_true", help="enable native audio-device playback")
     parser.add_argument("--output", type=Path, default=ROOT / "build/python")
     args = parser.parse_args()
     output = args.output.resolve()
     command = ["cargo", "build", "-p", "noon-python"]
     if args.minimal:
         command.append("--no-default-features")
+    if args.audio:
+        command.extend(("--features", "audio"))
     if args.profile == "release":
         command.append("--release")
     environment = dict(os.environ, PYO3_PYTHON=sys.executable, PYO3_BUILD_EXTENSION_MODULE="1")
