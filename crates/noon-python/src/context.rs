@@ -153,6 +153,39 @@ enum NativeFamilyMember {
     Family(noon::MobjectFamily),
 }
 impl MembershipBatch {
+    pub(crate) fn is_add(&self) -> PyResult<bool> {
+        match self.kind.as_str() {
+            "add" => Ok(true),
+            "remove" => Ok(false),
+            _ => Err(engine_error("membership requires add or remove")),
+        }
+    }
+
+    pub(crate) fn add_targets(&self) -> PyResult<Vec<MobjectTarget<'_>>> {
+        if self.kind != "add" {
+            return Err(engine_error("membership operation requires an add batch"));
+        }
+        Ok(self.targets())
+    }
+
+    pub(crate) fn single_member(&self) -> PyResult<MobjectTarget<'_>> {
+        let targets = self.add_targets()?;
+        let [target] = targets.as_slice() else {
+            return Err(engine_error("insertion requires exactly one member"));
+        };
+        Ok(*target)
+    }
+
+    pub(crate) fn edit_children(&self, owner: MobjectTarget<'_>) -> PyResult<Vec<bool>> {
+        let targets = self.targets();
+        if self.is_add()? {
+            owner.add_many(&targets)
+        } else {
+            owner.remove_many(&targets)
+        }
+        .map_err(engine_error)
+    }
+
     pub(crate) fn targets(&self) -> Vec<MobjectTarget<'_>> {
         self.members
             .iter()
@@ -420,6 +453,49 @@ impl Context {
         self.require_execution()?;
         edit(&mut self.scene)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+    }
+
+    fn edit_children(
+        &mut self,
+        owner: MobjectTarget<'_>,
+        batch: &MembershipBatch,
+    ) -> PyResult<Vec<bool>> {
+        self.available()?;
+        let adding = batch.is_add()?;
+        let members = batch.targets();
+        self.edit_running_scene(|scene| {
+            if adding {
+                scene.add_family_members(owner, &members)
+            } else {
+                scene.remove_family_members(owner, &members)
+            }
+        })
+    }
+
+    fn prepare_children(
+        &mut self,
+        owner: MobjectTarget<'_>,
+        batch: &MembershipBatch,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.available()?;
+        let members = batch.add_targets()?;
+        let pending = self.with_live(|live| {
+            live.prepare_family_membership(owner, &members, true)
+                .map(|(pending, _)| pending)
+        })?;
+        self.staged(pending, batch.bindings.clone())
+    }
+
+    fn path_boundary_points_3d(&self, target: MobjectTarget<'_>) -> PyResult<Vec<f64>> {
+        self.require_active()?;
+        let points = if self.has_execution() {
+            self.scene.effective_path_boundary_points_3d(target)
+        } else {
+            target.path_boundary_points_3d()
+        };
+        points
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
     }
 
     fn edit_path(
@@ -1610,6 +1686,21 @@ impl Context {
         })
     }
 
+    #[pyo3(name = "queryMobjectPathBoundaryPoints3D")]
+    fn mobject_path_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
+        self.same_store(target)?;
+        self.path_boundary_points_3d((&target.handle).into())
+    }
+
+    #[pyo3(name = "queryFamilyPathBoundaryPoints3D")]
+    fn family_path_boundary_points_3d(
+        &self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<Vec<f64>> {
+        self.same_family_store(target)?;
+        self.path_boundary_points_3d((&target.family).into())
+    }
+
     #[pyo3(name = "queryMobjectVectorBoundaryPoints3D")]
     fn mobject_vector_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
@@ -2506,7 +2597,9 @@ impl Context {
         }
         self.scene
             .copy_family_with_references(&target.family, &references.targets())
-            .map(|copied| crate::family::FamilyCopy { copied })
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
             .map_err(engine_error)
     }
     #[pyo3(name = "liveEditFamilyMembership")]
@@ -2515,18 +2608,93 @@ impl Context {
         target: &crate::family::FamilyHandle,
         batch: &MembershipBatch,
     ) -> PyResult<Vec<bool>> {
-        self.available()?;
         self.same_family_store(target)?;
-        match batch.kind.as_str() {
-            "add" => self.edit_running_scene(|scene| {
-                scene.add_family_members(&target.family, &batch.targets())
-            }),
-            "remove" => self.edit_running_scene(|scene| {
-                scene.remove_family_members(&target.family, &batch.targets())
-            }),
-            _ => Err(engine_error("unsupported family membership operation")),
-        }
+        self.edit_children((&target.family).into(), batch)
     }
+
+    #[pyo3(name = "liveEditObjectMembership")]
+    fn edit_object_membership(
+        &mut self,
+        target: &MobjectHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<Vec<bool>> {
+        self.same_store(target)?;
+        self.edit_children((&target.handle).into(), batch)
+    }
+
+    #[pyo3(name = "liveInsertFamilyMember")]
+    fn insert_family_member(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        index: usize,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let member = batch.single_member()?;
+        self.edit_running_scene(|scene| scene.insert_family_member(&target.family, index, member))
+    }
+
+    #[pyo3(name = "liveInsertObjectMember")]
+    fn insert_object_member(
+        &mut self,
+        target: &MobjectHandle,
+        index: usize,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_store(target)?;
+        let member = batch.single_member()?;
+        self.edit_running_scene(|scene| scene.insert_family_member(&target.handle, index, member))
+    }
+
+    #[pyo3(name = "liveReplaceFamilyMembers")]
+    fn replace_family_members(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let members = batch.add_targets()?;
+        self.edit_running_scene(|scene| scene.replace_members((&target.family).into(), &members))
+    }
+
+    #[pyo3(name = "liveReplaceObjectMembers")]
+    fn replace_object_members(
+        &mut self,
+        target: &MobjectHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_store(target)?;
+        let members = batch.add_targets()?;
+        self.edit_running_scene(|scene| scene.replace_members((&target.handle).into(), &members))
+    }
+
+    #[pyo3(name = "liveInvertFamilyMembers")]
+    fn invert_family_members(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        recursive: bool,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        self.edit_running_scene(|scene| scene.invert_family_members(&target.family, recursive))
+    }
+
+    #[pyo3(name = "liveCopyMobjectFamily")]
+    fn copy_mobject_family(
+        &mut self,
+        target: &MobjectHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.available()?;
+        self.same_store(target)?;
+        self.require_execution()?;
+        self.scene
+            .copy_mobject_with_references(&target.handle, &references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "liveShiftFamily")]
     fn shift_family(
         &mut self,
@@ -3179,10 +3347,15 @@ impl Context {
         self.same_store(target)?;
         self.place(|scene| scene.apply_matrix(&target.handle, &values, rows, columns, x, y))
     }
-    #[pyo3(name = "liveShift")]
-    fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
+    #[pyo3(name = "liveShift", signature = (target, x, y, z = None))]
+    fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64, z: Option<f64>) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| live.shift(&target.handle, x, y).map(|_| ()))
+        self.edit_running_scene(|scene| {
+            scene.shift_3d(
+                &target.handle,
+                noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)),
+            )
+        })
     }
     #[pyo3(name = "liveScale")]
     fn scale_mobject(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
@@ -3307,6 +3480,24 @@ impl Context {
         })?;
         self.staged(pending, Vec::new())
     }
+    #[pyo3(name = "prepareFamilyMembership")]
+    fn prepare_family_membership(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.prepare_children((&target.family).into(), batch)
+    }
+
+    #[pyo3(name = "prepareObjectMembership")]
+    fn prepare_object_membership(
+        &mut self,
+        target: &MobjectHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.prepare_children((&target.handle).into(), batch)
+    }
+
     #[pyo3(name = "prepareFamilyEffectAddition")]
     fn prepare_family_effect_addition(
         &mut self,

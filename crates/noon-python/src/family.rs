@@ -886,16 +886,49 @@ impl FamilyHandle {
             .set_own_color(red, green, blue, alpha)
             .map_err(engine_error)
     }
+    #[pyo3(name = "extremumFromPoints")]
+    fn extremum_from_points(
+        &self,
+        coordinates: Vec<f64>,
+        dimensions: usize,
+        dim: usize,
+        key: f64,
+    ) -> PyResult<f64> {
+        noon::reduce_point_extremum(&coordinates, dimensions, dim, key).map_err(engine_error)
+    }
+
+    #[pyo3(name = "pathBoundaryPoints3D")]
+    fn path_boundary_points_3d(&self) -> PyResult<Vec<f64>> {
+        noon::MobjectTarget::from(&self.family)
+            .path_boundary_points_3d()
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "editMembership")]
     fn edit_membership(&self, batch: &MembershipBatch) -> PyResult<Vec<bool>> {
-        let members = batch.targets();
-        match batch.kind.as_str() {
-            "add" => self.family.add_many(&members),
-            "remove" => self.family.remove_many(&members),
-            _ => return Err(engine_error("unsupported family membership operation")),
-        }
-        .map_err(engine_error)
+        batch.edit_children((&self.family).into())
     }
+
+    #[pyo3(name = "insertMember")]
+    fn insert_member(&self, index: usize, batch: &MembershipBatch) -> PyResult<()> {
+        self.family
+            .insert_member(index, batch.single_member()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "replaceMembers")]
+    fn replace_members(&self, batch: &MembershipBatch) -> PyResult<()> {
+        self.family
+            .replace_members(&batch.add_targets()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "invertMembers")]
+    fn invert_members(&self, recursive: bool) -> PyResult<()> {
+        self.family.invert(recursive).map_err(engine_error)
+    }
+
     #[pyo3(name = "copyFamily")]
     fn copy_family(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
         if references.kind != "add" {
@@ -903,7 +936,9 @@ impl FamilyHandle {
         }
         self.family
             .copy_with_references(&references.targets())
-            .map(|copied| FamilyCopy { copied })
+            .map(|copied| FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
             .map_err(engine_error)
     }
 }
@@ -1067,7 +1102,7 @@ impl FamilyLayoutObservation {
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct FamilyCopy {
-    pub(crate) copied: noon::FamilyCopy,
+    pub(crate) copied: noon::SemanticCopy<noon::CompositeEntryHandle>,
 }
 #[pymethods]
 impl FamilyCopy {

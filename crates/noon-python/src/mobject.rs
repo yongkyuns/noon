@@ -180,13 +180,83 @@ impl MobjectHandle {
         self.handle.set_emission(value).map_err(engine_error)
     }
 
+    #[pyo3(name = "memberKeys")]
+    fn member_keys(&self) -> PyResult<Vec<String>> {
+        let store = self.handle.integration_store().borrow();
+        let node = store
+            .semantic_authoring_node_checked(self.handle.node_id())
+            .map_err(engine_error)?;
+        Ok(node
+            .members_iter()
+            .map(|id| format!("{}:{}", id.slot(), id.generation()))
+            .collect())
+    }
+
+    #[pyo3(name = "extremumFromPoints")]
+    fn extremum_from_points(
+        &self,
+        coordinates: Vec<f64>,
+        dimensions: usize,
+        dim: usize,
+        key: f64,
+    ) -> PyResult<f64> {
+        noon::reduce_point_extremum(&coordinates, dimensions, dim, key).map_err(engine_error)
+    }
+
+    #[pyo3(name = "boundaryPointFromPoints")]
+    fn boundary_point_from_points(
+        &self,
+        coordinates: Vec<f64>,
+        dimensions: usize,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> PyResult<Vec<f64>> {
+        noon::reduce_point_boundary(&coordinates, dimensions, direction_x, direction_y)
+            .map(|(x, y)| vec![x, y])
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "pathBoundaryPoints3D")]
+    fn path_boundary_points_3d(&self) -> PyResult<Vec<f64>> {
+        noon::MobjectTarget::from(&self.handle)
+            .path_boundary_points_3d()
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "editMembership")]
+    fn edit_membership(&self, batch: &MembershipBatch) -> PyResult<Vec<bool>> {
+        batch.edit_children((&self.handle).into())
+    }
+
     #[pyo3(name = "prependMembers")]
     fn prepend_members(&self, batch: &MembershipBatch) -> PyResult<()> {
-        if batch.kind != "add" {
-            return Err(engine_error("member prepend requires an add batch"));
-        }
         self.handle
-            .prepend_many(&batch.targets())
+            .prepend_many(&batch.add_targets()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "insertMember")]
+    fn insert_member(&self, index: usize, batch: &MembershipBatch) -> PyResult<()> {
+        self.handle
+            .insert_member(index, batch.single_member()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "replaceMembers")]
+    fn replace_members(&self, batch: &MembershipBatch) -> PyResult<()> {
+        self.handle
+            .replace_members(&batch.add_targets()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "copyFamily")]
+    fn copy_family(&self, references: &MembershipBatch) -> PyResult<crate::family::FamilyCopy> {
+        self.handle
+            .copy_with_references(&references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
             .map_err(engine_error)
     }
 

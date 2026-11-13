@@ -1270,10 +1270,9 @@ impl SemanticExecutionPlayer {
         z: f64,
     ) -> Result<(), AuthoringFailure> {
         self.source
-            .live()
+            .scene_mut()
             .shift_3d(mobject, noon_core::SemanticVec3::new(x, y, z))
-            .map(|_| ())
-            .map_err(AuthoringFailure::from)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1800,13 +1799,10 @@ impl SemanticExecutionPlayer {
         &mut self,
         target: noon::MobjectTarget<'_>,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        let semantics = self.source.scene().integration_store().clone();
-        noon::integration::effective_path_boundary_points_3d(
-            &semantics,
-            self.source.session(),
-            target,
-        )
-        .map_err(AuthoringFailure::from)
+        self.source
+            .scene()
+            .effective_path_boundary_points_3d(target)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]

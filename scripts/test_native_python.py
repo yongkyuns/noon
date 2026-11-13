@@ -23,6 +23,7 @@ class NativePythonTests(unittest.TestCase):
                      "ordinary_path_construction", "ordinary_path_editing", "ordinary_path_smoothing",
                      "ordinary_path_refinement", "ordinary_path_selection", "ordinary_path_alignment",
                      "showcase_bezier_paths", "manim_parity_family_slices",
+                     "manim_parity_object_members", "manim_parity_family_member_queries",
                      "coordinate_plotting", "animated_number_line", "live_coordinate_plotting",
                      "number_plane", "polar_plane", "manim_example_moving_camera_center",
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",

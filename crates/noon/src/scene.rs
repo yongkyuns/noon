@@ -618,6 +618,17 @@ impl Scene {
         crate::path_queries::effective_path_boundary_points(&self.store, execution, target)
     }
 
+    /// Capture the full-coordinate path boundary at the current execution publication.
+    pub fn effective_path_boundary_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
+        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        crate::path_queries::effective_path_boundary_points_3d(&self.store, execution, target)
+    }
+
     /// Query a vector-path boundary anchor extremum from the current publication.
     pub fn effective_path_boundary_extremum_along_dim(
         &self,
