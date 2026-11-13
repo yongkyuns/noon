@@ -178,7 +178,7 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                 &mut tx,
             )
             .unwrap();
-        session.live().apply(tx).unwrap();
+        noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
         let visibility = session
             .scene()
             .integration_store()
@@ -221,7 +221,7 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                         &mut tx,
                     )
                     .unwrap();
-                session.live().apply(tx).unwrap();
+                noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
                 let pixels = surface.render_on(
                     &device,
                     &queue,
@@ -286,7 +286,7 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
         }
         let mut tx = SemanticMutationTransaction::new();
         tx.remove_node(visibility);
-        session.live().apply(tx).unwrap();
+        noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
         assert_eq!(
             surface.render_on(
                 &device,

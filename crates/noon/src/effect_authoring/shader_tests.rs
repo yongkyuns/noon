@@ -115,7 +115,10 @@ fn shader_composition_revalidates_prepared_program_view_and_detached_membership(
                     camera.node_id(),
                     noon_core::ViewColorProfile::LinearHdr,
                 );
-                session.live().apply(transaction).unwrap();
+                session
+                    .scene_mut()
+                    .apply_semantic_transaction(transaction)
+                    .unwrap();
             }
             _ => {
                 let addition = session
@@ -175,7 +178,10 @@ fn shader_membership_revalidates_program_and_view_after_preparation() {
             let mut transaction = SemanticMutationTransaction::new();
             transaction
                 .set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
-            session.live().apply(transaction).unwrap();
+            session
+                .scene_mut()
+                .apply_semantic_transaction(transaction)
+                .unwrap();
         }
         session.session_mut().take_frame_changes();
         let before = session.session().publication_context();
@@ -374,7 +380,13 @@ fn shader_view_rejects_live_profile_or_attachment_before_publication() {
         } else {
             tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
         }
-        let error = scene.live(&mut session).apply(tx).unwrap_err();
+        let error = crate::integration::scene_execution::publish_at_root(
+            scene.integration_store(),
+            scene.root(),
+            &mut session,
+            tx,
+        )
+        .unwrap_err();
         assert!(format!("{error:?}").contains("UnsupportedEffectProfile"));
         assert_eq!(session.publication_context(), before);
         assert_eq!(session.frame(), &frame);
@@ -394,7 +406,13 @@ fn shader_view_rejects_live_profile_or_attachment_before_publication() {
             let mut tx = SemanticMutationTransaction::new();
             tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
             tx.remove_node(source.get_effect("material").unwrap().node_id());
-            scene.live(&mut session).apply(tx).unwrap();
+            crate::integration::scene_execution::publish_at_root(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                tx,
+            )
+            .unwrap();
             assert!(source.get_effect("material").is_err());
             assert_eq!(
                 session.resource_publication().color_profile(),
@@ -418,7 +436,13 @@ fn shader_view_revalidates_a_profile_change_during_external_preparation() {
         .unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
-    scene.live(&mut session).apply(tx).unwrap();
+    crate::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     session.take_frame_changes();
     let before = session.publication_context();
     let frame = session.frame().clone();
@@ -454,7 +478,7 @@ fn shader_view_admission_uses_final_membership_including_aliases() {
         if remove_all {
             tx.remove_member(session.scene().root(), alias.node_id());
         }
-        let result = session.live().apply(tx);
+        let result = session.scene_mut().apply_semantic_transaction(tx);
         if remove_all {
             result.unwrap();
             assert_eq!(

@@ -16,16 +16,15 @@ impl LiveContinuation for Source {
         &mut self,
         scene: &mut noon::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let step = self.stage;
         self.stage += 1;
         Ok(match step {
-            0 => ContinuationStep::Await(live.wait_segment(1.0)?),
+            0 => ContinuationStep::Await(scene.live().wait_segment(1.0)?),
             1 => {
                 let mut tx = SemanticMutationTransaction::new();
                 tx.add_updater(self.marker.node_id(), CALLBACK, 1.0, None);
-                live.apply(tx)?;
-                ContinuationStep::Await(live.wait_segment(1.0)?)
+                noon::integration::scene_execution::publish(scene, tx)?;
+                ContinuationStep::Await(scene.live().wait_segment(1.0)?)
             }
             2 => ContinuationStep::Finished,
             _ => panic!("source restarted"),

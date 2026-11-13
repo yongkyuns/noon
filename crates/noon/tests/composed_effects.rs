@@ -1,4 +1,4 @@
-//! Public Scene/LiveSession publication of composed scopes, without a transport.
+//! Scene and integration publication of composed scopes, without a transport.
 mod composed_effect_animation;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
@@ -84,7 +84,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     session.session_mut().take_renderer_publication();
     let mut update = SemanticMutationTransaction::new();
     update.update_effect(inner_effect, EffectUpdate::default().radius(Pixels(3.0)));
-    session.live().apply(update).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), update).unwrap();
     assert_eq!(
         session
             .session()
@@ -104,7 +104,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     );
     let mut remove = SemanticMutationTransaction::new();
     remove.remove_node(outer_effect);
-    session.live().apply(remove).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), remove).unwrap();
     assert!(row(session.session(), outer.node_id()).is_none());
     assert_eq!(
         plan(session.session(), inner.node_id()).parent_scope(),
@@ -124,7 +124,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     let root = session.scene().root();
     let mut detach = SemanticMutationTransaction::new();
     detach.remove_member(root, outer.node_id());
-    session.live().apply(detach).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), detach).unwrap();
     for node in [
         a.node_id(),
         b.node_id(),
@@ -140,7 +140,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     assert!(row(session.session(), outside.node_id()).is_some());
     let mut reattach = SemanticMutationTransaction::new();
     reattach.add_member(root, outer.node_id());
-    session.live().apply(reattach).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), reattach).unwrap();
     assert_eq!(
         session.session().execution_object_id(outer.node_id()),
         Some(outer_object)
@@ -191,7 +191,7 @@ fn live_membership_relowers_only_affected_scope_plans_and_rejects_aliases_atomic
     let revision = session.scene().revision();
     let mut alias = SemanticMutationTransaction::new();
     alias.add_member(session.scene().root(), a.node_id());
-    assert!(session.live().apply(alias).is_err());
+    assert!(noon::integration::scene_execution::publish(session.scene_mut(), alias).is_err());
     assert_eq!(session.scene().revision(), revision);
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.session().frame(), &frame);
@@ -217,17 +217,29 @@ fn first_group_attachment_rejects_external_interleaving_before_semantic_commit()
     priorities
         .set_z_index(b.node_id(), 1.0)
         .set_z_index(c.node_id(), 2.0);
-    scene.live(&mut session).apply(priorities).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        priorities,
+    )
+    .unwrap();
     let frame = session.frame().clone();
     let context = session.publication_context();
     let revision = scene.revision();
     let mut tx = SemanticMutationTransaction::new();
     tx.create_effect(family.node_id(), "soften", Blur::default());
-    let error = scene.live(&mut session).apply(tx).unwrap_err();
+    let error = noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap_err();
     assert!(
         matches!(
             error,
-            noon::LiveSessionError::Publication(noon::ExecutionSessionPublicationError::Runtime(
+            noon::ExecutionSessionPublicationError::Runtime(
                 noon_runtime::AuthoredPublicationError::Compile(
                     noon_compile::CompilePatchError::InvalidComposedSource(
                         noon_compile::CompiledComposedSourceError {
@@ -236,7 +248,7 @@ fn first_group_attachment_rejects_external_interleaving_before_semantic_commit()
                         }
                     )
                 )
-            ))
+            )
         ),
         "the full proposed capture graph must reject the actual interleaving"
     );
@@ -335,7 +347,13 @@ fn provisional_nested_scopes_bind_one_final_identity_and_parent_graph() {
         .add_member(inner, b)
         .add_member(outer, inner)
         .add_member(scene.root(), outer);
-    let committed = scene.live(&mut session).apply(tx).unwrap();
+    let committed = noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     let outer = committed.resolve(outer).unwrap();
     let inner = committed.resolve(inner).unwrap();
     let a = committed.resolve(a).unwrap();
@@ -361,7 +379,13 @@ fn provisional_nested_scopes_bind_one_final_identity_and_parent_graph() {
     );
     let mut remove = SemanticMutationTransaction::new();
     remove.remove_node(committed.resolve(inner_effect).unwrap());
-    scene.live(&mut session).apply(remove).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        remove,
+    )
+    .unwrap();
     assert!(row(&session, inner).is_none());
     assert_eq!(plan(&session, outer).members().len(), 2);
     assert!(row(&session, a).is_some() && row(&session, b).is_some());

@@ -1207,8 +1207,13 @@ mod tests {
             )
             .replace_content(target.node_id(), foreign.state().unwrap().content);
         assert!(matches!(
-            scene.live(&mut session).apply(transaction),
-            Err(crate::LiveSessionError::Publication(_))
+            crate::integration::scene_execution::publish_at_root(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                transaction
+            ),
+            Err(crate::ExecutionSessionPublicationError::Semantic(_))
         ));
         assert_eq!(target.state().unwrap(), authored_before);
         assert_eq!(session.frame(), &frame_before);

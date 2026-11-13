@@ -190,7 +190,7 @@ fn public_composed_group_pixels_cover_live_attachment_membership_and_retirement(
                 } else {
                     tx.add_member(root, outer.node_id());
                 }
-                session.live().apply(tx).unwrap();
+                noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
             }
             _ => {}
         }

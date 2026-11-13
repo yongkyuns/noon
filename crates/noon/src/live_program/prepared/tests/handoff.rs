@@ -150,20 +150,19 @@ impl LiveContinuation for Script {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         match step {
-            0 => Ok(ContinuationStep::Await(live.wait_segment(1.0)?)),
+            0 => Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?)),
             1 => {
                 if self.drag {
-                    live.set_translation_drag_targets([&self.target])?;
+                    scene.live().set_translation_drag_targets([&self.target])?;
                 } else {
                     let mut transaction = SemanticMutationTransaction::new();
                     transaction.add_updater(self.target.node_id(), CALLBACK, 1.0, None);
-                    live.apply(transaction)?;
+                    scene.apply_semantic_transaction(transaction)?;
                 }
-                Ok(ContinuationStep::Await(live.wait_segment(1.0)?))
+                Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?))
             }
             2 => Ok(ContinuationStep::Finished),
             _ => panic!("original continuation executed twice"),

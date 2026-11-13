@@ -326,13 +326,13 @@ fn inset_relations_replay_activation_retirement_retarget_and_clear_with_the_fram
         other.camera_frame().node_id(),
         true,
     );
-    session.live().apply(retarget).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), retarget).unwrap();
     record(session.session_mut());
     for (time, enabled) in [(5.25, false), (5.75, true)] {
         session.session_mut().advance_to(time).unwrap();
         let mut drawing = noon_core::SemanticMutationTransaction::new();
         drawing.set_draw_enabled(view.display().node_id(), enabled);
-        session.live().apply(drawing).unwrap();
+        noon::integration::scene_execution::publish(session.scene_mut(), drawing).unwrap();
         assert_eq!(
             session.session().inset_2d_views().unwrap().len(),
             usize::from(enabled)
@@ -342,7 +342,7 @@ fn inset_relations_replay_activation_retirement_retarget_and_clear_with_the_fram
     session.session_mut().advance_to(6.0).unwrap();
     let mut clear = noon_core::SemanticMutationTransaction::new();
     clear.clear_inset_2d_view(view.display().node_id());
-    session.live().apply(clear).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), clear).unwrap();
     record(session.session_mut());
     session.session_mut().advance_to(7.0).unwrap();
     let mut restore = noon_core::SemanticMutationTransaction::new();
@@ -351,12 +351,12 @@ fn inset_relations_replay_activation_retirement_retarget_and_clear_with_the_fram
         view.camera_frame().node_id(),
         false,
     );
-    session.live().apply(restore).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), restore).unwrap();
     record(session.session_mut());
     session.session_mut().advance_to(8.0).unwrap();
     let mut retire = noon_core::SemanticMutationTransaction::new();
     retire.remove_node(view.camera_frame().node_id());
-    session.live().apply(retire).unwrap();
+    noon::integration::scene_execution::publish(session.scene_mut(), retire).unwrap();
     record(session.session_mut());
     assert!(session.session().inset_2d_views().unwrap().is_empty());
     let frontier = session.scene().revision();
@@ -425,7 +425,13 @@ fn pending_inset_pair_and_existing_display_bind_planned_camera_identity_atomical
         .add_member(scene.root(), pending_display)
         .set_inset_2d_view(display.node_id(), camera, true)
         .set_inset_2d_view(pending_display, camera, false);
-    scene.live(&mut session).apply(transaction).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        transaction,
+    )
+    .unwrap();
     sample(&mut session, &mut samples, 1.5);
     let expected = session.inset_2d_views().unwrap();
     assert_eq!(expected.len(), 2);

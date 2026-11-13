@@ -27,7 +27,13 @@ fn metadata_only_live_publication_does_not_lower_or_dirty_any_object() {
         .members();
     let mut tx = SemanticMutationTransaction::new();
     tx.set_foreground_members(scene.root(), [target.node_id()]);
-    let result = scene.live(&mut session).apply(tx).unwrap();
+    let result = noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     assert_eq!(
         result.impacts(),
         &[SemanticMutationImpact::ForegroundMembers {
@@ -78,12 +84,15 @@ fn metadata_only_live_publication_does_not_lower_or_dirty_any_object() {
     let unchanged = session.publication_context();
     let mut tx = SemanticMutationTransaction::new();
     tx.set_foreground_members(scene.root(), [target.node_id()]);
-    assert!(scene
-        .live(&mut session)
-        .apply(tx)
-        .unwrap()
-        .impacts()
-        .is_empty());
+    assert!(noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx
+    )
+    .unwrap()
+    .impacts()
+    .is_empty());
     assert_eq!(session.publication_context(), unchanged);
     assert!(session.take_frame_changes().is_empty());
 }
@@ -105,7 +114,13 @@ fn failed_runtime_preflight_keeps_metadata_properties_and_publication_unchanged(
         SemanticObjectProperty::Translation,
         SemanticSignalValue::Vec3(SemanticVec3::new(f64::MAX, 0.0, 0.0)),
     );
-    assert!(scene.live(&mut session).apply(tx).is_err());
+    assert!(noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx
+    )
+    .is_err());
     assert_eq!(scene.revision(), context.scene_revision());
     assert_eq!(session.publication_context(), context);
     assert_eq!(target.state().unwrap(), authored);
@@ -129,12 +144,24 @@ fn deleting_detached_foreground_target_cleans_metadata_without_frame_work() {
     let mut session = scene.execution_session().unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.set_foreground_members(scene.root(), [detached.node_id()]);
-    scene.live(&mut session).apply(tx).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     session.take_frame_changes();
     let objects = session.frame().objects.clone();
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_node(detached.node_id());
-    scene.live(&mut session).apply(tx).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     assert!(scene
         .integration_store()
         .borrow()
@@ -162,7 +189,13 @@ fn provisional_metadata_target_and_display_entry_share_one_transaction() {
     ));
     tx.add_member(scene.root(), target)
         .set_foreground_members(scene.root(), [target]);
-    let result = scene.live(&mut session).apply(tx).unwrap();
+    let result = noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     let target = result.resolve(target).unwrap();
     let store = scene.integration_store().borrow();
     assert_eq!(
@@ -205,7 +238,13 @@ fn foreign_store_and_stale_publication_reject_foreground_mutation() {
         scene.root(),
         std::iter::empty::<noon_core::SemanticNodeId>(),
     );
-    assert!(scene.live(&mut session).apply(tx).is_err());
+    assert!(noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx
+    )
+    .is_err());
     assert_eq!(session.publication_context(), before);
     assert!(session.take_frame_changes().is_empty());
 }

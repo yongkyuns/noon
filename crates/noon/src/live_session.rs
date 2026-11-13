@@ -23,8 +23,8 @@ use noon_core::{
     AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
     SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticObjectState, SemanticStore,
-    SemanticSubsetDisplayMode, SemanticVec3, Style, Transform2D,
+    SemanticNodeId, SemanticObjectState, SemanticStore, SemanticSubsetDisplayMode, SemanticVec3,
+    Style, Transform2D,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -528,10 +528,9 @@ impl From<ExecutionSegmentCompletionError> for LiveSessionError {
 
 /// A temporary, typed view over one semantic store and its published runtime.
 ///
-/// `LiveSession` has no scheduler, scene copy, or runtime mirror.  Persistent
-/// property edits use the shared semantic transaction vocabulary and publish
-/// through [`ExecutionSession`] atomically.  The supported transaction subset is
-/// exactly the session publication subset.
+/// This borrow controls activation, segments, input, and prepared publication
+/// for an existing execution. The owning [`crate::Scene`] supplies ordinary
+/// authoring and observations.
 pub struct LiveSession<'a> {
     store: &'a Rc<RefCell<SemanticStore>>,
     root: SemanticNodeId,
@@ -581,7 +580,7 @@ impl<'a> LiveSession<'a> {
 
     /// Bind a facade to the supplied store and existing execution session.
     /// Provenance and revision are checked by every publish/query operation.
-    pub fn new(
+    pub(crate) fn new(
         store: &'a Rc<RefCell<SemanticStore>>,
         root: SemanticNodeId,
         session: &'a mut ExecutionSession,
@@ -591,17 +590,6 @@ impl<'a> LiveSession<'a> {
             root,
             session,
         }
-    }
-
-    /// Apply one supported semantic transaction through the Scene-owned running
-    /// publication route. Unsupported content and structural work fails before
-    /// either layer commits.
-    pub fn apply(
-        &mut self,
-        transaction: SemanticMutationTransaction,
-    ) -> Result<SemanticMutationTransactionResult, LiveSessionError> {
-        crate::Scene::publish_running_transaction(self.store, self.root, self.session, transaction)
-            .map_err(Into::into)
     }
 
     pub(crate) fn stage_effect_publication(

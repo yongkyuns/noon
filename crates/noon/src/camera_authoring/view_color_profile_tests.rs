@@ -32,7 +32,13 @@ fn authored_camera_profile_reaches_initial_and_live_runtime_publications_atomica
     let before_rows = session.frame().objects.clone();
     let mut tx = SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera_id, ViewColorProfile::Compatibility);
-    scene.live(&mut session).apply(tx).unwrap();
+    crate::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     assert_eq!(
         session.frame().objects,
         before_rows,
@@ -51,7 +57,13 @@ fn authored_camera_profile_reaches_initial_and_live_runtime_publications_atomica
     drop(changed);
     let mut tx = SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera_id, ViewColorProfile::Compatibility);
-    scene.live(&mut session).apply(tx).unwrap();
+    crate::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     let no_op = session.take_renderer_publication();
     assert_eq!(no_op.context(), context);
     assert!(no_op.changes().object_indices().is_empty());
@@ -60,7 +72,13 @@ fn authored_camera_profile_reaches_initial_and_live_runtime_publications_atomica
     let mut invalid = SemanticMutationTransaction::new();
     invalid.set_view_color_profile(camera_id, ViewColorProfile::LinearHdr);
     invalid.set_view_color_profile(circle.node_id(), ViewColorProfile::LinearHdr);
-    assert!(scene.live(&mut session).apply(invalid).is_err());
+    assert!(crate::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        invalid
+    )
+    .is_err());
     assert_eq!(
         scene.integration_store().borrow().scene_revision(),
         before_revision
@@ -257,7 +275,7 @@ fn authored_profile_color_repack_is_once_per_view_change_and_other_edits_stay_lo
     drop(publication);
     let mut tx = SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-    session.live().apply(tx).unwrap();
+    session.scene_mut().apply_semantic_transaction(tx).unwrap();
     let publication = session.session_mut().take_renderer_publication();
     let prepared = preparer.prepare_publication(&publication).unwrap();
     assert_eq!(prepared.circles.len(), 64);
@@ -301,7 +319,7 @@ fn authored_profile_color_repack_is_once_per_view_change_and_other_edits_stay_lo
     drop(publication);
     let mut tx = SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::Compatibility);
-    session.live().apply(tx).unwrap();
+    session.scene_mut().apply_semantic_transaction(tx).unwrap();
     let publication = session.session_mut().take_renderer_publication();
     let restored = preparer.prepare_publication(&publication).unwrap();
     for (index, (before, after)) in compatibility.iter().zip(restored.circles).enumerate() {

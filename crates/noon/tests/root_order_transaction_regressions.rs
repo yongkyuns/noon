@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use noon::integration::{SemanticMutationTransaction, SemanticStore};
-use noon::{ExecutionSession, LiveSession};
+use noon::ExecutionSession;
 use noon_compile::semantic_execution_object_id;
 use noon_core::{
     plan_semantic_scene_membership, SemanticNodeId, SemanticObjectState,
@@ -49,8 +49,7 @@ fn shared_remove_preserves_promoted_empty_anchors() {
         plan_semantic_scene_membership(&store, root, SemanticSceneMembershipRequest::Remove(&[a]))
             .unwrap();
     let owner = Rc::new(RefCell::new(store));
-    LiveSession::new(&owner, root, &mut session)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, transaction)
         .unwrap();
     assert_order(&owner.borrow(), root, &session);
 }
@@ -70,8 +69,7 @@ fn shared_remove_skips_removed_successor_of_empty_anchor() {
     )
     .unwrap();
     let owner = Rc::new(RefCell::new(store));
-    LiveSession::new(&owner, root, &mut session)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, transaction)
         .unwrap();
     assert_order(&owner.borrow(), root, &session);
 }
@@ -87,8 +85,7 @@ fn compound_reorder_uses_staged_empty_anchor_successor() {
     let mut transaction = SemanticMutationTransaction::new();
     transaction.reorder_member(root, a, Some(c));
     transaction.reorder_member(root, c, Some(empty));
-    LiveSession::new(&owner, root, &mut session)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, transaction)
         .unwrap();
     assert_order(&owner.borrow(), root, &session);
 }
@@ -106,7 +103,12 @@ fn terminal_removal_of_reordered_leaf_never_half_publishes() {
     let mut transaction = SemanticMutationTransaction::new();
     transaction.reorder_member(root, c, Some(a));
     transaction.remove_node(c);
-    match LiveSession::new(&owner, root, &mut session).apply(transaction) {
+    match noon::integration::scene_execution::publish_at_root(
+        &owner,
+        root,
+        &mut session,
+        transaction,
+    ) {
         Ok(_) => assert_order(&owner.borrow(), root, &session),
         Err(_) => {
             assert_eq!(session.publication_context(), before);
@@ -135,8 +137,7 @@ fn provisional_empty_anchor_preserves_runtime_order_and_identity() {
     transaction.add_member(root, empty);
     transaction.reorder_member(root, empty, Some(tail));
     transaction.reorder_member_ref(root, source, Some(empty.into()));
-    LiveSession::new(&owner, root, &mut session)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, transaction)
         .unwrap();
     assert_order(&owner.borrow(), root, &session);
     assert_eq!(session.frame().objects, frame.objects);
@@ -179,8 +180,7 @@ fn provisional_object_and_nested_family_keep_their_staged_position() {
         tx.add_member(root, anchor);
         tx.reorder_member(root, anchor, Some(tail));
         tx.reorder_member_ref(root, source, Some(anchor.into()));
-        LiveSession::new(&owner, root, &mut session)
-            .apply(tx)
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx)
             .unwrap();
         assert_order(&owner.borrow(), root, &session);
     }
@@ -207,8 +207,7 @@ fn nested_alias_append_and_reorder_use_first_occurrence_once() {
         } else {
             tx.reorder_member(root, moved, Some(anchor));
         }
-        LiveSession::new(&owner, root, &mut session)
-            .apply(tx)
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx)
             .unwrap();
         assert_order(&owner.borrow(), root, &session);
     }
@@ -236,13 +235,12 @@ fn rejected_provisional_order_preserves_state_then_reuses_unpublished_identity()
         if invalid {
             tx.set_property(leaf, SemanticObjectProperty::RotationZ, f64::MAX);
         }
-        let result = LiveSession::new(&owner, root, &mut session).apply(tx);
+        let result =
+            noon::integration::scene_execution::publish_at_root(&owner, root, &mut session, tx);
         if invalid {
             assert!(matches!(
                 result,
-                Err(noon::LiveSessionError::Publication(
-                    noon::ExecutionSessionPublicationError::Lowering(_)
-                ))
+                Err(noon::ExecutionSessionPublicationError::Lowering(_))
             ));
             assert_eq!(owner.borrow().len(), count);
             assert_eq!(
@@ -265,7 +263,7 @@ fn rejected_provisional_order_preserves_state_then_reuses_unpublished_identity()
 
 #[test]
 fn live_root_must_belong_to_the_execution_domain_before_publication() {
-    use noon::{ExecutionSessionPublicationError, LiveSessionError};
+    use noon::ExecutionSessionPublicationError;
     use noon_core::{SemanticNodeCreation, SemanticObjectProperty, SemanticVec3};
 
     for scene_owned in [false, true] {
@@ -294,9 +292,13 @@ fn live_root_must_belong_to_the_execution_domain_before_publication() {
                         SemanticObjectProperty::Translation,
                         SemanticVec3::new(3.0, 0.0, 0.0),
                     );
-                    LiveSession::new(&owner, root, &mut session)
-                        .apply(tx)
-                        .unwrap();
+                    noon::integration::scene_execution::publish_at_root(
+                        &owner,
+                        root,
+                        &mut session,
+                        tx,
+                    )
+                    .unwrap();
                 }
                 let context = session.publication_context();
                 let frame = session.frame().clone();
@@ -320,10 +322,8 @@ fn live_root_must_belong_to_the_execution_domain_before_publication() {
                 tx.set_property(b, SemanticObjectProperty::RotationZ, 0.5);
                 tx.create_node(SemanticNodeCreation::family());
                 assert!(matches!(
-                    LiveSession::new(&owner, wrong_root, &mut session).apply(tx),
-                    Err(LiveSessionError::Publication(
-                        ExecutionSessionPublicationError::UnknownObject(rejected)
-                    )) if rejected == wrong_root
+                    noon::integration::scene_execution::publish_at_root(&owner, wrong_root, &mut session, tx),
+                    Err(ExecutionSessionPublicationError::UnknownObject(rejected)) if rejected == wrong_root
                 ));
 
                 assert_eq!(session.publication_context(), context);
@@ -355,9 +355,13 @@ fn live_root_must_belong_to_the_execution_domain_before_publication() {
 
                 let mut valid = SemanticMutationTransaction::new();
                 valid.reorder_member(root, b, Some(a));
-                LiveSession::new(&owner, root, &mut session)
-                    .apply(valid)
-                    .unwrap();
+                noon::integration::scene_execution::publish_at_root(
+                    &owner,
+                    root,
+                    &mut session,
+                    valid,
+                )
+                .unwrap();
                 assert_order(&owner.borrow(), root, &session);
                 assert_eq!(session.frame(), &frame);
                 let after = session.publication_context();

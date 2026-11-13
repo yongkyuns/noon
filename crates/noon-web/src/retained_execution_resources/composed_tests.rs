@@ -235,7 +235,13 @@ impl Fixture {
     fn parameter(&mut self) -> RetainedFamilyExecutionDeltaEnvelope {
         let mut tx = SemanticMutationTransaction::new();
         tx.update_effect(self.effect, EffectUpdate::default().radius(Pixels(4.0)));
-        self.scene.live(&mut self.session).apply(tx).unwrap();
+        noon::integration::scene_execution::publish_at_root(
+            self.scene.integration_store(),
+            self.scene.root(),
+            &mut self.session,
+            tx,
+        )
+        .unwrap();
         encode(&mut self.encoder, &mut self.session, false)
     }
     fn slot(&self, id: ObjectId) -> TransportSlotId {
@@ -281,7 +287,13 @@ fn nested_public_groups_cross_worker_codec_reuse_parameter_resources_and_retire_
     assert_coherent(&mut f.session, &f.mirror);
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_member(f.scene.root(), f.outer.node_id());
-    f.scene.live(&mut f.session).apply(tx).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        f.scene.integration_store(),
+        f.scene.root(),
+        &mut f.session,
+        tx,
+    )
+    .unwrap();
     let detached = encode(&mut f.encoder, &mut f.session, false);
     assert_eq!(detached.resource_retirements.composed_sources.len(), 2);
     apply(&mut f.mirror, &detached).unwrap();
@@ -294,7 +306,13 @@ fn nested_public_groups_cross_worker_codec_reuse_parameter_resources_and_retire_
     assert_coherent(&mut f.session, &f.mirror);
     let mut tx = SemanticMutationTransaction::new();
     tx.add_member(f.scene.root(), f.outer.node_id());
-    f.scene.live(&mut f.session).apply(tx).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        f.scene.integration_store(),
+        f.scene.root(),
+        &mut f.session,
+        tx,
+    )
+    .unwrap();
     let readded = encode(&mut f.encoder, &mut f.session, false);
     assert_eq!(
         source_handle(&readded, f.inner_id).version,
@@ -548,13 +566,15 @@ fn membership_churn_retires_both_nested_plans_and_keeps_resource_closure_bounded
         ));
         tx.add_member(f.inner.node_id(), next);
         tx.remove_node(current);
-        current = f
-            .scene
-            .live(&mut f.session)
-            .apply(tx)
-            .unwrap()
-            .resolve(next)
-            .unwrap();
+        current = noon::integration::scene_execution::publish_at_root(
+            f.scene.integration_store(),
+            f.scene.root(),
+            &mut f.session,
+            tx,
+        )
+        .unwrap()
+        .resolve(next)
+        .unwrap();
         let delta = encode(&mut f.encoder, &mut f.session, false);
         assert_eq!(
             delta
@@ -577,7 +597,13 @@ fn membership_churn_retires_both_nested_plans_and_keeps_resource_closure_bounded
     }
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_member(f.scene.root(), f.outer.node_id());
-    f.scene.live(&mut f.session).apply(tx).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        f.scene.integration_store(),
+        f.scene.root(),
+        &mut f.session,
+        tx,
+    )
+    .unwrap();
     let delta = encode(&mut f.encoder, &mut f.session, false);
     apply(&mut f.mirror, &delta).unwrap();
     assert_eq!(f.mirror.resources().composed_source_count(), 0);
@@ -704,7 +730,13 @@ fn one_atomic_delta_resolves_pending_equal_interval_scopes_before_members_and_pa
         .add_member(inner, b)
         .add_member(outer, inner)
         .add_member(scene.root(), outer);
-    let committed = scene.live(&mut session).apply(tx).unwrap();
+    let committed = noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     let outer_id = session
         .execution_object_id(committed.resolve(outer).unwrap())
         .unwrap();

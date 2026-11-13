@@ -470,7 +470,8 @@ fn invalid_live_batch_preserves_transaction_cause_and_rolls_back_prior_writes() 
         SemanticObjectProperty::StrokeWidth,
         f64::NAN,
     );
-    let error = session.live().apply(transaction).unwrap_err();
+    let error =
+        noon::integration::scene_execution::publish(session.scene_mut(), transaction).unwrap_err();
     let cause = SemanticMutationTransactionError::NonFinitePropertyValue {
         index: 1,
         object: local.node_id(),
@@ -487,7 +488,7 @@ fn invalid_live_batch_preserves_transaction_cause_and_rolls_back_prior_writes() 
     );
     assert!(matches!(
         error,
-        LiveSessionError::Publication(ExecutionSessionPublicationError::Semantic(_))
+        AuthoringError::ExecutionPublication(ExecutionSessionPublicationError::Semantic(_))
     ));
     assert_eq!(local.state()?, state);
     assert_eq!(authored_snapshot(session.scene()), before);

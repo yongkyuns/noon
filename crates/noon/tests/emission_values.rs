@@ -58,7 +58,13 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
     style.emission = Emission::new(3.000000000000001).unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.replace_style(source.node_id(), style.clone());
-    scene.live(&mut session).apply(tx).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     assert_eq!(
         session.frame().objects[index].style.emission,
         style.emission
@@ -70,7 +76,13 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
     drop(published);
     let mut tx = SemanticMutationTransaction::new();
     tx.replace_style(source.node_id(), style);
-    scene.live(&mut session).apply(tx).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        tx,
+    )
+    .unwrap();
     assert!(session
         .take_renderer_publication()
         .changes()
@@ -83,7 +95,13 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
         noon_core::SemanticObjectProperty::Emission,
         7.000000000000001,
     );
-    scene.live(&mut session).apply(property).unwrap();
+    noon::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        property,
+    )
+    .unwrap();
     assert_eq!(
         session.frame().objects[index].style.emission.strength(),
         7.000000000000001
@@ -104,7 +122,13 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
             noon_core::SemanticObjectProperty::Emission,
             invalid,
         );
-        assert!(scene.live(&mut session).apply(tx).is_err());
+        assert!(noon::integration::scene_execution::publish_at_root(
+            scene.integration_store(),
+            scene.root(),
+            &mut session,
+            tx
+        )
+        .is_err());
         assert_eq!(session.frame(), &before);
         assert_eq!(source.state().unwrap(), authored);
         assert_eq!(other.state().unwrap(), other_authored);

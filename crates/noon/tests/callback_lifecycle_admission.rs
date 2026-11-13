@@ -244,7 +244,7 @@ fn removed_callback_history_does_not_block_a_later_fade() {
 
     let mut removal = SemanticMutationTransaction::new();
     removal.remove_updater(moving.node_id(), MOVE, 1.0);
-    execution.live().apply(removal).unwrap();
+    noon::integration::scene_execution::publish(execution.scene_mut(), removal).unwrap();
     let call_count = times.borrow().len();
     let frozen = execution.scene().effective(&moving).unwrap();
     let segment = execution
@@ -626,7 +626,7 @@ fn a_target_with_completed_updater_history_can_fade_out_without_restarting_it() 
     execution.live().complete_segment(wait).unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_updater(target.node_id(), MOVE, 1.0);
-    execution.live().apply(tx).unwrap();
+    noon::integration::scene_execution::publish(execution.scene_mut(), tx).unwrap();
     let calls = times.borrow().clone();
     let frozen = execution.scene().effective(&target).unwrap().transform;
     let segment = execution

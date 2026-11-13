@@ -332,8 +332,8 @@ impl ExecutionSession {
     /// Structural publication admits geometry entries, local
     /// family exits, and content already owned by this store before session bootstrap.
     /// Aliases are reduced to exact net membership after semantic commit. Root-relative
-    /// painter reordering is published through [`LiveSession`](crate::LiveSession), which
-    /// supplies the authoritative execution root. Resource allocation and reactive
+    /// painter reordering uses the owning [`crate::Scene`] or the explicit
+    /// root-aware integration entry point. Resource allocation and reactive
     /// membership remain explicit unsupported cases.
     pub fn apply_semantic_transaction(
         &mut self,

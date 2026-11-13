@@ -1857,7 +1857,7 @@ impl ExecutionSession {
     }
 
     /// Atomically create and enroll one input-only scalar in this live root.
-    pub fn create_scoped_value_tracker(
+    pub(crate) fn create_scoped_value_tracker(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -1962,7 +1962,7 @@ impl ExecutionSession {
 
     /// Atomically associate and, when necessary, sparsely enroll one existing
     /// detached scalar signal in this execution root.
-    pub fn associate_value_tracker(
+    pub(crate) fn associate_value_tracker(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,

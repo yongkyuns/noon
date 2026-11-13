@@ -31,7 +31,13 @@ fn scene(colored: bool) -> (Scene, Mobject, ExecutionSession) {
     if colored {
         let mut tx = SemanticMutationTransaction::new();
         tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-        scene.live(&mut session).apply(tx).unwrap();
+        noon::integration::scene_execution::publish_at_root(
+            scene.integration_store(),
+            scene.root(),
+            &mut session,
+            tx,
+        )
+        .unwrap();
     }
     (scene, label, session)
 }

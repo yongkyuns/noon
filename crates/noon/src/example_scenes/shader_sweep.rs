@@ -87,12 +87,12 @@ impl LiveContinuation for ShaderSweep {
             1 | 3 => {
                 if let Some(introduction) = self.deferred.take() {
                     if let Some(camera) = self.camera.take() {
-                        let mut transaction = noon_core::SemanticMutationTransaction::new();
-                        transaction.set_view_color_profile(
-                            camera.node_id(),
-                            noon_core::ViewColorProfile::Compatibility,
-                        );
-                        scene.live().apply(transaction).map_err(message)?;
+                        scene
+                            .set_view_color_profile(
+                                &camera,
+                                noon_core::ViewColorProfile::Compatibility,
+                            )
+                            .map_err(message)?;
                     }
                     let pending = match introduction {
                         Introduction::Membership => {
