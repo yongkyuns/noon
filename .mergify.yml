@@ -16,6 +16,8 @@ queue_rules:
     queue_conditions:
       - base = master
       - -draft
+      # Enforce opt-in even for direct/manual queue commands.
+      - label = merge-train
       - check-success = @github-actions/Rust format and lint
       - check-success = @github-actions/Rust unit tests
       - check-success = @github-actions/Web static and unit checks
