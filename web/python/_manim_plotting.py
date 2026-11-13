@@ -183,7 +183,7 @@ def _coordinate_constructor_context():
     _outside_callback()
     if _create_coordinates is None:
         raise RuntimeError("coordinates require the shared Rust authoring host")
-    return _shared._live_constructor_context("coordinates")
+    return _shared._path_authoring_context()
 
 
 _THREE_D_AXIS_CONFIG_KEYS = {
@@ -579,7 +579,7 @@ class NumberLine(_compat.Group):
             raise
         _attach_number_line(
             self,
-            engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options),
+            engine_call(context.createCoordinates if context is not None else _create_coordinates, options),
             tick_size=tick_size,
             include_ticks=bool(include_ticks),
             include_tip=bool(include_tip),
@@ -880,7 +880,7 @@ class Axes(_compat.Group):
         except BaseException:
             options.free()
             raise
-        handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
+        handle = engine_call(context.createCoordinates if context is not None else _create_coordinates, options)
         members = []
         axis_setups = (
             (0, x_options, x_scale, x_range_values),
@@ -1351,7 +1351,7 @@ class ThreeDAxes(_compat.Group):
             options.free()
             raise
         handle = engine_call(
-            context.liveCreateCoordinates if context is not None else _create_coordinates,
+            context.createCoordinates if context is not None else _create_coordinates,
             options,
         )
         axes = [

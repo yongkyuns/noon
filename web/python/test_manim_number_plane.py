@@ -23,7 +23,7 @@ class NumberPlaneAdapterTests(TestCase):
         self.cold = Mock(name="cold-create", return_value=Mock(name="cold-handle"))
         self.live = Mock(name="live-create", return_value=Mock(name="live-handle"))
         self.context = SimpleNamespace(
-            liveCreateCoordinates=self.live,
+            createCoordinates=self.live,
             queryNumberPlaneFrame=Mock(name="query-plane-frame"),
         )
         self.parts = [Mock(name=f"part-{index}") for index in range(4)]

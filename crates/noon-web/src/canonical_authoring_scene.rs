@@ -9920,20 +9920,20 @@ mod wasm {
         }
 
         /// Publish a detached coordinate family through the same retained owner.
-        #[wasm_bindgen(js_name = liveCreateCoordinates)]
-        pub fn live_create_coordinates(
+        #[wasm_bindgen(js_name = createCoordinates)]
+        pub fn create_coordinates(
             &mut self,
             candidate: crate::WasmCoordinateOptions,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             use crate::authoring_coordinates::CoordinateRequest;
-            use noon::integration::{live_coordinate_failure, live_coordinate_publication_failure};
-            let scene = self
-                .inner
-                .active_live_player()
-                .map_err(AuthoringFailure::from)
-                .map_err(typed_js_error)?
-                .scene_mut();
-            let failure = if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
+            use noon::integration::{
+                coordinate_failure, live_coordinate_failure, live_coordinate_publication_failure,
+            };
+            let running = self.inner.requires_live_mutation_routing();
+            let scene = self.inner.local_authoring_scene().map_err(typed_js_error)?;
+            let failure = if !running {
+                coordinate_failure
+            } else if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
                 live_coordinate_publication_failure
             } else {
                 live_coordinate_failure
