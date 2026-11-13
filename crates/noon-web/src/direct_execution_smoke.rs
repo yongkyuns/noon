@@ -578,7 +578,7 @@ pub async fn create_direct_execution_smoke_renderer(
     }
     execution
         .with_store_and_session(|store, session| {
-            session.activate_animation(
+            session.activate_animation_segment(
                 store,
                 animation,
                 AnimationOptions::new()
