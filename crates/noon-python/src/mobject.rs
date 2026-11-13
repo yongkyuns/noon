@@ -1427,6 +1427,70 @@ impl LayoutAnchor {
             .map_err(engine_error)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn flip(
+        &self,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        x: f64,
+        y: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.anchor
+            .flip(
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                pivot(x, y, point),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "replaceLayout")]
+    fn replace_layout(&self, target: &Self, dimension: u32, stretch: bool) -> PyResult<()> {
+        self.anchor
+            .replace_layout(
+                &target.anchor,
+                dimension.try_into().map_err(engine_error)?,
+                stretch,
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "surroundCircle")]
+    fn surround_circle(
+        &self,
+        target: &Self,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> PyResult<()> {
+        self.anchor
+            .surround_circle(&target.anchor, dimension, stretch, buffer_factor)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "matchDimSize")]
+    #[allow(clippy::too_many_arguments)]
+    fn match_dim_size(
+        &self,
+        target: &Self,
+        dimension: u32,
+        stretch: bool,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.anchor
+            .match_dim_size_with_pivot(
+                &target.anchor,
+                dimension.try_into().map_err(engine_error)?,
+                stretch,
+                pivot_3d(x, y, z, point),
+            )
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "dimensionLength")]
     fn dimension_length(&self, dimension: u32) -> PyResult<f64> {
         self.anchor

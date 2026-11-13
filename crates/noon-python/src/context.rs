@@ -3417,6 +3417,85 @@ impl Context {
         self.available()?;
         self.place(|scene| scene.rotate_layout(&target.anchor, angle, pivot(x, y, point)))
     }
+    #[pyo3(name = "liveFlipLayout")]
+    #[allow(clippy::too_many_arguments)]
+    fn flip_layout(
+        &mut self,
+        source: &LayoutAnchor,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        x: f64,
+        y: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.flip_layout(
+                &source.anchor,
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                pivot(x, y, point),
+            )
+        })
+    }
+
+    #[pyo3(name = "liveReplaceLayout")]
+    fn replace_layout(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+    ) -> PyResult<()> {
+        let dimension = dimension.try_into().map_err(engine_error)?;
+        self.place(|scene| scene.replace_layout(&source.anchor, &target.anchor, dimension, stretch))
+    }
+
+    #[pyo3(name = "liveSurroundCircle")]
+    fn surround_circle(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> PyResult<()> {
+        self.place(|scene| {
+            scene.surround_circle(
+                &source.anchor,
+                &target.anchor,
+                dimension,
+                stretch,
+                buffer_factor,
+            )
+        })
+    }
+
+    #[pyo3(name = "liveMatchDimSize")]
+    #[allow(clippy::too_many_arguments)]
+    fn match_dim_size(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        let dimension = dimension.try_into().map_err(engine_error)?;
+        self.place(|scene| {
+            scene.match_dim_size_with_pivot(
+                &source.anchor,
+                &target.anchor,
+                dimension,
+                stretch,
+                crate::mobject::pivot_3d(x, y, z, point),
+            )
+        })
+    }
+
     #[pyo3(name="beginOrdinaryCompositionBuilder",signature=(kind,duration,lag,play_duration))]
     fn composition(
         &self,
