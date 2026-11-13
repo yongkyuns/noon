@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use std::collections::BTreeSet;
 
 use noon_core::{
@@ -82,7 +83,7 @@ fn copied_graph_ordinary_motion_is_local_and_reuses_endpoint_content() {
         ])
         .unwrap();
 
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let original_start = session
         .execution_object_id(graph.vertex(&"a").unwrap().node_id())
         .unwrap();
@@ -136,7 +137,7 @@ fn native_motion_expands_zero_length_arrow_without_resource_admission() {
     scene
         .add_many(&[noon::MobjectTarget::Family(graph.family())])
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let ids = [
         session
             .execution_object_id(graph.vertex(&"a").unwrap().node_id())
@@ -202,7 +203,7 @@ fn callback_motion_publishes_vertex_and_endpoints_in_one_retained_delta() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let ids = [
         session.execution_object_id(start.node_id()).unwrap(),
         session
@@ -260,7 +261,7 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
     let mut scene = noon::Scene::new();
     let sentinel = scene.circle(0.1).unwrap();
     scene.add(&sentinel).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = live_player(&scene, session);
     let resources = player.resource_bundle_bytes();
     let mut mirror =

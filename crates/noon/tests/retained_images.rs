@@ -1,4 +1,5 @@
 //! Qualification of the ordinary retained image lane, not a second renderer.
+use noon::integration::scene_execution;
 use noon::{ExecutionSession, ImageMobjectOptions, RasterImageSampling, Scene};
 use noon_core::{
     FontResourceArena, GeometryResourceArena, RasterImageResourceArena, TextResourceArena,
@@ -242,7 +243,7 @@ fn failed_image_preparation_cannot_be_reused_by_an_empty_delta() {
     let mut scene = Scene::new();
     let object = scene.image(options()).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let texts = TextResourceArena::new();
@@ -355,7 +356,7 @@ fn native_image_pixels_preserve_orientation_alpha_and_painter_order() {
         foreground.set_fill(1.0, 1.0, 0.0, 1.0).unwrap();
         foreground.disable_stroke().unwrap();
         scene.add(&foreground).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, 64, 64);
         let mut text = renderer.create_retained_text_state(&device, &queue);

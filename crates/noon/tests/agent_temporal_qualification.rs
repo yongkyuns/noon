@@ -2,6 +2,7 @@
 //! Exercise typed authoring, shared execution, and production retained rendering;
 //! this is not a native clone of the browser preview service.
 
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, Color, ExecutionSession, RateFunction, Scene};
 
 mod raster_support;
@@ -19,9 +20,8 @@ fn sample_translation(y: f64, mut observe: impl FnMut(&mut ExecutionSession, f64
     scene.add(&marker).unwrap();
     let mut target = marker.target_editor().unwrap();
     target.set_translation(3.0, y).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene_execution::lower(&scene).unwrap();
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_transform_to(
             &marker,
             &target,
@@ -40,7 +40,9 @@ fn sample_translation(y: f64, mut observe: impl FnMut(&mut ExecutionSession, f64
         assert_eq!(position.y, y as f32);
         observe(&mut session, time, expected_x);
     }
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .complete_segment(segment)
+        .unwrap();
     assert_eq!(marker.center().unwrap(), (3.0, y));
     assert_eq!(session.frame().time, 3.0);
 }

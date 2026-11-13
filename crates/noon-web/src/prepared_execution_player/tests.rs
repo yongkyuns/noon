@@ -254,7 +254,7 @@ fn prepared_audio_uses_reader_resources_and_never_reports_frontier_as_duration()
     scene
         .audio(resource, noon_core::AudioClipOptions::default())
         .unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = noon::integration::scene_execution::lower(&scene).unwrap();
     source
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();

@@ -1,6 +1,7 @@
 //! Public native authoring -> ordinary Fill animation -> retained GPU pixels.
 //! The reference enumerates band intersections using authored inputs and physical
 //! pixel corners, without reading effective paints, uniforms or production samples.
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, Color, HatchPaint, HatchPaintOptions, Mobject, RateFunction, Scene};
 use noon_core::{Vec2, VectorPath};
 mod hatch_reference;
@@ -193,13 +194,14 @@ fn hatch_pixels_match_independent_band_filter_pose_time_and_seek_reference() {
                                 .rate_func(RateFunction::Linear),
                         )
                         .unwrap();
-                    let mut session = scene.execution_session().unwrap();
-                    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+                    let mut session = scene_execution::lower(&scene).unwrap();
+                    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
+                        .play_animation(&animation)
+                        .unwrap();
                     let mut quarter = None;
                     let mut endpoint = None;
                     for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
-                        scene
-                            .live(&mut session)
+                        scene_execution::borrow_uninstalled(&scene, &mut session)
                             .advance_segment_to(segment, time)
                             .unwrap();
                         let pixels = raster.capture(&session.take_renderer_publication());
@@ -257,7 +259,9 @@ fn hatch_pixels_match_independent_band_filter_pose_time_and_seek_reference() {
                         "backward seek changed the same authored hatch sample"
                     );
                     session.seek(1.0).unwrap();
-                    scene.live(&mut session).complete_segment(segment).unwrap();
+                    scene_execution::borrow_uninstalled(&scene, &mut session)
+                        .complete_segment(segment)
+                        .unwrap();
                     let completed = raster.capture(&session.take_renderer_publication());
                     assert_eq!(
                         endpoint.unwrap(),
@@ -292,7 +296,7 @@ fn static_rectangle(viewport: Viewport, width: f64, definition: Pattern) -> Vec<
         .unwrap();
     source.set_object_opacity(0.6).unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let pixels = raster.capture(&session.take_renderer_publication());
     assert_eq!(pixels, raster.capture(&session.take_renderer_publication()));
     assert_eq!(raster.last_scene_upload_bytes, 0);

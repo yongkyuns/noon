@@ -319,7 +319,7 @@ mod tests {
             .unwrap();
         assert_eq!(native.sections(), context.scene.sections());
         assert_eq!(native.time(), context.authored_duration());
-        let mut native = native.execution_session().unwrap();
+        let mut native = noon::integration::scene_execution::lower(&native).unwrap();
         let mut wrapped = context.lower_execution().unwrap();
         assert_eq!(native.finite_timeline_end_time(), Some(30.0));
         assert_eq!(wrapped.finite_timeline_end_time(), Some(30.0));

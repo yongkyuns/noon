@@ -5,6 +5,7 @@
 
 mod raster_support;
 
+use noon::integration::scene_execution;
 use noon::integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition};
 use noon::{
     AnimationOptions, ExecutionSession, IndicateOptions, Mobject, PrefixPublisher, PrefixReader,
@@ -40,7 +41,7 @@ fn recorded_scene(
             .on_click_indicate(&target, indication, animation)
             .unwrap();
     }
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     let object = source.execution_object_id(target.node_id()).unwrap();
     source
         .begin_replay_retention(ReplayLimits {
@@ -282,8 +283,7 @@ fn appended_binding_changes_preserve_active_effect_until_displayed_revision_chan
 #[test]
 fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_deletion() {
     let (scene, target, source, object, mut publisher, mut reader) = fixture(Some(A));
-    let mut source =
-        noon::integration::scene_execution::consume_with_session(scene, source).unwrap();
+    let mut source = scene_execution::consume_with_session(scene, source).unwrap();
     source.scene_mut().remove(&target).unwrap();
     append_interval(source.session_mut(), &mut publisher, &mut reader);
     let (indication, animation) = options(B);
@@ -305,7 +305,7 @@ fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_
 
     let mut deletion = SemanticMutationTransaction::new();
     deletion.remove_node(target.node_id());
-    noon::integration::scene_execution::publish(source.scene_mut(), deletion).unwrap();
+    scene_execution::publish(source.scene_mut(), deletion).unwrap();
     assert_eq!(source.session().execution_object_id(target.node_id()), None);
     append_interval(source.session_mut(), &mut publisher, &mut reader);
     drop(target);
@@ -598,7 +598,7 @@ fn prepared_history_rejects_live_glow_pulse_without_borrowing_a_semantic_owner()
         .declare_glow_pulse(&target, 2.0, AnimationOptions::new().run_time(1.0))
         .unwrap();
     scene.on_click(&target, Some(&pulse)).unwrap();
-    let source = scene.execution_session().unwrap();
+    let source = scene_execution::lower(&scene).unwrap();
     assert!(
         source.has_native_pointer_subscribers(),
         "ordinary live GlowPulse stays interested in input"

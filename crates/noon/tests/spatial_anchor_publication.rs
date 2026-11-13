@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use noon::{Scene, SceneMembershipRequest};
 use noon_core::{
     ObjectId, SemanticMutationTransaction, SemanticSpatialCompositionDomain, SemanticTransform,
@@ -31,7 +32,7 @@ fn removing_anchor_family_publishes_cleared_spatial_state_to_running_runtime() {
     scene
         .edit_membership(SceneMembershipRequest::Add(&[(&family).into()]))
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene_execution::lower(&scene).unwrap();
     let store_rc = scene.integration_store();
 
     let mut anchor = SemanticMutationTransaction::new();
@@ -101,7 +102,7 @@ fn nested_anchor_membership_recomputes_only_its_shared_center() {
         ]))
         .unwrap();
     let extra = scene.square(2.0).unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene_execution::lower(&scene).unwrap();
     let store_rc = scene.integration_store();
 
     let mut declare = SemanticMutationTransaction::new();

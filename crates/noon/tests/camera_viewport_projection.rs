@@ -1,6 +1,7 @@
 //! B6 camera qualification through the ordinary typed authoring/runtime path.
 //! No host camera state, frontend interpolation, renderer or transport fixture.
 
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, RateFunction, Scene};
 use noon_core::{Camera2DState, DEFAULT_FRAME_HEIGHT};
 
@@ -97,9 +98,8 @@ fn direct_seek_and_forward_pan_zoom_agree_for_every_viewport_aspect() {
     let mut target = frame.target_editor().unwrap();
     target.set_translation(2.0, -1.0).unwrap();
     target.set_scale(0.5, 0.5).unwrap();
-    let mut forward = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut forward)
+    let mut forward = scene_execution::lower(&scene).unwrap();
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut forward)
         .declare_and_activate_transform_to(
             &frame,
             &target,
@@ -113,8 +113,7 @@ fn direct_seek_and_forward_pan_zoom_agree_for_every_viewport_aspect() {
     let authored = frame.state().unwrap();
     let mut samples = Vec::new();
     for time in SAMPLE_TIMES {
-        scene
-            .live(&mut forward)
+        scene_execution::borrow_uninstalled(&scene, &mut forward)
             .advance_segment_to(segment, time)
             .unwrap();
         let camera = forward.camera().unwrap();

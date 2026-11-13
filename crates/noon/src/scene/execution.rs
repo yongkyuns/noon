@@ -95,6 +95,22 @@ pub mod host_execution {
         })
     }
 
+    /// Lower a standalone runtime for a host-managed bootstrap or handoff.
+    /// Use [`Scene::into_execution`] for the ordinary owned execution path.
+    pub fn lower(
+        scene: &Scene,
+    ) -> Result<ExecutionSession, noon_compile::SemanticExecutionLoweringError> {
+        scene.execution_session()
+    }
+
+    /// Borrow execution controls before the host installs a prepared runtime.
+    pub fn borrow_uninstalled<'a>(
+        scene: &'a Scene,
+        session: &'a mut ExecutionSession,
+    ) -> LiveSession<'a> {
+        scene.live(session)
+    }
+
     /// Transfer a host-prepared runtime and its exact Scene into one owner.
     ///
     /// The handoff validates arena identity, publication revision, and scene root;

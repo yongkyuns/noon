@@ -115,7 +115,7 @@ fn prepared_movie_preserves_cropped_shared_pcm_pixels_and_exact_partial_endpoint
             )
             .unwrap();
     }
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     let publication = session.publication_context();
     audio::Soundtrack::new(&session, sampling)
         .unwrap()

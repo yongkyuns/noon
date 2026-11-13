@@ -1,4 +1,5 @@
 //! Exercise the public Rust error contract as an external, provider-free consumer.
+use noon::integration::scene_execution;
 use std::error::Error;
 
 use noon::integration::{
@@ -66,7 +67,7 @@ fn foreign_handle_in_authored_batch_is_typed_and_atomic() -> TestResult {
     assert!(error.source().is_none());
     assert_eq!(authored_snapshot(&scene), before);
     scene.add(&local)?;
-    assert_eq!(scene.execution_session()?.frame().objects.len(), 1);
+    assert_eq!(scene_execution::lower(&scene)?.frame().objects.len(), 1);
     Ok(())
 }
 
@@ -168,7 +169,7 @@ fn authored_membership_preserves_duplicate_missing_and_ambiguous_causes() -> Tes
     assert_eq!(authored_snapshot(&scene), before);
     scene.clear()?;
     scene.add(&replacement)?;
-    assert_eq!(scene.execution_session()?.frame().objects.len(), 1);
+    assert_eq!(scene_execution::lower(&scene)?.frame().objects.len(), 1);
     Ok(())
 }
 
@@ -234,7 +235,7 @@ fn live_foreign_handle_and_foreign_runtime_are_distinct_and_atomic() -> TestResu
     assert_eq!(session.session().publication_context(), publication);
     assert!(session.session_mut().take_frame_changes().is_empty());
 
-    let mut wrong_session = foreign_scene.execution_session()?;
+    let mut wrong_session = scene_execution::lower(&foreign_scene)?;
     wrong_session.take_frame_changes();
     let before = authored_snapshot(session.scene());
     let frame = wrong_session.frame().clone();
@@ -330,9 +331,9 @@ fn external_authored_edit_keeps_the_stale_publication_category() -> TestResult {
     assert!(session.session_mut().take_frame_changes().is_empty());
     // Retire the invalidated runtime and lower the new authored revision.
     let scene = session.scene_mut();
-    noon::integration::scene_execution::retire(scene)?;
-    let replacement = scene.execution_session()?;
-    noon::integration::scene_execution::attach(scene, replacement)?;
+    scene_execution::retire(scene)?;
+    let replacement = scene_execution::lower(scene)?;
+    scene_execution::attach(scene, replacement)?;
     scene.add(&detached)?;
     assert_eq!(scene.effective(&local)?.transform.translation.x, 3.0);
     Ok(())
@@ -470,8 +471,7 @@ fn invalid_live_batch_preserves_transaction_cause_and_rolls_back_prior_writes() 
         SemanticObjectProperty::StrokeWidth,
         f64::NAN,
     );
-    let error =
-        noon::integration::scene_execution::publish(session.scene_mut(), transaction).unwrap_err();
+    let error = scene_execution::publish(session.scene_mut(), transaction).unwrap_err();
     let cause = SemanticMutationTransactionError::NonFinitePropertyValue {
         index: 1,
         object: local.node_id(),

@@ -1,5 +1,6 @@
 //! Public family-target animation, identity and atomicity qualification.
 use super::*;
+use noon::integration::scene_execution;
 
 fn qualify_family_opacity_target(start: f64) {
     use noon::{AnimationCompositionRequest, AnimationOptions, RateFunction};
@@ -452,7 +453,7 @@ fn declared_opacity_scope_retires_when_its_last_declaration_is_cascade_removed()
     let mut transaction = SemanticMutationTransaction::new();
     transaction.remove_node(target.root().node_id());
     let before = session.scene().revision();
-    noon::integration::scene_execution::publish(session.scene_mut(), transaction).unwrap();
+    scene_execution::publish(session.scene_mut(), transaction).unwrap();
     assert_ne!(session.scene().revision(), before);
     assert!(
         declaration.options().is_err(),
@@ -850,10 +851,9 @@ fn unrelated_effects_do_not_change_unequal_family_transform_admission() {
     scene
         .add_many(&[(&family).into(), (&unrelated).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let effects = row(&session, unrelated.node_id()).unwrap().effects.clone();
-    let segment = scene
-        .live(&mut session)
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_composition(
             &AnimationCompositionRequest::FamilyTransformTo {
                 source: &family,
@@ -871,7 +871,9 @@ fn unrelated_effects_do_not_change_unequal_family_transform_admission() {
         1.5
     );
     session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .complete_segment(segment)
+        .unwrap();
     assert_eq!(row(&session, unrelated.node_id()).unwrap().effects, effects);
 }
 

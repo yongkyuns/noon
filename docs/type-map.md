@@ -409,9 +409,9 @@ explicitly.
 
 `SceneExecution::live` and `ContinuationScene::live` borrow segment controls
 from the owning Scene. `LiveSession` handles activation, progression, completion,
-input, and staged publication. `Scene::live(&mut ExecutionSession)` is available
-for hosts that explicitly manage a standalone runtime handoff. Sequential
-sources use `ScriptScene` for authoring and `play`/`wait`.
+input, and staged publication. Hosts that configure a runtime before installation
+use `integration::scene_execution`. Sequential sources use `ScriptScene` for
+authoring and `play`/`wait`.
 
 ### `SceneInstance`
 

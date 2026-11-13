@@ -2,6 +2,8 @@ mod spatial_queries;
 
 use crate::retained_resource_transport::residency::{ResourceResidency, ResourceRoot};
 use crate::retained_resource_transport::{render_geometry_id, RenderGeometrySlot};
+#[cfg(test)]
+use noon::integration::scene_execution;
 use std::collections::HashMap;
 
 use noon_core::{Camera2DState, RetainedFamilyAnimationPlan};
@@ -1224,13 +1226,15 @@ mod tests {
     #[test]
     fn prepared_surface_snapshot_resolves_meshes_added_after_empty_bootstrap() {
         let (scene, _, _) = noon::example_scenes::spatial_surface::scene().unwrap();
-        let mut source = scene.execution_session().unwrap();
+        let mut source = scene_execution::lower(&scene).unwrap();
         source
             .begin_replay_retention(noon_runtime::ReplayLimits::default())
             .unwrap();
         let wait = source.wait_segment(0.5).unwrap();
         source.advance_to(wait.end_time()).unwrap();
-        scene.live(&mut source).complete_segment(wait).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut source)
+            .complete_segment(wait)
+            .unwrap();
         let (_, reader) = source.create_prepared_prefix(wait).unwrap();
         let mut player = crate::PreparedExecutionPlayer::from_reader(reader, 81);
         let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(

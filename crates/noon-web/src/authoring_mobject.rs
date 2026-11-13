@@ -4845,7 +4845,7 @@ mod tests {
         handle.set_stroke_width(3.5).unwrap();
 
         scene.add(&handle).unwrap();
-        let session = scene.execution_session().unwrap();
+        let session = noon::integration::scene_execution::lower(&scene).unwrap();
         let effective = &session.frame().objects[0];
         assert_eq!(
             handle.wire_translation().unwrap(),

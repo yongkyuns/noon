@@ -1,5 +1,6 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
+use noon::integration::scene_execution;
 use noon::{
     ExecutionSession, ImageMobjectOptions, ImagePaintOptions, ManimBecomeOptions, PrefixReader,
     Scene,
@@ -16,7 +17,7 @@ fn fixture() -> (
     let mut scene = Scene::new();
     let anchor = scene.circle(0.15).unwrap();
     scene.add(&anchor).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     source
         .begin_replay_retention(ReplayLimits {
             revisions: 256,
@@ -181,8 +182,7 @@ fn image_paint_resource_budget_failure_keeps_suffix_cursor_and_reader_unchanged(
 #[test]
 fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
     let (scene, _, source, mut publisher, mut reader) = fixture();
-    let mut execution =
-        noon::integration::scene_execution::consume_with_session(scene, source).unwrap();
+    let mut execution = scene_execution::consume_with_session(scene, source).unwrap();
     let a = execution
         .scene_mut()
         .image(image([240, 20, 10, 255]))
@@ -548,7 +548,7 @@ fn pointer_driven_prefix_effect_pixels_restore_after_terminal_delivery_and_sourc
                 AnimationOptions::new().run_time(0.5),
             )
             .unwrap();
-        let mut source = scene.execution_session().unwrap();
+        let mut source = scene_execution::lower(&scene).unwrap();
         source
             .begin_replay_retention(ReplayLimits {
                 revisions: 128,

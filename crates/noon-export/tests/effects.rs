@@ -3,6 +3,7 @@
 //! no engine projection, kernel, sampler, mask uniform or pass planner is used.
 #![cfg(not(target_arch = "wasm32"))]
 
+use noon::integration::scene_execution;
 use std::{collections::BTreeMap, convert::Infallible};
 
 use noon::{
@@ -302,9 +303,8 @@ fn native_composed_effects_match_literal_pixels_through_camera_units_and_offscre
                     0.0
                 };
                 let (scene, camera, target) = fixture(pixels, shift);
-                let mut session = scene.execution_session().unwrap();
-                let segment = scene
-                    .live(&mut session)
+                let mut session = scene_execution::lower(&scene).unwrap();
+                let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
                     .declare_and_activate_transform_to(
                         &camera,
                         &target,
@@ -375,7 +375,9 @@ fn native_composed_effects_match_literal_pixels_through_camera_units_and_offscre
                 let mut fresh = SessionCapture::new(&session, options(width, height)).unwrap();
                 assert_eq!(fresh.capture(&mut session).unwrap().rgba, seen[&2]);
                 samples += 1;
-                scene.live(&mut session).complete_segment(segment).unwrap();
+                scene_execution::borrow_uninstalled(&scene, &mut session)
+                    .complete_segment(segment)
+                    .unwrap();
                 assert_eq!(capture.capture(&mut session).unwrap().rgba, seen[&2]);
                 samples += 1;
                 eprintln!("native effects {width}x{height} pixels={pixels} offscreen={offscreen}: exact seek/fresh/held/completion; max error {maximum}");

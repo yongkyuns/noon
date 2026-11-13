@@ -1,5 +1,6 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, ExecutionSession, PrefixReader, RateFunction, Scene};
 use noon_core::{SemanticStyle, Vec2, VectorPath};
 use noon_runtime::ReplayLimits;
@@ -38,7 +39,7 @@ fn history(paths: bool) -> (ExecutionSession, PrefixReader) {
     first.shift(1.2, 0.6).unwrap();
     last.shift(-1.0, -0.6).unwrap();
     scene.add(&shape).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     source
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
@@ -49,8 +50,7 @@ fn history(paths: bool) -> (ExecutionSession, PrefixReader) {
     let baseline = reader.frame().clone();
     let publication = reader.publication_context();
     for target in [&first, &last] {
-        let segment = scene
-            .live(&mut source)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut source)
             .declare_and_activate_transform_to(
                 &shape,
                 target,
@@ -59,7 +59,7 @@ fn history(paths: bool) -> (ExecutionSession, PrefixReader) {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut live = scene.live(&mut source);
+        let mut live = scene_execution::borrow_uninstalled(&scene, &mut source);
         live.advance_segment_to(segment, segment.end_time())
             .unwrap();
         live.complete_segment(segment).unwrap();

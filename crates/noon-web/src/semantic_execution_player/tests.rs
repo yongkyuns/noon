@@ -1,5 +1,6 @@
 use super::*;
 use crate::{RetainedExecutionFrameMirror, TransportObjectContent};
+use noon::integration::scene_execution;
 use noon_core::{
     AnimationOptions, GeometryResourceLookup, HostCallbackId, NativeInputModifiers,
     NativePointerId, NativePointerInput, NativePointerInputKind, NativePointerPosition,
@@ -50,12 +51,12 @@ fn consumed_scene_player_retains_the_exact_store_root_and_current_session() {
     scene.add(&circle).unwrap();
     let semantics = std::rc::Rc::clone(scene.integration_store());
     let root = scene.root();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     session.advance_to(0.25).unwrap();
     let frame = session.frame().clone();
     let publication = session.publication_context();
     let mut player = SemanticExecutionPlayer::from_scene_execution(
-        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
+        scene_execution::consume_with_session(scene, session).unwrap(),
         1.0,
         105,
     )
@@ -115,7 +116,7 @@ fn finite_worker_audio_uses_one_clock_and_stops_at_the_exact_endpoint() {
         .audio(resource, noon_core::AudioClipOptions::default())
         .unwrap();
     let live = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -306,13 +307,13 @@ fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport
         .on_click_playback(&button, noon::PlaybackControl::NextSection)
         .unwrap();
     let revision = scene.revision();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     assert!(!session.has_audio());
     assert!(session.has_playback_controls());
     // The profile rejection must precede even playback-clock validation, which
     // itself precedes resource encoding. No partial worker player is returned.
     let error = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         f64::NAN,
@@ -323,7 +324,7 @@ fn worker_player_rejects_scene_controls_without_audio_before_preparing_transport
     assert!(error.contains("scene playback controls"));
     assert_eq!(scene.revision(), revision);
     let error = SemanticExecutionPlayer::from_scene_execution(
-        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
+        scene_execution::consume_with_session(scene, session).unwrap(),
         f64::NAN,
         101,
     )
@@ -345,10 +346,10 @@ fn worker_profile_gate_preserves_existing_click_indicate_admission() {
             AnimationOptions::new(),
         )
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     assert!(!session.has_playback_controls());
     let live_player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -357,7 +358,7 @@ fn worker_profile_gate_preserves_existing_click_indicate_admission() {
     .unwrap();
     assert!(!live_player.resource_bundle_bytes().is_empty());
     let player = SemanticExecutionPlayer::from_scene_execution(
-        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
+        scene_execution::consume_with_session(scene, session).unwrap(),
         1.0,
         103,
     )
@@ -926,7 +927,7 @@ fn callback_json_regions_preserve_native_host_order_and_publish_once() {
         second.apply(&mut store).unwrap();
     }
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -1015,7 +1016,7 @@ fn terminal_callback_content_replaces_one_effective_row_across_frames() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         2.0,
@@ -1163,7 +1164,7 @@ fn callback_path_replacement_uses_one_lease_and_retires_old_resource() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         2.0,
@@ -1376,7 +1377,7 @@ fn callback_content_does_not_adopt_another_producers_lease() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let replacement = session
         .prepare_effective_content_replacement(
             source.node_id(),
@@ -1435,7 +1436,7 @@ fn callback_text_source_uses_the_effective_text_resource_closure() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -1624,7 +1625,7 @@ fn live_advance_projection_preserves_clock_frame_and_retry() {
     let object = scene.circle(0.5).unwrap();
     scene.add(&object).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -1697,7 +1698,7 @@ fn live_advance_projection_preserves_callback_guard_and_recovery() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -1798,7 +1799,7 @@ fn live_transform_projection_preserves_atomic_rejection_and_local_retry() {
         let mut scene = noon::Scene::new();
         let object = scene.circle(0.5).unwrap();
         scene.add(&object).unwrap();
-        let session = scene.execution_session().unwrap();
+        let session = scene_execution::lower(&scene).unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
             session,
             std::rc::Rc::clone(scene.integration_store()),
@@ -1854,7 +1855,7 @@ fn live_content_and_observation_errors_keep_atomicity_and_local_retry() {
     let mut other = noon::Scene::new();
     let foreign = other.circle(0.5).unwrap();
     scene.add(&target).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -1923,7 +1924,7 @@ fn membership_deltas_omit_unchanged_rows_and_preserve_incremental_order() {
     let toggled = scene.circle(1.0).unwrap();
     scene.add(&anchor).unwrap();
     scene.add(&toggled).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -2091,7 +2092,7 @@ fn animated_player() -> SemanticExecutionPlayer {
             AnimationOptions::new(),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     session
         .activate_animation(
             &mut scene.integration_store().borrow_mut(),
@@ -2102,7 +2103,7 @@ fn animated_player() -> SemanticExecutionPlayer {
         )
         .unwrap();
     SemanticExecutionPlayer::from_scene_execution(
-        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
+        scene_execution::consume_with_session(scene, session).unwrap(),
         2.0,
         42,
     )
@@ -2136,11 +2137,8 @@ fn native_input_codec_reaches_one_session_and_keeps_event_occurrences_ordered() 
     store
         .bind_semantic_signal(clicks, object, SemanticObjectProperty::RotationZ)
         .unwrap();
-    let scene = noon::integration::scene_execution::adopt_root(
-        std::rc::Rc::new(std::cell::RefCell::new(store)),
-        root,
-    )
-    .unwrap();
+    let scene = scene_execution::adopt_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
+        .unwrap();
     let mut player =
         SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 61)
             .unwrap();
@@ -2185,11 +2183,8 @@ fn rejected_native_input_keeps_frame_and_player_event_sequence_unchanged() {
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_updater(object, HostCallbackId::new(9), 0.0, None);
     transaction.apply(&mut store).unwrap();
-    let scene = noon::integration::scene_execution::adopt_root(
-        std::rc::Rc::new(std::cell::RefCell::new(store)),
-        root,
-    )
-    .unwrap();
+    let scene = scene_execution::adopt_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
+        .unwrap();
     let mut player =
         SemanticExecutionPlayer::from_scene_execution(scene.into_execution().unwrap(), 2.0, 62)
             .unwrap();
@@ -2211,7 +2206,7 @@ fn live_segment_wake_drives_one_leased_session_without_a_host_timeline() {
     scene.add(&circle).unwrap();
     let mut target = circle.target_editor().unwrap();
     target.set_translation(2.0, -1.0).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -2291,7 +2286,7 @@ fn delayed_python_source_handoffs_carry_overdue_wall_time_across_short_waits() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(0.4).unwrap();
     scene.add(&circle).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -2340,7 +2335,7 @@ fn external_authored_samples_are_monotonic_and_reuse_the_live_player() {
     scene.add(&circle).unwrap();
     let mut target = circle.target_editor().unwrap();
     target.set_translation(2.0, 0.0).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -2416,7 +2411,7 @@ fn callback_segment_drive_pins_time_until_exact_phase_commit() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -2584,7 +2579,7 @@ fn callback_phase_wire_pins_runtime_publication_and_orders_effective_writes() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -2705,7 +2700,7 @@ fn required_callback_membership_publishes_one_existing_handle_edit() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -2770,7 +2765,7 @@ fn callback_provisional_visual_replaces_full_effective_state_without_authored_gr
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -2956,7 +2951,7 @@ fn callback_batch_accepts_mixed_direct_and_provisional_inline_geometry() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3026,7 +3021,7 @@ fn callback_provisional_retained_path_replaces_one_target_without_resource_growt
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3205,7 +3200,7 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3375,7 +3370,7 @@ fn callback_provisional_add_preserves_interleaved_source_order() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3469,7 +3464,7 @@ fn unadmitted_callback_provisional_is_canceled_before_the_final_publication() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3516,7 +3511,7 @@ fn rejected_callback_membership_keeps_the_pending_phase_retryable() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3570,7 +3565,7 @@ fn callback_membership_collector_orders_multiple_edits_with_one_effective_public
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3684,7 +3679,7 @@ fn caught_callback_membership_error_retains_earlier_staged_edits() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3747,7 +3742,7 @@ fn rejected_final_callback_membership_commit_is_terminal_and_keeps_both_states_u
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -3897,7 +3892,7 @@ fn callback_sparse_read_accepts_the_raw_pending_token_and_rejects_a_foreign_one(
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -3954,7 +3949,7 @@ fn callback_phase_json_keeps_a_sparse_working_set_in_a_600_object_scene() {
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
 
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -3987,7 +3982,7 @@ fn interrupted_callback_phase_stays_terminal_after_player_recovery() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -4016,7 +4011,7 @@ fn forward_callback_control_uses_authored_time_without_a_browser_timestamp() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -4139,7 +4134,7 @@ fn unfinished_wait_cannot_seal_a_shorter_replay_interval() {
     let circle = scene.circle(0.4).unwrap();
     scene.add(&circle).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -4196,7 +4191,7 @@ fn wait_observations_advance_without_runtime_frames_or_publications() {
     let mut scene = noon::Scene::new();
     let circle = scene.circle(0.4).unwrap();
     scene.add(&circle).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -4328,7 +4323,7 @@ fn live_variable_tracker_update_replaces_text_through_sparse_resource_delta() {
     let mut backend = NumericRuleBackend;
     let scene = noon::Scene::new();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         1.0,
@@ -4402,7 +4397,7 @@ fn assert_late_text_resource_admission(
 ) {
     let scene = noon::Scene::new();
     let mut player = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         2.0,
@@ -4559,7 +4554,7 @@ mod callback_provisional_stage_limit_regression {
             .apply(&mut scene.integration_store().borrow_mut())
             .unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
-            scene.execution_session().unwrap(),
+            scene_execution::lower(&scene).unwrap(),
             std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,
@@ -4633,7 +4628,7 @@ mod callback_mixed_provisional_membership_regression {
             .apply(&mut scene.integration_store().borrow_mut())
             .unwrap();
         let mut player = SemanticExecutionPlayer::from_live_session(
-            scene.execution_session().unwrap(),
+            scene_execution::lower(&scene).unwrap(),
             std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             1.0,

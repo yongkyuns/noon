@@ -413,7 +413,7 @@ fn camera_rejection_does_not_change_the_root_and_recovers_after_clear() -> TestR
     scene.clear()?;
     scene.camera_frame()?;
     scene.add(&object)?;
-    scene.execution_session()?;
+    noon::integration::scene_execution::lower(&scene)?;
     Ok(())
 }
 

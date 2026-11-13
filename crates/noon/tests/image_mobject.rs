@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use noon::{
     AnimationOptions, ImageMobjectOptions, LayoutAnchor, LayoutDimension, RasterImageSampling,
     RateFunction, Scene,
@@ -234,10 +235,9 @@ fn unsupported_image_styles_and_create_are_rejected_before_publication() -> Test
         Err(noon_core::SemanticAnimationError::UnsupportedImageAnimation)
     ));
     assert_eq!(scene.revision(), before.0);
-    let mut session = scene.execution_session()?;
+    let mut session = scene_execution::lower(&scene)?;
     let frame = session.frame().clone();
-    assert!(scene
-        .live(&mut session)
+    assert!(scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_create(&image, AnimationOptions::new())
         .is_err());
     assert_eq!(scene.revision(), before.0);

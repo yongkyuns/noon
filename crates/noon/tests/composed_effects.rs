@@ -1,5 +1,6 @@
 //! Scene and integration publication of composed scopes, without a transport.
 mod composed_effect_animation;
+use noon::integration::scene_execution;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
     ExecutionSession, MobjectFamily, Scene,
@@ -84,7 +85,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     session.session_mut().take_renderer_publication();
     let mut update = SemanticMutationTransaction::new();
     update.update_effect(inner_effect, EffectUpdate::default().radius(Pixels(3.0)));
-    noon::integration::scene_execution::publish(session.scene_mut(), update).unwrap();
+    scene_execution::publish(session.scene_mut(), update).unwrap();
     assert_eq!(
         session
             .session()
@@ -104,7 +105,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     );
     let mut remove = SemanticMutationTransaction::new();
     remove.remove_node(outer_effect);
-    noon::integration::scene_execution::publish(session.scene_mut(), remove).unwrap();
+    scene_execution::publish(session.scene_mut(), remove).unwrap();
     assert!(row(session.session(), outer.node_id()).is_none());
     assert_eq!(
         plan(session.session(), inner.node_id()).parent_scope(),
@@ -124,7 +125,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     let root = session.scene().root();
     let mut detach = SemanticMutationTransaction::new();
     detach.remove_member(root, outer.node_id());
-    noon::integration::scene_execution::publish(session.scene_mut(), detach).unwrap();
+    scene_execution::publish(session.scene_mut(), detach).unwrap();
     for node in [
         a.node_id(),
         b.node_id(),
@@ -140,7 +141,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     assert!(row(session.session(), outside.node_id()).is_some());
     let mut reattach = SemanticMutationTransaction::new();
     reattach.add_member(root, outer.node_id());
-    noon::integration::scene_execution::publish(session.scene_mut(), reattach).unwrap();
+    scene_execution::publish(session.scene_mut(), reattach).unwrap();
     assert_eq!(
         session.session().execution_object_id(outer.node_id()),
         Some(outer_object)
@@ -191,7 +192,7 @@ fn live_membership_relowers_only_affected_scope_plans_and_rejects_aliases_atomic
     let revision = session.scene().revision();
     let mut alias = SemanticMutationTransaction::new();
     alias.add_member(session.scene().root(), a.node_id());
-    assert!(noon::integration::scene_execution::publish(session.scene_mut(), alias).is_err());
+    assert!(scene_execution::publish(session.scene_mut(), alias).is_err());
     assert_eq!(session.scene().revision(), revision);
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(session.session().frame(), &frame);
@@ -212,12 +213,12 @@ fn first_group_attachment_rejects_external_interleaving_before_semantic_commit()
     let c = scene.circle(0.4).unwrap();
     let family = scene.family(&[(&a).into(), (&c).into()]).unwrap();
     scene.add_many(&[(&family).into(), (&b).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let mut priorities = SemanticMutationTransaction::new();
     priorities
         .set_z_index(b.node_id(), 1.0)
         .set_z_index(c.node_id(), 2.0);
-    noon::integration::scene_execution::publish_at_root(
+    scene_execution::publish_at_root(
         scene.integration_store(),
         scene.root(),
         &mut session,
@@ -229,13 +230,9 @@ fn first_group_attachment_rejects_external_interleaving_before_semantic_commit()
     let revision = scene.revision();
     let mut tx = SemanticMutationTransaction::new();
     tx.create_effect(family.node_id(), "soften", Blur::default());
-    let error = noon::integration::scene_execution::publish_at_root(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        tx,
-    )
-    .unwrap_err();
+    let error =
+        scene_execution::publish_at_root(scene.integration_store(), scene.root(), &mut session, tx)
+            .unwrap_err();
     assert!(
         matches!(
             error,
@@ -329,7 +326,7 @@ fn initial_named_family_effects_use_one_controller_and_exact_handle_removal() {
 fn provisional_nested_scopes_bind_one_final_identity_and_parent_graph() {
     use noon_core::{SemanticNodeCreation, SemanticObjectState, StoredGeometry};
     let scene = Scene::new();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let mut tx = SemanticMutationTransaction::new();
     // Allocate outer before inner and put both definitions before their inputs.
     // Final semantic containment, never allocation order, owns the pass graph.
@@ -347,13 +344,9 @@ fn provisional_nested_scopes_bind_one_final_identity_and_parent_graph() {
         .add_member(inner, b)
         .add_member(outer, inner)
         .add_member(scene.root(), outer);
-    let committed = noon::integration::scene_execution::publish_at_root(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        tx,
-    )
-    .unwrap();
+    let committed =
+        scene_execution::publish_at_root(scene.integration_store(), scene.root(), &mut session, tx)
+            .unwrap();
     let outer = committed.resolve(outer).unwrap();
     let inner = committed.resolve(inner).unwrap();
     let a = committed.resolve(a).unwrap();
@@ -379,7 +372,7 @@ fn provisional_nested_scopes_bind_one_final_identity_and_parent_graph() {
     );
     let mut remove = SemanticMutationTransaction::new();
     remove.remove_node(committed.resolve(inner_effect).unwrap());
-    noon::integration::scene_execution::publish_at_root(
+    scene_execution::publish_at_root(
         scene.integration_store(),
         scene.root(),
         &mut session,
@@ -404,7 +397,7 @@ fn initial_partial_scope_opacity_lowers_without_fabricated_effect_attachments() 
         tx.apply(&mut scene.integration_store().borrow_mut())
             .unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let session = scene.execution_session().unwrap();
+        let session = scene_execution::lower(&scene).unwrap();
         let scope = row(&session, family.node_id()).unwrap();
         assert_eq!(scope.style.opacity, opacity as f32);
         assert!(scope.effects.is_none());

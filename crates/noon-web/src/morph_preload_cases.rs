@@ -38,7 +38,7 @@ mod tests {
         scene.add(&source).unwrap();
 
         let mut player = SemanticExecutionPlayer::from_live_session(
-            scene.execution_session().unwrap(),
+            noon::integration::scene_execution::lower(&scene).unwrap(),
             std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             2.0,
@@ -99,7 +99,7 @@ mod tests {
         scene.add(&source).unwrap();
 
         let mut player = SemanticExecutionPlayer::from_live_session(
-            scene.execution_session().unwrap(),
+            noon::integration::scene_execution::lower(&scene).unwrap(),
             std::rc::Rc::clone(scene.integration_store()),
             scene.root(),
             3.0,

@@ -1,5 +1,6 @@
 use super::*;
 use crate::{BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake};
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, ExecutionSession, IndicateOptions, PrefixPublisher, Scene};
 use noon_core::ObjectId;
 use noon_runtime::{ReplayLimits, TimelineWakeState};
@@ -22,7 +23,7 @@ fn fixture() -> (
             AnimationOptions::new().run_time(0.5),
         )
         .unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     let object = source.execution_object_id(circle.node_id()).unwrap();
     source
         .begin_replay_retention(ReplayLimits {
@@ -327,7 +328,7 @@ fn prepared_canvas_zero_duration_is_an_idle_snapshot_without_loop_cadence() {
     let mut scene = Scene::new();
     let circle = scene.circle(0.5).unwrap();
     scene.add(&circle).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     source
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();

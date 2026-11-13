@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, RateFunction, Rect, Scene, Vec2};
 
 #[test]
@@ -29,9 +30,9 @@ fn renderer_viewport_keeps_offscreen_anchor_for_onscreen_transient() {
         .unwrap();
 
     scene.add_many(&[(&source).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let segment = {
-        let mut live = scene.live(&mut session);
+        let mut live = scene_execution::borrow_uninstalled(&scene, &mut session);
         let segment = live
             .declare_and_activate_family_transform_to(
                 &source,
